@@ -26,4 +26,4 @@ Cap is an open-source and privacy-friendly alternative to Loom, providing an int
 
 # App Architecture
 
-React, TypeScript, Tauri.
+React, Vite, TypeScript, Tauri, TailwindCSS.
