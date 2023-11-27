@@ -146,7 +146,7 @@ a,
 p,
 span,
 input {
-  @apply tracking-tight;
+  @apply tracking-tight text-black;
 }
 
 a,
