@@ -123,8 +123,15 @@ a.bg-primary:hover {
 
 body,
 html {
-  color: #000000 !important;
+  color: #000000;
   font-family: "Geist", sans-serif !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  body,
+  html {
+    color: #ffffff;
+  }
 }
 
 h1,
