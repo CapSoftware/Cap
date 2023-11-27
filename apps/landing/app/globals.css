@@ -121,8 +121,9 @@ a.bg-primary:hover {
   }
 }
 
-body {
-  color: #000;
+body,
+html {
+  color: #000000;
   font-family: "Geist", sans-serif !important;
 }
 
