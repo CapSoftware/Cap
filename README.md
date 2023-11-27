@@ -22,7 +22,7 @@
 
 > NOTE: Cap is under active development, and this repository will be updated regularly with changes and new releases.
 
-Cap is an open-source and privacy-friendly alternative to Loom, providing an intuitive platform that prioritizes your data security while delivering stunning, easily shareable screen recordings. Embrace the freedom of an ethical recording tool that champions open collaboration and user empowerment, without ever compromising on quality or ease-of-use.
+Cap is an open source and privacy focused alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.
 
 # App Architecture
 
