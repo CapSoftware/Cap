@@ -1,0 +1,37 @@
+{
+  "name": "ui",
+  "version": "0.0.0",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./tailwind": "./tailwind.config.js",
+    "./postcss": "./postcss.config.js",
+    "./style": "./style/styles.css"
+  },
+  "scripts": {
+    "lint": "eslint src --cache",
+    "typecheck": "tsc -b",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.5.0",
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.2.38",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "^4.0.3",
+    "autoprefixer": "^10.4.16",
+    "eslint": "^7.32.0",
+    "postcss": "^8.4.31",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.18.0",
+    "tailwindcss": "^3.3.3",
+    "tauri-plugin-context-menu": "^0.5.0",
+    "tauri-plugin-positioner-api": "^0.2.7",
+    "tsconfig": "workspace:*",
+    "typescript": "^5.3.2",
+    "vite": "^4.4.4",
+    "vite-tsconfig-paths": "^4.2.1"
+  }
+}

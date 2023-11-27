@@ -1,0 +1,245 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-SemiBold.woff2") format("woff2"),
+    url("/fonts/Geist-SemiBold.woff") format("woff");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Regular.woff2") format("woff2"),
+    url("/fonts/Geist-Regular.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Light.woff2") format("woff2"),
+    url("/fonts/Geist-Light.woff") format("woff");
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+.wrapper {
+  @apply mx-auto w-[92%] max-w-screen-xl;
+}
+
+.wrapper-max {
+  @apply max-w-screen-2xl;
+}
+
+.wrapper-sm {
+  @apply max-w-5xl;
+}
+
+*,
+*:before,
+*:after {
+  box-sizing: inherit;
+}
+
+.text-primary {
+  color: var(--primary);
+}
+
+a.text-primary:hover {
+  color: var(--primary-2);
+}
+
+.text-secondary {
+  color: var(--secondary);
+}
+
+a.text-secondary:hover {
+  color: var(--secondary-2);
+}
+
+a.bg-primary:hover {
+  background-color: var(--primary-2);
+}
+
+.bg-dark {
+  background-color: var(--secondary-3);
+}
+
+.bg-gradient {
+  @apply bg-gradient-to-r from-secondary-2 to-secondary-3 transition-all duration-300;
+}
+
+.bg-gradient:hover {
+  @apply bg-gradient-to-r from-secondary to-secondary-3;
+}
+
+.bg-animated {
+  content: "";
+  background: linear-gradient(60deg, var(--primary), var(--secondary));
+  animation: animatedgradient 2s ease infinite;
+  background-size: 300% 300%;
+}
+
+.animated-yaxis {
+  animation: animatedyaxis 6s ease infinite forwards;
+}
+
+:root {
+  --primary: #005cb1;
+  --primary-2: #004c93;
+  --primary-3: #003b73;
+  --secondary: #2eb4ff;
+  --secondary-2: #1696e0;
+  --secondary-3: #117ebd;
+  --tertiary: #c5eaff;
+  --tertiary-2: #d3e5ff;
+  --tertiary-3: #e0edff;
+  --filler: #efefef;
+  --filler-2: #e4e4e4;
+  --filler-3: #e2e2e2;
+  --filler-txt: #b3b3b3;
+  --text-primary: #0d1b2a;
+  --text-secondary: #ffffff;
+  --header-height: 80px;
+  --vh100-offset: calc(100vh - var(--header-height));
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 214, 219, 220;
+  --background-end-rgb: 255, 255, 255;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --foreground-rgb: 255, 255, 255;
+    --background-start-rgb: 0, 0, 0;
+    --background-end-rgb: 0, 0, 0;
+  }
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  font-family: "Geist", sans-serif !important;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  @apply font-semibold tracking-tighter !important;
+}
+
+a,
+p,
+span,
+input {
+  @apply tracking-tight;
+}
+
+a,
+button {
+  @apply transition-all;
+}
+
+nav a:hover {
+  @apply underline;
+}
+
+nav a {
+  @apply text-sm md:text-base;
+}
+
+.custom-bg {
+  background: radial-gradient(
+    50.01% 50.01% at 53.53% 49.99%,
+    var(--tertiary-2) 4.65%,
+    var(--tertiary) 68.48%,
+    #ffffff 100%
+  );
+}
+
+.styled-links a {
+  @apply font-semibold underline;
+}
+
+.absolute-middle {
+  @apply absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2;
+}
+
+.fade-in-down {
+  animation: fadeInDown 1s forwards;
+  opacity: 0;
+}
+
+.fade-in {
+  animation: fadeIn 1s forwards;
+  opacity: 0;
+}
+
+.fade-in-up {
+  animation: fadeInUp 1s forwards;
+  opacity: 0;
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    transform: translateY(0px);
+    opacity: 1;
+  }
+}
+
+.animate-delay-1 {
+  animation-delay: 0.3s;
+}
+
+.animate-delay-2 {
+  animation-delay: 0.6s;
+}
+
+.animate-delay-3 {
+  animation-delay: 1.2s;
+}
+
+.page-intro {
+  @apply space-y-3;
+}
+
+.page-intro h1 {
+  @apply text-3xl sm:text-4xl lg:text-6xl fade-in-down;
+}
+
+.page-intro p {
+  @apply fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto;
+}
+
+ul {
+  @apply list-disc pl-5;
+}
