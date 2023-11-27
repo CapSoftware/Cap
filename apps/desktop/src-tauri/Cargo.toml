@@ -1,0 +1,25 @@
+[package]
+name = "Cap"
+version = "0.0.0"
+description = "A Tauri App"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+tauri-build = { version = "1.5.0", features = [] }
+
+[dependencies]
+tauri = { version = "1.5.0", features = [ "window-set-ignore-cursor-events", "macos-private-api", "window-unminimize", "window-minimize", "window-close", "window-show", "window-start-dragging", "window-hide", "window-unmaximize", "window-maximize", "window-set-always-on-top", "shell-open"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri-plugin-context-menu = "0.5.0"
+tauri-plugin-positioner = { version = "1.0", features = ["system-tray"] }
+
+[features]
+# this feature is used for production builds or when `devPath` points to the filesystem
+# DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]

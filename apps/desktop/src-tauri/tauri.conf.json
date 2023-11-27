@@ -1,0 +1,99 @@
+{
+  "build": {
+    "beforeDevCommand": "vite",
+    "beforeBuildCommand": "pnpm run build",
+    "devPath": "http://localhost:1420",
+    "distDir": "../dist",
+    "withGlobalTauri": false
+  },
+  "package": {
+    "productName": "Cap",
+    "version": "0.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true
+      },
+      "window": {
+        "all": false,
+        "close": true,
+        "hide": true,
+        "show": true,
+        "maximize": true,
+        "minimize": true,
+        "unmaximize": true,
+        "unminimize": true,
+        "startDragging": true,
+        "setAlwaysOnTop": true,
+        "setIgnoreCursorEvents": true
+      }
+    },
+
+    "bundle": {
+      "active": true,
+      "targets": "all",
+      "identifier": "com.cap.so",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ]
+    },
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "title": "Cap",
+        "label": "main",
+        "url": "/",
+        "width": 0,
+        "height": 0,
+        "maximized": false,
+        "resizable": true,
+        "fullscreen": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": false,
+        "center": true
+      },
+      {
+        "title": "Cap",
+        "label": "camera",
+        "url": "/camera",
+        "width": 200,
+        "height": 200,
+        "maximized": false,
+        "resizable": false,
+        "fullscreen": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": false,
+        "center": false,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "title": "Cap",
+        "label": "options",
+        "url": "/options",
+        "width": 380,
+        "height": 460,
+        "maximized": false,
+        "resizable": false,
+        "fullscreen": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": false,
+        "center": true,
+        "y": 0
+      }
+    ]
+  }
+}

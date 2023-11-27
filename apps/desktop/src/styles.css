@@ -1,0 +1,183 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: "Geist";
+  src:
+    url("/public/fonts/Geist-SemiBold.woff2") format("woff2"),
+    url("/public/fonts/Geist-SemiBold.woff") format("woff");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  src:
+    url("/public/fonts/Geist-Regular.woff2") format("woff2"),
+    url("/public/fonts/Geist-Regular.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  src:
+    url("/public/fonts/Geist-Light.woff2") format("woff2"),
+    url("/public/fonts/Geist-Light.woff") format("woff");
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+.wrapper {
+  @apply mx-auto w-11/12 clear-both max-w-screen-xl;
+}
+
+.wrapper-max {
+  @apply max-w-screen-2xl;
+}
+
+.wrapper-sm {
+  @apply max-w-5xl;
+}
+
+*,
+*:before,
+*:after {
+  outline: none !important;
+}
+
+.text-primary {
+  color: var(--primary);
+}
+
+a.text-primary:hover {
+  color: var(--primary-2);
+}
+
+.text-secondary {
+  color: var(--secondary);
+}
+
+a.text-secondary:hover {
+  color: var(--secondary-2);
+}
+
+a.bg-primary:hover {
+  background-color: var(--primary-2);
+}
+
+.bg-dark {
+  background-color: var(--secondary-3);
+}
+
+.bg-gradient {
+  @apply bg-gradient-to-r from-secondary-2 to-secondary-3 transition-all duration-300;
+}
+
+.bg-gradient:hover {
+  @apply bg-gradient-to-r from-secondary to-secondary-3;
+}
+
+.bg-animated {
+  content: "";
+  background: linear-gradient(60deg, var(--primary), var(--secondary));
+  animation: animatedgradient 2s ease infinite;
+  background-size: 300% 300%;
+}
+
+.animated-yaxis {
+  animation: animatedyaxis 6s ease infinite forwards;
+}
+
+:root {
+  --primary: #005cb1;
+  --primary-2: #004c93;
+  --primary-3: #003b73;
+  --secondary: #2eb4ff;
+  --secondary-2: #1696e0;
+  --secondary-3: #117ebd;
+  --tertiary: #82c6f1;
+  --tertiary-2: #67aad4;
+  --tertiary-3: #4c95c2;
+  --filler: #efefef;
+  --filler-2: #e4e4e4;
+  --filler-3: #e2e2e2;
+  --filler-txt: #b3b3b3;
+  --text-primary: #0d1b2a;
+  --text-secondary: #ffffff;
+  --header-height: 80px;
+  --vh100-offset: calc(100vh - var(--header-height));
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 214, 219, 220;
+  --background-end-rgb: 255, 255, 255;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --foreground-rgb: 255, 255, 255;
+    --background-start-rgb: 0, 0, 0;
+    --background-end-rgb: 0, 0, 0;
+  }
+}
+
+html {
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  font-family: "Geist", sans-serif !important;
+  background-color: rgba(255, 255, 255, 0);
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  cursor: default !important;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: antialiased;
+  font-smooth: always;
+}
+
+#root {
+  @apply h-screen overflow-hidden flex items-center justify-center;
+}
+
+* {
+  cursor: default !important;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  @apply font-semibold;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+a,
+p,
+span,
+button,
+label {
+  @apply tracking-tight;
+}
+
+.custom-bg {
+  background: radial-gradient(
+    69.32% 50% at 50% 50%,
+    #c5eaff 0%,
+    #d3e5ff 49.88%,
+    #ffffff 100%
+  );
+}
