@@ -108,14 +108,14 @@ a.bg-primary:hover {
   --text-secondary: #ffffff;
   --header-height: 80px;
   --vh100-offset: calc(100vh - var(--header-height));
-  --foreground-rgb: 0, 0, 0;
+  --foreground-rgb: #000000;
   --background-start-rgb: 214, 219, 220;
   --background-end-rgb: 255, 255, 255;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --foreground-rgb: 255, 255, 255;
+    --foreground-rgb: #ffffff;
     --background-start-rgb: 0, 0, 0;
     --background-end-rgb: 0, 0, 0;
   }
