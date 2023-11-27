@@ -41,30 +41,39 @@ export const HomePage = () => {
       <div className="w-full custom-bg">
         <div className="wrapper wrapper-sm mx-auto">
           <div className="mb-auto -mt-20 text-center md:px-4 pt-32 pb-52 md:pt-52 md:pb-64 space-y-8">
-            <h1 className="fade-in-down text-3xl sm:text-5xl lg:text-7xl relative z-10">
+            <h1 className="fade-in-down text-3xl sm:text-5xl lg:text-7xl relative z-10 text-black">
               Your screen recordings deserve to be beautiful.
             </h1>
-            <p className="fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto">
+            <p className="fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto text-black">
               Cap is an open source and privacy focused alternative to Loom.
               Lightweight, powerful and stunning. Record and share in seconds.
             </p>
             {waitlistSuccess === true ? (
               <div className="fade-in-up max-w-lg mx-auto styled-links">
-                <p className="text-sm">
+                <p className="text-sm text-black">
                   Thank you for joining the waitlist. Development of Cap is
                   ongoing, and you can follow along live either via{" "}
-                  <a href="https://x.com/richiemcilroy" target="_blank">
+                  <a
+                    className="text-black"
+                    href="https://x.com/richiemcilroy"
+                    target="_blank"
+                  >
                     Twitter (X)
                   </a>
                   , our growing{" "}
                   <a
+                    className="text-black"
                     href="https://discord.com/invite/y8gdQ3WRN3"
                     target="_blank"
                   >
                     Discord community
                   </a>
                   , or over on the Cap{" "}
-                  <a href="https://github.com/cap-so/cap" target="_blank">
+                  <a
+                    className="text-black"
+                    href="https://github.com/cap-so/cap"
+                    target="_blank"
+                  >
                     GitHub repository
                   </a>
                 </p>
@@ -80,7 +89,7 @@ export const HomePage = () => {
                     ref={emailRef}
                     type="email"
                     name="email"
-                    className="w-full h-full bg-white focus:outline-none outline-none px-3 text-sm sm:text-base"
+                    className="w-full h-full bg-white focus:outline-none outline-none px-3 text-sm sm:text-base text-black"
                   />
                   <button className="bg-primary-2 hover:bg-primary-3 border border-primary text-white font-medium text-sm sm:text-base py-1.5 px-3">
                     {waitlistLoading === true ? "Loading..." : "Submit"}

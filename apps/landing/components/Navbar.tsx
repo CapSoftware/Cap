@@ -20,7 +20,7 @@ export const Navbar = () => {
           <Logo className="w-20 sm:w-24 h-auto" />
         </a>
       </div>
-      <ul className="p-0 m-0 space-x-5 text-lg flex items-center list-none">
+      <ul className="p-0 m-0 space-x-5 text-lg flex items-center list-none text-black">
         <li>
           <a href="/roadmap">Roadmap</a>
         </li>
