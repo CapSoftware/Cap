@@ -89,6 +89,7 @@ export const HomePage = () => {
                     ref={emailRef}
                     type="email"
                     name="email"
+                    placeholder="Your email address"
                     className="w-full h-full bg-white focus:outline-none outline-none px-3 text-sm sm:text-base text-black"
                   />
                   <button className="bg-primary-2 hover:bg-primary-3 border border-primary text-white font-medium text-sm sm:text-base py-1.5 px-3">
