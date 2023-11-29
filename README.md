@@ -26,7 +26,7 @@ Cap is an open source and privacy focused alternative to Loom. It's a video mess
 
 # Roadmap
 
-View what's currently in progress, and what's planned for the future: [Cap Roadmap]([https://cap.so/roadmap](https://capso.notion.site/7aac740edeee49b5a23be901a7cb734e))
+View what's currently in progress, and what's planned for the future: [Cap Roadmap](https://capso.notion.site/7aac740edeee49b5a23be901a7cb734e)
 
 # App Architecture
 
