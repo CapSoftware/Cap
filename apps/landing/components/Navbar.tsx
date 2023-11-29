@@ -22,7 +22,12 @@ export const Navbar = () => {
       </div>
       <ul className="p-0 m-0 space-x-5 text-lg flex items-center list-none text-black">
         <li>
-          <a href="/roadmap">Roadmap</a>
+          <a
+            href="https://capso.notion.site/7aac740edeee49b5a23be901a7cb734e?v=7c1f56484be4497aae03e1aa5fba0f34"
+            target="_blank"
+          >
+            Roadmap
+          </a>
         </li>
         <li>
           <a href="/faq">FAQ</a>
