@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { ReactMediaRecorder } from "@/utils/recording/client";
-import { showMenu } from "tauri-plugin-context-menu";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
@@ -10,6 +9,7 @@ import { Button } from "@/components/Button";
 import { Logo } from "@/components/icons/Logo";
 // import { Settings } from "@/components/icons/Settings";
 import { emit } from "@tauri-apps/api/event";
+import { showMenu } from "tauri-plugin-context-menu";
 
 export const FloatingOptions = () => {
   const [foundDevices, setFoundDevices] = useState<MediaDeviceInfo[]>([]);
@@ -63,7 +63,7 @@ export const FloatingOptions = () => {
           }
         }
       } catch (error) {
-        console.error(error);
+        console.error("Couldn't fetch devices", error);
       }
     };
 
@@ -71,29 +71,37 @@ export const FloatingOptions = () => {
   }, []);
 
   const handleContextClick = async (option: string) => {
+    const filteredDevices = foundDevices
+      .filter((device) =>
+        option === "video"
+          ? device.kind === "videoinput"
+          : device.kind === "audioinput"
+      )
+      .map((device) => ({
+        label: device.label,
+        disabled:
+          option === "video"
+            ? device.deviceId === selectedVideoDevice?.deviceId
+            : device.deviceId === selectedAudioDevice?.deviceId,
+        event: async () => {
+          try {
+            await emit("change-device", { type: option, device });
+          } catch (error) {
+            console.error("Failed to emit change-device event:", error);
+          }
+        },
+      }));
+
+    //TODO: Some default item maybe. OR Show an error when filteredDevices length === 0
     showMenu({
-      items: [
-        ...foundDevices
-          .filter((device) =>
-            option === "video"
-              ? device.kind === "videoinput"
-              : device.kind === "audioinput"
-          )
-          .map((device) => ({
-            label: device.label,
-            disabled:
-              option === "video"
-                ? device.deviceId === selectedVideoDevice?.deviceId
-                : device.deviceId === selectedAudioDevice?.deviceId,
-            event: async () => {
-              try {
-                await emit("change-device", { type: option, device });
-              } catch (error) {
-                console.error("Failed to emit change-device event:", error);
-              }
-            },
-          })),
-      ],
+      items: [...filteredDevices],
+      ...(filteredDevices.length === 0 && {
+        items: [
+          {
+            label: "Nothing found.",
+          },
+        ],
+      }),
     });
   };
 

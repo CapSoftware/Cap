@@ -6,6 +6,7 @@ import {
 import { ReactElement, useCallback, useEffect, useRef, useState } from "react";
 import { connect } from "extendable-media-recorder-wav-encoder";
 import { useMediaDevices } from "./MediaDeviceContext";
+import { useDidMountEffect } from "@/hooks/useDidMount";
 
 export type ReactMediaRecorderRenderProps = {
   error: string;
@@ -90,7 +91,8 @@ export function useReactMediaRecorder({
 
   const { selectedVideoDevice, selectedAudioDevice } = useMediaDevices();
 
-  useEffect(() => {
+  // We don't have a unmount / unregister for this so we need to use `useDidMountEffect`
+  useDidMountEffect(() => {
     const setup = async () => {
       await register(await connect());
     };
