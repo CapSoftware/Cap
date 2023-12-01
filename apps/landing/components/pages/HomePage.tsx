@@ -19,12 +19,12 @@ export const HomePage = () => {
     const email = formData.get("email");
 
     if (!email) {
-      setEmailError("Please enter your email!");
+      setEmailError("Please enter your email address to receive updates.");
       return;
     }
 
     setWaitlistLoading(true);
-    setEmailError(null); 
+    setEmailError(null);
 
     const response = await fetch("/api/waitlist", {
       method: "POST",
@@ -101,12 +101,13 @@ export const HomePage = () => {
                     {waitlistLoading === true ? "Loading..." : "Submit"}
                   </button>
                 </form>
-                {emailError && (
-                  <p className="text-red-500 text-sm">{emailError}</p>
+                {emailError ? (
+                  <p className="text-red-600 text-sm">{emailError}</p>
+                ) : (
+                  <p className="text-gray-600 text-sm">
+                    Sign up to receive development updates and early access.
+                  </p>
                 )}
-                <p className="text-gray-600 text-sm">
-                  Sign up to receive development updates and early access.
-                </p>
               </div>
             ) : (
               <div className="fade-in-up animate-delay-2">
