@@ -9,6 +9,7 @@ export const HomePage = () => {
   const [showEmail, setShowEmail] = useState<boolean>(false);
   const [waitlistSuccess, setWaitlistSuccess] = useState<boolean>(false);
   const [waitlistLoading, setWaitlistLoading] = useState<boolean>(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -17,9 +18,13 @@ export const HomePage = () => {
     const formData = new FormData(event.currentTarget);
     const email = formData.get("email");
 
-    if (!email) return;
+    if (!email) {
+      setEmailError("Please enter your email!");
+      return;
+    }
 
     setWaitlistLoading(true);
+    setEmailError(null); 
 
     const response = await fetch("/api/waitlist", {
       method: "POST",
@@ -45,8 +50,8 @@ export const HomePage = () => {
               Your screen recordings deserve to be beautiful.
             </h1>
             <p className="fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto text-black">
-              Cap is an open source and privacy focused alternative to Loom.
-              Lightweight, powerful and stunning. Record and share in seconds.
+              Cap is an open source and privacy-focused alternative to Loom.
+              Lightweight, powerful, and stunning. Record and share in seconds.
             </p>
             {waitlistSuccess === true ? (
               <div className="fade-in-up max-w-lg mx-auto styled-links">
@@ -96,6 +101,9 @@ export const HomePage = () => {
                     {waitlistLoading === true ? "Loading..." : "Submit"}
                   </button>
                 </form>
+                {emailError && (
+                  <p className="text-red-500 text-sm">{emailError}</p>
+                )}
                 <p className="text-gray-600 text-sm">
                   Sign up to receive development updates and early access.
                 </p>
