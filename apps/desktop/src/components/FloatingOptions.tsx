@@ -1,29 +1,29 @@
 import { useEffect, useState } from "react";
 import {
   ReactMediaRecorder,
-  useDisplayRecorder,
+  // useDisplayRecorder,
 } from "@/utils/recording/client";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
-import { Screen } from "@/components/icons/Screen";
-import { Window } from "@/components/icons/Window";
+// import { Screen } from "@/components/icons/Screen";
+// import { Window } from "@/components/icons/Window";
 import { ActionButton } from "@/components/recording/ActionButton";
 import { Button } from "@/components/Button";
 import { Logo } from "@/components/icons/Logo";
 import { emit } from "@tauri-apps/api/event";
 import { showMenu } from "tauri-plugin-context-menu";
+import { invoke } from "@tauri-apps/api/tauri";
 
-type DisplayType = {
-  label: string;
-  track: MediaStreamTrack;
-  type: string;
-} | null;
+// type DisplayType = {
+//   label: string;
+//   track: MediaStreamTrack;
+//   type: string;
+// } | null;
 
 export const FloatingOptions = () => {
   const [foundDevices, setFoundDevices] = useState<MediaDeviceInfo[]>([]);
   const { selectedVideoDevice, selectedAudioDevice } = useMediaDevices();
-  const [selectedDisplay, setSelectedDisplay] = useState<DisplayType>(null);
 
   useEffect(() => {
     const fetchAndEmitDevices = async () => {
@@ -80,74 +80,67 @@ export const FloatingOptions = () => {
     fetchAndEmitDevices();
   }, []);
 
-  // Helper function to handle "Screen" or "Window" selection
-  const selectScreenOrWindow = async (sourceType: string) => {
-    try {
-      // Use the getDisplayMedia API for screen capture options
-      const stream = (await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: false,
-      })) as MediaStream;
+  // // Helper function to handle "Screen" or "Window" selection
+  // const selectScreenOrWindow = async (sourceType: string) => {
+  //   try {
+  //     // Use the getDisplayMedia API for screen capture options
+  //     const stream = (await navigator.mediaDevices.getDisplayMedia({
+  //       video: {
+  //         displaySurface: "monitor",
+  //       },
+  //       audio: false,
+  //     })) as MediaStream;
 
-      if (stream.getVideoTracks().length === 0) {
-        return;
-      }
-      // Now you should have access to the id, label and other properties of the chosen screen or window
-      const track = stream.getVideoTracks()[0];
-      const label = track ? track.label : "No Label";
+  //     if (stream.getVideoTracks().length === 0) {
+  //       return;
+  //     }
+  //     // Now you should have access to the id, label and other properties of the chosen screen or window
+  //     const track = stream.getVideoTracks()[0];
+  //     const label = track ? track.label : "No Label";
 
-      // After selection, save it in the state
-      setSelectedDisplay({ label, track, type: sourceType });
+  //     // After selection, save it in the state
+  //     setSelectedDisplay({ label, track, type: sourceType });
 
-      // stream.getTracks().forEach((t) => t.stop()); // Stop the stream if you don't need it running
-    } catch (error) {
-      console.error("Failed to select screen or window:", error);
-    }
-  };
+  //     // stream.getTracks().forEach((t) => t.stop()); // Stop the stream if you don't need it running
+  //   } catch (error) {
+  //     console.error("Failed to select screen or window:", error);
+  //   }
+  // };
 
   const handleContextClick = async (option: string) => {
-    if (option === "screen" || option === "window") {
-      // Call the selectScreenOrWindow function when "Screen" or "Window" is clicked
-      selectScreenOrWindow(option);
-    } else {
-      // The existing logic to handle selection of video or audio devices
-      const filteredDevices = foundDevices
-        .filter((device) =>
+    const filteredDevices = foundDevices
+      .filter((device) =>
+        option === "video"
+          ? device.kind === "videoinput"
+          : device.kind === "audioinput"
+      )
+      .map((device) => ({
+        label: device.label,
+        disabled:
           option === "video"
-            ? device.kind === "videoinput"
-            : device.kind === "audioinput"
-        )
-        .map((device) => ({
-          label: device.label,
-          disabled:
-            option === "video"
-              ? device.deviceId === selectedVideoDevice?.deviceId
-              : device.deviceId === selectedAudioDevice?.deviceId,
-          event: async () => {
-            try {
-              await emit("change-device", { type: option, device });
-            } catch (error) {
-              console.error("Failed to emit change-device event:", error);
-            }
+            ? device.deviceId === selectedVideoDevice?.deviceId
+            : device.deviceId === selectedAudioDevice?.deviceId,
+        event: async () => {
+          try {
+            await emit("change-device", { type: option, device });
+          } catch (error) {
+            console.error("Failed to emit change-device event:", error);
+          }
+        },
+      }));
+
+    // Show a context menu or dialog with the filtered devices
+    showMenu({
+      items: [...filteredDevices],
+      ...(filteredDevices.length === 0 && {
+        items: [
+          {
+            label: "Nothing found.",
           },
-        }));
-
-      // Show a context menu or dialog with the filtered devices
-      showMenu({
-        items: [...filteredDevices],
-        ...(filteredDevices.length === 0 && {
-          items: [
-            {
-              label: "Nothing found.",
-            },
-          ],
-        }),
-      });
-    }
+        ],
+      }),
+    });
   };
-
-  console.log("selectedisplayinnner: ");
-  console.log(selectedDisplay);
 
   return (
     <ReactMediaRecorder
@@ -162,25 +155,15 @@ export const FloatingOptions = () => {
           : undefined
       }
       render={({ status, startRecording, stopRecording }) => {
-        const {
-          startRecording: startDisplayRecording,
-          stopRecording: stopDisplayRecording,
-          screenBlobUrl,
-        } = useDisplayRecorder(
-          selectedDisplay?.track
-            ? new MediaStream([selectedDisplay.track])
-            : null
-        );
-
-        const handleStartAllRecordings = () => {
+        const handleStartAllRecordings = async () => {
           startRecording(); // Starts webcam recording
-          startDisplayRecording(); // Starts display recording
+          await invoke("take_screenshot");
         };
 
         // Similarly, for stopping all recordings
         const handleStopAllRecordings = () => {
           stopRecording(); // Stops webcam recording
-          stopDisplayRecording(); // Stops display recording
+          // stopDisplayRecording(); // Stops display recording
         };
 
         return (
@@ -204,7 +187,7 @@ export const FloatingOptions = () => {
                 </div> */}
               </div>
               <div className="space-y-4 w-full">
-                <div>
+                {/* <div>
                   <label className="text-sm font-medium">
                     Display Settings
                   </label>
@@ -229,7 +212,7 @@ export const FloatingOptions = () => {
                       }
                     />
                   </div>
-                </div>
+                </div> */}
                 <div>
                   <label className="text-sm font-medium">Webcam Settings</label>
                   <div className="space-y-1">
@@ -259,9 +242,6 @@ export const FloatingOptions = () => {
                     handler={handleStartAllRecordings}
                     label="Start Recording"
                   />
-                )}
-                {screenBlobUrl !== null && (
-                  <video src={screenBlobUrl} controls />
                 )}
               </div>
             </div>
