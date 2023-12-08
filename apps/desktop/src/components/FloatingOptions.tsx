@@ -157,12 +157,13 @@ export const FloatingOptions = () => {
       render={({ status, startRecording, stopRecording }) => {
         const handleStartAllRecordings = async () => {
           startRecording(); // Starts webcam recording
-          await invoke("take_screenshot");
+          await invoke("start_video_recording");
         };
 
         // Similarly, for stopping all recordings
-        const handleStopAllRecordings = () => {
+        const handleStopAllRecordings = async () => {
           stopRecording(); // Stops webcam recording
+          await invoke("stop_video_recording");
           // stopDisplayRecording(); // Stops display recording
         };
 

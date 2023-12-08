@@ -1,81 +1,96 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-extern crate scrap;
+use std::sync::{Arc, Mutex};
+use tauri::{Manager, Window};
 
-use scrap::{Capturer, Display};
-use std::io::ErrorKind::WouldBlock;
-use std::thread;
-use std::time::Duration;
-use std::path::Path;
-use std::fs;
-use tauri::Manager;
-use image::{ImageBuffer, RgbaImage, Pixel, Rgba};
+use ffmpeg_sidecar::{
+    command::ffmpeg_is_installed,
+    download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
+    error::Result as FfmpegResult,
+    paths::sidecar_dir,
+    version::ffmpeg_version,
+};
 
-// Define a command that can be invoked from the frontend
+mod recorder;
+use recorder::ScreenRecorder;
+
 #[tauri::command]
-fn take_screenshot() -> Result<(), String> {
-    let frames_dir = Path::new("frames");
-    if let Err(e) = fs::create_dir_all(&frames_dir) {
-        return Err(format!("Failed to create frames directory: {}", e));
-    }
-
-    let one_frame = Duration::from_nanos(16666667); // Approx. 1/60 second
-
-    let display = Display::primary().map_err(|e| format!("Couldn't find primary display: {}", e))?;
-    let mut capturer = Capturer::new(display).map_err(|e| format!("Couldn't begin capture: {}", e))?;
-    let (w, h) = (capturer.width(), capturer.height());
-
-    // Log width and height
-    println!("Width: {}, Height: {}", w, h);
-
-    // Attempt to capture a frame, retrying if needed
-    let buffer = loop {
-        match capturer.frame() {
-            Ok(buffer) => break buffer,
-            Err(error) if error.kind() == WouldBlock => {
-                thread::sleep(one_frame);
-                continue;
-            },
-            Err(e) => return Err(format!("Error capturing frame: {}", e)),
+fn start_video_recording(window: Window, recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
+    let window = window.clone();
+    // Clone the Arc before moving it into the thread, which will then have a 'static lifetime.
+    let recorder = recorder.inner().clone();
+    std::thread::spawn(move || {
+        let recorder = recorder.lock().expect("Failed to lock recorder.");
+        if let Err(e) = recorder.start_recording() {
+            window.emit("recording-error", &e.to_string()).expect("Failed to send recording-error event.");
         }
-    };
+    });
+}
 
-    println!("Captured! Processing...");
 
-    // Convert BGRA to RGBA
-    let mut rgba_buffer = Vec::with_capacity(buffer.len());
-    for chunk in buffer.chunks_exact(4) {
-        let bgra = [chunk[0], chunk[1], chunk[2], chunk[3]];
-        let rgba = Rgba::from_channels(bgra[2], bgra[1], bgra[0], bgra[3]);
-        rgba_buffer.extend_from_slice(&rgba.0);
-    }
-
-    // Attempt to create an RgbaImage from the converted buffer.
-    let image: RgbaImage = ImageBuffer::from_vec(w as u32, h as u32, rgba_buffer)
-        .ok_or_else(|| "Creating the image buffer failed".to_string())?;
-
-    let scaled_width = (w as f32 * 0.5) as u32; // Reducing width to 50%
-    let scaled_height = (h as f32 * 0.5) as u32; // Reducing height to 50%
-    let resized_image = image::imageops::resize(
-        &image,
-        scaled_width,
-        scaled_height,
-        image::imageops::FilterType::Lanczos3, // High-quality filter
-    );
-
-    // Save the image
-    let image_path = frames_dir.join("screenshot.png");
-    resized_image.save(&image_path)
-        .map_err(|e| format!("Failed to save screenshot: {}", e))?;
-
-    println!("Image saved as `screenshot.png`.");
-    Ok(())
+#[tauri::command]
+fn stop_video_recording(recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
+    let recorder = recorder.lock().expect("Failed to lock recorder."); // Removed 'mut' keyword
+    recorder.stop_recording();
 }
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("Thread panicked: {:?}", info);
+    }));
+
+    if which::which("ffmpeg").is_err() {
+        if let Err(e) = handle_ffmpeg_installation() {
+            eprintln!("Failed to handle FFmpeg installation: {}", e);
+        }
+    }
+
+    fn handle_ffmpeg_installation() -> FfmpegResult<()> {
+        if ffmpeg_is_installed() {
+            println!("FFmpeg is already installed! 🎉");
+            return Ok(());
+        }
+
+        match check_latest_version() {
+            Ok(version) => println!("Latest available version: {}", version),
+            Err(_) => println!("Skipping version check on this platform."),
+        }
+
+        let download_url = ffmpeg_download_url()?;
+        let destination = sidecar_dir()?;
+
+        println!("Downloading from: {:?}", download_url);
+        let archive_path = download_ffmpeg_package(download_url, &destination)?;
+        println!("Downloaded package: {:?}", archive_path);
+
+        println!("Extracting...");
+        unpack_ffmpeg(&archive_path, &destination)?;
+
+        let version = ffmpeg_version()?;
+        println!("FFmpeg version: {}", version);
+
+        println!("Done! 🏁");
+        Ok(())
+    }
+
     tauri::Builder::default()
-        .plugin(tauri_plugin_context_menu::init()) // Ensure you have this plugin in your dependencies
-        .invoke_handler(tauri::generate_handler![take_screenshot])
+        .setup(|app| {  
+            // Fetch the full path to the FFmpeg binary
+            let ffmpeg_binary_path = sidecar_dir()?.join(if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" });
+  
+            // Create an instance of ScreenRecorder with the ffmpeg_binary_path
+            let recorder = ScreenRecorder::new(
+                ffmpeg_binary_path,
+            );
+  
+            let shared_recorder = Arc::new(Mutex::new(recorder));
+            app.manage(shared_recorder);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            start_video_recording,
+            stop_video_recording
+        ])
         .run(tauri::generate_context!())
-        .expect("Failed to run Tauri application");
+        .expect("Error while running tauri application");
 }

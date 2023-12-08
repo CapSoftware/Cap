@@ -3,20 +3,6 @@
 version = 3
 
 [[package]]
-name = "Cap"
-version = "0.0.0"
-dependencies = [
- "image",
- "scrap",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-context-menu",
- "tauri-plugin-positioner",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -427,6 +413,22 @@ dependencies = [
  "glib-sys",
  "libc",
  "system-deps 6.1.2",
+]
+
+[[package]]
+name = "cap"
+version = "0.0.0"
+dependencies = [
+ "ffmpeg-sidecar",
+ "image",
+ "scrap",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-context-menu",
+ "tauri-plugin-positioner",
+ "which",
 ]
 
 [[package]]
@@ -980,6 +982,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ffmpeg-sidecar"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5b56b7872b0cbc828e83043a82268b111e3648dab25f29079fce448648e572a"
+
+[[package]]
 name = "field-offset"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1529,6 +1537,15 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "home"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5444c27eef6923071f7ebcc33e3444508466a76f7a2b93da00ed6e19f30c1ddb"
+dependencies = [
+ "windows-sys 0.48.0",
+]
 
 [[package]]
 name = "html5ever"
@@ -4518,6 +4535,18 @@ name = "weezl"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9193164d4de03a926d909d3bc7c30543cecb35400c02114792c2cae20d5e2dbb"
+
+[[package]]
+name = "which"
+version = "4.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87ba24419a2078cd2b0f2ede2691b6c66d8e47836da3b6db8265ebad47afbfc7"
+dependencies = [
+ "either",
+ "home",
+ "once_cell",
+ "rustix 0.38.20",
+]
 
 [[package]]
 name = "winapi"
