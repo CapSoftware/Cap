@@ -138,7 +138,7 @@ export const HomePage = () => {
                   </a>
                 </div>
                 <p className="text-gray-600 text-sm">
-                  Coming soon to macOS and Windows.
+                  Coming soon to macOS, Windows and Linux.
                 </p>
               </div>
             )}
