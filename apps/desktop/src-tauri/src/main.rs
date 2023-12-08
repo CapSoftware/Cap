@@ -13,6 +13,7 @@ use ffmpeg_sidecar::{
 
 mod recorder;
 use recorder::ScreenRecorder;
+use which::which;
 
 #[tauri::command]
 fn start_video_recording(window: Window, recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
@@ -22,11 +23,12 @@ fn start_video_recording(window: Window, recorder: tauri::State<'_, Arc<Mutex<Sc
     std::thread::spawn(move || {
         let recorder = recorder.lock().expect("Failed to lock recorder.");
         if let Err(e) = recorder.start_recording() {
-            window.emit("recording-error", &e.to_string()).expect("Failed to send recording-error event.");
+            window
+                .emit("recording-error", &e.to_string())
+                .expect("Failed to send recording-error event.");
         }
     });
 }
-
 
 #[tauri::command]
 fn stop_video_recording(recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
@@ -74,15 +76,13 @@ fn main() {
     }
 
     tauri::Builder::default()
-        .setup(|app| {  
+        .setup(|app| {
             // Fetch the full path to the FFmpeg binary
-            let ffmpeg_binary_path = sidecar_dir()?.join(if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" });
-  
+            let ffmpeg_binary_path = which("ffmpeg").unwrap();
+
             // Create an instance of ScreenRecorder with the ffmpeg_binary_path
-            let recorder = ScreenRecorder::new(
-                ffmpeg_binary_path,
-            );
-  
+            let recorder = ScreenRecorder::new(ffmpeg_binary_path);
+
             let shared_recorder = Arc::new(Mutex::new(recorder));
             app.manage(shared_recorder);
             Ok(())

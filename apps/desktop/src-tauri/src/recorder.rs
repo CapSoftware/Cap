@@ -1,14 +1,14 @@
+use image::{ImageBuffer, Pixel, Rgba, RgbaImage};
+use scrap::{Capturer, Display};
+use std::fs::File;
 use std::io::{ErrorKind::WouldBlock, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::path::{PathBuf, Path};
-use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::fs::File;
-use scrap::{Capturer, Display};
-use image::{ImageBuffer, RgbaImage, Pixel, Rgba};
+use std::{env, fs};
 
 #[derive(Clone, PartialEq)]
 pub enum RecordingState {
@@ -33,7 +33,6 @@ fn save_frame_to_file(frame: &[u8], output_file_path: PathBuf) -> Result<(), std
 }
 
 impl ScreenRecorder {
-  
     pub fn new(ffmpeg_path: PathBuf) -> Self {
         Self {
             state: Arc::new(Mutex::new(RecordingState::Idle)),
@@ -51,7 +50,8 @@ impl ScreenRecorder {
         println!("Starting recording from function");
         println!("ffmpeg_path: {}", ffmpeg_path.to_str().unwrap());
 
-        let display = Display::primary().map_err(|_| "Failed to find primary display".to_string())?;
+        let display =
+            Display::primary().map_err(|_| "Failed to find primary display".to_string())?;
         let (w, h) = (display.width(), display.height());
         let adjusted_height = h & !1;
         let capture_size = w * adjusted_height * BYTES_PER_PIXEL;
@@ -59,10 +59,12 @@ impl ScreenRecorder {
         let frame_duration = Duration::from_secs_f64(1.0 / framerate as f64);
         let mut last_frame_time = Instant::now();
         let one_frame_duration = Duration::from_secs_f64(1.0 / framerate as f64);
-    
+
         println!("Display size: {}x{}", w, h);
 
-        let mut state_guard = state.lock().map_err(|_| "Failed to acquire state lock".to_string())?;
+        let mut state_guard = state
+            .lock()
+            .map_err(|_| "Failed to acquire state lock".to_string())?;
         if *state_guard != RecordingState::Idle {
             return Err("Recording is already in progress".to_owned());
         }
@@ -70,38 +72,51 @@ impl ScreenRecorder {
         drop(state_guard); // Drop the lock as soon as it's no longer needed.
 
         let recordings_dir = Path::new("recordings");
-        fs::create_dir_all(&recordings_dir).map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+        fs::create_dir_all(&recordings_dir)
+            .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
 
         let output_path = recordings_dir.join("recording.mp4");
-        let output_path_str = output_path.to_str().ok_or_else(|| "Failed to construct output file path string".to_string())?;
 
+        let binding = env::current_dir().unwrap().join(output_path);
+        let output_path_str = binding.to_str().unwrap();
         println!("Output path: {}", output_path_str);
         println!("Starting FFmpeg...");
 
         let mut command = Command::new(&self.ffmpeg_path)
             .args(&[
-                "-f", "rawvideo",            // Input format
-                "-pix_fmt", "bgra",          // Input pixel format
-                "-video_size", &format!("{}x{}", w, adjusted_height), // Input video size
-                "-framerate", &framerate.to_string(),          // Input frame rate
-                "-i", "-",                   // Input from stdin (use `pipe:0` if `-` does not work)
-                "-c:v", "libx264",           // Video codec
-                "-preset", "veryfast",       // Encoding preset
-                "-crf", "18",                // Constant Rate Factor for quality
-                "-pix_fmt", "yuv420p",       // Output pixel format
-                "-y",                        // Overwrite output file without asking
-                "-movflags", "+faststart",   // Enable fast start
-                output_path_str,             // Output file path
+                "-f",
+                "rawvideo", // Input format
+                "-pix_fmt",
+                "bgra", // Input pixel format
+                "-video_size",
+                &format!("{}x{}", w, adjusted_height), // Input video size
+                "-framerate",
+                &framerate.to_string(), // Input frame rate
+                "-i",
+                "-", // Input from stdin (use `pipe:0` if `-` does not work)
+                "-c:v",
+                "libx264", // Video codec
+                "-preset",
+                "veryfast", // Encoding preset
+                "-crf",
+                "18", // Constant Rate Factor for quality
+                "-pix_fmt",
+                "yuv420p", // Output pixel format
+                "-y",      // Overwrite output file without asking
+                "-movflags",
+                "+faststart",    // Enable fast start
+                output_path_str, // Output file path
             ])
             .stdin(Stdio::piped())
+            .stdout(Stdio::inherit())
             .spawn()
-            .map_err(|e| format!("Failed to start FFmpeg: {}", e))?;
-
-        let ffmpeg_stdin = command.stdin.take().ok_or_else(|| "Failed to take FFmpeg stdin".to_string())?;
+            .unwrap();
 
         println!("FFmpeg started");
 
+        let ffmpeg_stdin = command.stdin.take().expect("Failed to get stdin");
         let should_stop_clone = should_stop.clone();
+
         let ffmpeg_handle = thread::spawn(move || {
             // Set up the capturer for the primary display.
             let mut capturer = Capturer::new(display).expect("Failed to start capture");
@@ -109,29 +124,30 @@ impl ScreenRecorder {
 
             // Create a new buffer for the frame with the exact size required, excluding any padding.
             let frame_size = w * h * BYTES_PER_PIXEL;
-            
+
             // Capture frames in a loop.
             loop {
                 let start_frame_time = Instant::now();
                 if should_stop_clone.load(Ordering::SeqCst) {
                     *state.lock().unwrap() = RecordingState::Stopping;
                     break;
-                }    
+                }
                 let buffer = match capturer.frame() {
                     Ok(buffer) => buffer,
                     Err(error) if error.kind() == WouldBlock => {
                         thread::sleep(Duration::from_millis(1));
                         continue;
-                    },
+                    }
                     Err(e) => return Err(format!("Error capturing frame: {}", e)),
                 };
-                
+
                 // argb_to_i420(w as usize, adjusted_height as usize, &buffer[..capture_size], &mut yuv_buffer);
 
-                let stride = buffer[..capture_size].len() / adjusted_height;
+                let stride = buffer[..capture_size].len() / h;
 
                 // Write each row of the buffer to FFmpeg, excluding stride if there is any.
                 // Here we're assuming there's no stride, so we write the entire row.
+
                 for row in 0..adjusted_height {
                     let start = row * stride;
                     let end = start + stride;
@@ -148,11 +164,11 @@ impl ScreenRecorder {
                     *state.lock().unwrap() = RecordingState::Stopping;
                 }
 
-                if let Some(time_to_sleep) = frame_duration.checked_sub(start_frame_time.elapsed()) {
+                if let Some(time_to_sleep) = frame_duration.checked_sub(start_frame_time.elapsed())
+                {
                     thread::sleep(time_to_sleep);
                 }
-            };
-
+            }
 
             // Handle closing FFmpeg's stdin and waiting for the encoding process to finish.
             drop(ffmpeg_stdin_guard);
@@ -166,29 +182,30 @@ impl ScreenRecorder {
                         println!("FFmpeg encoding completed successfully.");
                         Ok(())
                     } else {
-                        let error_message = format!("FFmpeg exited with error, status: {:?}", output.status.code());
+                        let error_message = format!(
+                            "FFmpeg exited with error, status: {:?}",
+                            output.status.code()
+                        );
                         eprintln!("{}", &error_message);
                         Err(error_message)
                     }
-                },
+                }
                 Err(e) => {
                     let error_message = format!("Failed to wait for FFmpeg child: {}", e);
                     eprintln!("{}", &error_message);
                     Err(error_message)
-                },
+                }
             }
         });
-
 
         *self.ffmpeg_handle.lock().unwrap() = Some(ffmpeg_handle);
 
         Ok(())
     }
 
-
     pub fn stop_recording(&self) {
         println!("Stop recording requested.");
-        
+
         // Mark the flag to stop recording
         self.should_stop.store(true, Ordering::SeqCst);
 
@@ -201,7 +218,7 @@ impl ScreenRecorder {
         };
 
         if let Some(ffmpeg_handle) = ffmpeg_handle_lock.take() {
-            drop(ffmpeg_handle_lock); 
+            drop(ffmpeg_handle_lock);
             match ffmpeg_handle.join() {
                 Ok(result) => match result {
                     Ok(_) => println!("Recording stopped successfully."),
