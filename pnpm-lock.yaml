@@ -79,7 +79,7 @@ importers:
         specifier: ^4.4.4
         version: 4.5.0(@types/node@20.10.0)
 
-  apps/landing:
+  apps/web:
     dependencies:
       dotenv:
         specifier: ^16.3.1
