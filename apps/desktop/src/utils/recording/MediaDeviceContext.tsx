@@ -1,4 +1,10 @@
-import { useState, createContext, useContext, useEffect } from "react";
+import {
+  useState,
+  createContext,
+  useContext,
+  useEffect,
+  useCallback,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import { DeviceChangePayload } from "@/utils/types/shared";
 
@@ -12,6 +18,8 @@ interface MediaDeviceContextData {
   setSelectedAudioDevice: React.Dispatch<
     React.SetStateAction<MediaDeviceInfo | null>
   >;
+  devices: MediaDeviceInfo[];
+  getDevices: () => Promise<void>;
 }
 
 export const MediaDeviceContext = createContext<
@@ -25,41 +33,32 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     useState<MediaDeviceInfo | null>(null);
   const [selectedAudioDevice, setSelectedAudioDevice] =
     useState<MediaDeviceInfo | null>(null);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
 
-  // useEffect(() => {
-  //   const passVideoDeviceState = async () => {
-  //     try {
-  //       if (selectedVideoDevice === null) return;
-  //       await emit("change-device", {
-  //         type: "video",
-  //         device: selectedVideoDevice,
-  //       });
-  //     } catch (error) {
-  //       console.error("Error emitting event:", error);
-  //     }
-  //   };
+  const getDevices = useCallback(async () => {
+    const fetchedDevices = await navigator.mediaDevices.enumerateDevices();
+    setDevices(fetchedDevices);
 
-  //   passVideoDeviceState();
-  // }, [selectedVideoDevice]);
-
-  // useEffect(() => {
-  //   const passAudioDeviceState = async () => {
-  //     try {
-  //       if (selectedAudioDevice === null) return;
-  //       await emit("change-device", {
-  //         type: "audio",
-  //         device: selectedAudioDevice,
-  //       });
-  //     } catch (error) {
-  //       console.error("Error emitting event:", error);
-  //     }
-  //   };
-
-  //   passAudioDeviceState();
-  // }, [selectedAudioDevice]);
+    // Automatically select the first available devices if not already selected
+    if (!selectedVideoDevice) {
+      const videoInput = fetchedDevices.find(
+        (device) => device.kind === "videoinput"
+      );
+      setSelectedVideoDevice(videoInput || null);
+    }
+    if (!selectedAudioDevice) {
+      const audioInput = fetchedDevices.find(
+        (device) => device.kind === "audioinput"
+      );
+      setSelectedAudioDevice(audioInput || null);
+    }
+  }, [selectedVideoDevice, selectedAudioDevice]);
 
   useEffect(() => {
-    // Initialize the event listener
+    getDevices();
+  }, [getDevices]);
+
+  useEffect(() => {
     let unlistenFn: any;
 
     const setupListener = async () => {
@@ -93,13 +92,12 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
     setupListener();
 
-    // Cleanup function to unlisten when the component unmounts
     return () => {
       if (unlistenFn) {
         unlistenFn();
       }
     };
-  }, []);
+  }, [selectedVideoDevice, selectedAudioDevice]);
 
   return (
     <MediaDeviceContext.Provider
@@ -108,6 +106,8 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         setSelectedVideoDevice,
         selectedAudioDevice,
         setSelectedAudioDevice,
+        devices,
+        getDevices,
       }}
     >
       {children}

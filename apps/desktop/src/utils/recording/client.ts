@@ -7,6 +7,8 @@ import { ReactElement, useCallback, useEffect, useRef, useState } from "react";
 import { connect } from "extendable-media-recorder-wav-encoder";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { useDidMountEffect } from "@/utils/hooks/useDidMount";
+import { writeBinaryFile, createDir } from "@tauri-apps/api/fs";
+import { appDataDir } from "@tauri-apps/api/path";
 
 export type ReactMediaRecorderRenderProps = {
   error: string;
@@ -156,7 +158,9 @@ export function useReactMediaRecorder({
   }, [audio, video, screen]);
 
   useEffect(() => {
-    getMediaStream();
+    if (selectedVideoDevice || selectedAudioDevice || !customMediaStream) {
+      getMediaStream();
+    }
   }, [selectedVideoDevice, selectedAudioDevice]);
 
   useEffect(() => {
@@ -264,17 +268,39 @@ export function useReactMediaRecorder({
     onStart();
   };
 
-  const onRecordingStop = () => {
+  const onRecordingStop = async () => {
+    console.log("onRecordingStop started");
     const [chunk] = mediaChunks.current;
     const blobProperty: BlobPropertyBag = Object.assign(
       { type: chunk.type },
-      blobPropertyBag || (video ? { type: "video/mp4" } : { type: "audio/wav" })
+      blobPropertyBag || { type: "video/mp4" }
     );
     const blob = new Blob(mediaChunks.current, blobProperty);
-    const url = URL.createObjectURL(blob);
-    setStatus("stopped");
-    setMediaBlobUrl(url);
-    onStop(url, blob);
+    const buffer = await blob.arrayBuffer();
+    const data = new Uint8Array(buffer);
+
+    try {
+      // Get the app's data directory path
+      const dir = await appDataDir();
+      const filePath = `${dir}/recording.mp4`.replace(/\/\//g, "/");
+
+      console.log("Saving recording to:", filePath);
+
+      // Ensure the directory exists
+      await createDir(dir, { recursive: true });
+
+      // Write the file
+      await writeBinaryFile(filePath, data);
+      console.log("Recording saved successfully to:", filePath);
+
+      // Generate a Blob URL for preview or download
+      const url = URL.createObjectURL(blob);
+      setStatus("stopped");
+      setMediaBlobUrl(url);
+      onStop(url, blob);
+    } catch (error) {
+      console.error("Failed to save recording:", error);
+    }
   };
 
   const muteAudio = (mute: boolean) => {
@@ -339,113 +365,6 @@ export function useReactMediaRecorder({
     },
   };
 }
-
-export const useDisplayRecorder = (
-  screenStream: MediaStream | null,
-  onStop?: (blobUrl: string, blob: Blob) => void
-) => {
-  const mediaRecorder = useRef<MediaRecorder | null>(null);
-  const mediaChunks = useRef<Blob[]>([]);
-  const [status, setStatus] = useState<"idle" | "recording" | "stopped">(
-    "idle"
-  );
-  const [screenBlobUrl, setScreenBlobUrl] = useState<string | undefined>(
-    undefined
-  );
-  const [error, setError] = useState<string>("");
-  const mime = MediaRecorder.isTypeSupported("video/webm; codecs=vp9")
-    ? "video/webm; codecs=vp9"
-    : "video/mp4";
-
-  const startRecording = useCallback(() => {
-    if (status !== "idle" || !screenStream) return;
-
-    try {
-      mediaRecorder.current = new MediaRecorder(screenStream, {
-        mimeType: mime,
-      });
-
-      mediaRecorder.current.ondataavailable = (event) => {
-        console.log("new event: ", event);
-        if (event.data.size > 0) {
-          mediaChunks.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.current.onstart = () => {
-        console.log("recording started");
-      };
-
-      mediaRecorder.current.onstop = () => {
-        const blob = new Blob(mediaChunks.current, { type: mime });
-        const url = URL.createObjectURL(blob);
-        setScreenBlobUrl(url);
-        setStatus("stopped");
-        if (onStop) onStop(url, blob);
-      };
-
-      mediaRecorder.current.onerror = (event: any) => {
-        console.log("recording error2: ", event);
-        setError("Error during recording: " + event.error.name);
-        setStatus("idle");
-      };
-
-      mediaRecorder.current.start();
-      setStatus("recording");
-    } catch (err) {
-      console.log("recording error: ", err);
-      setError("Failed to start recording: " + (err as Error).message);
-      setStatus("idle");
-    }
-  }, [screenStream, status, onStop]);
-
-  const stopRecording = useCallback(() => {
-    if (status === "recording" && mediaRecorder.current) {
-      mediaRecorder.current.stop();
-    }
-  }, [status]);
-
-  const clearBlobUrl = useCallback(() => {
-    if (screenBlobUrl) {
-      URL.revokeObjectURL(screenBlobUrl);
-      setScreenBlobUrl(undefined);
-    }
-  }, [screenBlobUrl]);
-
-  // Make sure to clean up media resources when the component using this hook gets unmounted
-  useEffect(() => {
-    return () => {
-      clearBlobUrl();
-      if (mediaRecorder.current && mediaRecorder.current.state !== "inactive") {
-        mediaRecorder.current.stop();
-      }
-      if (
-        !mediaRecorder.current ||
-        mediaRecorder.current.state === "inactive"
-      ) {
-        screenStream?.getTracks().forEach((track) => track.stop());
-      }
-      mediaChunks.current = [];
-      mediaRecorder.current = null;
-    };
-  }, [clearBlobUrl, screenStream]);
-
-  console.log("status", status);
-  console.log("error", error);
-  console.log("screenBlobUrl", screenBlobUrl);
-  console.log("mediaChunks", mediaChunks.current);
-  console.log(screenStream?.getTracks());
-  console.log(mediaRecorder.current);
-
-  return {
-    startRecording,
-    stopRecording,
-    clearBlobUrl,
-    screenBlobUrl,
-    status,
-    error,
-  };
-};
 
 export const ReactMediaRecorder = (props: ReactMediaRecorderProps) =>
   props.render(useReactMediaRecorder(props));

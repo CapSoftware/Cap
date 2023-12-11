@@ -29,6 +29,19 @@
         "startDragging": true,
         "setAlwaysOnTop": true,
         "setIgnoreCursorEvents": true
+      },
+      "fs": {
+        "scope": ["**"],
+        "all": false,
+        "readFile": true,
+        "writeFile": true,
+        "readDir": true,
+        "copyFile": true,
+        "createDir": true,
+        "removeDir": true,
+        "removeFile": true,
+        "renameFile": true,
+        "exists": true
       }
     },
 

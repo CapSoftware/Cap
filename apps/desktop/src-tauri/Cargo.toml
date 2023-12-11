@@ -13,7 +13,7 @@ edition = "2021"
 tauri-build = { version = "1.5.0", features = [] }
 
 [dependencies]
-tauri = { version = "1.5.0", features = [ "window-set-ignore-cursor-events", "macos-private-api", "window-unminimize", "window-minimize", "window-close", "window-show", "window-start-dragging", "window-hide", "window-unmaximize", "window-maximize", "window-set-always-on-top", "shell-open"] }
+tauri = { version = "1.5.0", features = [ "fs-write-file", "fs-remove-file", "fs-read-file", "fs-rename-file", "fs-exists", "fs-remove-dir", "fs-read-dir", "fs-copy-file", "fs-create-dir", "window-set-ignore-cursor-events", "macos-private-api", "window-unminimize", "window-minimize", "window-close", "window-show", "window-start-dragging", "window-hide", "window-unmaximize", "window-maximize", "window-set-always-on-top", "shell-open"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri-plugin-context-menu = "0.5.0"

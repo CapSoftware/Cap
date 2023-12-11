@@ -6,9 +6,7 @@ use std::time::{Duration, Instant};
 use std::path::{PathBuf, Path};
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::fs::File;
 use scrap::{Capturer, Display};
-use image::{ImageBuffer, RgbaImage, Pixel, Rgba};
 
 #[derive(Clone, PartialEq)]
 pub enum RecordingState {
@@ -25,12 +23,6 @@ pub struct ScreenRecorder {
 }
 
 const BYTES_PER_PIXEL: usize = 4;
-
-fn save_frame_to_file(frame: &[u8], output_file_path: PathBuf) -> Result<(), std::io::Error> {
-    let mut output_file = File::create(output_file_path)?;
-    output_file.write_all(frame)?;
-    Ok(())
-}
 
 impl ScreenRecorder {
   
@@ -55,10 +47,8 @@ impl ScreenRecorder {
         let (w, h) = (display.width(), display.height());
         let adjusted_height = h & !1;
         let capture_size = w * adjusted_height * BYTES_PER_PIXEL;
-        let framerate = 60;
+        let framerate = 30;
         let frame_duration = Duration::from_secs_f64(1.0 / framerate as f64);
-        let mut last_frame_time = Instant::now();
-        let one_frame_duration = Duration::from_secs_f64(1.0 / framerate as f64);
     
         println!("Display size: {}x{}", w, h);
 
@@ -67,12 +57,16 @@ impl ScreenRecorder {
             return Err("Recording is already in progress".to_owned());
         }
         *state_guard = RecordingState::Recording;
-        drop(state_guard); // Drop the lock as soon as it's no longer needed.
+        drop(state_guard);
 
         let recordings_dir = Path::new("recordings");
         fs::create_dir_all(&recordings_dir).map_err(|e| format!("Failed to create recordings directory: {}", e))?;
 
         let output_path = recordings_dir.join("recording.mp4");
+        // Delete the existing recording file if it exists
+        if output_path.exists() {
+            fs::remove_file(&output_path).map_err(|e| format!("Failed to delete existing recording file: {}", e))?;
+        }
         let output_path_str = output_path.to_str().ok_or_else(|| "Failed to construct output file path string".to_string())?;
 
         println!("Output path: {}", output_path_str);
@@ -80,18 +74,18 @@ impl ScreenRecorder {
 
         let mut command = Command::new(&self.ffmpeg_path)
             .args(&[
-                "-f", "rawvideo",            // Input format
-                "-pix_fmt", "bgra",          // Input pixel format
-                "-video_size", &format!("{}x{}", w, adjusted_height), // Input video size
-                "-framerate", &framerate.to_string(),          // Input frame rate
-                "-i", "-",                   // Input from stdin (use `pipe:0` if `-` does not work)
-                "-c:v", "libx264",           // Video codec
-                "-preset", "veryfast",       // Encoding preset
-                "-crf", "18",                // Constant Rate Factor for quality
-                "-pix_fmt", "yuv420p",       // Output pixel format
-                "-y",                        // Overwrite output file without asking
-                "-movflags", "+faststart",   // Enable fast start
-                output_path_str,             // Output file path
+                "-f", "rawvideo",
+                "-pix_fmt", "bgra",
+                "-video_size", &format!("{}x{}", w, adjusted_height),
+                "-framerate", &framerate.to_string(),
+                "-i", "-",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                "-y",
+                "-movflags", "+faststart",
+                output_path_str,
             ])
             .stdin(Stdio::piped())
             .spawn()
@@ -103,14 +97,9 @@ impl ScreenRecorder {
 
         let should_stop_clone = should_stop.clone();
         let ffmpeg_handle = thread::spawn(move || {
-            // Set up the capturer for the primary display.
             let mut capturer = Capturer::new(display).expect("Failed to start capture");
             let mut ffmpeg_stdin_guard = ffmpeg_stdin;
-
-            // Create a new buffer for the frame with the exact size required, excluding any padding.
-            let frame_size = w * h * BYTES_PER_PIXEL;
             
-            // Capture frames in a loop.
             loop {
                 let start_frame_time = Instant::now();
                 if should_stop_clone.load(Ordering::SeqCst) {
@@ -126,12 +115,9 @@ impl ScreenRecorder {
                     Err(e) => return Err(format!("Error capturing frame: {}", e)),
                 };
                 
-                // argb_to_i420(w as usize, adjusted_height as usize, &buffer[..capture_size], &mut yuv_buffer);
 
                 let stride = buffer[..capture_size].len() / adjusted_height;
 
-                // Write each row of the buffer to FFmpeg, excluding stride if there is any.
-                // Here we're assuming there's no stride, so we write the entire row.
                 for row in 0..adjusted_height {
                     let start = row * stride;
                     let end = start + stride;
@@ -142,7 +128,6 @@ impl ScreenRecorder {
                     }
                 }
 
-                // Flush FFmpeg's stdin to ensure all data is sent.
                 if let Err(e) = ffmpeg_stdin_guard.flush() {
                     eprintln!("Failed to flush FFmpeg stdin: {:?}", e);
                     *state.lock().unwrap() = RecordingState::Stopping;
@@ -153,8 +138,6 @@ impl ScreenRecorder {
                 }
             };
 
-
-            // Handle closing FFmpeg's stdin and waiting for the encoding process to finish.
             drop(ffmpeg_stdin_guard);
             let output_status = command.wait_with_output();
             match output_status {
@@ -186,34 +169,44 @@ impl ScreenRecorder {
     }
 
 
-    pub fn stop_recording(&self) {
+    pub fn stop_recording(&self) -> Result<(), String> {
         println!("Stop recording requested.");
-        
+
+        // Check if recording is in progress or stopping
+        {
+            let state_guard = self.state.lock().map_err(|_| "Failed to acquire state lock".to_string())?;
+            if *state_guard == RecordingState::Idle {
+                println!("Recording is not in progress.");
+                return Ok(());
+            }
+        }
+
         // Mark the flag to stop recording
         self.should_stop.store(true, Ordering::SeqCst);
 
-        let mut ffmpeg_handle_lock = match self.ffmpeg_handle.lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                eprintln!("Failed to lock ffmpeg_handle mutex.");
-                return;
+        // Wait for the recording thread to finish
+        {
+            let mut handle = self.ffmpeg_handle.lock().map_err(|_| "Failed to acquire ffmpeg_handle lock".to_string())?;
+            if let Some(ffmpeg_handle) = handle.take() {
+                // Join the ffmpeg thread
+                match ffmpeg_handle.join() {
+                    Ok(result) => match result {
+                        Ok(_) => println!("Recording stopped successfully."),
+                        Err(e) => eprintln!("Recording thread encountered an error: {}", e),
+                    },
+                    Err(_) => eprintln!("Failed to join recording thread."),
+                }
             }
-        };
-
-        if let Some(ffmpeg_handle) = ffmpeg_handle_lock.take() {
-            drop(ffmpeg_handle_lock); 
-            match ffmpeg_handle.join() {
-                Ok(result) => match result {
-                    Ok(_) => println!("Recording stopped successfully."),
-                    Err(e) => eprintln!("Recording thread encountered an error: {}", e),
-                },
-                Err(_) => eprintln!("Failed to join recording thread."),
-            };
-        } else {
-            println!("Recording was not in progress or is already stopping.");
         }
+
+        // Reset the state to `Idle`
+        let mut state_guard = self.state.lock().map_err(|_| "Failed to acquire state lock".to_string())?;
+        *state_guard = RecordingState::Idle;
 
         // Lastly, reset the should_stop flag for potential next recording.
         self.should_stop.store(false, Ordering::SeqCst);
+
+        Ok(())
     }
+
 }

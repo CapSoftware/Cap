@@ -15,9 +15,8 @@ mod recorder;
 use recorder::ScreenRecorder;
 
 #[tauri::command]
-fn start_video_recording(window: Window, recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
+fn start_screen_recording(window: Window, recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
     let window = window.clone();
-    // Clone the Arc before moving it into the thread, which will then have a 'static lifetime.
     let recorder = recorder.inner().clone();
     std::thread::spawn(move || {
         let recorder = recorder.lock().expect("Failed to lock recorder.");
@@ -29,9 +28,11 @@ fn start_video_recording(window: Window, recorder: tauri::State<'_, Arc<Mutex<Sc
 
 
 #[tauri::command]
-fn stop_video_recording(recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
-    let recorder = recorder.lock().expect("Failed to lock recorder."); // Removed 'mut' keyword
-    recorder.stop_recording();
+fn stop_screen_recording(recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
+    let recorder = recorder.lock().expect("Failed to lock recorder.");
+    if let Err(e) = recorder.stop_recording() {
+        eprintln!("Failed to stop recording: {}", e);
+    }
 }
 
 fn main() {
@@ -88,9 +89,10 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            start_video_recording,
-            stop_video_recording
+            start_screen_recording,
+            stop_screen_recording
         ])
+        .plugin(tauri_plugin_context_menu::init())
         .run(tauri::generate_context!())
         .expect("Error while running tauri application");
 }
