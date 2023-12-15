@@ -2,7 +2,6 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import App from "./App";
-import { Editor } from "@/components/windows/Editor";
 import { Camera } from "@/components/windows/Camera";
 import { Options } from "@/components/windows/Options";
 import "./styles.css";
@@ -10,7 +9,6 @@ import "./styles.css";
 const router = createBrowserRouter([
   {
     path: "/",
-    Component: Editor,
   },
   {
     path: "/camera",

@@ -10,7 +10,7 @@ import { emit } from "@tauri-apps/api/event";
 import { showMenu } from "tauri-plugin-context-menu";
 import { invoke } from "@tauri-apps/api/tauri";
 
-export const FloatingOptions = () => {
+export const Recorder = () => {
   const { devices, selectedVideoDevice, selectedAudioDevice, getDevices } =
     useMediaDevices();
 
