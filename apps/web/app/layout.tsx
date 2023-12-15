@@ -8,10 +8,15 @@ import type { SupabaseClient } from "@supabase/auth-helpers-nextjs";
 import { Toaster } from "react-hot-toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { Metadata } from "next/types";
 
 export type TypedSupabaseClient = SupabaseClient<Database>;
 
-// do not cache this layout
+export const metadata: Metadata = {
+  title: "Cap — Beautiful, shareable screen recordings",
+  description: "Cap — Beautiful, shareable screen recordings",
+};
+
 export const revalidate = 0;
 
 export default async function RootLayout({
