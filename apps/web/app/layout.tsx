@@ -1,20 +1,29 @@
-import type { Metadata } from "next";
-import "ui/style";
-import "./globals.css";
+import "server-only";
+import SupabaseListener from "@/utils/database/supabase/listener";
+import SupabaseProvider from "@/utils/database/supabase/provider";
+import "@/app/globals.css";
+import { createServerClient } from "@/utils/database/supabase/server";
+import type { Database } from "@/utils/database/supabase/types";
+import type { SupabaseClient } from "@supabase/auth-helpers-nextjs";
+import { Toaster } from "react-hot-toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
-import { Toaster } from "react-hot-toast";
 
-export const metadata: Metadata = {
-  title: "Cap — Beautiful, shareable screen recordings",
-  description: "Cap — Beautiful, shareable screen recordings",
-};
+export type TypedSupabaseClient = SupabaseClient<Database>;
 
-export default function RootLayout({
+// do not cache this layout
+export const revalidate = 0;
+
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const supabase = createServerClient();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
   return (
     <html lang="en">
       <head>
@@ -44,12 +53,15 @@ export default function RootLayout({
         <meta name="theme-color" content="#ffffff" />
       </head>
       <body>
-        <Toaster />
-        <main className="w-full overflow-hidden">
-          <Navbar />
-          {children}
-          <Footer />
-        </main>
+        <SupabaseProvider session={session}>
+          <SupabaseListener serverAccessToken={session?.access_token} />
+          <Toaster />
+          <main className="w-full overflow-hidden">
+            <Navbar />
+            {children}
+            <Footer />
+          </main>
+        </SupabaseProvider>
         <script
           defer
           data-domain="cap.so"

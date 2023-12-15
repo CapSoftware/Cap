@@ -44,7 +44,12 @@
 *,
 *:before,
 *:after {
-  box-sizing: inherit;
+  box-sizing: border-box;
+}
+
+* {
+  min-width: 0;
+  min-height: 0;
 }
 
 .text-primary {
@@ -154,12 +159,12 @@ button {
   @apply transition-all;
 }
 
-nav a:hover {
-  @apply underline;
-}
-
 nav a {
   @apply text-sm md:text-base;
+}
+
+label {
+  @apply text-left text-sm font-semibold block;
 }
 
 .custom-bg {
@@ -250,4 +255,32 @@ nav a {
 
 ul {
   @apply list-disc pl-5;
+}
+
+.embossed {
+  @apply bg-white border-2 border-filler-3 relative w-[320px] max-w-full min-h-[60px] rounded-xl z-10;
+}
+
+.embossed button {
+  width: 100%;
+}
+
+.dashboard-page {
+  @apply py-8 mx-auto w-11/12 clear-both max-w-screen-xl flex flex-col;
+}
+
+.dashboard-header {
+  @apply mb-4 flex items-center justify-between space-y-2;
+}
+
+.dashboard-header.has-title {
+  @apply pb-4 border-b border-filler;
+}
+
+.dashboard-header h1 {
+  @apply text-3xl;
+}
+
+.dashboard-header p {
+  @apply text-lg;
 }
