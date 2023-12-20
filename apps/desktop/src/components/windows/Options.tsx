@@ -19,8 +19,6 @@ export const Options = () => {
     });
   }, []);
 
-  console.log({ session });
-
   if (session) {
     return <Recorder />;
   }
