@@ -113,7 +113,7 @@ export const Recorder = () => {
           >
             {countdownActive && (
               <Countdown
-                countdownFrom={3}
+                countdownFrom={1}
                 onCountdownFinish={handleOverlayFinished}
               />
             )}
