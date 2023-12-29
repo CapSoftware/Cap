@@ -1,0 +1,10 @@
+[package]
+name = "capture"
+description = "Adapted version of Scrap crate."
+version = "0.0.1"
+
+[dependencies]
+block = "0.1"
+cfg-if = "0.1"
+libc = "0.2"
+winapi = "0.2"

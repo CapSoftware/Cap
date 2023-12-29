@@ -1,5 +1,5 @@
 use std::io::{ErrorKind::WouldBlock, Write};
-use std::process::{Command, Stdio};
+use std::process::{Command};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -7,7 +7,7 @@ use std::path::{PathBuf, Path};
 use std::fs;
 use std::fs::File;
 use std::sync::atomic::{AtomicBool, Ordering};
-use scrap::{Capturer, Display};
+use capture::{Capturer, Display};
 
 #[derive(Clone, PartialEq)]
 pub enum RecordingState {
@@ -46,7 +46,7 @@ impl ScreenRecorder {
         let (w, h) = (display.width(), display.height());
         let adjusted_height = h & !1;
         let capture_size = w * adjusted_height * BYTES_PER_PIXEL;
-        let framerate = 30;
+        let framerate = 60;
 
         // Check current recording state
         let mut state_guard = state.lock().map_err(|_| "Failed to acquire state lock".to_string())?;
@@ -68,69 +68,71 @@ impl ScreenRecorder {
         }
         let output_path_str = output_path.to_str().ok_or_else(|| "Failed to construct output file path string".to_string())?.to_owned();
 
-        // Spawn the recording thread
-       let ffmpeg_handle = thread::spawn(move || {
-            // Start the capture session and open the temporary file
+        let ffmpeg_handle = thread::spawn(move || {
             let mut capturer = Capturer::new(display).expect("Failed to start capture");
-            let mut raw_file = File::create(&tmp_file_path)
-                .map_err(|e| format!("Failed to create temporary raw file: {}", e))?;
-
+            let (sender, receiver) = std::sync::mpsc::channel::<Vec<u8>>();
             let frame_duration = Duration::from_secs_f64(1.0 / framerate as f64);
-            
-            loop {
-                // Start timing the frame capture
-                let frame_start = Instant::now();
 
-                // Stop the loop if the recording is set to be stopped
-                if should_stop.load(Ordering::SeqCst) {
-                    break;
-                }
+            let write_handle = {
+                let tmp_file_path = tmp_file_path.clone(); 
+                let buffer_size = 100;
+                let mut buffer = Vec::new();
+                thread::spawn(move || {
+                    let mut raw_file = File::create(&tmp_file_path).expect("Failed to create temporary raw file");
+                    for data in receiver {
+                        buffer.push(data);
+                        if buffer.len() >= buffer_size {
+                            for frame_data in buffer.drain(..) {
+                                raw_file.write_all(&frame_data).expect("Failed to write frame data to file");
+                            }
+                        }
+                    }
+                    // Write any remaining frames in the buffer
+                    for frame_data in buffer {
+                        raw_file.write_all(&frame_data).expect("Failed to write frame data to file");
+                    }
+                })
+            };
 
-                // Capture a frame, handling potential errors
-                let buffer = match capturer.frame() {
-                    Ok(buffer) => buffer,
+            // Capture loop
+            while !should_stop.load(Ordering::SeqCst) {
+                let time_started = Instant::now();
+                let frame = match capturer.frame() {
+                    Ok(frame) => frame,
                     Err(error) if error.kind() == WouldBlock => {
-                        // If capturing would block, wait a bit and retry
-                        thread::sleep(Duration::from_micros(100));
                         continue;
                     },
-                    Err(e) => return Err(format!("Error capturing frame: {}", e)),
+                    Err(error) => return Err(format!("Capture error: {}", error)),
                 };
-
-                let stride = buffer[..capture_size].len() / adjusted_height;
-
+                
+                let stride = frame[..capture_size].len() / adjusted_height;
+                let mut frame_data = Vec::with_capacity(capture_size);
                 for row in 0..adjusted_height {
                     let start = row * stride;
                     let end = start + stride;
-                    if let Err(e) = raw_file.write_all(&buffer[start..end]) {
-                        eprintln!("Failed to write frame: {:?}", e);
-                        *state.lock().unwrap() = RecordingState::Stopping;
-                        break;
-                    }
+                    frame_data.extend_from_slice(&frame[start..end]);
                 }
 
-                // Calculate the time to sleep to maintain the target framerate
-                let elapsed_time = frame_start.elapsed();
-                if let Some(remaining_sleep_duration) = frame_duration.checked_sub(elapsed_time) {
-                    thread::sleep(remaining_sleep_duration);
-                }
+                sender.send(frame_data).expect("Failed to send frame data to the writer thread");
             }
-            // Close the temporary file to ensure all data is flushed
-            drop(raw_file);
 
-            // Start the encoding process using FFmpeg
+            // End capture loop
+            drop(sender); // Send the terminating signal to the writing thread.
+            write_handle.join().expect("Failed to join the writer handle");
+
+            // Encoding with FFmpeg
             let status = Command::new(&ffmpeg_path)
                 .args(&[
                     "-f", "rawvideo",
                     "-pix_fmt", "bgra",
                     "-s", &format!("{}x{}", w, adjusted_height),
                     "-r", &framerate.to_string(),
-                    "-i", tmp_file_path.to_str().unwrap(),
+                    "-i", tmp_file_path.to_str().ok_or_else(|| "Failed to convert temporary file path to string".to_owned())?,
                     "-c:v", "libx264",
                     "-preset", "veryfast",
                     "-crf", "15",
                     "-pix_fmt", "yuv420p",
-                    "-y",
+                    "-y", // Overwrite output file without asking
                     "-movflags", "+faststart",
                     &output_path_str,
                 ])
@@ -140,7 +142,7 @@ impl ScreenRecorder {
             match status {
                 Ok(output) if output.status.success() => {
                     // Encoding succeeded, remove the temporary file
-                    fs::remove_file(&tmp_file_path).map_err(|e| format!("Failed to remove temporary file: {}", e))?;
+                    let _ = fs::remove_file(&tmp_file_path);
                     Ok(())
                 },
                 Ok(output) => {

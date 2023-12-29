@@ -1,5 +1,4 @@
 import { Preview } from "@/components/recording/Preview";
-import { setWindowPosition } from "@/utils/helpers";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { ReactMediaRecorder } from "@/utils/recording/client";
 import { useRef } from "react";
@@ -7,7 +6,6 @@ import { useRef } from "react";
 export const Camera = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const { selectedVideoDevice } = useMediaDevices();
-  setWindowPosition("bottom_right");
 
   return (
     <div className="w-full h-full">

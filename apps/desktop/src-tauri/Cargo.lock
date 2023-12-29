@@ -471,18 +471,30 @@ dependencies = [
 name = "cap"
 version = "0.0.0"
 dependencies = [
+ "capture",
  "dotenv",
  "ffmpeg-sidecar",
  "image",
+ "qoi",
  "rust-s3",
- "scrap",
  "serde",
  "serde_json",
+ "shuteye",
  "tauri",
  "tauri-build",
  "tauri-plugin-context-menu",
  "tauri-plugin-positioner",
  "which",
+]
+
+[[package]]
+name = "capture"
+version = "0.0.1"
+dependencies = [
+ "block",
+ "cfg-if 0.1.10",
+ "libc",
+ "winapi 0.2.8",
 ]
 
 [[package]]
@@ -3410,18 +3422,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
-name = "scrap"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04f3e5e5b3bd8d65b04de768fe0bdbd1e2da0831be9f117e1cc1d71785c9126c"
-dependencies = [
- "block",
- "cfg-if 0.1.10",
- "libc",
- "winapi 0.2.8",
-]
-
-[[package]]
 name = "security-framework"
 version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3636,6 +3636,15 @@ checksum = "b0d94659ad3c2137fef23ae75b03d5241d633f8acded53d672decfa0e6e0caef"
 dependencies = [
  "libc",
  "winapi 0.3.9",
+]
+
+[[package]]
+name = "shuteye"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ca27229f5eb21ea854a551c24b268c824949a01c41652b6d423c141539252cf"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

@@ -28,7 +28,8 @@
         "unminimize": true,
         "startDragging": true,
         "setAlwaysOnTop": true,
-        "setIgnoreCursorEvents": true
+        "setIgnoreCursorEvents": true,
+        "setPosition": true
       },
       "fs": {
         "scope": ["**"],

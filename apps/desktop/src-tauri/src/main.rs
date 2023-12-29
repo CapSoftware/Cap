@@ -8,6 +8,7 @@ use s3::creds::Credentials;
 use s3::region::Region;
 use s3::error::S3Error;
 use tauri::{Manager, Window};
+use tauri_plugin_positioner::{WindowExt, Position};
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
@@ -31,7 +32,6 @@ fn start_screen_recording(window: Window, recorder: tauri::State<'_, Arc<Mutex<S
         }
     });
 }
-
 
 #[tauri::command]
 fn stop_screen_recording(recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
@@ -133,6 +133,7 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_positioner::init())
         .setup(|app| {  
             tauri::async_runtime::block_on(async {
                 if let Err(e) = setup_s3_client().await {
@@ -154,6 +155,15 @@ fn main() {
   
             let shared_recorder = Arc::new(Mutex::new(recorder));
             app.manage(shared_recorder);
+
+            if let Some(camera_window) = app.get_window("camera") { 
+              let _ = camera_window.move_window(Position::BottomRight);
+            }
+
+            if let Some(options_window) = app.get_window("options") { 
+              let _ = options_window.move_window(Position::Center);
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
