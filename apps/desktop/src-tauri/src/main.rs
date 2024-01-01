@@ -7,6 +7,7 @@ use s3::bucket::Bucket;
 use s3::creds::Credentials;
 use s3::region::Region;
 use s3::error::S3Error;
+use uuid::Uuid;
 use tauri::{Manager, Window};
 use tauri_plugin_positioner::{WindowExt, Position};
 
@@ -22,14 +23,22 @@ mod recorder;
 use recorder::ScreenRecorder;
 
 #[tauri::command]
-fn start_screen_recording(window: Window, recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
+fn start_screen_recording(window: Window, user_id: String, recorder: tauri::State<'_, Arc<Mutex<ScreenRecorder>>>) {
     let window = window.clone();
     let recorder = recorder.inner().clone();
     std::thread::spawn(move || {
-        let recorder = recorder.lock().expect("Failed to lock recorder.");
-        if let Err(e) = recorder.start_recording() {
-            window.emit("recording-error", &e.to_string()).expect("Failed to send recording-error event.");
+        println!("Thread for recording started");
+        match recorder.lock() {
+            Ok(mut recorder) => {
+                recorder.set_user_id(user_id);
+                match recorder.start_recording() {
+                    Ok(()) => println!("Recording started successfully"),
+                    Err(e) => window.emit("recording-error", &e.to_string()).expect("Failed to send recording-error event."),
+                }
+            },
+            Err(e) => window.emit("recording-error", &format!("Failed to lock recorder: {}", e)).expect("Failed to send recording-error event."),
         }
+        println!("Thread for recording ended");
     });
 }
 
@@ -61,33 +70,40 @@ async fn setup_s3_client() -> Result<Bucket, S3Error> {
 }
 
 #[tauri::command]
-async fn upload_video(file_path: String) -> Result<String, String> {
+async fn upload_video(window: Window, user_id: String, file_path: String) -> Result<String, String> {
+    let window = window.clone();
     let bucket_result = setup_s3_client().await;
     
     if let Err(e) = bucket_result {
         return Err(format!("Failed to setup S3 client: {}", e));
     }
-    
+
     let bucket = bucket_result.unwrap();
     
-    let file_key = file_path.split('/').last().ok_or("Invalid file path")?.to_string();
+    // Generate a random UUID for the new folder name
+    let video_folder_uuid = Uuid::new_v4().to_string();
+    let file_name = file_path.split('/').last().ok_or("Invalid file path")?.to_string();
+    
+    // Update the file key to include the random UUID
+    let file_key = format!("{}/{}/{}", user_id, video_folder_uuid, file_name);
     
     let content = match std::fs::read(&file_path) {
         Ok(data) => data,
         Err(e) => return Err(format!("Failed to read video file: {}", e)),
     };
     
-    let response_data = match bucket.put_object(&file_key, &content).await {
-        Ok(data) => data,
+    match bucket.put_object(&file_key, &content).await {
+        Ok(data) => {
+            if data.status_code() == 200 {
+                window.emit("video-uploaded", &video_folder_uuid)
+                    .expect("Failed to send the video-uploaded event");
+                Ok(file_key)
+            } else {
+                let error_message = format!("Failed to upload file: HTTP Status Code {}", data.status_code());
+                Err(error_message)
+            }
+        },
         Err(e) => return Err(format!("Failed to upload file: {}", e)),
-    };
-    
-    // If the response indicates success, return the file key, else return an error message.
-    match response_data.status_code() {
-        200 => Ok(file_key),
-        403 => Err("Forbidden: Check your S3 permissions and credentials".into()),
-        404 => Err("Not Found: The specified bucket does not exist".into()),
-        status => Err(format!("Failed to upload file: HTTP Status Code {}", status)),
     }
 }
 
@@ -147,10 +163,13 @@ fn main() {
 
             // Fetch the full path to the FFmpeg binary
             let ffmpeg_binary_path = sidecar_dir()?.join(if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" });
+
+            let window = app.get_window("options").ok_or("Failed to get options window")?;
   
             // Create an instance of ScreenRecorder with the ffmpeg_binary_path
             let recorder = ScreenRecorder::new(
                 ffmpeg_binary_path,
+                window.clone()
             );
   
             let shared_recorder = Arc::new(Mutex::new(recorder));

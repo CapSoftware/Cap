@@ -8,6 +8,8 @@ use std::fs;
 use std::fs::File;
 use std::sync::atomic::{AtomicBool, Ordering};
 use capture::{Capturer, Display};
+use tauri::{Window};
+use super::upload_video;
 
 #[derive(Clone, PartialEq)]
 pub enum RecordingState {
@@ -21,25 +23,37 @@ pub struct ScreenRecorder {
     ffmpeg_handle: Mutex<Option<thread::JoinHandle<Result<(), String>>>>,
     ffmpeg_path: PathBuf,
     should_stop: Arc<AtomicBool>,
+    user_id: Option<String>,
+    window: Window
 }
 
 const BYTES_PER_PIXEL: usize = 4;
 
 impl ScreenRecorder {
   
-    pub fn new(ffmpeg_path: PathBuf) -> Self {
+    pub fn new(ffmpeg_path: PathBuf, window: Window) -> Self {
         Self {
             state: Arc::new(Mutex::new(RecordingState::Idle)),
             ffmpeg_handle: Mutex::new(None),
             ffmpeg_path,
             should_stop: Arc::new(AtomicBool::new(false)),
+            user_id: None,
+            window
         }
+    }
+
+    pub fn set_user_id(&mut self, user_id: String) {
+        self.user_id = Some(user_id);
     }
 
     pub fn start_recording(&self) -> Result<(), String> {
         let state = self.state.clone();
-        let should_stop = self.should_stop.clone();
+        let should_stop = Arc::clone(&self.should_stop);
         let ffmpeg_path = self.ffmpeg_path.clone();
+        let user_id = self.user_id.clone();
+        let window = self.window.clone();
+
+        println!("Start recording requested.");
 
         // Ensure we have a primary display to capture
         let display = Display::primary().map_err(|_| "Failed to find primary display".to_string())?;
@@ -47,6 +61,8 @@ impl ScreenRecorder {
         let adjusted_height = h & !1;
         let capture_size = w * adjusted_height * BYTES_PER_PIXEL;
         let framerate = 60;
+
+        println!("Display: {}x{}", w, h);
 
         // Check current recording state
         let mut state_guard = state.lock().map_err(|_| "Failed to acquire state lock".to_string())?;
@@ -56,19 +72,32 @@ impl ScreenRecorder {
         *state_guard = RecordingState::Recording;
         drop(state_guard);
 
+        println!("Starting recording...");
+
         // Define paths for recordings and temp data
         let recordings_dir = Path::new("recordings");
-        fs::create_dir_all(&recordings_dir).map_err(|e| format!("Failed to create recordings directory: {}", e))?;
         let tmp_file_path = recordings_dir.join("temporary_capture.raw");
         let output_path = recordings_dir.join("recording.mp4").to_owned();
 
-        // Delete existing files if necessary
-        if output_path.exists() {
-            fs::remove_file(&output_path).map_err(|e| format!("Failed to delete existing recording file: {}", e))?;
+        fs::create_dir_all(&recordings_dir).map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+
+        println!("Temporary file path: {}", tmp_file_path.to_str().ok_or_else(|| "Failed to convert temporary file path to string".to_owned())?);
+
+        // Delete existing temporary and final output files if they exist
+        if tmp_file_path.exists() {
+            std::fs::remove_file(&tmp_file_path).map_err(|e| format!("Failed to delete existing temp file: {}", e))?;
         }
+        if output_path.exists() {
+            std::fs::remove_file(&output_path).map_err(|e| format!("Failed to delete existing final output file: {}", e))?;
+        }
+
+        println!("Output file path: {}", output_path.to_str().ok_or_else(|| "Failed to convert output file path to string".to_owned())?);
+
         let output_path_str = output_path.to_str().ok_or_else(|| "Failed to construct output file path string".to_string())?.to_owned();
 
         let ffmpeg_handle = thread::spawn(move || {
+            println!("Starting capture...");
+
             let mut capturer = Capturer::new(display).expect("Failed to start capture");
             let (sender, receiver) = std::sync::mpsc::channel::<Vec<u8>>();
             let frame_duration = Duration::from_secs_f64(1.0 / framerate as f64);
@@ -116,9 +145,13 @@ impl ScreenRecorder {
                 sender.send(frame_data).expect("Failed to send frame data to the writer thread");
             }
 
+            println!("Capture stopped.");
+
             // End capture loop
             drop(sender); // Send the terminating signal to the writing thread.
             write_handle.join().expect("Failed to join the writer handle");
+
+            println!("Encoding video...");
 
             // Encoding with FFmpeg
             let status = Command::new(&ffmpeg_path)
@@ -138,11 +171,23 @@ impl ScreenRecorder {
                 ])
                 .output();
 
+            println!("Encoding finished.");
             // Handle the FFmpeg output
             match status {
                 Ok(output) if output.status.success() => {
                     // Encoding succeeded, remove the temporary file
                     let _ = fs::remove_file(&tmp_file_path);
+                    println!("Encoding succeeded.");
+
+                    if let Some(user_id) = &user_id {
+                        println!("Uploading video...");
+
+                        match tauri::async_runtime::block_on(upload_video(window.clone(), user_id.clone(), output_path_str.clone())) {
+                            Ok(_) => println!("Video uploaded successfully."),
+                            Err(e) => eprintln!("Video upload encountered an error: {}", e),
+                        }
+                    }
+
                     Ok(())
                 },
                 Ok(output) => {

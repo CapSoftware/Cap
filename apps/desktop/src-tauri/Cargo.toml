@@ -23,7 +23,9 @@ ffmpeg-sidecar = "0.5.1"
 which = "4.2.2"
 rust-s3 = "0.34.0-rc3"
 dotenv = "0.15.0"
+tokio = { version = "1", features = ["full"] }
 capture = { path = "./src/capture" }
+uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
 shuteye = "0.3.3"

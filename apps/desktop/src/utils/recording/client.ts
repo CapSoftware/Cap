@@ -7,7 +7,7 @@ import { ReactElement, useCallback, useEffect, useRef, useState } from "react";
 import { connect } from "extendable-media-recorder-wav-encoder";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { useDidMountEffect } from "@/utils/hooks/useDidMount";
-import { writeBinaryFile, createDir } from "@tauri-apps/api/fs";
+import { writeBinaryFile, createDir, removeFile } from "@tauri-apps/api/fs";
 import { appDataDir } from "@tauri-apps/api/path";
 
 export type ReactMediaRecorderRenderProps = {
@@ -244,6 +244,16 @@ export function useReactMediaRecorder({
       if (!mediaStream.current.active) {
         return;
       }
+
+      // Delete the old file
+      const filePath = await recordingFileLocation();
+      try {
+        await removeFile(filePath);
+        console.log("Old recording deleted successfully");
+      } catch (error) {
+        console.error("Failed to delete old recording:", error);
+      }
+
       mediaRecorder.current = new ExtendableMediaRecorder(
         mediaStream.current,
         mediaRecorderOptions || undefined

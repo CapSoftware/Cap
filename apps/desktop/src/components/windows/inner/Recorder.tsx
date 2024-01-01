@@ -1,8 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  ReactMediaRecorder,
-  recordingFileLocation,
-} from "@/utils/recording/client";
+import { ReactMediaRecorder } from "@/utils/recording/client";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
@@ -14,8 +11,9 @@ import { showMenu } from "tauri-plugin-context-menu";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Countdown } from "./Countdown";
 import { appWindow, WebviewWindow } from "@tauri-apps/api/window";
+import { AuthSession } from "@supabase/supabase-js";
 
-export const Recorder = () => {
+export const Recorder = ({ session }: { session: AuthSession | null }) => {
   const { devices, selectedVideoDevice, selectedAudioDevice, getDevices } =
     useMediaDevices();
   const [isRecording, setIsRecording] = useState(false);
@@ -87,18 +85,13 @@ export const Recorder = () => {
         const handleStopAllRecordings = async () => {
           stopRecording();
           await invoke("stop_screen_recording");
-          const filePath = await recordingFileLocation();
-          const upload = await invoke("upload_video", {
-            filePath: filePath.toString(),
-          });
-          console.log("Upload response:", upload);
           setIsRecording(false);
         };
 
         useEffect(() => {
           if (isRecording) {
             startRecording();
-            invoke("start_screen_recording");
+            invoke("start_screen_recording", { userId: session?.user?.id });
           }
         }, [isRecording]);
 

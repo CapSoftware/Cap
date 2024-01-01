@@ -47,11 +47,12 @@ CREATE TABLE space_members (
 CREATE TABLE videos (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    name VARCHAR(255) NOT NULL,
-    s3_url TEXT NOT NULL, -- AWS S3 URL to the video
+    name VARCHAR(255) NOT NULL default 'My Video: ' || to_char(now(), 'YYYY-MM-DD HH24:MI:SS'),
+    s3_url TEXT default null, -- AWS S3 URL to the video
     thumbnail_url TEXT, -- URL to the video's thumbnail
     duration NUMERIC, -- The length of the video
     metadata JSONB, -- Any additional metadata about the video
+    unique_cap_id UUID default NULL unique,
     complete BOOLEAN NOT NULL DEFAULT true, -- Whether video is fully processed
     is_public BOOLEAN NOT NULL DEFAULT false, -- Can be shared to spaces
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
