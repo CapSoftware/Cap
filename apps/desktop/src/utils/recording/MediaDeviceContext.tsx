@@ -20,6 +20,8 @@ interface MediaDeviceContextData {
   >;
   devices: MediaDeviceInfo[];
   getDevices: () => Promise<void>;
+  isRecording: boolean;
+  setIsRecording: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 export const MediaDeviceContext = createContext<
@@ -34,6 +36,7 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   const [selectedAudioDevice, setSelectedAudioDevice] =
     useState<MediaDeviceInfo | null>(null);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [isRecording, setIsRecording] = useState(false);
 
   const getDevices = useCallback(async () => {
     const fetchedDevices = await navigator.mediaDevices.enumerateDevices();
@@ -108,6 +111,8 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         setSelectedAudioDevice,
         devices,
         getDevices,
+        isRecording,
+        setIsRecording,
       }}
     >
       {children}

@@ -1,4 +1,5 @@
 import { appWindow, LogicalPosition } from "@tauri-apps/api/window";
+import { open } from "@tauri-apps/api/shell";
 
 export const setWindowPosition = (
   position: "bottom_center" | "bottom_right"
@@ -27,4 +28,18 @@ export const setWindowPosition = (
         return;
     }
   });
+};
+
+export const uuidParse = (uuid: string) => {
+  return uuid.replace(/-/g, "");
+};
+
+export const uuidFormat = (uuid: string) => {
+  return uuid.replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5");
+};
+
+export const openLinkInBrowser = (url: string) => {
+  open(url);
+
+  return;
 };

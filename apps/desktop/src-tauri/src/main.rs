@@ -70,7 +70,7 @@ async fn setup_s3_client() -> Result<Bucket, S3Error> {
 }
 
 #[tauri::command]
-async fn upload_video(window: Window, user_id: String, file_path: String) -> Result<String, String> {
+async fn upload_video(window: Window, user_id: String, file_path: String, unique_id: String, final_call: bool) -> Result<String, String> {
     let window = window.clone();
     let bucket_result = setup_s3_client().await;
     
@@ -80,8 +80,13 @@ async fn upload_video(window: Window, user_id: String, file_path: String) -> Res
 
     let bucket = bucket_result.unwrap();
     
-    // Generate a random UUID for the new folder name
-    let video_folder_uuid = Uuid::new_v4().to_string();
+    // Use the provided unique_id if it's not empty, otherwise generate a random UUID
+    let video_folder_uuid = if unique_id.is_empty() {
+        Uuid::new_v4().to_string()
+    } else {
+        unique_id
+    };
+    
     let file_name = file_path.split('/').last().ok_or("Invalid file path")?.to_string();
     
     // Update the file key to include the random UUID
@@ -95,9 +100,16 @@ async fn upload_video(window: Window, user_id: String, file_path: String) -> Res
     match bucket.put_object(&file_key, &content).await {
         Ok(data) => {
             if data.status_code() == 200 {
-                window.emit("video-uploaded", &video_folder_uuid)
-                    .expect("Failed to send the video-uploaded event");
+                if !final_call {
+                    println!("Video uploaded successfully. Not a final call.");
+                    window.emit("video-uploaded", &video_folder_uuid)
+                        .expect("Failed to send the video-uploaded event");
+                } else {
+                   println!("Video uploaded successfully. Final call.");
+                }
+
                 Ok(file_key)
+                
             } else {
                 let error_message = format!("Failed to upload file: HTTP Status Code {}", data.status_code());
                 Err(error_message)
@@ -105,6 +117,13 @@ async fn upload_video(window: Window, user_id: String, file_path: String) -> Res
         },
         Err(e) => return Err(format!("Failed to upload file: {}", e)),
     }
+}
+
+#[tauri::command]
+fn open_external(window: tauri::Window, url: String) -> Result<(), String> {
+    let shell_scope = window.shell_scope();
+    
+    tauri::api::shell::open(&shell_scope, &url, None).map_err(|e| e.to_string())
 }
 
 fn main() {
@@ -188,7 +207,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             start_screen_recording,
             stop_screen_recording,
-            upload_video
+            upload_video,
+            open_external
         ])
         .plugin(tauri_plugin_context_menu::init())
         .run(tauri::generate_context!())

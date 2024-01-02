@@ -77,7 +77,7 @@ impl ScreenRecorder {
         // Define paths for recordings and temp data
         let recordings_dir = Path::new("recordings");
         let tmp_file_path = recordings_dir.join("temporary_capture.raw");
-        let output_path = recordings_dir.join("recording.mp4").to_owned();
+        let output_path = recordings_dir.join("screen.mp4").to_owned();
 
         fs::create_dir_all(&recordings_dir).map_err(|e| format!("Failed to create recordings directory: {}", e))?;
 
@@ -182,7 +182,7 @@ impl ScreenRecorder {
                     if let Some(user_id) = &user_id {
                         println!("Uploading video...");
 
-                        match tauri::async_runtime::block_on(upload_video(window.clone(), user_id.clone(), output_path_str.clone())) {
+                        match tauri::async_runtime::block_on(upload_video(window.clone(), user_id.clone(), output_path_str.clone(), String::new(), false)) {
                             Ok(_) => println!("Video uploaded successfully."),
                             Err(e) => eprintln!("Video upload encountered an error: {}", e),
                         }

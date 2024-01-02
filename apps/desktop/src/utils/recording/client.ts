@@ -378,7 +378,7 @@ export function useReactMediaRecorder({
 
 export const recordingFileLocation = async () => {
   const dir = await appDataDir();
-  const filePath = `${dir}/recording.mp4`.replace(/\/\//g, "/");
+  const filePath = `${dir}/video.mp4`.replace(/\/\//g, "/");
 
   return filePath;
 };

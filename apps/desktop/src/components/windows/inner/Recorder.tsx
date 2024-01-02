@@ -14,9 +14,14 @@ import { appWindow, WebviewWindow } from "@tauri-apps/api/window";
 import { AuthSession } from "@supabase/supabase-js";
 
 export const Recorder = ({ session }: { session: AuthSession | null }) => {
-  const { devices, selectedVideoDevice, selectedAudioDevice, getDevices } =
-    useMediaDevices();
-  const [isRecording, setIsRecording] = useState(false);
+  const {
+    devices,
+    selectedVideoDevice,
+    selectedAudioDevice,
+    getDevices,
+    isRecording,
+    setIsRecording,
+  } = useMediaDevices();
   const [countdownActive, setCountdownActive] = useState(false);
 
   useEffect(() => {
@@ -70,7 +75,7 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
           ? { deviceId: selectedAudioDevice.deviceId }
           : undefined
       }
-      render={({ status, startRecording, stopRecording }) => {
+      render={({ startRecording, stopRecording }) => {
         const handleOverlayFinished = () => {
           appWindow.minimize();
           WebviewWindow.getByLabel("camera")?.minimize();
@@ -85,7 +90,6 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
         const handleStopAllRecordings = async () => {
           stopRecording();
           await invoke("stop_screen_recording");
-          setIsRecording(false);
         };
 
         useEffect(() => {
@@ -134,7 +138,7 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
                     />
                   </div>
                 </div>
-                {status === "recording" ? (
+                {isRecording === true ? (
                   <Button
                     variant="primary"
                     handler={handleStopAllRecordings}
