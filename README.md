@@ -4,7 +4,7 @@
   </p>
 	<h1 align="center"><b>Cap</b></h1>
 	<p align="center">
-		Beautiful, shareable screen recordings. Open-source and privacy-friendly.
+		Beautiful, shareable screen recordings. Open source and privacy-focused.
     <br />
     <a href="https://cap.so"><strong>cap.so »</strong></a>
     <br />
