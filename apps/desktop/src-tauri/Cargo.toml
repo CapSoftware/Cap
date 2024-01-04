@@ -22,10 +22,13 @@ image = "0.24.7"
 ffmpeg-sidecar = "0.5.1"
 which = "4.2.2"
 rust-s3 = "0.34.0-rc3"
-dotenv = "0.15.0"
+dotenvy = "0.15.7"
+dotenvy_macro = "0.15.7"
 tokio = { version = "1", features = ["full"] }
 capture = { path = "./src/capture" }
 uuid = { version = "1.0", features = ["v4"] }
+tauri-invoke-http = { git = "https://github.com/tauri-apps/tauri-invoke-http", branch = "dev" }
+warp = "0.3"
 
 [dev-dependencies]
 shuteye = "0.3.3"

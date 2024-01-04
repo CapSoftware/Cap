@@ -1,11 +1,12 @@
 import "./App.css";
 import { MediaDeviceProvider } from "@/utils/recording/MediaDeviceContext";
+import { AuthProvider } from "@/utils/database/AuthContext";
 
 function App({ children }: { children: React.ReactNode }) {
   return (
-    <MediaDeviceProvider>
-      <>{children}</>
-    </MediaDeviceProvider>
+    <AuthProvider>
+      <MediaDeviceProvider>{children}</MediaDeviceProvider>
+    </AuthProvider>
   );
 }
 

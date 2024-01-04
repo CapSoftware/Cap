@@ -43,3 +43,20 @@ export const openLinkInBrowser = (url: string) => {
 
   return;
 };
+
+export function concatenateTypedArrays(
+  constructor: new (arg0: number) => any,
+  ...arrays: any[]
+) {
+  let totalLength = 0;
+  for (const arr of arrays) {
+    totalLength += arr.length;
+  }
+  const result = new constructor(totalLength);
+  let offset = 0;
+  for (const arr of arrays) {
+    result.set(arr, offset);
+    offset += arr.length;
+  }
+  return result;
+}

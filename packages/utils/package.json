@@ -1,0 +1,19 @@
+{
+  "name": "utils",
+  "version": "0.0.0",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "exports": {
+    ".": "./src/index.tsx"
+  },
+  "scripts": {
+    "lint": "eslint src --cache",
+    "typecheck": "tsc -b",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "tsconfig": "workspace:*",
+    "typescript": "^5.3.2"
+  },
+  "dependencies": {}
+}

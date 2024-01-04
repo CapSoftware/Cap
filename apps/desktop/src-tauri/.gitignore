@@ -2,6 +2,7 @@
 # will have compiled files and executables
 /target/
 /recordings/*
+/chunks/*
 src/capture/target/*
 .env
 .env*

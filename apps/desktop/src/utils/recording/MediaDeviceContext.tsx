@@ -6,19 +6,26 @@ import {
   useCallback,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { DeviceChangePayload } from "@/utils/types/shared";
+import { invoke } from "@tauri-apps/api/tauri";
+
+interface Devices {
+  index: number;
+  label: string;
+  kind: "videoinput" | "audioinput";
+}
+
+interface DeviceList {
+  video_devices: string[];
+  audio_devices: string[];
+}
 
 // Define the type of the context data
 interface MediaDeviceContextData {
-  selectedVideoDevice: MediaDeviceInfo | null;
-  setSelectedVideoDevice: React.Dispatch<
-    React.SetStateAction<MediaDeviceInfo | null>
-  >;
-  selectedAudioDevice: MediaDeviceInfo | null;
-  setSelectedAudioDevice: React.Dispatch<
-    React.SetStateAction<MediaDeviceInfo | null>
-  >;
-  devices: MediaDeviceInfo[];
+  selectedVideoDevice: Devices | null;
+  setSelectedVideoDevice: React.Dispatch<React.SetStateAction<Devices | null>>;
+  selectedAudioDevice: Devices | null;
+  setSelectedAudioDevice: React.Dispatch<React.SetStateAction<Devices | null>>;
+  devices: Devices[];
   getDevices: () => Promise<void>;
   isRecording: boolean;
   setIsRecording: React.Dispatch<React.SetStateAction<boolean>>;
@@ -32,34 +39,57 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   children,
 }) => {
   const [selectedVideoDevice, setSelectedVideoDevice] =
-    useState<MediaDeviceInfo | null>(null);
+    useState<Devices | null>(null);
   const [selectedAudioDevice, setSelectedAudioDevice] =
-    useState<MediaDeviceInfo | null>(null);
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+    useState<Devices | null>(null);
+  const [devices, setDevices] = useState<Devices[]>([]);
   const [isRecording, setIsRecording] = useState(false);
 
   const getDevices = useCallback(async () => {
-    const fetchedDevices = await navigator.mediaDevices.enumerateDevices();
-    setDevices(fetchedDevices);
+    console.log("getDevices called");
 
-    // Automatically select the first available devices if not already selected
-    if (!selectedVideoDevice) {
-      const videoInput = fetchedDevices.find(
-        (device) => device.kind === "videoinput"
-      );
-      setSelectedVideoDevice(videoInput || null);
-    }
-    if (!selectedAudioDevice) {
-      const audioInput = fetchedDevices.find(
-        (device) => device.kind === "audioinput"
-      );
-      setSelectedAudioDevice(audioInput || null);
+    try {
+      const deviceList = (await invoke("list_devices")) as DeviceList;
+      const { video_devices, audio_devices } = deviceList;
+
+      console.log("deviceList:");
+      console.log(deviceList);
+
+      const formattedDevices = [
+        ...(video_devices.map((device, index) => ({
+          index: index,
+          label: device,
+          kind: "videoinput",
+        })) as Devices[]),
+        ...(audio_devices.map((device, index) => ({
+          index: index,
+          label: device,
+          kind: "audioinput",
+        })) as Devices[]),
+      ];
+      setDevices(formattedDevices);
+
+      // Automatically select the first available devices if not already selected
+      if (!selectedVideoDevice) {
+        const videoInput = formattedDevices.find(
+          (device) => device.kind === "videoinput"
+        );
+        setSelectedVideoDevice(videoInput || null);
+      }
+      if (!selectedAudioDevice) {
+        const audioInput = formattedDevices.find(
+          (device) => device.kind === "audioinput"
+        );
+        setSelectedAudioDevice(audioInput || null);
+      }
+    } catch (error) {
+      console.error("Failed to get media devices:", error);
     }
   }, [selectedVideoDevice, selectedAudioDevice]);
 
   useEffect(() => {
     getDevices();
-  }, [getDevices]);
+  }, []);
 
   useEffect(() => {
     let unlistenFn: any;
@@ -68,12 +98,16 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
       try {
         unlistenFn = await listen(
           "change-device",
-          ({ payload }: { payload: DeviceChangePayload }) => {
+          ({
+            payload,
+          }: {
+            payload: { type: "video" | "audio"; device: Devices };
+          }) => {
             if (payload && payload.device) {
               if (payload.type === "video") {
                 console.log("receiving video payload:");
                 console.log(payload);
-                if (selectedVideoDevice?.deviceId !== payload.device.deviceId) {
+                if (selectedVideoDevice?.index !== payload.device.index) {
                   setSelectedVideoDevice(payload.device);
                 }
               }
@@ -81,7 +115,7 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
               if (payload.type === "audio") {
                 console.log("receiving audio payload:");
                 console.log(payload);
-                if (selectedAudioDevice?.deviceId !== payload.device.deviceId) {
+                if (selectedAudioDevice?.index !== payload.device.index) {
                   setSelectedAudioDevice(payload.device);
                 }
               }
