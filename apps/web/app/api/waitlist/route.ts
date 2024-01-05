@@ -8,31 +8,20 @@ export async function POST(request: Request) {
     });
   }
 
-  console.log("email", email);
+  await fetch("https://app.loops.so/api/v1/contacts/create", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.NEXT_LOOPS_KEY}`,
+    },
+    body: JSON.stringify({
+      email,
+      userGroup: "Waitlist",
+      source: "auth",
+    }),
+  });
 
-  const apiResponse = await fetch(
-    "https://app.loops.so/api/v1/contacts/create",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.NEXT_LOOPS_KEY}`,
-      },
-      body: JSON.stringify({
-        email,
-        userGroup: "Waitlist",
-        source: "auth",
-      }),
-    }
-  );
-
-  if (apiResponse.ok) {
-    return new Response("Success", {
-      status: 200,
-    });
-  }
-
-  return new Response("Error saving email", {
-    status: 400,
+  return new Response("Success", {
+    status: 200,
   });
 }
