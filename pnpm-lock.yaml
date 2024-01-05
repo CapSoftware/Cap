@@ -26,6 +26,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@cap/utils':
+        specifier: workspace:*
+        version: link:../../packages/utils
       '@tauri-apps/api':
         specifier: ^1.5.0
         version: 1.5.1
@@ -87,6 +90,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@cap/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@cap/utils':
+        specifier: workspace:*
+        version: link:../../packages/utils
       '@headlessui/react':
         specifier: ^1.7.17
         version: 1.7.17(react-dom@18.2.0)(react@18.2.0)
@@ -132,12 +141,6 @@ importers:
       tailwind-merge:
         specifier: ^2.1.0
         version: 2.1.0
-      ui:
-        specifier: workspace:*
-        version: link:../../packages/ui
-      utils:
-        specifier: workspace:*
-        version: link:../../packages/utils
       zod:
         specifier: ^3.22.4
         version: 3.22.4

@@ -24,8 +24,8 @@
     "react-scroll-parallax": "^3.4.5",
     "server-only": "^0.0.1",
     "tailwind-merge": "^2.1.0",
-    "ui": "workspace:*",
-    "utils": "workspace:*",
+    "@cap/ui": "workspace:*",
+    "@cap/utils": "workspace:*",
     "zod": "^3.22.4"
   },
   "devDependencies": {

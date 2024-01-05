@@ -3,10 +3,7 @@
     "build": "turbo run build",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
-    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "web": "pnpm --filter web --",
-    "workshop": "pnpm --filter workshop --",
-    "types": "npx supabase gen types typescript --project-id 'rvaxxiofrpjbeacyuwaf' --schema public > apps/web/utils/database/supabase/types.ts"
+    "format": "prettier --write \"**/*.{ts,tsx,md}\""
   },
   "devDependencies": {
     "@turbo/gen": "^1.9.7",

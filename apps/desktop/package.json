@@ -21,7 +21,8 @@
     "tailwindcss": "^3.3.4",
     "tauri-plugin-context-menu": "^0.5.0",
     "tauri-plugin-positioner-api": "^0.2.7",
-    "vite-tsconfig-paths": "^4.2.1"
+    "vite-tsconfig-paths": "^4.2.1",
+    "@cap/utils": "workspace:*"
   },
   "devDependencies": {
     "@supabase/supabase-js": "^2.39.0",

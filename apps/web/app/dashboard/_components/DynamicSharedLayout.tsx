@@ -2,7 +2,7 @@
 import { createContext, useContext } from "react";
 import AdminDesktopNav from "@/app/dashboard/_components/AdminNavbar/AdminDesktopNav";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
-import type { Database } from "@/utils/database/supabase/types";
+import type { Database } from "@cap/utils";
 
 type SharedContext = {
   spaceData: Database["public"]["Tables"]["spaces"]["Row"][] | null;

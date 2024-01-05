@@ -18,8 +18,8 @@ import {
   CommandGroup,
   CommandInput,
   CommandItem,
-} from "ui";
-import { Popover, PopoverContent, PopoverTrigger } from "ui";
+} from "@cap/ui";
+import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
 import { useState } from "react";
 import {
   Dialog,
@@ -28,7 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "ui";
+} from "@cap/ui";
 import { NewSpace } from "@/components/forms/NewSpace";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { handleActiveSpace } from "@/utils/database/supabase/helpers";

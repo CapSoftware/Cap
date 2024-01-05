@@ -1,7 +1,6 @@
 "use client";
-import { Button } from "ui";
-import type { Database } from "@/utils/database/supabase/types";
-import { Eye, FileText, Lock } from "lucide-react";
+import { Button } from "@cap/ui";
+import type { Database } from "@cap/utils";
 
 export const Caps = ({
   data,

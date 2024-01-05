@@ -17,7 +17,7 @@ if (!process.env.NEXT_PUBLIC_ENVIRONMENT || !process.env.NEXT_PUBLIC_URL) {
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
-  transpilePackages: ["ui", "utils"],
+  transpilePackages: ["@cap/ui", "@cap/utils"],
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -25,7 +25,7 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   experimental: {
-    optimizePackageImports: ["ui", "utils"],
+    optimizePackageImports: ["@cap/ui", "@cap/utils"],
   },
 };
 

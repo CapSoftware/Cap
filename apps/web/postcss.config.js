@@ -1,1 +1,1 @@
-module.exports = require("ui/postcss");
+module.exports = require("@cap/ui/postcss");

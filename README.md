@@ -6,7 +6,7 @@
 	<p align="center">
 		Beautiful, shareable screen recordings. Open source and privacy-focused.
     <br />
-    <a href="https://cap.so"><strong>cap.so »</strong></a>
+    <a href="https://cap.so"><strong>Cap.so »</strong></a>
     <br />
     <br />
     <b>Download for </b>
@@ -31,3 +31,7 @@ View what's currently in progress, and what's planned for the future: [Cap Roadm
 # App Architecture
 
 React, Vite, TypeScript, Tauri, TailwindCSS.
+
+# Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for more information. This is a work in progress, and will be updated regularly.

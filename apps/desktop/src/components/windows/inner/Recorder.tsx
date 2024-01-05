@@ -12,6 +12,7 @@ import { Countdown } from "./Countdown";
 import { appWindow, WebviewWindow } from "@tauri-apps/api/window";
 import { AuthSession } from "@supabase/supabase-js";
 import { supabase } from "@/utils/database/client";
+import type { Database } from "@cap/utils";
 
 export const Recorder = ({ session }: { session: AuthSession | null }) => {
   const {
@@ -77,17 +78,16 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
   useEffect(() => {
     const startRecording = async () => {
       if (isRecording) {
-        const { data: videoData, error: videoError } = await supabase
+        const { data: videoData, error: videoError } = (await supabase
           .from("videos")
-          .insert([{ owner_id: session?.user?.id }]);
+          .insert([
+            { owner_id: session?.user?.id },
+          ])) as Database["public"]["Tables"]["videos"]["Insert"];
 
         if (videoError) {
           console.error("Error inserting video:", videoError);
           return;
         }
-
-        console.log("videoData:");
-        console.log(videoData);
 
         if (videoData && videoData[0] && videoData[0].id) {
           const videoId = videoData[0].id;
