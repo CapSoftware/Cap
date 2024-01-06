@@ -1,7 +1,7 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { Button } from "ui";
-import { LogoBadge } from "ui";
+import { Button } from "@cap/ui";
+import { LogoBadge } from "@cap/ui";
 import { useSupabase } from "@/utils/database/supabase/provider";
 
 export default function Login() {

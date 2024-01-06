@@ -1,6 +1,18 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
+import dotenv from "dotenv";
+
+// Load the environment variables
+dotenv.config({ path: "../../.env" });
+
+const requiredEnvVariables = ["VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY"];
+
+requiredEnvVariables.forEach((envVar) => {
+  if (!process.env[envVar]) {
+    throw new Error(`Please set ${envVar} in .env file`);
+  }
+});
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({

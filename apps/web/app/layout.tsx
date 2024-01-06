@@ -3,7 +3,7 @@ import SupabaseListener from "@/utils/database/supabase/listener";
 import SupabaseProvider from "@/utils/database/supabase/provider";
 import "@/app/globals.css";
 import { createServerClient } from "@/utils/database/supabase/server";
-import type { Database } from "@/utils/database/supabase/types";
+import type { Database } from "@cap/utils";
 import type { SupabaseClient } from "@supabase/auth-helpers-nextjs";
 import { Toaster } from "react-hot-toast";
 import { Navbar } from "@/components/Navbar";

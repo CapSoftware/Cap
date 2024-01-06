@@ -1,51 +1,61 @@
-import { createRouteClient } from "@/utils/database/supabase/server";
+import { S3Client } from "@aws-sdk/client-s3";
+import { createPresignedPost, PresignedPost } from "@aws-sdk/s3-presigned-post";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { NextRequest } from "next/server";
 
-export async function POST(request: Request) {
-  const res = await request.json();
-  const { s3_url, name, duration, thumbnail_url, metadata, is_public } =
-    res.body;
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION || "",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY || "",
+    secretAccessKey: process.env.AWS_SECRET_KEY || "",
+  },
+});
 
-  // Simple validation
-  if (!s3_url || !name) {
-    return res.status(400).json({ message: "Missing required fields" });
-  }
+export async function POST(request: NextRequest) {
+  try {
+    const { userId, fileKey, awsBucket, awsRegion } = await request.json();
 
-  const supabase = createRouteClient();
+    if (!userId || !fileKey || !awsBucket || !awsRegion) {
+      return new Response(
+        JSON.stringify({ error: "Missing required fields" }),
+        {
+          status: 400,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    }
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    const Fields = {
+      "x-amz-meta-userid": userId,
+    };
 
-  if (!session) {
-    return new Response("Unauthorized", {
-      status: 401,
+    const presignedPostData: PresignedPost = await createPresignedPost(
+      s3Client,
+      {
+        Bucket: awsBucket,
+        Key: fileKey,
+        Fields,
+        Expires: 1800,
+      }
+    );
+
+    return new Response(JSON.stringify({ presignedPostData }), {
+      headers: {
+        "Content-Type": "application/json",
+      },
     });
+  } catch (error) {
+    console.error("Error creating presigned URL", error);
+    return new Response(
+      JSON.stringify({ error: "Error creating presigned URL" }),
+      {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
   }
-
-  // Insert data into the videos table
-  const { data, error } = await supabase.from("videos").insert([
-    {
-      owner_id: session.user.id,
-      s3_url,
-      name,
-      duration,
-      thumbnail_url,
-      metadata: metadata || {},
-      is_public: false,
-    },
-  ]);
-
-  console.log("supabase response:");
-  console.log(data);
-  console.log(error);
-
-  if (data !== null) {
-    return new Response("Success", {
-      status: 200,
-    });
-  }
-
-  return new Response("Error saving video", {
-    status: 400,
-  });
 }

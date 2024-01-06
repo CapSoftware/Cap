@@ -1,5 +1,5 @@
 "use client";
-import { Logo } from "ui";
+import { Logo } from "@cap/ui";
 import Link from "next/link";
 import { AdminNavItems } from "./AdminNavItems";
 

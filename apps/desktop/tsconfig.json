@@ -5,7 +5,7 @@
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
-
+    "allowSyntheticDefaultImports": true,
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -15,7 +15,7 @@
     "jsx": "react-jsx",
 
     /* Paths */
-    "baseUrl": "./",
+    "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
       "@/components/*": ["src/components/*"],
@@ -29,5 +29,6 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src", "tailwind.config.ts"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "references": [{ "path": "./tsconfig.node.json" }],
+  "exclude": ["node_modules"]
 }

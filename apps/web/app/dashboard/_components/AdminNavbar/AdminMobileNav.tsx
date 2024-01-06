@@ -1,7 +1,7 @@
 "use client";
 import { Fragment, useState } from "react";
 import { X, Menu } from "lucide-react";
-import { Logo } from "ui";
+import { Logo } from "@cap/ui";
 import Link from "next/link";
 import { Dialog, Transition } from "@headlessui/react";
 import { AdminNavItems } from "./AdminNavItems";

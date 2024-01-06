@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { Logo } from "ui";
+import { Logo } from "@cap/ui";
 
 export const Navbar = () => {
   const pathname = usePathname();

@@ -26,3 +26,4 @@ dist-ssr
 *.sln
 *.sw?
 .turbo
+pnpm-lock.yaml

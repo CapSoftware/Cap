@@ -3,7 +3,7 @@ import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 
-import { Button } from "ui";
+import { Button } from "@cap/ui";
 import {
   Form,
   FormControl,
@@ -11,8 +11,8 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
-} from "ui";
-import { Input } from "ui";
+} from "@cap/ui";
+import { Input } from "@cap/ui";
 import { useForm } from "react-hook-form";
 import { useSupabase } from "@/utils/database/supabase/provider";
 import { useState } from "react";

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { LogoBadge } from "ui";
+import { LogoBadge } from "@cap/ui";
 import { Parallax } from "react-scroll-parallax";
 import toast from "react-hot-toast";
 

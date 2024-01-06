@@ -181,6 +181,8 @@ export interface Database {
       }
       videos: {
         Row: {
+          aws_bucket: string | null
+          aws_region: string | null
           complete: boolean
           created_at: string
           duration: number | null
@@ -189,24 +191,13 @@ export interface Database {
           metadata: Json | null
           name: string
           owner_id: string | null
-          s3_url: string
+          s3_url: string | null
           thumbnail_url: string | null
           updated_at: string
         }
         Insert: {
-          complete?: boolean
-          created_at?: string
-          duration?: number | null
-          id?: string
-          is_public?: boolean
-          metadata?: Json | null
-          name: string
-          owner_id?: string | null
-          s3_url: string
-          thumbnail_url?: string | null
-          updated_at?: string
-        }
-        Update: {
+          aws_bucket?: string | null
+          aws_region?: string | null
           complete?: boolean
           created_at?: string
           duration?: number | null
@@ -215,7 +206,22 @@ export interface Database {
           metadata?: Json | null
           name?: string
           owner_id?: string | null
-          s3_url?: string
+          s3_url?: string | null
+          thumbnail_url?: string | null
+          updated_at?: string
+        }
+        Update: {
+          aws_bucket?: string | null
+          aws_region?: string | null
+          complete?: boolean
+          created_at?: string
+          duration?: number | null
+          id?: string
+          is_public?: boolean
+          metadata?: Json | null
+          name?: string
+          owner_id?: string | null
+          s3_url?: string | null
           thumbnail_url?: string | null
           updated_at?: string
         }
