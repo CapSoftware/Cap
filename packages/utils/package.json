@@ -1,10 +1,10 @@
 {
   "name": "@cap/utils",
   "version": "0.0.0",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.tsx"
   },
   "scripts": {
     "lint": "eslint src --cache",
@@ -13,7 +13,10 @@
   },
   "devDependencies": {
     "tsconfig": "workspace:*",
-    "typescript": "^5.3.2"
+    "typescript": "^5.3.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.18.0"
   },
   "dependencies": {}
 }

@@ -1,8 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.0.0",
-  "type": "module",
+  "version": "0.1.0",
   "scripts": {
     "dev": "tauri dev",
     "build": "tsc && vite build",
@@ -30,7 +29,7 @@
     "@types/react": "^18.2.15",
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "^4.0.3",
-    "typescript": "^5.0.2",
-    "vite": "^4.4.4"
+    "typescript": "^5.3.2",
+    "vite": "^5.0.11"
   }
 }

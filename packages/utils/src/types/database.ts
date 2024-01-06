@@ -181,6 +181,8 @@ export interface Database {
       }
       videos: {
         Row: {
+          aws_bucket: string | null
+          aws_region: string | null
           complete: boolean
           created_at: string
           duration: number | null
@@ -191,10 +193,11 @@ export interface Database {
           owner_id: string | null
           s3_url: string | null
           thumbnail_url: string | null
-          unique_cap_id: string | null
           updated_at: string
         }
         Insert: {
+          aws_bucket?: string | null
+          aws_region?: string | null
           complete?: boolean
           created_at?: string
           duration?: number | null
@@ -205,10 +208,11 @@ export interface Database {
           owner_id?: string | null
           s3_url?: string | null
           thumbnail_url?: string | null
-          unique_cap_id?: string | null
           updated_at?: string
         }
         Update: {
+          aws_bucket?: string | null
+          aws_region?: string | null
           complete?: boolean
           created_at?: string
           duration?: number | null
@@ -219,7 +223,6 @@ export interface Database {
           owner_id?: string | null
           s3_url?: string | null
           thumbnail_url?: string | null
-          unique_cap_id?: string | null
           updated_at?: string
         }
         Relationships: [

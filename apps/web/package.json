@@ -9,10 +9,16 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.485.0",
+    "@aws-sdk/s3-presigned-post": "^3.485.0",
+    "@aws-sdk/s3-request-presigner": "^3.485.0",
+    "@cap/ui": "workspace:*",
+    "@cap/utils": "workspace:*",
     "@headlessui/react": "^1.7.17",
     "@hookform/resolvers": "^3.3.2",
     "@supabase/auth-helpers-nextjs": "^0.8.7",
     "@supabase/supabase-js": "^2.39.0",
+    "aws-sdk": "^2.1530.0",
     "clsx": "^2.0.0",
     "dotenv": "^16.3.1",
     "lucide-react": "^0.294.0",
@@ -24,8 +30,6 @@
     "react-scroll-parallax": "^3.4.5",
     "server-only": "^0.0.1",
     "tailwind-merge": "^2.1.0",
-    "@cap/ui": "workspace:*",
-    "@cap/utils": "workspace:*",
     "zod": "^3.22.4"
   },
   "devDependencies": {

@@ -71,28 +71,55 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
   };
 
   const handleStopAllRecordings = async () => {
-    // stopRecording();
     await invoke("stop_screen_recording");
+    setIsRecording(false);
   };
 
   useEffect(() => {
     const startRecording = async () => {
       if (isRecording) {
-        const { data: videoData, error: videoError } = (await supabase
+        const {
+          data: videoData,
+          error: videoError,
+        }: {
+          data: Database["public"]["Tables"]["videos"]["Row"] | null;
+          error: any;
+        } = await supabase
           .from("videos")
-          .insert([
-            { owner_id: session?.user?.id },
-          ])) as Database["public"]["Tables"]["videos"]["Insert"];
+          .insert({
+            owner_id: session?.user?.id,
+            aws_region: import.meta.env.VITE_AWS_REGION,
+            aws_bucket: import.meta.env.VITE_AWS_BUCKET,
+          })
+          .select()
+          .single();
 
-        if (videoError) {
-          console.error("Error inserting video:", videoError);
+        console.log("session:");
+        console.log(session?.user?.id);
+        console.log("import.meta.env.VITE_AWS_REGION:");
+        console.log(import.meta.env.VITE_AWS_REGION);
+        console.log("import.meta.env.VITE_AWS_BUCKET:");
+        console.log(import.meta.env.VITE_AWS_BUCKET);
+        console.log("videoData:");
+        console.log(videoData);
+        console.log("videoError:");
+        console.log(videoError);
+
+        if (videoData === null) {
+          console.error("videoData is null");
           return;
         }
 
-        if (videoData && videoData[0] && videoData[0].id) {
-          const videoId = videoData[0].id;
-          invoke("start_screen_recording", {
-            options: { user_id: session?.user?.id, unique_id: videoId },
+        if (videoData.id) {
+          invoke("start_dual_recording", {
+            options: {
+              user_id: session?.user?.id,
+              video_id: videoData.id,
+              aws_region: videoData.aws_region,
+              aws_bucket: videoData.aws_bucket,
+              screen_index: "3",
+              video_index: "0",
+            },
           }).catch((error) => {
             console.error("Error invoking start_screen_recording:", error);
           });
@@ -158,13 +185,6 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
             />
           )}
         </div>
-        {/* <button
-          onClick={() => {
-            startStream();
-          }}
-        >
-          Start stream
-        </button> */}
       </div>
     </div>
   );
