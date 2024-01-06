@@ -59,10 +59,16 @@ async fn start_dual_recording(
   clean_and_create_dir(&screen_chunks_dir)?;
   clean_and_create_dir(&video_chunks_dir)?;
 
-  let ffmpeg_screen_args = construct_recording_args(&options.screen_index, &screen_chunks_dir, "screen");
-  let ffmpeg_video_args = construct_recording_args(&options.video_index, &video_chunks_dir, "video");
+  let ffmpeg_screen_args_future = construct_recording_args(&options.screen_index, &screen_chunks_dir, "screen");
+  let ffmpeg_video_args_future = construct_recording_args(&options.video_index, &video_chunks_dir, "video");
 
-  // Use tokio's Command to spawn the process with ffmpeg_screen_args
+  // Await the futures to get the arguments
+  let ffmpeg_screen_args = ffmpeg_screen_args_future.await.map_err(|e| e.to_string())?;
+  let ffmpeg_video_args = ffmpeg_video_args_future.await.map_err(|e| e.to_string())?;
+  
+  println!("Screen args: {:?}", ffmpeg_screen_args);
+  println!("Video args: {:?}", ffmpeg_video_args);
+
   let mut screen_child = tokio::process::Command::new(&ffmpeg_binary_path)
       .args(&ffmpeg_screen_args)
       .stdout(Stdio::piped())
@@ -70,7 +76,6 @@ async fn start_dual_recording(
       .spawn()
       .map_err(|e| e.to_string())?;
 
-  // Use tokio's Command to spawn the process with ffmpeg_video_args
   let mut video_child = tokio::process::Command::new(&ffmpeg_binary_path)
       .args(&ffmpeg_video_args)
       .stdout(Stdio::piped())
@@ -80,14 +85,14 @@ async fn start_dual_recording(
 
   let screen_stdout = screen_child.stdout.take().unwrap();
   let screen_stderr = screen_child.stderr.take().unwrap();
-  tokio::spawn(log_output(screen_stdout, "Screen stdout"));
-  tokio::spawn(log_output(screen_stderr, "Screen stderr"));
+  tokio::spawn(log_output(screen_stdout, "Screen stdout".to_string()));
+  tokio::spawn(log_output(screen_stderr, "Screen stderr".to_string()));
 
   // Video recording process
   let video_stdout = video_child.stdout.take().unwrap();
   let video_stderr = video_child.stderr.take().unwrap();
-  tokio::spawn(log_output(video_stdout, "Video stdout"));
-  tokio::spawn(log_output(video_stderr, "Video stderr"));
+  tokio::spawn(log_output(video_stdout, "Video stdout".to_string()));
+  tokio::spawn(log_output(video_stderr, "Video stderr".to_string()));
 
   let (tx, _rx) = mpsc::channel::<()>(1);
 
@@ -99,9 +104,11 @@ async fn start_dual_recording(
   };
   drop(guard);
 
-  start_upload_loop(screen_chunks_dir, options.clone(), "screen".to_string()).await;
-  start_upload_loop(video_chunks_dir, options.clone(), "video".to_string()).await;
-  
+  tokio::join!(
+      start_upload_loop(screen_chunks_dir, options.clone(), "screen".to_string()),
+      start_upload_loop(video_chunks_dir, options.clone(), "video".to_string())
+  );
+    
   Ok(())
 }
 
@@ -119,93 +126,136 @@ fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-async fn log_output(mut stdout: impl tokio::io::AsyncRead + Unpin, desc: &str) {
+async fn log_output(reader: impl tokio::io::AsyncRead + Unpin + Send + 'static, desc: String) {
     use tokio::io::{AsyncBufReadExt, BufReader};
-    let mut reader = BufReader::new(stdout).lines();
+    let mut reader = BufReader::new(reader).lines();
 
-    while let Some(line) = reader.next_line().await.unwrap() {
+    while let Ok(Some(line)) = reader.next_line().await {
         println!("{}: {}", desc, line);
     }
 }
 
-
-fn construct_recording_args(input_index: &str, chunks_dir: &Path, video_type: &str) -> Vec<String> {
+async fn construct_recording_args(
+    input_index: &str, 
+    chunks_dir: &Path, 
+    video_type: &str
+) -> Result<Vec<String>, String> {
     let output_filename_pattern = format!("{}/recording_chunk_%03d.ts", chunks_dir.display());
+    let fps = if video_type == "screen" { "60" } else { "30" };
+    let preset = "veryfast".to_string();
+    let crf = "20".to_string();
+    let pix_fmt = "yuv420p".to_string();
+    let codec = "libx264".to_string();
+    let gop = "60".to_string();
+    let segment_time = "10".to_string();
 
-    //List fps/options for input device, if video type is video
-    if video_type == "video" {
-        let (output, stderr) = run_command("ffmpeg", vec!["-f", "dshow", "-list_options", "true", "-i", format!("video={}", input_index).as_str()]).unwrap();
-        let raw_output = if !stderr.trim().is_empty() { stderr } else { output };
-        println!("Video options: {}", raw_output);
-    }
-
-    // The base arguments for FFmpeg command
-    let mut ffmpeg_args = vec![
-        "-pix_fmt".to_string(), "uyvy422".to_string(),
-        "-c:v".to_string(), "libx264".to_string(),
-        "-crf".to_string(), "20".to_string(),
-        "-preset".to_string(), "veryfast".to_string(),
-        "-g".to_string(), "60".to_string(),
-        "-f".to_string(), "segment".to_string(),
-        "-segment_time".to_string(), "10".to_string(),
-        "-segment_format".to_string(), "mpegts".to_string(),
-        "-reset_timestamps".to_string(), "1".to_string(),
-        output_filename_pattern,
-    ];
-
-    // OS-specific argument construction
     match std::env::consts::OS {
         "macos" => {
-            ffmpeg_args.insert(0, if video_type == "screen" { "Capture screen 0" } else { input_index }.to_string());
-            ffmpeg_args.insert(0, "-i".to_string());
-            ffmpeg_args.insert(0, "avfoundation".to_string());
-            ffmpeg_args.insert(0, "-f".to_string());
-
             if video_type == "screen" {
-                ffmpeg_args.insert(0, "1".to_string());
-                ffmpeg_args.insert(0, "-capture_cursor".to_string());
-                ffmpeg_args.insert(0, "60".to_string());
-                ffmpeg_args.insert(0, "-r".to_string());
-            }
-
-            if video_type == "video" {
-                ffmpeg_args.splice(0..0, vec!["-re".to_string()].into_iter());
+                Ok(vec![
+                    "-f".to_string(), "avfoundation".to_string(),
+                    "-framerate".to_string(), fps.to_string(),
+                    "-i".to_string(), format!("{}:none", input_index),
+                    "-c:v".to_string(), codec,
+                    "-crf".to_string(), crf,
+                    "-preset".to_string(), preset,
+                    "-g".to_string(), gop,
+                    "-r".to_string(), fps.to_string(),
+                    "-f".to_string(), "segment".to_string(),
+                    "-segment_time".to_string(), segment_time,
+                    "-segment_format".to_string(), "mpegts".to_string(),
+                    "-reset_timestamps".to_string(), "1".to_string(),
+                    "-pix_fmt".to_string(), pix_fmt,
+                    output_filename_pattern,
+                ])
+            } else {
+                Ok(vec![
+                    "-f".to_string(), "avfoundation".to_string(),
+                    "-framerate".to_string(), fps.to_string(),
+                    "-s".to_string(), "640x480".to_string(),
+                    "-i".to_string(), format!("{}:none", input_index),
+                    "-r".to_string(), fps.to_string(),
+                    "-f".to_string(), "segment".to_string(),
+                    "-segment_time".to_string(), segment_time,
+                    "-segment_format".to_string(), "mpegts".to_string(),
+                    "-reset_timestamps".to_string(), "1".to_string(),
+                    output_filename_pattern,
+                ])
             }
         },
         "linux" => {
-            ffmpeg_args.insert(0, format!("{}+0,0", input_index).to_string());
-            ffmpeg_args.insert(0, "-i".to_string());
-            ffmpeg_args.insert(0, "x11grab".to_string());
-            ffmpeg_args.insert(0, "-f".to_string());
-
             if video_type == "screen" {
-                ffmpeg_args.insert(0, "60".to_string());
-                ffmpeg_args.insert(0, "-r".to_string());
-                ffmpeg_args.push("-draw_mouse".to_string());
-                ffmpeg_args.push("1".to_string());
+                Ok(vec![
+                    "-f".to_string(), "x11grab".to_string(),
+                    "-i".to_string(), format!("{}+0,0", input_index),
+                    "-draw_mouse".to_string(), "1".to_string(),
+                    "-pix_fmt".to_string(), pix_fmt,
+                    "-c:v".to_string(), codec,
+                    "-crf".to_string(), crf,
+                    "-preset".to_string(), preset,
+                    "-g".to_string(), gop,
+                    "-r".to_string(), fps.to_string(),
+                    "-f".to_string(), "segment".to_string(),
+                    "-segment_time".to_string(), segment_time,
+                    "-segment_format".to_string(), "mpegts".to_string(),
+                    "-reset_timestamps".to_string(), "1".to_string(),
+                    output_filename_pattern,
+                ])
+            } else {
+                Ok(vec![
+                    "-f".to_string(), "x11grab".to_string(),
+                    "-i".to_string(), format!("{}+0,0", input_index),
+                    "-pix_fmt".to_string(), pix_fmt,
+                    "-c:v".to_string(), codec,
+                    "-crf".to_string(), crf,
+                    "-preset".to_string(), preset,
+                    "-g".to_string(), gop,
+                    "-r".to_string(), fps.to_string(),
+                    "-f".to_string(), "segment".to_string(),
+                    "-segment_time".to_string(), segment_time,
+                    "-segment_format".to_string(), "mpegts".to_string(),
+                    "-reset_timestamps".to_string(), "1".to_string(),
+                    output_filename_pattern,
+                ])
             }
         },
         "windows" => {
             if video_type == "screen" {
-                ffmpeg_args.insert(0, "desktop".to_string());
-                ffmpeg_args.insert(0, "-i".to_string());
-                ffmpeg_args.insert(0, "gdigrab".to_string());
-                ffmpeg_args.insert(0, "-f".to_string());
-                ffmpeg_args.insert(0, "60".to_string());
-                ffmpeg_args.insert(0, "-r".to_string());
+                Ok(vec![
+                    "-f".to_string(), "gdigrab".to_string(),
+                    "-i".to_string(), "desktop".to_string(),
+                    "-pix_fmt".to_string(), pix_fmt,
+                    "-c:v".to_string(), codec,
+                    "-crf".to_string(), crf,
+                    "-preset".to_string(), preset,
+                    "-g".to_string(), gop,
+                    "-r".to_string(), fps.to_string(),
+                    "-f".to_string(), "segment".to_string(),
+                    "-segment_time".to_string(), segment_time,
+                    "-segment_format".to_string(), "mpegts".to_string(),
+                    "-reset_timestamps".to_string(), "1".to_string(),
+                    output_filename_pattern,
+                ])
             } else {
-                ffmpeg_args.insert(0, format!("video={}", input_index).to_string());
-                ffmpeg_args.insert(0, "-i".to_string());
-                ffmpeg_args.insert(0, "dshow".to_string());
-                ffmpeg_args.insert(0, "-f".to_string());
-                ffmpeg_args.insert(0, "30".to_string());
-                ffmpeg_args.insert(0, "-framerate".to_string());
+                Ok(vec![
+                    "-f".to_string(), "dshow".to_string(),
+                    "-i".to_string(), format!("video={}", input_index),
+                    "-pix_fmt".to_string(), pix_fmt,
+                    "-c:v".to_string(), codec,
+                    "-crf".to_string(), crf,
+                    "-preset".to_string(), preset,
+                    "-g".to_string(), gop,
+                    "-r".to_string(), fps.to_string(),
+                    "-f".to_string(), "segment".to_string(),
+                    "-segment_time".to_string(), segment_time,
+                    "-segment_format".to_string(), "mpegts".to_string(),
+                    "-reset_timestamps".to_string(), "1".to_string(),
+                    output_filename_pattern,
+                ])
             }
         },
-        _ => panic!("Unsupported OS"),
-    };
-
-    ffmpeg_args
+        _ => Err("Unsupported OS".to_string()),
+    }
 }
 
 async fn start_upload_loop(chunks_dir: PathBuf, options: RecordingOptions, video_type: String) {
@@ -235,6 +285,10 @@ async fn start_upload_loop(chunks_dir: PathBuf, options: RecordingOptions, video
             let path = entry.path();
             if path.is_file() && path.extension().map_or(false, |e| e == "ts") {
                 let filepath_str = path.to_str().unwrap_or_default().to_owned();
+
+                //Log the file path, and the video type in one print, starting with "Uploading video from"
+                println!("Uploading video for {}: {}", video_type, filepath_str);
+
                 match upload_video(
                     options.clone(),
                     filepath_str.clone(),
@@ -262,6 +316,9 @@ fn run_command(command: &str, args: Vec<&str>) -> Result<(String, String), Strin
 
     let stdout = String::from_utf8(output.stdout).unwrap_or_else(|_| "".to_string());
     let stderr = String::from_utf8(output.stderr).unwrap_or_else(|_| "".to_string());
+
+    println!("Command output: {}", stdout);
+    println!("Command error: {}", stderr);
 
     Ok((stdout, stderr))
 }

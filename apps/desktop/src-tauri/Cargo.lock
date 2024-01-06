@@ -451,6 +451,7 @@ name = "cap"
 version = "0.0.0"
 dependencies = [
  "ffmpeg-sidecar",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -458,9 +459,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-context-menu",
  "tauri-plugin-positioner",
- "thiserror",
  "tokio",
- "uuid",
  "which",
 ]
 
