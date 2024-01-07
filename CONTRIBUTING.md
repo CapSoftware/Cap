@@ -20,6 +20,14 @@ There are many ways to contribute to Cap. You can:
 - [Suggest a feature (via Discord)](https://discord.com/invite/y8gdQ3WRN3)
 - Submit a PR
 
+### How do I set up a local Supabase database?
+
+1. Follow the instructions here to install the Supabase CLI: https://supabase.com/docs/guides/cli/getting-started
+2. Run `cd supabase && supabase start` from the route of the project. This will take you to the supabase folder, and start the local Supabase server.
+3. On first run, it'll take a few mins to set up the local Supabase server.
+4. Once running, your local Supabase server env vars will be printed to the console. Copy these into your .env file.
+5. To stop the local Supabase server, run `supabase stop` from the supabase folder, and `supabase start` to start it again.
+
 ### How do I get started with development on my local machine?
 
 This is a very top level guide right now, but the basics are:

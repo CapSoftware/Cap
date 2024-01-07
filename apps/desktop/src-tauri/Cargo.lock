@@ -451,7 +451,6 @@ name = "cap"
 version = "0.0.0"
 dependencies = [
  "ffmpeg-sidecar",
- "regex",
  "reqwest",
  "serde",
  "serde_json",
