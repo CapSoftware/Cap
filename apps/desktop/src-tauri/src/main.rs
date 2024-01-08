@@ -141,7 +141,7 @@ async fn construct_recording_args(
     video_type: &str
 ) -> Result<Vec<String>, String> {
     let output_filename_pattern = format!("{}/recording_chunk_%03d.ts", chunks_dir.display());
-    let fps = if video_type == "screen" { "60" } else { "30" };
+    let fps = if video_type == "screen" { "60" } else { "29.97" };
     let preset = "veryfast".to_string();
     let crf = "20".to_string();
     let pix_fmt = "yuv420p".to_string();
