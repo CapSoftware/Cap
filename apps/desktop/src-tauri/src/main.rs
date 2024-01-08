@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 use std::env;
 use std::process::{Command, Child, Stdio};
 use std::path::PathBuf;
+use std::time::SystemTime;
 use tauri::State;
 use std::path::Path;
 use serde::Serialize;
@@ -38,6 +39,8 @@ struct RecordingOptions {
   aws_region: String,
   aws_bucket: String
 }
+
+const FILE_MODIFICATION_THRESHOLD: u64 = 5;
 
 #[tauri::command]
 async fn start_dual_recording(
@@ -284,9 +287,19 @@ async fn start_upload_loop(chunks_dir: PathBuf, options: RecordingOptions, video
             };
             let path = entry.path();
             if path.is_file() && path.extension().map_or(false, |e| e == "ts") {
+                // Skip files that have been recently modified
+                if let Ok(metadata) = std::fs::metadata(&path) {
+                    if let Ok(modified) = metadata.modified() {
+                        if SystemTime::now().duration_since(modified).unwrap_or_default().as_secs() < FILE_MODIFICATION_THRESHOLD {
+                            println!("Skipping recently modified file: {}", path.display());
+                            continue;
+                        }
+                    }
+                }
+
                 let filepath_str = path.to_str().unwrap_or_default().to_owned();
 
-                //Log the file path, and the video type in one print, starting with "Uploading video from"
+                // Log the file path, and the video type in one print, starting with "Uploading video from"
                 println!("Uploading video for {}: {}", video_type, filepath_str);
 
                 match upload_video(
