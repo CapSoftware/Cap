@@ -5,11 +5,11 @@ import { Logo } from "@/components/icons/Logo";
 import toast from "react-hot-toast";
 
 export const SignIn = () => {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState<string>("");
+  const [OTPcode, setOTPcode] = useState<string>("");
   const [enterCode, setEnterCode] = useState(false);
-  const [OTPcode, setOTPcode] = useState<number>();
 
-  const handleGoogleLogin = async () => {
+  const handleLogin = async () => {
     const { error } = await supabase.auth.signInWithOtp({
       email: email,
     });
@@ -24,9 +24,16 @@ export const SignIn = () => {
   };
 
   const verifyOTPCode = async () => {
+    if (!email || !OTPcode) {
+      toast.error(`Error: Email or OTP code is missing`);
+      return;
+    }
+
+    console.log({ email, OTPcode });
+
     const { error } = await supabase.auth.verifyOtp({
       email: email,
-      token: String(OTPcode),
+      token: OTPcode,
       type: "email",
     });
 
@@ -46,9 +53,7 @@ export const SignIn = () => {
         <div className="max-w-sm mx-auto flex items-center relative h-14 mb-8">
           <input
             onChange={(e) => {
-              enterCode
-                ? setOTPcode(e.target.valueAsNumber)
-                : setEmail(e.target.value);
+              enterCode ? setOTPcode(e.target.value) : setEmail(e.target.value);
             }}
             type={enterCode ? "number" : "email"}
             placeholder={enterCode ? "Enter code" : "Your email"}
@@ -59,7 +64,7 @@ export const SignIn = () => {
           {enterCode === false ? (
             <div className="mt-3 text-center absolute right-0 h-full">
               <Button
-                handler={handleGoogleLogin}
+                handler={handleLogin}
                 variant="primary"
                 label="Continue"
                 className="h-full rounded-tr-full rounded-br-full min-w-[100px] border-none"
@@ -81,7 +86,13 @@ export const SignIn = () => {
             type="button"
             className="underline text-sm"
             onClick={() => {
-              enterCode ? setEnterCode(false) : setEnterCode(true);
+              if (enterCode) {
+                setEmail("");
+                setEnterCode(false);
+              } else {
+                setOTPcode("");
+                setEnterCode(true);
+              }
             }}
           >
             {enterCode ? "Don't have a code?" : "Already have a code?"}
