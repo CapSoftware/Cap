@@ -34,7 +34,7 @@ export const SignIn = () => {
     const { error } = await supabase.auth.verifyOtp({
       email: email,
       token: OTPcode,
-      type: "email",
+      type: "magiclink",
     });
 
     if (error) {
