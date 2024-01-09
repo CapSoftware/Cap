@@ -1,5 +1,7 @@
 use serde_json::Value as JsonValue;
 use std::path::{Path};
+use futures::{TryStreamExt};
+use tokio_util::codec::{BytesCodec, FramedRead};
 use reqwest;
 
 use crate::recording::RecordingOptions;
@@ -61,14 +63,20 @@ pub async fn upload_video(
 
     println!("Uploading file: {}", file_path);
 
-    // Add the file content
-    let file_bytes = tokio::fs::read(&file_path).await.map_err(|e| format!("Failed to read file: {}", e))?;
-    let file_part = reqwest::multipart::Part::stream(reqwest::Body::from(file_bytes))
-        .file_name(format!("{}", file_name)); 
+    let file = tokio::fs::File::open(&file_path).await.map_err(|e| format!("Failed to open file: {}", e))?;
+    let metadata = file.metadata().await.map_err(|e| format!("Failed to extract file metadata: {}", e))?;
+    let file_length = metadata.len();
+
+    println!("Uploading file: {} with size: {}", file_path, file_length);
+
+    let stream = FramedRead::new(file, BytesCodec::new()).map_ok(|bytes| bytes.freeze());
+    let file_part = reqwest::multipart::Part::stream(reqwest::Body::wrap_stream(stream))
+        .file_name(file_name.clone())
+        .mime_str("application/octet-stream")
+        .map_err(|e| format!("Error setting MIME type: {}", e))?;
 
     form = form.part("file", file_part);
 
-    // Extract the URL and send the form to the presigned URL for upload
     let post_url = presigned_post_data["presignedPostData"]["url"].as_str()
         .ok_or("URL is missing or not a string")?;
 

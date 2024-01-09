@@ -126,7 +126,8 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
               aws_region: videoData.aws_region,
               aws_bucket: videoData.aws_bucket,
               screen_index: "Capture screen 0",
-              video_index: "0",
+              video_index: String(selectedVideoDevice?.index),
+              audio_index: String(selectedAudioDevice?.index),
               ...mediaSettings,
             },
           }).catch((error) => {

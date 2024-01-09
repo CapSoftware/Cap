@@ -22,6 +22,7 @@ pub struct RecordingOptions {
   pub video_id: String,
   pub screen_index: String,
   pub video_index: String,
+  pub audio_index: String,
   pub aws_region: String,
   pub aws_bucket: String,
   pub framerate: String,
@@ -50,8 +51,8 @@ pub async fn start_dual_recording(
   clean_and_create_dir(&screen_chunks_dir)?;
   clean_and_create_dir(&video_chunks_dir)?;
 
-  let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index);
-  let ffmpeg_video_args_future = construct_recording_args(&options, &video_chunks_dir, "video", &options.video_index);
+  let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index, &options.video_index);
+  let ffmpeg_video_args_future = construct_recording_args(&options, &video_chunks_dir, "video", &options.video_index, &options.audio_index);
 
   // Await the futures to get the arguments
   let ffmpeg_screen_args = ffmpeg_screen_args_future.await.map_err(|e| e.to_string())?;
@@ -131,6 +132,7 @@ async fn construct_recording_args(
     chunks_dir: &Path, 
     video_type: &str,
     input_index: &str, 
+    audio_index: &str,
 ) -> Result<Vec<String>, String> {
     let output_filename_pattern = format!("{}/recording_chunk_%03d.mkv", chunks_dir.display());
     let fps = if video_type == "screen" { "60" } else { &options.framerate };
@@ -140,6 +142,9 @@ async fn construct_recording_args(
     let codec = "libx264".to_string();
     let gop = "60".to_string();
     let segment_time = "10".to_string();
+    
+    //Set the correct input index. If screen, just use the index. If video, use the index and the audio index
+    let input_string = if video_type == "screen" { input_index.to_string() } else { format!("{}:{}", input_index, audio_index) };
 
     match std::env::consts::OS {
         "macos" => {
@@ -165,8 +170,9 @@ async fn construct_recording_args(
                     "-f".to_string(), "avfoundation".to_string(),
                     "-video_size".to_string(), options.resolution.to_string(),
                     "-framerate".to_string(), fps.to_string(),
-                    "-i".to_string(), format!("{}:none", input_index),
+                    "-i".to_string(), input_string.to_string(),
                     "-c:v".to_string(), codec,
+                    "-c:a".to_string(), "aac".to_string(),
                     "-preset".to_string(), preset,
                     "-pix_fmt".to_string(), pix_fmt,
                     "-fps_mode".to_string(), "vfr".to_string(),

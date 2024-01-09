@@ -22,6 +22,9 @@ export const Camera = () => {
           navigator.mediaDevices.getUserMedia({
             video: {
               deviceId: deviceId,
+              frameRate: { ideal: 30 },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
             },
           })
         )
@@ -29,10 +32,13 @@ export const Camera = () => {
           let video = videoRef.current;
           if (video) {
             video.srcObject = stream;
-            video.play();
+            video.onplaying = () => {
+              setIsLoading(false);
+            };
+            video.play().catch((error) => {
+              console.error("Error attempting to play the video:", error);
+            });
           }
-
-          setIsLoading(false);
         })
         .catch((err) => {
           console.error(err);
