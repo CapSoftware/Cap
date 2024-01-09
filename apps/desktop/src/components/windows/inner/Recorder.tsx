@@ -13,6 +13,7 @@ import { appWindow, WebviewWindow } from "@tauri-apps/api/window";
 import { AuthSession } from "@supabase/supabase-js";
 import { supabase } from "@/utils/database/client";
 import type { Database } from "@cap/utils";
+import { getVideoSettings } from "@/utils/helpers";
 
 export const Recorder = ({ session }: { session: AuthSession | null }) => {
   const {
@@ -46,7 +47,6 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
         },
       }));
 
-    // Show a context menu or dialog with the filtered devices
     showMenu({
       items: [...filteredDevices],
       ...(filteredDevices.length === 0 && {
@@ -78,6 +78,8 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
   useEffect(() => {
     const startRecording = async () => {
       if (isRecording) {
+        const mediaSettings = await getVideoSettings(selectedVideoDevice);
+
         const {
           data: videoData,
           error: videoError,
@@ -107,10 +109,16 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
 
         if (videoData === null) {
           console.error("videoData is null");
+          setIsRecording(false);
           return;
         }
 
-        if (videoData.id) {
+        if (
+          videoData &&
+          videoData.id &&
+          mediaSettings?.resolution &&
+          mediaSettings?.framerate
+        ) {
           invoke("start_dual_recording", {
             options: {
               user_id: session?.user?.id,
@@ -119,6 +127,7 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
               aws_bucket: videoData.aws_bucket,
               screen_index: "Capture screen 0",
               video_index: "0",
+              ...mediaSettings,
             },
           }).catch((error) => {
             console.error("Error invoking start_screen_recording:", error);

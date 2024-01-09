@@ -16,8 +16,6 @@ export const Camera = () => {
           const videoDevices = devices.filter(
             (device) => device.kind === "videoinput"
           );
-          console.log("videoDevices:");
-          console.log(videoDevices);
           return videoDevices[selectedVideoDevice.index].deviceId;
         })
         .then((deviceId) =>
@@ -31,10 +29,9 @@ export const Camera = () => {
           let video = videoRef.current;
           if (video) {
             video.srcObject = stream;
-            console.log("video.srcObject:");
-            console.log(video.srcObject);
             video.play();
           }
+
           setIsLoading(false);
         })
         .catch((err) => {

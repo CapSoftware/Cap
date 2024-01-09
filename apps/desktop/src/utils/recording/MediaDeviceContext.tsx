@@ -19,8 +19,7 @@ interface DeviceList {
   audio_devices: string[];
 }
 
-// Define the type of the context data
-interface MediaDeviceContextData {
+export interface MediaDeviceContextData {
   selectedVideoDevice: Devices | null;
   setSelectedVideoDevice: React.Dispatch<React.SetStateAction<Devices | null>>;
   selectedAudioDevice: Devices | null;
