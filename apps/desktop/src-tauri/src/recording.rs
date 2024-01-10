@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 use tauri::State;
 
 use crate::utils::ffmpeg_path_as_str;
-use crate::upload::upload_video;
+use crate::upload::upload_file;
 
 #[warn(dead_code)]
 pub struct RecordingState {
@@ -22,7 +22,6 @@ pub struct RecordingOptions {
   pub video_id: String,
   pub screen_index: String,
   pub video_index: String,
-  pub audio_index: String,
   pub aws_region: String,
   pub aws_bucket: String,
   pub framerate: String,
@@ -51,10 +50,8 @@ pub async fn start_dual_recording(
   clean_and_create_dir(&screen_chunks_dir)?;
   clean_and_create_dir(&video_chunks_dir)?;
 
-  let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index, &options.video_index);
-  let ffmpeg_video_args_future = construct_recording_args(&options, &video_chunks_dir, "video", &options.video_index, &options.audio_index);
-
-  // Await the futures to get the arguments
+  let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index);
+  let ffmpeg_video_args_future = construct_recording_args(&options, &video_chunks_dir, "video", &options.video_index);
   let ffmpeg_screen_args = ffmpeg_screen_args_future.await.map_err(|e| e.to_string())?;
   let ffmpeg_video_args = ffmpeg_video_args_future.await.map_err(|e| e.to_string())?;
   
@@ -90,18 +87,42 @@ pub async fn start_dual_recording(
 
   let mut guard = state.lock().await;
   *guard = RecordingState {
-      screen_process: Some(screen_child),
-      video_process: Some(video_child),
+      screen_process: None,
+      video_process: None,
       tx: Some(tx),
   };
   drop(guard);
 
   tokio::join!(
       start_upload_loop(screen_chunks_dir, options.clone(), "screen".to_string()),
-      start_upload_loop(video_chunks_dir, options.clone(), "video".to_string())
+      start_upload_loop(video_chunks_dir, options.clone(), "video".to_string()),
   );
     
   Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_all_recordings(
+    state: State<'_, Arc<Mutex<RecordingState>>>,
+) -> Result<(), String> {
+    let mut guard = state.lock().await;
+
+    if let Some(screen_process) = guard.screen_process.take() {
+        screen_process.kill().await.map_err(|e| format!("Failed to stop screen recording: {}", e))?;
+    }
+
+    if let Some(video_process) = guard.video_process.take() {
+        video_process.kill().await.map_err(|e| format!("Failed to stop video recording: {}", e))?;
+    }
+
+    // This code sends a stop message to the channel which is being listened to in the upload loop.
+    // This will allow you to terminate the loop gracefully, which is useful to ensure that all
+    // currently processed files are finished uploading before the recording stops.
+    if let Some(tx) = guard.tx.take() {
+        let _ = tx.send(()).await;
+    }
+
+    Ok(())
 }
 
 fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
@@ -132,19 +153,16 @@ async fn construct_recording_args(
     chunks_dir: &Path, 
     video_type: &str,
     input_index: &str, 
-    audio_index: &str,
 ) -> Result<Vec<String>, String> {
     let output_filename_pattern = format!("{}/recording_chunk_%03d.mkv", chunks_dir.display());
     let fps = if video_type == "screen" { "60" } else { &options.framerate };
-    let preset = "veryfast".to_string();
-    let crf = "20".to_string();
-    let pix_fmt = "yuyv422".to_string();
+    let preset = "ultrafast".to_string();
+    let crf = "23".to_string();
+    let pix_fmt = "nv12".to_string();
     let codec = "libx264".to_string();
-    let gop = "60".to_string();
+    let gop = "30".to_string();
     let segment_time = "10".to_string();
-    
-    //Set the correct input index. If screen, just use the index. If video, use the index and the audio index
-    let input_string = if video_type == "screen" { input_index.to_string() } else { format!("{}:{}", input_index, audio_index) };
+    let input_string = format!("{}:none", input_index);
 
     match std::env::consts::OS {
         "macos" => {
@@ -152,7 +170,7 @@ async fn construct_recording_args(
                 Ok(vec![
                     "-f".to_string(), "avfoundation".to_string(),
                     "-framerate".to_string(), fps.to_string(),
-                    "-i".to_string(), format!("{}:none", input_index),
+                    "-i".to_string(), input_string.to_string(),
                     "-c:v".to_string(), codec,
                     "-crf".to_string(), crf,
                     "-preset".to_string(), preset,
@@ -172,7 +190,6 @@ async fn construct_recording_args(
                     "-framerate".to_string(), fps.to_string(),
                     "-i".to_string(), input_string.to_string(),
                     "-c:v".to_string(), codec,
-                    "-c:a".to_string(), "aac".to_string(),
                     "-preset".to_string(), preset,
                     "-pix_fmt".to_string(), pix_fmt,
                     "-fps_mode".to_string(), "vfr".to_string(),
@@ -225,7 +242,7 @@ async fn construct_recording_args(
                 Ok(vec![
                     "-f".to_string(), "gdigrab".to_string(),
                     "-i".to_string(), "desktop".to_string(),
-                    "-pix_fmt".to_string(), pix_fmt,
+                    "-pixel_format".to_string(), pix_fmt,
                     "-c:v".to_string(), codec,
                     "-crf".to_string(), crf,
                     "-preset".to_string(), preset,
@@ -241,7 +258,7 @@ async fn construct_recording_args(
                 Ok(vec![
                     "-f".to_string(), "dshow".to_string(),
                     "-i".to_string(), format!("video={}", input_index),
-                    "-pix_fmt".to_string(), pix_fmt,
+                    "-pixel_format".to_string(), pix_fmt,
                     "-c:v".to_string(), codec,
                     "-crf".to_string(), crf,
                     "-preset".to_string(), preset,
@@ -300,7 +317,7 @@ async fn start_upload_loop(chunks_dir: PathBuf, options: RecordingOptions, video
                 // Log the file path, and the video type in one print, starting with "Uploading video from"
                 println!("Uploading video for {}: {}", video_type, filepath_str);
 
-                match upload_video(
+                match upload_file(
                     options.clone(),
                     filepath_str.clone(),
                     video_type.clone(),

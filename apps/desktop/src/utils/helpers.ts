@@ -65,16 +65,11 @@ export function concatenateTypedArrays(
 export const getVideoSettings = async (
   videoDevice: MediaDeviceContextData["selectedVideoDevice"]
 ) => {
-  console.log("getVideoSettings Video Device:");
-  console.log(videoDevice);
-
   if (!videoDevice) {
     return Promise.reject("Video device not selected");
   }
 
   try {
-    await requestMediaDevicesPermission();
-
     const devices = await navigator.mediaDevices.enumerateDevices();
     const videoDevices = devices.filter(
       (device) => device.kind === "videoinput"

@@ -19,31 +19,46 @@ export const Camera = () => {
           return videoDevices[selectedVideoDevice.index].deviceId;
         })
         .then((deviceId) =>
-          navigator.mediaDevices.getUserMedia({
-            video: {
-              deviceId: deviceId,
-              frameRate: { ideal: 30 },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            },
-          })
-        )
-        .then((stream) => {
-          let video = videoRef.current;
-          if (video) {
-            video.srcObject = stream;
-            video.onplaying = () => {
+          navigator.mediaDevices
+            .getUserMedia({
+              video: {
+                deviceId: deviceId,
+                frameRate: { ideal: 30 },
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+              },
+            })
+            //Save fps and widthXheight settings to local storage
+            .then((stream) => {
+              const videoTrack = stream.getVideoTracks()[0];
+              const settings = videoTrack.getSettings();
+              const videoProperties = {
+                framerate: settings.frameRate ? String(settings.frameRate) : "",
+                resolution: `${settings.width}x${settings.height}`,
+              };
+              localStorage.setItem(
+                "videoDeviceProperties",
+                JSON.stringify(videoProperties)
+              );
+              return stream;
+            })
+            .then((stream) => {
+              let video = videoRef.current;
+              if (video) {
+                video.srcObject = stream;
+                video.onplaying = () => {
+                  setIsLoading(false);
+                };
+                video.play().catch((error) => {
+                  console.error("Error attempting to play the video:", error);
+                });
+              }
+            })
+            .catch((err) => {
+              console.error(err);
               setIsLoading(false);
-            };
-            video.play().catch((error) => {
-              console.error("Error attempting to play the video:", error);
-            });
-          }
-        })
-        .catch((err) => {
-          console.error(err);
-          setIsLoading(false);
-        });
+            })
+        );
 
       setIsLoading(false);
     }

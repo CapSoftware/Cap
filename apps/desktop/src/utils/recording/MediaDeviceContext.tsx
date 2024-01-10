@@ -7,6 +7,7 @@ import {
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/tauri";
+import { getLocalDevices, enumerateAndStoreDevices } from "./utils";
 
 interface Devices {
   index: number;
@@ -46,13 +47,13 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
   const getDevices = useCallback(async () => {
     console.log("getDevices called");
+    await enumerateAndStoreDevices();
 
     try {
       const deviceList = (await invoke("list_devices")) as DeviceList;
-      const { video_devices, audio_devices } = deviceList;
+      const { video_devices } = deviceList;
 
-      console.log("deviceList:");
-      console.log(deviceList);
+      const { audioDevices } = await getLocalDevices();
 
       const formattedDevices = [
         ...(video_devices.map((device, index) => ({
@@ -60,12 +61,13 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
           label: device,
           kind: "videoinput",
         })) as Devices[]),
-        ...(audio_devices.map((device, index) => ({
+        ...(audioDevices.map((device: MediaDeviceInfo, index: number) => ({
           index: index,
-          label: device,
+          label: device.label,
           kind: "audioinput",
         })) as Devices[]),
       ];
+
       setDevices(formattedDevices);
 
       // Automatically select the first available devices if not already selected
@@ -112,8 +114,6 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
               }
 
               if (payload.type === "audio") {
-                console.log("receiving audio payload:");
-                console.log(payload);
                 if (selectedAudioDevice?.index !== payload.device.index) {
                   setSelectedAudioDevice(payload.device);
                 }

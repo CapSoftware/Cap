@@ -11,7 +11,8 @@ mod upload;
 mod devices;
 mod utils;
 
-use recording::{RecordingState, start_dual_recording};
+use recording::{RecordingState, start_dual_recording, stop_all_recordings};
+use upload::upload_file;
 use devices::list_devices;
 
 use ffmpeg_sidecar::{
@@ -76,6 +77,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             start_dual_recording,
+            stop_all_recordings,
+            upload_file,
             list_devices
         ])
         .manage(Arc::new(Mutex::new(RecordingState { screen_process: None, video_process: None, tx: None })))

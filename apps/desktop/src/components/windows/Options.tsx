@@ -4,7 +4,6 @@ import { useAuth } from "@/utils/database/AuthContext";
 
 export const Options = () => {
   const { session, userRef } = useAuth();
-
   const currentUser = userRef.current;
 
   if (currentUser) {

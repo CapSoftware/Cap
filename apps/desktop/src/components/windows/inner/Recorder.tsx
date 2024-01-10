@@ -9,11 +9,14 @@ import { emit } from "@tauri-apps/api/event";
 import { showMenu } from "tauri-plugin-context-menu";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Countdown } from "./Countdown";
-import { appWindow, WebviewWindow } from "@tauri-apps/api/window";
+// import { appWindow, WebviewWindow } from "@tauri-apps/api/window";
 import { AuthSession } from "@supabase/supabase-js";
 import { supabase } from "@/utils/database/client";
 import type { Database } from "@cap/utils";
-import { getVideoSettings } from "@/utils/helpers";
+// import { getVideoSettings } from "@/utils/helpers";
+import { useAudioRecorder } from "@/utils/recording/useAudioRecorder";
+import { getSelectedVideoProperties } from "@/utils/recording/utils";
+import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 
 export const Recorder = ({ session }: { session: AuthSession | null }) => {
   const {
@@ -24,6 +27,7 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
     setIsRecording,
   } = useMediaDevices();
   const [countdownActive, setCountdownActive] = useState(false);
+  const { startAudioRecording, stopAudioRecording } = useAudioRecorder();
 
   const handleContextClick = async (option: string) => {
     const filteredDevices = devices
@@ -60,8 +64,8 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
   };
 
   const handleOverlayFinished = () => {
-    appWindow.minimize();
-    WebviewWindow.getByLabel("camera")?.minimize();
+    // appWindow.minimize();
+    // WebviewWindow.getByLabel("camera")?.minimize();
     setIsRecording(true);
     setCountdownActive(false);
   };
@@ -71,15 +75,37 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
   };
 
   const handleStopAllRecordings = async () => {
-    await invoke("stop_screen_recording");
+    const recordedAudioFilePath = await stopAudioRecording();
+    if (recordedAudioFilePath) {
+      try {
+        await invoke("upload_file", {
+          options: {
+            user_id: session?.user?.id,
+            video_id: await getLatestVideoId(),
+            screen_index: "",
+            video_index: "",
+            aws_region: import.meta.env.VITE_AWS_REGION,
+            aws_bucket: import.meta.env.VITE_AWS_BUCKET,
+            framerate: "",
+            resolution: "",
+          },
+          filePath: recordedAudioFilePath,
+          fileType: "audio",
+        });
+      } catch (error) {
+        console.error("Error invoking upload_file:", error);
+      }
+    } else {
+      console.error("Audio file path string is not available.");
+    }
     setIsRecording(false);
+    setCountdownActive(false);
   };
 
   useEffect(() => {
     const startRecording = async () => {
       if (isRecording) {
-        const mediaSettings = await getVideoSettings(selectedVideoDevice);
-
+        const mediaSettings = await getSelectedVideoProperties();
         const {
           data: videoData,
           error: videoError,
@@ -96,16 +122,17 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
           .select()
           .single();
 
-        console.log("session:");
-        console.log(session?.user?.id);
-        console.log("import.meta.env.VITE_AWS_REGION:");
-        console.log(import.meta.env.VITE_AWS_REGION);
-        console.log("import.meta.env.VITE_AWS_BUCKET:");
-        console.log(import.meta.env.VITE_AWS_BUCKET);
-        console.log("videoData:");
-        console.log(videoData);
-        console.log("videoError:");
-        console.log(videoError);
+        if (session?.user?.id === undefined) {
+          console.error("session.user.id is undefined");
+          setIsRecording(false);
+          return;
+        }
+
+        if (videoError) {
+          console.error("videoError:", videoError);
+          setIsRecording(false);
+          return;
+        }
 
         if (videoData === null) {
           console.error("videoData is null");
@@ -113,13 +140,18 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
           return;
         }
 
+        await saveLatestVideoId(videoData.id);
+        await startAudioRecording(selectedAudioDevice);
+
+        console.log("mediaSettings:", mediaSettings);
+        console.log("videoData:", videoData);
+
         if (
-          videoData &&
           videoData.id &&
           mediaSettings?.resolution &&
           mediaSettings?.framerate
         ) {
-          invoke("start_dual_recording", {
+          await invoke("start_dual_recording", {
             options: {
               user_id: session?.user?.id,
               video_id: videoData.id,
@@ -127,7 +159,6 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
               aws_bucket: videoData.aws_bucket,
               screen_index: "Capture screen 0",
               video_index: String(selectedVideoDevice?.index),
-              audio_index: String(selectedAudioDevice?.index),
               ...mediaSettings,
             },
           }).catch((error) => {

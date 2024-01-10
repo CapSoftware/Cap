@@ -1,15 +1,14 @@
 use serde_json::Value as JsonValue;
 use std::path::{Path};
-use futures::{TryStreamExt};
-use tokio_util::codec::{BytesCodec, FramedRead};
 use reqwest;
 
 use crate::recording::RecordingOptions;
 
-pub async fn upload_video(
+#[tauri::command]
+pub async fn upload_file(
     options: RecordingOptions,
     file_path: String,
-    video_type: String
+    file_type: String
 ) -> Result<String, String> {
     println!("Uploading video...");
 
@@ -19,7 +18,7 @@ pub async fn upload_video(
         .ok_or("Invalid file path")?
         .to_string();
 
-    let file_key = format!("{}/{}/{}/{}", options.user_id, video_type, options.video_id, file_name);
+    let file_key = format!("{}/{}/{}/{}", options.user_id, file_type, options.video_id, file_name);
 
     // Here we assume your server listens on localhost:3000 and the route is `api/upload/new`
     let server_url = format!("http://localhost:3000/api/upload/new");
@@ -63,14 +62,8 @@ pub async fn upload_video(
 
     println!("Uploading file: {}", file_path);
 
-    let file = tokio::fs::File::open(&file_path).await.map_err(|e| format!("Failed to open file: {}", e))?;
-    let metadata = file.metadata().await.map_err(|e| format!("Failed to extract file metadata: {}", e))?;
-    let file_length = metadata.len();
-
-    println!("Uploading file: {} with size: {}", file_path, file_length);
-
-    let stream = FramedRead::new(file, BytesCodec::new()).map_ok(|bytes| bytes.freeze());
-    let file_part = reqwest::multipart::Part::stream(reqwest::Body::wrap_stream(stream))
+    let file_bytes = tokio::fs::read(&file_path).await.map_err(|e| format!("Failed to read file: {}", e))?;
+    let file_part = reqwest::multipart::Part::bytes(file_bytes)
         .file_name(file_name.clone())
         .mime_str("application/octet-stream")
         .map_err(|e| format!("Error setting MIME type: {}", e))?;
