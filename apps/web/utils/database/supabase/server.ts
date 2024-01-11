@@ -3,7 +3,7 @@ import {
   createServerComponentClient,
   createRouteHandlerClient,
 } from "@supabase/auth-helpers-nextjs";
-import { Database } from "./types";
+import type { Database } from "@cap/utils";
 
 export const createServerClient = () =>
   createServerComponentClient<Database>({

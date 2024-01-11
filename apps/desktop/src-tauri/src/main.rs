@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::{Arc};
+use std::sync::atomic::{AtomicBool};
 use tokio::sync::Mutex;
 use std::env;
 use tauri::{Manager};
@@ -81,7 +82,7 @@ fn main() {
             upload_file,
             list_devices
         ])
-        .manage(Arc::new(Mutex::new(RecordingState { screen_process: None, video_process: None, tx: None })))
+        .manage(Arc::new(Mutex::new(RecordingState { screen_process: None, video_process: None, recording_options: None, upload_handles: Mutex::new(vec![]), shutdown_flag: Arc::new(AtomicBool::new(false))})))
         .plugin(tauri_plugin_context_menu::init())
         .run(tauri::generate_context!())
         .expect("Error while running tauri application");
