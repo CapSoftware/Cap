@@ -9,8 +9,10 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@cap/utils": "workspace:*",
     "@tauri-apps/api": "^1.5.0",
     "autoprefixer": "^10.4.16",
+    "date-fns": "^3.2.0",
     "dotenv": "^16.3.1",
     "postcss": "^8.4.31",
     "react": "^18.2.0",
@@ -20,8 +22,7 @@
     "tailwindcss": "^3.3.4",
     "tauri-plugin-context-menu": "^0.5.0",
     "tauri-plugin-positioner-api": "^0.2.7",
-    "vite-tsconfig-paths": "^4.2.1",
-    "@cap/utils": "workspace:*"
+    "vite-tsconfig-paths": "^4.2.1"
   },
   "devDependencies": {
     "@supabase/supabase-js": "^2.39.0",
@@ -31,5 +32,8 @@
     "@vitejs/plugin-react": "^4.0.3",
     "typescript": "^5.3.2",
     "vite": "^5.0.11"
+  },
+  "engines": {
+    "node": "20"
   }
 }

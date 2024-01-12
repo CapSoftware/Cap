@@ -1,16 +1,11 @@
 import "server-only";
-import SupabaseListener from "@/utils/database/supabase/listener";
 import SupabaseProvider from "@/utils/database/supabase/provider";
 import "@/app/globals.css";
-import { createServerClient } from "@/utils/database/supabase/server";
-import type { Database } from "@cap/utils";
-import type { SupabaseClient } from "@supabase/auth-helpers-nextjs";
 import { Toaster } from "react-hot-toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import { Metadata } from "next/types";
-
-export type TypedSupabaseClient = SupabaseClient<Database>;
+import { getSession } from "@/utils/database/supabase/server";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful, shareable screen recordings",
@@ -24,10 +19,7 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = createServerClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const session = await getSession();
 
   return (
     <html lang="en">
@@ -58,8 +50,7 @@ export default async function RootLayout({
         <meta name="theme-color" content="#ffffff" />
       </head>
       <body>
-        <SupabaseProvider session={session}>
-          <SupabaseListener serverAccessToken={session?.access_token} />
+        <SupabaseProvider session={session ?? null}>
           <Toaster />
           <main className="w-full overflow-hidden">
             <Navbar />

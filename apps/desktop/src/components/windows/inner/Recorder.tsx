@@ -12,7 +12,7 @@ import { Countdown } from "./Countdown";
 import { AuthSession } from "@supabase/supabase-js";
 import { supabase } from "@/utils/database/client";
 import type { Database } from "@cap/utils";
-import { useAudioRecorder } from "@/utils/recording/useAudioRecorder";
+import { useMediaRecorder } from "@/utils/recording/useMediaRecorder";
 import { getSelectedVideoProperties } from "@/utils/recording/utils";
 import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
@@ -30,7 +30,7 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
   const [stoppingRecording, setStoppingRecording] = useState(false);
   const [currentStoppingMessage, setCurrentStoppingMessage] =
     useState("Stopping Recording");
-  const { startAudioRecording, stopAudioRecording } = useAudioRecorder();
+  const { startMediaRecording, stopMediaRecording } = useMediaRecorder();
 
   const handleContextClick = async (option: string) => {
     const filteredDevices = devices
@@ -137,7 +137,11 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
     try {
       const videoData = await prepareVideoData();
       if (videoData) {
-        await startAudioRecording(selectedAudioDevice);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: selectedAudioDevice?.deviceId },
+          video: { deviceId: selectedVideoDevice?.deviceId },
+        });
+        await startMediaRecording(stream);
         await startDualRecording(videoData);
       } else {
         throw new Error("Failed to prepare video data.");
@@ -151,47 +155,30 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
   const handleStopAllRecordings = async () => {
     setStoppingRecording(true);
 
-    const recordedAudioFilePath = await stopAudioRecording();
-    if (recordedAudioFilePath) {
-      try {
-        console.log("Stopping recordings...");
+    try {
+      console.log("Stopping recordings...");
 
-        await invoke("stop_all_recordings");
+      await stopMediaRecording();
 
-        console.log("Recordings stopped...");
+      await invoke("stop_all_recordings");
 
-        await invoke("upload_file", {
-          options: {
-            user_id: session?.user?.id,
-            video_id: await getLatestVideoId(),
-            screen_index: "",
-            video_index: "",
-            aws_region: import.meta.env.VITE_AWS_REGION,
-            aws_bucket: import.meta.env.VITE_AWS_BUCKET,
-            framerate: "",
-            resolution: "",
-          },
-          filePath: recordedAudioFilePath,
-          fileType: "audio",
-        });
+      console.log("Recordings stopped...");
 
-        console.log("Opening window...");
+      console.log("Opening window...");
 
-        await openLinkInBrowser(
-          `${import.meta.env.VITE_PUBLIC_URL}/share/${uuidParse(
-            await getLatestVideoId()
-          )}`
-        );
+      await openLinkInBrowser(
+        `${import.meta.env.VITE_PUBLIC_URL}/share/${uuidParse(
+          await getLatestVideoId()
+        )}`
+      );
 
-        setIsRecording(false);
-        setCountdownActive(false);
-        setStoppingRecording(false);
-      } catch (error) {
-        console.error("Error invoking upload_file:", error);
-      }
-    } else {
-      console.error("Audio file path string is not available.");
+      setIsRecording(false);
+      setCountdownActive(false);
+      setStoppingRecording(false);
+    } catch (error) {
+      console.error("Error invoking upload_file:", error);
     }
+
     setIsRecording(false);
     setCountdownActive(false);
     setStoppingRecording(false);

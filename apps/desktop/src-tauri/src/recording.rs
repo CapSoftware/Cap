@@ -20,6 +20,7 @@ pub struct RecordingState {
   pub upload_handles: Mutex<Vec<JoinHandle<Result<(), String>>>>,
   pub recording_options: Option<RecordingOptions>,
   pub shutdown_flag: Arc<AtomicBool>,
+  pub data_dir: Option<PathBuf>, 
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -40,29 +41,31 @@ pub async fn start_dual_recording(
   options: RecordingOptions,
 ) -> Result<(), String> {
   println!("Starting screen recording...");
+  let mut state_guard = state.lock().await;
 
   let shutdown_flag = Arc::new(AtomicBool::new(false));
 
   let ffmpeg_binary_path_str = ffmpeg_path_as_str()?;
-  
-  let screen_chunks_dir = std::env::current_dir()
-      .map_err(|_| "Cannot get current directory".to_string())?
-      .join("chunks/screen");
 
-  let video_chunks_dir = std::env::current_dir()
-      .map_err(|_| "Cannot get current directory".to_string())?
-      .join("chunks/video");
+  let data_dir = state_guard.data_dir.as_ref()
+      .ok_or("Data directory is not set in the recording state".to_string())?;
+
+  //print the data_dir
+  println!("data_dir: {:?}", data_dir);
+  
+  let screen_chunks_dir = data_dir.join("chunks/screen");
+  let video_chunks_dir = data_dir.join("chunks/video");
 
   clean_and_create_dir(&screen_chunks_dir)?;
   clean_and_create_dir(&video_chunks_dir)?;
 
   let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index);
-  let ffmpeg_video_args_future = construct_recording_args(&options, &video_chunks_dir, "video", &options.video_index);
+  // let ffmpeg_video_args_future = construct_recording_args(&options, &video_chunks_dir, "video", &options.video_index);
   let ffmpeg_screen_args = ffmpeg_screen_args_future.await.map_err(|e| e.to_string())?;
-  let ffmpeg_video_args = ffmpeg_video_args_future.await.map_err(|e| e.to_string())?;
+  // let ffmpeg_video_args = ffmpeg_video_args_future.await.map_err(|e| e.to_string())?;
   
   println!("Screen args: {:?}", ffmpeg_screen_args);
-  println!("Video args: {:?}", ffmpeg_video_args);
+  // println!("Video args: {:?}", ffmpeg_video_args);
 
   let mut screen_child = tokio::process::Command::new(&ffmpeg_binary_path_str)
       .args(&ffmpeg_screen_args)
@@ -71,37 +74,45 @@ pub async fn start_dual_recording(
       .spawn()
       .map_err(|e| e.to_string())?;
 
-  let mut video_child = tokio::process::Command::new(&ffmpeg_binary_path_str)
-      .args(&ffmpeg_video_args)
-      .stdout(Stdio::piped())
-      .stderr(Stdio::piped())
-      .spawn()
-      .map_err(|e| e.to_string())?;
+  // let mut video_child = tokio::process::Command::new(&ffmpeg_binary_path_str)
+  //     .args(&ffmpeg_video_args)
+  //     .stdout(Stdio::piped())
+  //     .stderr(Stdio::piped())
+  //     .spawn()
+  //     .map_err(|e| e.to_string())?;
 
   let screen_stdout = screen_child.stdout.take().unwrap();
   let screen_stderr = screen_child.stderr.take().unwrap();
   tokio::spawn(log_output(screen_stdout, "Screen stdout".to_string()));
   tokio::spawn(log_output(screen_stderr, "Screen stderr".to_string()));
 
-  let video_stdout = video_child.stdout.take().unwrap();
-  let video_stderr = video_child.stderr.take().unwrap();
-  tokio::spawn(log_output(video_stdout, "Video stdout".to_string()));
-  tokio::spawn(log_output(video_stderr, "Video stderr".to_string()));
+  // let video_stdout = video_child.stdout.take().unwrap();
+  // let video_stderr = video_child.stderr.take().unwrap();
+  // tokio::spawn(log_output(video_stdout, "Video stdout".to_string()));
+  // tokio::spawn(log_output(video_stderr, "Video stderr".to_string()));
 
-  let mut guard = state.lock().await;
-  guard.screen_process = Some(screen_child);
-  guard.video_process = Some(video_child);
-  guard.upload_handles = Mutex::new(vec![]);
-  guard.recording_options = Some(options.clone());
-  guard.shutdown_flag = shutdown_flag.clone();
+  state_guard.screen_process = Some(screen_child);
+  // guard.video_process = Some(video_child);
+  state_guard.upload_handles = Mutex::new(vec![]);
+  state_guard.recording_options = Some(options.clone());
+  state_guard.shutdown_flag = shutdown_flag.clone();
 
-  drop(guard);
+  drop(state_guard);
 
-  tokio::join!(
-      start_upload_loop(state.clone(), screen_chunks_dir, options.clone(), "screen".to_string(), shutdown_flag.clone()),
-      start_upload_loop(state.clone(), video_chunks_dir, options.clone(), "video".to_string(), shutdown_flag.clone()),
-  );
-    
+  println!("Starting upload loops...");
+
+  let screen_upload = start_upload_loop(state.clone(), screen_chunks_dir, options.clone(), "screen".to_string(), shutdown_flag.clone());
+  let video_upload = start_upload_loop(state.clone(), video_chunks_dir, options.clone(), "video".to_string(), shutdown_flag.clone());
+
+  match tokio::try_join!(screen_upload, video_upload) {
+      Ok(_) => {
+          println!("Both upload loops completed successfully.");
+      },
+      Err(e) => {
+          eprintln!("An error occurred: {}", e);
+      },
+  }
+
   Ok(())
 }
 
@@ -120,24 +131,23 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
           println!("Child process terminated successfully.");
       }
     }
-    if let Some(child_process) = &mut guard.video_process {
-      if let Err(e) = child_process.kill().await {
-          eprintln!("Failed to kill the child process: {}", e);
-      } else {
-          println!("Child process terminated successfully.");
-      }
-    }
+    // if let Some(child_process) = &mut guard.video_process {
+    //   if let Err(e) = child_process.kill().await {
+    //       eprintln!("Failed to kill the child process: {}", e);
+    //   } else {
+    //       println!("Child process terminated successfully.");
+    //   }
+    // }
     
     guard.screen_process = None;
-    guard.video_process = None;
+    // guard.video_process = None;
 
-    let chunks_dir_screen = std::env::current_dir()
-        .map_err(|e| format!("Cannot get current directory: {}", e))?
-        .join("chunks/screen");
+    let data_dir = guard.data_dir.as_ref()
+      .ok_or("Data directory is not set in the recording state".to_string())?;
 
-    let chunks_dir_video = std::env::current_dir()
-        .map_err(|e| format!("Cannot get current directory: {}", e))?
-        .join("chunks/video");
+    let chunks_dir_screen = data_dir.join("chunks/screen");
+
+    let chunks_dir_video = data_dir.join("chunks/video");
 
     let recording_options = guard.recording_options.clone();
 
@@ -193,7 +203,19 @@ fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
     } else {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    Ok(())
+
+    // Ensure the segment list file exists within the given directory
+    // This assumes a naming convention where the segment list file is named "segment_list.txt"
+    let segment_list_path = dir.join("segment_list.txt");
+    match File::open(&segment_list_path) {
+        Ok(_) => Ok(()), // File already exists, return Ok(())
+        Err(ref e) if e.kind() == ErrorKind::NotFound => {
+            // Create the file if it does not exist, but ignore the returned File object
+            File::create(&segment_list_path).map_err(|e| e.to_string())?;
+            Ok(()) // Now the file is created, return Ok(())
+        },
+        Err(e) => Err(e.to_string()), // Handle other possible file I/O errors
+    }
 }
 
 async fn log_output(reader: impl tokio::io::AsyncRead + Unpin + Send + 'static, desc: String) {
@@ -357,11 +379,15 @@ async fn start_upload_loop(
     options: RecordingOptions,
     video_type: String,
     shutdown_flag: Arc<AtomicBool>,
-) {
-    let segment_list_path = chunks_dir.join("segment_list.txt");
+) -> Result<(), String> {
+    println!("Starting upload loop for {}", video_type);
 
+    //print the chunks_dir
+    println!("chunks_dir: {:?}", chunks_dir);
+
+    let segment_list_path = chunks_dir.join("segment_list.txt");
+    
     let mut watched_segments: HashSet<String> = HashSet::new();
-    let upload_interval = std::time::Duration::from_secs(3);
 
     loop {
         if shutdown_flag.load(Ordering::SeqCst) {
@@ -399,15 +425,18 @@ async fn start_upload_loop(
                         // Store the handle in the state for later awaits or cancels if required.
                         let guard = state.lock().await;
                         guard.upload_handles.lock().await.push(handle);
+
+                        drop(guard);
                     }
                 }
             }
             Err(e) => eprintln!("Failed to read segment list for {}: {}", video_type, e),
         }
 
-        // Sleep for the interval before checking the segment list again
-        tokio::time::sleep(upload_interval).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
     }
+
+    Ok(())
 }
 
 fn ensure_segment_list_exists(file_path: PathBuf) -> io::Result<()> {
@@ -444,8 +473,6 @@ async fn upload_remaining_chunks(
     video_type: &str,
 ) -> Result<(), String> {
     if let Some(actual_options) = options {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
         let retry_interval = Duration::from_secs(2);
         let upload_timeout = Duration::from_secs(15);
         let file_stability_timeout = Duration::from_secs(1);
@@ -455,13 +482,13 @@ async fn upload_remaining_chunks(
         let entries = std::fs::read_dir(chunks_dir).map_err(|e| format!("Error reading directory: {}", e))?;
 
         // A semaphore to limit the number of concurrent uploads
-        let semaphore = Arc::new(Semaphore::new(8));
+        let semaphore = Arc::new(Semaphore::new(16));
 
         // Create upload tasks for each file entry
         let tasks: Vec<_> = entries.filter_map(|entry| entry.ok())
             .map(|entry| {
                 let path = entry.path();
-                if path.is_file() && path.extension().map_or(false, |e| e == "mkv") {
+                if path.is_file() && (path.extension().map_or(false, |e| e == "mkv" || e == "webm")) {
                     let video_type = video_type.to_string();
                     let semaphore_clone = semaphore.clone();
                     let actual_options_clone = actual_options.clone();

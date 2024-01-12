@@ -26,5 +26,16 @@
     <true/>
     <key>com.apple.security.inherit</key>
     <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.cap.so</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>caprecorder</string>
+            </array>
+        </dict>
+    </array>
   </dict>
 </plist>

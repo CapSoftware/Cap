@@ -116,6 +116,7 @@ a.bg-primary:hover {
   --foreground-rgb: #000000;
   --background-start-rgb: 214, 219, 220;
   --background-end-rgb: 255, 255, 255;
+  --primary-font: "Geist", sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -129,7 +130,7 @@ a.bg-primary:hover {
 body,
 html {
   color: #000000;
-  font-family: "Geist", sans-serif !important;
+  font-family: var(--primary-font) !important;
 }
 
 @media (prefers-color-scheme: dark) {

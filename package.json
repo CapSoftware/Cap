@@ -13,5 +13,8 @@
     "supabase": "^1.123.4"
   },
   "packageManager": "pnpm@8.10.5",
-  "name": "cap"
+  "name": "cap",
+  "engines": {
+    "node": "20"
+  }
 }

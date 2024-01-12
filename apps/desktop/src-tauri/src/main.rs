@@ -1,8 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::{Arc};
-use std::sync::atomic::{AtomicBool};
+use std::path::PathBuf;
 use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicBool};
 use std::env;
 use tauri::{Manager};
 use tauri_plugin_positioner::{WindowExt, Position};
@@ -14,7 +15,6 @@ mod utils;
 
 use recording::{RecordingState, start_dual_recording, stop_all_recordings};
 use upload::upload_file;
-use devices::list_devices;
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
@@ -25,6 +25,8 @@ use ffmpeg_sidecar::{
 };
 
 fn main() {
+    tauri_plugin_deep_link::prepare("com.cap.so");
+    
     std::panic::set_hook(Box::new(|info| {
         eprintln!("Thread panicked: {:?}", info);
     }));
@@ -66,6 +68,9 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
         .setup(move |app| {
+            let handle = app.handle();
+            let handle_clone = handle.clone();
+            
             if let Some(camera_window) = app.get_window("camera") { 
               let _ = camera_window.move_window(Position::BottomRight);
             }
@@ -74,15 +79,33 @@ fn main() {
               let _ = options_window.move_window(Position::Center);
             }
 
+            tauri_plugin_deep_link::register(
+                "caprecorder",
+                move |request| {
+                    dbg!(&request);
+                    handle_clone.emit_all("scheme-request-received", request).unwrap();
+                },
+            ).unwrap();
+
+            let data_directory = handle.path_resolver().app_data_dir().unwrap_or_else(|| PathBuf::new());
+            let recording_state = RecordingState {
+                screen_process: None,
+                video_process: None,
+                upload_handles: Mutex::new(vec![]),
+                recording_options: None,
+                shutdown_flag: Arc::new(AtomicBool::new(false)),
+                data_dir: Some(data_directory),
+            };
+
+            app.manage(Arc::new(Mutex::new(recording_state)));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             start_dual_recording,
             stop_all_recordings,
-            upload_file,
-            list_devices
+            upload_file
         ])
-        .manage(Arc::new(Mutex::new(RecordingState { screen_process: None, video_process: None, recording_options: None, upload_handles: Mutex::new(vec![]), shutdown_flag: Arc::new(AtomicBool::new(false))})))
         .plugin(tauri_plugin_context_menu::init())
         .run(tauri::generate_context!())
         .expect("Error while running tauri application");

@@ -1,19 +1,30 @@
 import { cookies } from "next/headers";
-import {
-  createServerComponentClient,
-  createRouteHandlerClient,
-} from "@supabase/auth-helpers-nextjs";
+import { createServerComponentClient } from "@supabase/auth-helpers-nextjs";
 import type { Database } from "@cap/utils";
 
 export const createServerClient = () =>
-  createServerComponentClient<Database>({
-    cookies,
-  });
+  createServerComponentClient<Database>(
+    {
+      cookies,
+    },
+    {
+      supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+      supabaseKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    }
+  );
 
-export const createRouteClient = () =>
-  createRouteHandlerClient<Database>({
-    cookies,
-  });
+export const getSession = async () => {
+  const supabase = createServerClient();
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session;
+  } catch (error) {
+    console.error("Error:", error);
+    return null;
+  }
+};
 
 export const getActiveSpace = async () => {
   const supabase = createServerClient();

@@ -1,6 +1,7 @@
 import { createContext, useState, useEffect, useContext, useRef } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/utils/database/client";
+import { saveUserId } from "@/utils/database/utils";
 
 interface AuthContextProps {
   session: Session | null;
@@ -27,7 +28,10 @@ export const AuthProvider: React.FC<React.PropsWithChildren<{}>> = ({
     const updateAuthState = (session: Session | null) => {
       setSession(session);
       setUser(session?.user || null);
-      userRef.current = session?.user || null; // Update the ref whenever the user state changes
+      userRef.current = session?.user || null;
+      if (session?.user) {
+        saveUserId(session.user.id);
+      }
     };
 
     supabase.auth.getSession().then(({ data: { session }, error }) => {

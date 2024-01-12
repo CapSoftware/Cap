@@ -2,6 +2,7 @@ import "server-only";
 import DynamicSharedLayout from "@/app/dashboard/_components/DynamicSharedLayout";
 import {
   createServerClient,
+  getSession,
   getActiveSpace,
 } from "@/utils/database/supabase/server";
 
@@ -18,6 +19,9 @@ export default async function DashboardLayout({
     .select("*")
     .order("created_at", { ascending: true });
   const activeSpace = await getActiveSpace();
+  const session = await getSession();
+
+  console.log("session", session);
 
   return (
     <DynamicSharedLayout spaceData={spaceData?.data} activeSpace={activeSpace}>

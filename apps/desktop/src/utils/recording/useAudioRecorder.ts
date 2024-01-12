@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { appDataDir, join } from "@tauri-apps/api/path";
+import { dataDir, join } from "@tauri-apps/api/path";
 import { writeBinaryFile } from "@tauri-apps/api/fs";
 import { MediaDeviceContextData } from "@/utils/recording/MediaDeviceContext";
 import { getLocalDevices } from "@/utils/recording/utils";
@@ -64,7 +64,7 @@ export const useAudioRecorder = () => {
               type: "audio/mp3",
             });
             const buffer = await audioBlob.arrayBuffer();
-            const dir = await appDataDir();
+            const dir = await dataDir();
             const filePath = await join(
               dir,
               `cap_audio_${new Date().toISOString()}.mp3`

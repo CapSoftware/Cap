@@ -6,18 +6,13 @@ import {
   useCallback,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/tauri";
 import { getLocalDevices, enumerateAndStoreDevices } from "./utils";
 
 interface Devices {
   index: number;
   label: string;
   kind: "videoinput" | "audioinput";
-}
-
-interface DeviceList {
-  video_devices: string[];
-  audio_devices: string[];
+  deviceId: string;
 }
 
 export interface MediaDeviceContextData {
@@ -50,21 +45,20 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     await enumerateAndStoreDevices();
 
     try {
-      const deviceList = (await invoke("list_devices")) as DeviceList;
-      const { video_devices } = deviceList;
-
-      const { audioDevices } = await getLocalDevices();
+      const { videoDevices, audioDevices } = await getLocalDevices();
 
       const formattedDevices = [
-        ...(video_devices.map((device, index) => ({
+        ...(videoDevices.map((device: MediaDeviceInfo, index) => ({
           index: index,
-          label: device,
+          label: device.label,
           kind: "videoinput",
+          deviceId: device.deviceId,
         })) as Devices[]),
         ...(audioDevices.map((device: MediaDeviceInfo, index: number) => ({
           index: index,
           label: device.label,
           kind: "audioinput",
+          deviceId: device.deviceId,
         })) as Devices[]),
       ];
 
