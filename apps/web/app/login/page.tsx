@@ -5,9 +5,10 @@ import { LogoBadge } from "@cap/ui";
 import { Auth } from "@supabase/auth-ui-react";
 import { ThemeSupa } from "@supabase/auth-ui-shared";
 import { useRouter } from "next/navigation";
+import { supabase } from "@/utils/database/supabase/client";
 
 export default function AuthUI() {
-  const { supabase, session } = useSupabase();
+  const { session } = useSupabase();
   const router = useRouter();
 
   if (session) {
@@ -29,10 +30,18 @@ export default function AuthUI() {
               <div className="flex flex-col space-y-4">
                 <Auth
                   supabaseClient={supabase}
-                  view="magic_link"
+                  view="sign_up"
+                  otpType="signup"
                   providers={[]}
                   redirectTo={`${process.env.NEXT_PUBLIC_URL}/auth/callback`}
                   magicLink={true}
+                  localization={{
+                    variables: {
+                      magic_link: {
+                        link_text: "",
+                      },
+                    },
+                  }}
                   appearance={{
                     theme: ThemeSupa,
                     variables: {

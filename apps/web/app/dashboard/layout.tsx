@@ -1,7 +1,7 @@
 import "server-only";
 import DynamicSharedLayout from "@/app/dashboard/_components/DynamicSharedLayout";
 import {
-  createServerClient,
+  createSupabaseServerClient,
   getSession,
   getActiveSpace,
 } from "@/utils/database/supabase/server";
@@ -13,7 +13,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = createServerClient();
+  const supabase = await createSupabaseServerClient();
   const spaceData = await supabase
     .from("spaces")
     .select("*")

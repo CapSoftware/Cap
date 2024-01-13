@@ -1,6 +1,6 @@
 import "server-only";
-import { createServerClient } from "@/utils/database/supabase/server";
 import { Share } from "./Share";
+import { createSupabaseServerClient } from "@/utils/database/supabase/server";
 import { uuidFormat } from "@cap/utils";
 
 export const revalidate = 0;
@@ -10,13 +10,11 @@ type Props = {
 };
 
 export default async function ShareVideoPage(props: Props) {
+  const supabase = await createSupabaseServerClient();
   const params = props.params;
-  const supabase = createServerClient();
+  const videoId = uuidFormat(params.videoId as string);
 
-  const video = await supabase
-    .from("videos")
-    .select("*")
-    .eq("id", "6e3ae508-f661-4547-948b-d7b06c9bb752");
+  const video = await supabase.from("videos").select("*").eq("id", videoId);
 
   console.log(video);
 

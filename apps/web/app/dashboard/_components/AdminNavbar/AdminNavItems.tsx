@@ -1,6 +1,5 @@
 "use client";
 import { usePathname, useRouter } from "next/navigation";
-import { useSupabase } from "@/utils/database/supabase/provider";
 import {
   Plus,
   Settings,
@@ -32,10 +31,10 @@ import {
 import { NewSpace } from "@/components/forms/NewSpace";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { handleActiveSpace } from "@/utils/database/supabase/helpers";
+import { supabase } from "@/utils/database/supabase/client";
 
 export const AdminNavItems = () => {
   const pathname = usePathname();
-  const { supabase } = useSupabase();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const { spaceData, activeSpace } = useSharedContext();
@@ -93,7 +92,7 @@ export const AdminNavItems = () => {
                     <CommandItem
                       key={space.name}
                       onSelect={async () => {
-                        await handleActiveSpace(space.id, supabase);
+                        await handleActiveSpace(space.id);
                         router.refresh();
                         setOpen(false);
                       }}

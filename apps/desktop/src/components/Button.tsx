@@ -28,12 +28,12 @@ export const Button = ({
 
   return (
     <button onClick={handler} className={classes}>
-      {label}
-      {spinner && (
-        <div className="ml-2">
+      {spinner ? (
+        <div className="flex justify-between">
+          {label}
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            className="w-6 h-6"
+            className="w-6 h-6 ml-2"
             viewBox="0 0 24 24"
           >
             <style>
@@ -54,6 +54,8 @@ export const Button = ({
             />
           </svg>
         </div>
+      ) : (
+        label
       )}
     </button>
   );

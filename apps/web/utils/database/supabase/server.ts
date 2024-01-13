@@ -1,20 +1,29 @@
-import { cookies } from "next/headers";
-import { createServerComponentClient } from "@supabase/auth-helpers-nextjs";
-import type { Database } from "@cap/utils";
+"use server";
 
-export const createServerClient = () =>
-  createServerComponentClient<Database>(
+import { createServerClient } from "@supabase/ssr";
+import type { Database } from "@cap/utils";
+import { cookies } from "next/headers";
+
+export async function createSupabaseServerClient() {
+  const cookieStore = cookies();
+
+  const supabase = createServerClient<Database>(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
-      cookies,
-    },
-    {
-      supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
-      supabaseKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      cookies: {
+        get(name: string) {
+          return cookieStore.get(name)?.value;
+        },
+      },
     }
   );
 
+  return supabase;
+}
+
 export const getSession = async () => {
-  const supabase = createServerClient();
+  const supabase = await createSupabaseServerClient();
   try {
     const {
       data: { session },
@@ -27,7 +36,7 @@ export const getSession = async () => {
 };
 
 export const getActiveSpace = async () => {
-  const supabase = createServerClient();
+  const supabase = await createSupabaseServerClient();
 
   const { data: userData, error: userError } = await supabase
     .from("users")

@@ -1,8 +1,8 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { useSupabase } from "@/utils/database/supabase/provider";
 import { AuthChangeEvent, Session } from "@supabase/supabase-js";
+import { supabase } from "@/utils/database/supabase/client";
 
 // this component handles refreshing server data when the user logs in or out
 // this method avoids the need to pass a session down to child components
@@ -13,7 +13,6 @@ export default function SupabaseListener({
 }: {
   serverAccessToken?: string;
 }) {
-  const { supabase } = useSupabase();
   const router = useRouter();
 
   useEffect(() => {

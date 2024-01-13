@@ -16,15 +16,16 @@
     "@cap/utils": "workspace:*",
     "@headlessui/react": "^1.7.17",
     "@hookform/resolvers": "^3.3.2",
-    "@supabase/auth-helpers-nextjs": "^0.7.0",
+    "@supabase/auth-helpers-nextjs": "^0.8.7",
     "@supabase/auth-ui-react": "^0.4.2",
     "@supabase/auth-ui-shared": "^0.1.6",
-    "@supabase/supabase-js": "^2.23.0",
+    "@supabase/ssr": "^0.0.10",
+    "@supabase/supabase-js": "^2.39.0",
     "aws-sdk": "^2.1530.0",
     "clsx": "^2.0.0",
     "dotenv": "^16.3.1",
     "lucide-react": "^0.294.0",
-    "next": "13.4.3",
+    "next": "14.0.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hook-form": "^7.49.2",
@@ -45,10 +46,6 @@
     "supabase": "^1.63.1",
     "tailwindcss": "^3",
     "typescript": "^5.3.2"
-  },
-  "optionalDependencies": {
-    "bufferutil": "^4.0.8",
-    "utf-8-validate": "^6.0.3"
   },
   "engines": {
     "node": "20"

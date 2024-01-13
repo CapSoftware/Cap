@@ -16,9 +16,10 @@ import { Input } from "@cap/ui";
 import { useForm } from "react-hook-form";
 import { useSupabase } from "@/utils/database/supabase/provider";
 import { useState } from "react";
+import { supabase } from "@/utils/database/supabase/client";
 
 export function NewSpace() {
-  const { supabase } = useSupabase();
+  const { session } = useSupabase();
   const [isLoading, setIsLoading] = useState(false);
   const { replace } = useRouter();
 
@@ -35,24 +36,21 @@ export function NewSpace() {
 
     const { name } = values;
 
-    const session = await supabase.auth.getSession();
-    const userId = session.data?.session ? session.data.session.user.id : null;
+    console.log("session:");
+    console.log(session);
 
-    if (!userId) {
+    if (!session) {
       alert("You must be logged in to create a space.");
       setIsLoading(false);
       return;
     }
-
-    console.log("userId:");
-    console.log(userId);
 
     console.log("session:");
     console.log(session);
 
     const { error } = await supabase
       .from("spaces")
-      .insert([{ name, owner_id: userId }]);
+      .insert([{ name, owner_id: session.user.id }]);
 
     if (error) {
       alert(error.message);

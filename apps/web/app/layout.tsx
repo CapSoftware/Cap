@@ -1,17 +1,20 @@
 import "server-only";
+import SupabaseListener from "@/utils/database/supabase/listener";
 import SupabaseProvider from "@/utils/database/supabase/provider";
 import "@/app/globals.css";
+import { Metadata } from "next/types";
 import { Toaster } from "react-hot-toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
-import { Metadata } from "next/types";
-import { getSession } from "@/utils/database/supabase/server";
+import { createSupabaseServerClient } from "@/utils/database/supabase/server";
+import { cookies } from "next/headers";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful, shareable screen recordings",
   description: "Cap — Beautiful, shareable screen recordings",
 };
 
+// do not cache this layout
 export const revalidate = 0;
 
 export default async function RootLayout({
@@ -19,12 +22,19 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await getSession();
+  const supabase = await createSupabaseServerClient();
+
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
 
   return (
     <html lang="en">
       <head>
-        <meta property="og:image" content="https://cap.so/og.png" />
+        <meta
+          property="og:description"
+          content="Imagine having all your messages in one place."
+        />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
         <link
@@ -50,19 +60,15 @@ export default async function RootLayout({
         <meta name="theme-color" content="#ffffff" />
       </head>
       <body>
-        <SupabaseProvider session={session ?? null}>
+        <SupabaseProvider session={session}>
           <Toaster />
           <main className="w-full overflow-hidden">
             <Navbar />
+            <SupabaseListener serverAccessToken={session?.access_token} />
             {children}
             <Footer />
           </main>
         </SupabaseProvider>
-        <script
-          defer
-          data-domain="cap.so"
-          src="https://plausible.io/js/script.js"
-        ></script>
       </body>
     </html>
   );

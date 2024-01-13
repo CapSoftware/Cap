@@ -186,7 +186,7 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
 
   useEffect(() => {
     if (stoppingRecording) {
-      const messages = ["Processing video", "Almost there", "Hang tight"];
+      const messages = ["Processing video", "Almost done", "Finishing up"];
       let messageIndex = 0;
 
       const nextMessage = () => {
@@ -196,7 +196,7 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
 
       nextMessage();
 
-      const intervalId = setInterval(nextMessage, 1500);
+      const intervalId = setInterval(nextMessage, 2000);
 
       return () => clearInterval(intervalId);
     } else {

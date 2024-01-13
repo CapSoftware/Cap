@@ -1,10 +1,7 @@
 import "server-only";
-import {
-  createServerClient,
-  getActiveSpace,
-} from "@/utils/database/supabase/server";
 import { Caps } from "./Caps";
 import { DashboardTemplate } from "@/components/templates/DashboardTemplate";
+import { createSupabaseServerClient } from "@/utils/database/supabase/server";
 
 export const revalidate = 0;
 
@@ -13,7 +10,7 @@ type Props = {
 };
 
 export default async function DocumentsPage(props: Props) {
-  const supabase = createServerClient();
+  const supabase = await createSupabaseServerClient();
   const caps = await supabase
     .from("videos")
     .select("*")
