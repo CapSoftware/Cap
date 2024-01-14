@@ -10,7 +10,7 @@
     "eslint": "^7.32.0",
     "prettier": "^2.5.1",
     "turbo": "^1.10.16",
-    "supabase": "^1.123.4",
+    "supabase": "^1.131.4",
     "dotenv-cli": "latest"
   },
   "packageManager": "pnpm@8.10.5",

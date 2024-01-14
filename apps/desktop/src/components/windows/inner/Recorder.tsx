@@ -20,6 +20,7 @@ import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
 import { uuidParse } from "@cap/utils";
 import toast, { Toaster } from "react-hot-toast";
+import { LogicalSize, WebviewWindow, appWindow } from "@tauri-apps/api/window";
 
 export const Recorder = ({ session }: { session: AuthSession | null }) => {
   const {
@@ -71,8 +72,8 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
   };
 
   const handleOverlayFinished = () => {
-    // appWindow.minimize();
-    // WebviewWindow.getByLabel("camera")?.minimize();
+    appWindow.setSize(new LogicalSize(0, 0));
+    WebviewWindow.getByLabel("camera")?.setSize(new LogicalSize(0, 0));
     setIsRecording(true);
     setCountdownActive(false);
   };

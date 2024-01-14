@@ -5,6 +5,8 @@ import {
   getSession,
   getActiveSpace,
 } from "@/utils/database/supabase/server";
+import SupabaseProvider from "@/utils/database/supabase/provider";
+import SupabaseListener from "@/utils/database/supabase/listener";
 
 export const revalidate = 0;
 
@@ -24,8 +26,14 @@ export default async function DashboardLayout({
   console.log("session", session);
 
   return (
-    <DynamicSharedLayout spaceData={spaceData?.data} activeSpace={activeSpace}>
-      <div className="full-layout">{children}</div>
-    </DynamicSharedLayout>
+    <SupabaseProvider session={session}>
+      <DynamicSharedLayout
+        spaceData={spaceData?.data}
+        activeSpace={activeSpace}
+      >
+        <SupabaseListener serverAccessToken={session?.access_token} />
+        <div className="full-layout">{children}</div>
+      </DynamicSharedLayout>
+    </SupabaseProvider>
   );
 }

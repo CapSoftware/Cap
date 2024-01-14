@@ -1,6 +1,8 @@
+import million from "million/compiler";
+
 /** @type {import('next').NextConfig} */
 
-require("dotenv").config({ path: "../../.env" });
+import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
 if (
   !process.env.NEXT_PUBLIC_SUPABASE_URL ||
@@ -28,4 +30,8 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+const millionConfig = {
+  auto: true,
+};
+
+export default million.next(nextConfig, millionConfig);

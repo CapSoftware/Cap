@@ -7,73 +7,76 @@ export const Camera = () => {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (videoRef.current && selectedVideoDevice) {
-      setIsLoading(true);
+    let activeStream: MediaStream | null = null;
 
-      navigator.mediaDevices
-        .enumerateDevices()
-        .then((devices) => {
-          const videoDevices = devices.filter(
-            (device) => device.kind === "videoinput"
-          );
-          return videoDevices[selectedVideoDevice.index].deviceId;
-        })
-        .then((deviceId) =>
-          navigator.mediaDevices
-            .getUserMedia({
-              video: {
-                deviceId: deviceId,
-                frameRate: { ideal: 30 },
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-              },
-            })
-            //Save fps and widthXheight settings to local storage
-            .then((stream) => {
-              const videoTrack = stream.getVideoTracks()[0];
-              const settings = videoTrack.getSettings();
-              const videoProperties = {
-                framerate: settings.frameRate ? String(settings.frameRate) : "",
-                resolution: `${settings.width}x${settings.height}`,
-              };
-              localStorage.setItem(
-                "videoDeviceProperties",
-                JSON.stringify(videoProperties)
-              );
-              return stream;
-            })
-            .then((stream) => {
-              let video = videoRef.current;
-              if (video) {
-                video.srcObject = stream;
-                video.onplaying = () => {
-                  setIsLoading(false);
-                };
-                video.play().catch((error) => {
-                  console.error("Error attempting to play the video:", error);
-                });
-              }
-            })
-            .catch((err) => {
-              console.error(err);
-              setIsLoading(false);
-            })
+    const setupCamera = async () => {
+      if (!videoRef.current || !selectedVideoDevice) {
+        setIsLoading(false);
+        return;
+      }
+
+      setIsLoading(true);
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(
+          (device) => device.kind === "videoinput"
+        );
+        const deviceId = videoDevices[selectedVideoDevice.index].deviceId;
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            deviceId: deviceId,
+            frameRate: { ideal: 30 },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+        });
+
+        // Save stream
+        activeStream = stream;
+
+        const videoTrack = stream.getVideoTracks()[0];
+        const settings = videoTrack.getSettings();
+        const videoProperties = {
+          framerate: settings.frameRate ? String(settings.frameRate) : "",
+          resolution: `${settings.width}x${settings.height}`,
+        };
+        localStorage.setItem(
+          "videoDeviceProperties",
+          JSON.stringify(videoProperties)
         );
 
-      setIsLoading(false);
-    }
-  }, [selectedVideoDevice, videoRef]);
+        const video = videoRef.current;
+        video.srcObject = stream;
+        video.onplaying = () => {
+          setIsLoading(false);
+        };
+        await video.play();
+      } catch (err) {
+        console.error(err);
+        setIsLoading(false);
+      }
+    };
 
-  if (videoRef && selectedVideoDevice && isLoading === true) {
-    setIsLoading(false);
-  }
+    setupCamera();
+
+    // Cleanup function to stop the stream and reset loading state
+    return () => {
+      if (activeStream) {
+        activeStream.getTracks().forEach((track) => track.stop());
+        activeStream = null;
+      }
+      // Avoid loading when the component is not actually loading
+      setIsLoading(false);
+    };
+  }, [selectedVideoDevice, videoRef]);
 
   return (
     <div
       data-tauri-drag-region
       className="w-[200px] h-[200px] bg-gray-200 rounded-full m-0 p-0 relative overflow-hidden flex items-center justify-center"
     >
-      {isLoading === true ? (
+      {isLoading ? (
         <svg
           xmlns="http://www.w3.org/2000/svg"
           stroke="#fff"

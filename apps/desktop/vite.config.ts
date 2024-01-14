@@ -1,3 +1,4 @@
+import million from "million/compiler";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
@@ -16,7 +17,7 @@ requiredEnvVariables.forEach((envVar) => {
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react(), tsconfigPaths()],
+  plugins: [million.vite({ optimize: true }), react(), tsconfigPaths()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
