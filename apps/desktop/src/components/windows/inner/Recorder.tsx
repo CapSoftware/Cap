@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
+import { Screen } from "@/components/icons/Screen";
+import { Window } from "@/components/icons/Window";
 import { ActionButton } from "@/components/recording/ActionButton";
 import { Button } from "@/components/Button";
 import { Logo } from "@/components/icons/Logo";
@@ -17,12 +19,14 @@ import { getSelectedVideoProperties } from "@/utils/recording/utils";
 import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
 import { uuidParse } from "@cap/utils";
+import toast, { Toaster } from "react-hot-toast";
 
 export const Recorder = ({ session }: { session: AuthSession | null }) => {
   const {
     devices,
     selectedVideoDevice,
     selectedAudioDevice,
+    selectedDisplayType,
     isRecording,
     setIsRecording,
   } = useMediaDevices();
@@ -227,19 +231,38 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
         </div>
         <div className="space-y-4 w-full">
           <div>
-            <label className="text-sm font-medium">Webcam Settings</label>
+            <label className="text-sm font-medium">Display</label>
+            <div className="flex items-center space-x-1">
+              <ActionButton
+                handler={() => console.log("Screen option selected")}
+                icon={<Screen className="w-5 h-5" />}
+                label="Screen"
+                active={selectedDisplayType === "screen"}
+              />
+              <ActionButton
+                handler={() => toast.error("This option is coming soon!")}
+                icon={<Window className="w-5 h-5" />}
+                label="Window"
+                active={selectedDisplayType === "window"}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-sm font-medium">Webcam / Video</label>
             <div className="space-y-1">
               <ActionButton
                 width="full"
                 handler={() => handleContextClick("video")}
                 icon={<Video className="w-5 h-5" />}
                 label={selectedVideoDevice?.label || "Video"}
+                active={selectedVideoDevice !== null}
               />
               <ActionButton
                 width="full"
                 handler={() => handleContextClick("audio")}
                 icon={<Microphone className="w-5 h-5" />}
                 label={selectedAudioDevice?.label || "Mic"}
+                active={selectedAudioDevice !== null}
               />
             </div>
           </div>
@@ -261,6 +284,7 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
           )}
         </div>
       </div>
+      <Toaster />
     </div>
   );
 };

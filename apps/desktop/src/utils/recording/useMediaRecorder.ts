@@ -71,9 +71,9 @@ export const useMediaRecorder = () => {
       await writeTextFile({ path: segmentListPath, contents: "" });
 
       // Set up and start the MediaRecorder
-      if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) {
+      if (MediaRecorder.isTypeSupported("video/webm;codecs=h264")) {
         mediaRecorder.current = new MediaRecorder(stream, {
-          mimeType: "video/webm;codecs=vp8",
+          mimeType: "video/webm;codecs=h264",
         });
       } else {
         // Fallback to the default MIME type if 'webm' is not supported

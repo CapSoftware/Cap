@@ -20,6 +20,10 @@ export interface MediaDeviceContextData {
   setSelectedVideoDevice: React.Dispatch<React.SetStateAction<Devices | null>>;
   selectedAudioDevice: Devices | null;
   setSelectedAudioDevice: React.Dispatch<React.SetStateAction<Devices | null>>;
+  selectedDisplayType: "screen" | "window" | "area";
+  setSelectedDisplayType: React.Dispatch<
+    React.SetStateAction<"screen" | "window" | "area">
+  >;
   devices: Devices[];
   getDevices: () => Promise<void>;
   isRecording: boolean;
@@ -37,6 +41,9 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     useState<Devices | null>(null);
   const [selectedAudioDevice, setSelectedAudioDevice] =
     useState<Devices | null>(null);
+  const [selectedDisplayType, setSelectedDisplayType] = useState<
+    "screen" | "window" | "area"
+  >("screen");
   const [devices, setDevices] = useState<Devices[]>([]);
   const [isRecording, setIsRecording] = useState(false);
 
@@ -136,6 +143,8 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         setSelectedVideoDevice,
         selectedAudioDevice,
         setSelectedAudioDevice,
+        selectedDisplayType,
+        setSelectedDisplayType,
         devices,
         getDevices,
         isRecording,

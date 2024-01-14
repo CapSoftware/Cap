@@ -30,18 +30,12 @@ export default function AuthUI() {
               <div className="flex flex-col space-y-4">
                 <Auth
                   supabaseClient={supabase}
-                  view="sign_up"
-                  otpType="signup"
+                  view="magic_link"
+                  otpType="magiclink"
                   providers={[]}
                   redirectTo={`${process.env.NEXT_PUBLIC_URL}/auth/callback`}
                   magicLink={true}
-                  localization={{
-                    variables: {
-                      magic_link: {
-                        link_text: "",
-                      },
-                    },
-                  }}
+                  showLinks={false}
                   appearance={{
                     theme: ThemeSupa,
                     variables: {
