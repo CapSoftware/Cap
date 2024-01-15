@@ -39,10 +39,10 @@ export const FaqPage = () => {
       <div className="text-center page-intro mb-14">
         <h1>FAQ</h1>
       </div>
-      <div className="space-y-8 mb-10">
+      <div className="mb-10">
         {faqContent.map((section, index) => {
           return (
-            <div key={index} className="max-w-2xl mx-auto">
+            <div key={index} className="max-w-2xl mx-auto my-8">
               <h2 className="text-xl mb-2">{section.title}</h2>
               <p className="text-lg">{section.answer}</p>
             </div>
