@@ -16,7 +16,7 @@ This guide is for anyone who wants to contribute to Cap. It's a work in progress
 
 There are many ways to contribute to Cap. You can:
 
-- [Report a bug](https://github.com/cap-so/cap/issues/new)
+- [Report a bug](https://github.com/CapSoftware/cap/issues/new)
 - [Suggest a feature (via Discord)](https://discord.com/invite/y8gdQ3WRN3)
 - Submit a PR
 

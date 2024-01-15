@@ -76,7 +76,7 @@ export const HomePage = () => {
                   , or over on the Cap{" "}
                   <a
                     className="text-black"
-                    href="https://github.com/cap-so/cap"
+                    href="https://github.com/CapSoftware/cap"
                     target="_blank"
                   >
                     GitHub repository
@@ -122,7 +122,7 @@ export const HomePage = () => {
                     Join Waitlist
                   </button>
                   <a
-                    href="https://github.com/cap-so/cap"
+                    href="https://github.com/CapSoftware/cap"
                     target="_blank"
                     className="bg-gray-700 hover:bg-gray-800 border border-gray-600 flex items-center space-x-2 text-white font-medium text-sm sm:text-base rounded-lg py-1.5 px-3"
                   >
