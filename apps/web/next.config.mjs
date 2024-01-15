@@ -33,6 +33,7 @@ const nextConfig = {
 const millionConfig = {
   auto: {
     rsc: true,
+    skip: ["Parallax"],
   },
 };
 

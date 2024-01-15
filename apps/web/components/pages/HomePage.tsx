@@ -49,7 +49,7 @@ export const HomePage = () => {
             <h1 className="fade-in-down text-3xl sm:text-5xl lg:text-7xl relative z-10 text-black">
               Your screen recordings deserve to be beautiful.
             </h1>
-            <p className="fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto text-black">
+            <p className="fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto text-black mb-8">
               Cap is an open source and privacy-focused alternative to Loom.
               Lightweight, powerful, and stunning. Record and share in seconds.
             </p>

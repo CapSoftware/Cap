@@ -1,6 +1,4 @@
 "use client";
-import SupabaseListener from "@/utils/database/supabase/listener";
-import SupabaseProvider from "@/utils/database/supabase/provider";
 import "@/app/globals.css";
 import { Toaster } from "react-hot-toast";
 import { Navbar } from "@/components/Navbar";
