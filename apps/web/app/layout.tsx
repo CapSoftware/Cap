@@ -49,6 +49,11 @@ export default async function RootLayout({
           {children}
           <Footer />
         </main>
+        <script
+          defer
+          data-domain="cap.so"
+          src="https://plausible.io/js/script.js"
+        ></script>
       </body>
     </html>
   );

@@ -1,4 +1,4 @@
-import "server-only";
+"use server";
 import DynamicSharedLayout from "@/app/dashboard/_components/DynamicSharedLayout";
 import {
   createSupabaseServerClient,
@@ -7,8 +7,6 @@ import {
 } from "@/utils/database/supabase/server";
 import SupabaseProvider from "@/utils/database/supabase/provider";
 import SupabaseListener from "@/utils/database/supabase/listener";
-
-export const revalidate = 0;
 
 export default async function DashboardLayout({
   children,

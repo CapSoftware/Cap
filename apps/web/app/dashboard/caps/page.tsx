@@ -1,9 +1,7 @@
-import "server-only";
+"use server";
 import { Caps } from "./Caps";
 import { DashboardTemplate } from "@/components/templates/DashboardTemplate";
 import { createSupabaseServerClient } from "@/utils/database/supabase/server";
-
-export const revalidate = 0;
 
 type Props = {
   params: { [key: string]: string | string[] | undefined };

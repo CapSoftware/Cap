@@ -2,18 +2,28 @@
 
 import { useSupabase } from "@/utils/database/supabase/provider";
 import { LogoBadge } from "@cap/ui";
-import { Auth } from "@supabase/auth-ui-react";
+import dynamic from "next/dynamic";
+const Auth = dynamic(
+  () => import("@supabase/auth-ui-react").then((mod) => mod.Auth),
+  {
+    ssr: false,
+  }
+);
 import { ThemeSupa } from "@supabase/auth-ui-shared";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/utils/database/supabase/client";
+import { useEffect } from "react";
 
 export default function AuthUI() {
-  const { session } = useSupabase();
+  const supabaseHelper = useSupabase();
   const router = useRouter();
 
-  if (session) {
-    router.replace("/dashboard/caps");
-  }
+  useEffect(() => {
+    const session = supabaseHelper?.session;
+    if (session && typeof window !== "undefined") {
+      router.replace("/dashboard/caps");
+    }
+  }, [supabaseHelper?.session, router]);
 
   return (
     <div>

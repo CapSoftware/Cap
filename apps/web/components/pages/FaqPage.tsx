@@ -1,3 +1,5 @@
+"use client";
+
 const faqContent = [
   {
     title: "What is Cap?",

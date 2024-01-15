@@ -1,3 +1,5 @@
+"use client";
+
 export const DashboardTemplate = ({
   title,
   description,

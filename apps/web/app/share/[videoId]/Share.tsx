@@ -1,9 +1,7 @@
 "use client";
-import { Button } from "@cap/ui";
 import type { Database } from "@cap/utils";
-import { classNames } from "../../../../../packages/ui/src/utils/helpers";
 
-export const Share = ({
+export const Share = async ({
   data,
 }: {
   data: Database["public"]["Tables"]["videos"]["Row"] | null;
