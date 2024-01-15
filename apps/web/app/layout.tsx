@@ -13,8 +13,12 @@ export default async function RootLayout({
     <html lang="en">
       <head>
         <meta
+          property="og:title"
+          content="Cap — Beautiful, shareable screen recordings. Open source."
+        />
+        <meta
           property="og:description"
-          content="Imagine having all your messages in one place."
+          content="Cap is an open source and privacy focused alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds."
         />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
@@ -39,6 +43,9 @@ export default async function RootLayout({
         <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5" />
         <meta name="msapplication-TileColor" content="#da532c" />
         <meta name="theme-color" content="#ffffff" />
+        <title>
+          Cap — Beautiful, shareable screen recordings. Open source.
+        </title>
       </head>
       <body>
         <Toaster />
