@@ -286,6 +286,6 @@ ul {
   @apply text-lg;
 }
 
-slot:first-of-type {
+slot {
   display: block;
 }
