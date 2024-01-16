@@ -14,12 +14,12 @@ import {
 } from "@cap/ui";
 import { Input } from "@cap/ui";
 import { useForm } from "react-hook-form";
-import { useSupabase } from "@/utils/database/supabase/provider";
+// import { useSupabase } from "@/utils/database/supabase/provider";
 import { useState } from "react";
-import { supabase } from "@/utils/database/supabase/client";
+// import { supabase } from "@/utils/database/supabase/client";
 
 export function NewSpace() {
-  const { session } = useSupabase();
+  // const { session } = useSupabase();
   const [isLoading, setIsLoading] = useState(false);
   const { replace } = useRouter();
 
@@ -31,57 +31,60 @@ export function NewSpace() {
     resolver: zodResolver(formSchema),
   });
 
-  async function onSubmit(values: z.infer<typeof formSchema>) {
-    setIsLoading(true);
+  //TODO: Auth
 
-    const { name } = values;
+  // async function onSubmit(values: z.infer<typeof formSchema>) {
+  //   setIsLoading(true);
 
-    console.log("session:");
-    console.log(session);
+  //   const { name } = values;
 
-    if (!session) {
-      alert("You must be logged in to create a space.");
-      setIsLoading(false);
-      return;
-    }
+  //   console.log("session:");
+  //   console.log(session);
 
-    console.log("session:");
-    console.log(session);
+  //   if (!session) {
+  //     alert("You must be logged in to create a space.");
+  //     setIsLoading(false);
+  //     return;
+  //   }
 
-    const { error } = await supabase
-      .from("spaces")
-      .insert([{ name, owner_id: session.user.id }]);
+  //   console.log("session:");
+  //   console.log(session);
 
-    if (error) {
-      alert(error.message);
-    } else {
-      window.location.href = "/dashboard";
-    }
-    setIsLoading(false);
-  }
+  //   const { error } = await supabase
+  //     .from("spaces")
+  //     .insert([{ name, owner_id: session.user.id }]);
+
+  //   if (error) {
+  //     alert(error.message);
+  //   } else {
+  //     window.location.href = "/dashboard";
+  //   }
+  //   setIsLoading(false);
+  // }
 
   return (
-    <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)}>
-        <div className="space-y-4 mb-8">
-          <FormField
-            control={form.control}
-            name="name"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Name</FormLabel>
-                <FormControl>
-                  <Input placeholder="Your space name" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-        </div>
-        <Button type="submit" disabled={isLoading}>
-          {isLoading ? "Loading..." : "Create Space"}
-        </Button>
-      </form>
-    </Form>
+    // <Form {...form}>
+    //   <form onSubmit={form.handleSubmit(onSubmit)}>
+    //     <div className="space-y-4 mb-8">
+    //       <FormField
+    //         control={form.control}
+    //         name="name"
+    //         render={({ field }) => (
+    //           <FormItem>
+    //             <FormLabel>Name</FormLabel>
+    //             <FormControl>
+    //               <Input placeholder="Your space name" {...field} />
+    //             </FormControl>
+    //             <FormMessage />
+    //           </FormItem>
+    //         )}
+    //       />
+    //     </div>
+    //     <Button type="submit" disabled={isLoading}>
+    //       {isLoading ? "Loading..." : "Create Space"}
+    //     </Button>
+    //   </form>
+    // </Form>
+    <p></p>
   );
 }

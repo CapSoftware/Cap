@@ -30,8 +30,10 @@ import {
 } from "@cap/ui";
 import { NewSpace } from "@/components/forms/NewSpace";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { handleActiveSpace } from "@/utils/database/supabase/helpers";
-import { supabase } from "@/utils/database/supabase/client";
+// import { handleActiveSpace } from "@/utils/database/supabase/helpers";
+// import { supabase } from "@/utils/database/supabase/client";
+
+//TODO: Auth
 
 export const AdminNavItems = () => {
   const pathname = usePathname();
@@ -50,13 +52,13 @@ export const AdminNavItems = () => {
     "flex items-center justify-start p-2 rounded-lg border border-transparent outline-none w-full";
 
   const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
+    // const { error } = await supabase.auth.signOut();
 
     router.refresh();
 
-    if (error) {
-      console.log({ error });
-    }
+    // if (error) {
+    //   console.log({ error });
+    // }
   };
 
   return (
@@ -88,7 +90,7 @@ export const AdminNavItems = () => {
                 <CommandInput placeholder="Search spaces..." />
                 <CommandEmpty>No spaces found.</CommandEmpty>
                 <CommandGroup>
-                  {spaceData?.map((space) => (
+                  {/* {spaceData?.map((space) => (
                     <CommandItem
                       key={space.name}
                       onSelect={async () => {
@@ -99,7 +101,7 @@ export const AdminNavItems = () => {
                     >
                       {space.name}
                     </CommandItem>
-                  ))}
+                  ))} */}
                   <DialogTrigger className="w-full">
                     <CommandItem className="bg-filler aria-selected:bg-filler-2 rounded-lg">
                       <Plus className="w-4 h-auto mr-1" />

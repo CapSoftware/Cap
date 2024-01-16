@@ -26,7 +26,6 @@
     "vite-tsconfig-paths": "^4.2.1"
   },
   "devDependencies": {
-    "@supabase/supabase-js": "^2.39.0",
     "@tauri-apps/cli": "^1.5.0",
     "@types/react": "^18.2.15",
     "@types/react-dom": "latest",

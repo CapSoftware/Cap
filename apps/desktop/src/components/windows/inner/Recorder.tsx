@@ -11,9 +11,12 @@ import { emit } from "@tauri-apps/api/event";
 import { showMenu } from "tauri-plugin-context-menu";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Countdown } from "./Countdown";
-import { AuthSession } from "@supabase/supabase-js";
-import { supabase } from "@/utils/database/client";
-import type { Database } from "@cap/utils";
+// import { AuthSession } from "@supabase/supabase-js";
+// import { supabase } from "@/utils/database/client";
+// import type { Database } from "@cap/utils";
+
+//TODO: Auth
+
 import { useMediaRecorder } from "@/utils/recording/useMediaRecorder";
 import { getSelectedVideoProperties } from "@/utils/recording/utils";
 import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
@@ -22,7 +25,7 @@ import { uuidParse } from "@cap/utils";
 import toast, { Toaster } from "react-hot-toast";
 import { LogicalSize, WebviewWindow, appWindow } from "@tauri-apps/api/window";
 
-export const Recorder = ({ session }: { session: AuthSession | null }) => {
+export const Recorder = ({ session }: { session: null }) => {
   const {
     devices,
     selectedVideoDevice,
@@ -78,37 +81,37 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
     setCountdownActive(false);
   };
 
-  const prepareVideoData = async () => {
-    return await supabase
-      .from("videos")
-      .insert({
-        owner_id: session?.user?.id,
-        aws_region: import.meta.env.VITE_AWS_REGION,
-        aws_bucket: import.meta.env.VITE_AWS_BUCKET,
-      })
-      .select()
-      .single()
-      .then(
-        ({
-          data,
-          error,
-        }: {
-          data: Database["public"]["Tables"]["videos"]["Row"] | null;
-          error: any;
-        }) => {
-          if (error) {
-            console.error("Error fetching video data:", error);
-            return null;
-          }
-          if (!data) {
-            console.error("No video data received");
-            return null;
-          }
-          saveLatestVideoId(data.id);
-          return data;
-        }
-      );
-  };
+  // const prepareVideoData = async () => {
+  //   return await supabase
+  //     .from("videos")
+  //     .insert({
+  //       owner_id: session?.user?.id,
+  //       aws_region: import.meta.env.VITE_AWS_REGION,
+  //       aws_bucket: import.meta.env.VITE_AWS_BUCKET,
+  //     })
+  //     .select()
+  //     .single()
+  //     .then(
+  //       ({
+  //         data,
+  //         error,
+  //       }: {
+  //         data: Database["public"]["Tables"]["videos"]["Row"] | null;
+  //         error: any;
+  //       }) => {
+  //         if (error) {
+  //           console.error("Error fetching video data:", error);
+  //           return null;
+  //         }
+  //         if (!data) {
+  //           console.error("No video data received");
+  //           return null;
+  //         }
+  //         saveLatestVideoId(data.id);
+  //         return data;
+  //       }
+  //     );
+  // };
 
   const startDualRecording = async (videoData: {
     id: any;
@@ -120,7 +123,7 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
     if (mediaSettings?.resolution && mediaSettings?.framerate) {
       await invoke("start_dual_recording", {
         options: {
-          user_id: session?.user?.id,
+          // user_id: session?.user?.id,
           video_id: videoData.id,
           aws_region: videoData.aws_region,
           aws_bucket: videoData.aws_bucket,
@@ -139,22 +142,22 @@ export const Recorder = ({ session }: { session: AuthSession | null }) => {
   const handleStartAllRecordings = async () => {
     setCountdownActive(true);
 
-    try {
-      const videoData = await prepareVideoData();
-      if (videoData) {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { deviceId: selectedAudioDevice?.deviceId },
-          video: { deviceId: selectedVideoDevice?.deviceId },
-        });
-        await startMediaRecording(stream);
-        await startDualRecording(videoData);
-      } else {
-        throw new Error("Failed to prepare video data.");
-      }
-    } catch (error) {
-      console.error("Error starting recordings:", error);
-      setCountdownActive(false);
-    }
+    // try {
+    //   const videoData = await prepareVideoData();
+    //   if (videoData) {
+    //     const stream = await navigator.mediaDevices.getUserMedia({
+    //       audio: { deviceId: selectedAudioDevice?.deviceId },
+    //       video: { deviceId: selectedVideoDevice?.deviceId },
+    //     });
+    //     await startMediaRecording(stream);
+    //     await startDualRecording(videoData);
+    //   } else {
+    //     throw new Error("Failed to prepare video data.");
+    //   }
+    // } catch (error) {
+    //   console.error("Error starting recordings:", error);
+    //   setCountdownActive(false);
+    // }
   };
 
   const handleStopAllRecordings = async () => {
