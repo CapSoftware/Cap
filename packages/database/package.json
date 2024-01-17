@@ -1,0 +1,34 @@
+{
+  "name": "@cap/database",
+  "private": true,
+  "types": "./index.ts",
+  "main": "index.js",
+  "scripts": {
+    "db:generate": "drizzle-kit generate:mysql --config=drizzle.config.ts",
+    "db:push": "drizzle-kit push:mysql --config=drizzle.config.ts",
+    "db:check": "drizzle-kit check:mysql --config=drizzle.config.ts",
+    "db:up": "drizzle-kit up:mysql --config=drizzle.config.ts",
+    "db:drop": "drizzle-kit drop --config=drizzle.config.ts"
+  },
+  "dependencies": {
+    "@paralleldrive/cuid2": "^2.2.2",
+    "@planetscale/database": "^1.13.0",
+    "drizzle-orm": "^0.29.3",
+    "mysql2": "^3.7.0",
+    "next-auth": "^4.24.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.2.38",
+    "@types/react-dom": "latest",
+    "tsconfig": "workspace:*",
+    "typescript": "^5.3.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.18.0",
+    "drizzle-kit": "^0.20.12"
+  },
+  "engines": {
+    "node": "20"
+  }
+}

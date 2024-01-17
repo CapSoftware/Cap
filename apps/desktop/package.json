@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@cap/utils": "workspace:*",
+    "@cap/database": "workspace:*",
     "@tauri-apps/api": "^1.5.0",
     "autoprefixer": "^10.4.16",
     "date-fns": "^3.2.0",
