@@ -3938,18 +3938,22 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-context-menu"
-version = "0.5.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b93737f332761822f2d1ee6f7dbe4c1f94c4d03020a349bc1f8070d75b6409e8"
+checksum = "408c121f5a61ef57b6246f87ef6205a9602efffd1c2db8fd5d696f61b055fac2"
 dependencies = [
  "cocoa",
  "dispatch",
+ "gdk",
+ "glib",
+ "gtk",
  "image",
  "lazy_static",
  "libc",
  "objc",
  "serde",
  "tauri",
+ "time",
  "winapi",
 ]
 
