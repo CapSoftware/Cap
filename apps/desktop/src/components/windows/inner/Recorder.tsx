@@ -1,3 +1,5 @@
+"use client";
+
 import { useState, useEffect } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
@@ -25,7 +27,7 @@ import { uuidParse } from "@cap/utils";
 import toast, { Toaster } from "react-hot-toast";
 import { LogicalSize, WebviewWindow, appWindow } from "@tauri-apps/api/window";
 
-export const Recorder = ({ session }: { session: null }) => {
+export const Recorder = () => {
   const {
     devices,
     selectedVideoDevice,
@@ -175,7 +177,7 @@ export const Recorder = ({ session }: { session: null }) => {
       console.log("Opening window...");
 
       await openLinkInBrowser(
-        `${import.meta.env.VITE_PUBLIC_URL}/share/${uuidParse(
+        `${process.env.NEXT_PUBLIC_URL}/share/${uuidParse(
           await getLatestVideoId()
         )}`
       );
@@ -253,7 +255,7 @@ export const Recorder = ({ session }: { session: null }) => {
           </div>
           <div>
             <label className="text-sm font-medium">Webcam / Video</label>
-            <div className="space-y-1">
+            <div>
               <ActionButton
                 width="full"
                 handler={() => handleContextClick("video")}

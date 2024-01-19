@@ -4,6 +4,7 @@ module.exports = function (app, options) {
       `../../apps/${app}/pages/**/*.{js,ts,jsx,tsx,mdx}`,
       `../../apps/${app}/components/**/*.{js,ts,jsx,tsx,mdx}`,
       `../../apps/${app}/app/**/*.{js,ts,jsx,tsx,mdx}`,
+      `../../apps/${app}/src/**/*.{js,ts,jsx,tsx,mdx}`,
       "../../packages/*/src/**/*.{ts,tsx,html,stories.tsx}",
     ],
     theme: {
