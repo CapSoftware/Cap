@@ -1,9 +1,9 @@
 {
   "build": {
-    "beforeDevCommand": "vite",
-    "beforeBuildCommand": "pnpm run build",
-    "devPath": "http://localhost:1420",
-    "distDir": "../dist",
+    "beforeDevCommand": "next dev -p 3001",
+    "beforeBuildCommand": "next build",
+    "devPath": "http://localhost:3001",
+    "distDir": "../out",
     "withGlobalTauri": false
   },
   "package": {

@@ -9,13 +9,15 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@cap/utils": "workspace:*",
     "@cap/database": "workspace:*",
+    "@cap/utils": "workspace:*",
+    "@cap/ui": "workspace:*",
     "@tauri-apps/api": "^1.5.0",
     "autoprefixer": "^10.4.16",
     "date-fns": "^3.2.0",
     "dotenv": "^16.3.1",
     "million": "^2.6.4",
+    "next": "^14.1.0",
     "postcss": "^8.4.31",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -23,16 +25,13 @@
     "react-router-dom": "^6.18.0",
     "tailwindcss": "^3.3.4",
     "tauri-plugin-context-menu": "^0.5.0",
-    "tauri-plugin-positioner-api": "^0.2.7",
-    "vite-tsconfig-paths": "^4.2.1"
+    "tauri-plugin-positioner-api": "^0.2.7"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^1.5.0",
     "@types/react": "^18.2.15",
     "@types/react-dom": "latest",
-    "@vitejs/plugin-react": "^4.0.3",
-    "typescript": "^5.3.2",
-    "vite": "^5.0.11"
+    "typescript": "^5.3.2"
   },
   "engines": {
     "node": "20"

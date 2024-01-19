@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useRef, useState } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 
