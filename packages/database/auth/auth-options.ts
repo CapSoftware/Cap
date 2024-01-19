@@ -1,23 +1,36 @@
-import { eq } from 'drizzle-orm';
-import { DrizzleAdapter } from './drizzle-adapter';
-import { db } from '../';
-import { users } from '../schema';
-import type { NextAuthOptions } from 'next-auth';
+import { eq } from "drizzle-orm";
+import { DrizzleAdapter } from "./drizzle-adapter";
+import { db } from "../";
+import { users } from "../schema";
+import EmailProvider from "next-auth/providers/email";
+import type { NextAuthOptions } from "next-auth";
+import { sendEmail } from "../emails/config";
+import { LoginLink } from "../emails/login-link";
 
 export const authOptions: NextAuthOptions = {
   adapter: DrizzleAdapter(db),
+  debug: true,
   session: {
-    strategy: 'jwt',
+    strategy: "jwt",
   },
   secret: process.env.NEXTAUTH_SECRET,
   pages: {
-    signIn: '/',
+    signIn: "/login",
   },
-  providers: [],
+  providers: [
+    EmailProvider({
+      sendVerificationRequest({ identifier, url }) {
+        sendEmail({
+          email: identifier,
+          subject: `Your Cap Login Link`,
+          react: LoginLink({ url, email: identifier }),
+        });
+      },
+    }),
+  ],
   callbacks: {
     async session({ token, session }) {
       if (token) {
-        session.user = session.user || {};
         session.user.id = token.id;
         session.user.name = token.name;
         session.user.email = token.email;
@@ -30,7 +43,7 @@ export const authOptions: NextAuthOptions = {
       const [dbUser] = await db
         .select()
         .from(users)
-        .where(eq(users.email, token.email || ''))
+        .where(eq(users.email, token.email || ""))
         .limit(1);
 
       if (!dbUser) {

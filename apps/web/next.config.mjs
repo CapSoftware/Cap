@@ -4,10 +4,6 @@ import million from "million/compiler";
 
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
-if (!process.env.NEXT_PUBLIC_ENVIRONMENT || !process.env.NEXT_PUBLIC_URL) {
-  throw new Error("Please set env vars in .env file");
-}
-
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
@@ -20,6 +16,11 @@ const nextConfig = {
   },
   experimental: {
     optimizePackageImports: ["@cap/ui", "@cap/utils"],
+    serverComponentsExternalPackages: [
+      "@react-email/components",
+      "@react-email/render",
+      "@react-email/tailwind",
+    ],
   },
 };
 

@@ -1,10 +1,9 @@
 import type { Config } from "drizzle-kit";
-import "dotenv/config";
 
 export default {
   schema: "./schema.ts",
   dbCredentials: {
-    uri: process.env['DB_MYSQL_MIGRATION_URL']!
+    uri: `mysql://${process.env.DB_PLANETSCALE_USERNAME}:${process.env.DB_PLANETSCALE_PASSWORD}@${process.env.DB_PLANETSCALE_HOST}/${process.env.DB_PLANETSCALE_DATABASE}?ssl={"rejectUnauthorized":false}`,
   },
   driver: "mysql2",
 } satisfies Config;

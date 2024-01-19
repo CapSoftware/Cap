@@ -18,7 +18,10 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.18.0"
   },
-  "dependencies": {},
+  "dependencies": {
+    "tailwind-merge": "^2.1.0",
+    "clsx": "^2.0.0"
+  },
   "engines": {
     "node": "20"
   }

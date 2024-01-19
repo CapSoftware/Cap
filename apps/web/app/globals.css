@@ -286,6 +286,7 @@ ul {
   @apply text-lg;
 }
 
-slot {
+/* Stops slot tags from being styled in dashboard, causing weird layout issues */
+slot:not(.dashboard-layout slot) {
   display: block;
 }

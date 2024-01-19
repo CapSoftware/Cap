@@ -1,10 +1,8 @@
 import { drizzle } from "drizzle-orm/planetscale-serverless";
 import { connect } from "@planetscale/database";
 
-const connection = connect({
-  url: process.env.DATABASE_URL,
+export const connection = connect({
+  url: `mysql://${process.env.DB_PLANETSCALE_USERNAME}:${process.env.DB_PLANETSCALE_PASSWORD}@${process.env.DB_PLANETSCALE_HOST}/${process.env.DB_PLANETSCALE_DATABASE}?ssl={"rejectUnauthorized":false}`,
 });
 
-const db = drizzle(connection);
-
-export { db };
+export const db = drizzle(connection);

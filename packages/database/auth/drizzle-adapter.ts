@@ -1,18 +1,19 @@
-import { createId } from '@paralleldrive/cuid2';
-import { and, eq } from 'drizzle-orm';
-import { accounts, sessions, users, verificationTokens } from '../schema';
-import type { Adapter } from 'next-auth/adapters';
-import type { PlanetScaleDatabase } from 'drizzle-orm/planetscale-serverless';
+import { nanoId } from "../helpers";
+import { and, eq } from "drizzle-orm";
+import { accounts, sessions, users, verificationTokens } from "../schema";
+import type { Adapter } from "next-auth/adapters";
+import type { PlanetScaleDatabase } from "drizzle-orm/planetscale-serverless";
 
 export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
   return {
     async createUser(userData) {
       await db.insert(users).values({
-        id: createId(),
+        id: nanoId(),
         email: userData.email,
         emailVerified: userData.emailVerified,
         name: userData.name,
         image: userData.image,
+        activeSpaceId: "",
       });
       const rows = await db
         .select()
@@ -20,7 +21,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         .where(eq(users.email, userData.email))
         .limit(1);
       const row = rows[0];
-      if (!row) throw new Error('User not found');
+      if (!row) throw new Error("User not found");
       return row;
     },
     async getUser(id) {
@@ -33,11 +34,14 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       return row ?? null;
     },
     async getUserByEmail(email) {
+      console.log("getUserByEmail");
+      console.log("email", email);
       const rows = await db
         .select()
         .from(users)
         .where(eq(users.email, email))
         .limit(1);
+      console.log("rows", rows);
       const row = rows[0];
       return row ?? null;
     },
@@ -57,7 +61,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       return row?.users ?? null;
     },
     async updateUser({ id, ...userData }) {
-      if (!id) throw new Error('User not found');
+      if (!id) throw new Error("User not found");
       await db.update(users).set(userData).where(eq(users.id, id));
       const rows = await db
         .select()
@@ -65,7 +69,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         .where(eq(users.id, id))
         .limit(1);
       const row = rows[0];
-      if (!row) throw new Error('User not found');
+      if (!row) throw new Error("User not found");
       return row;
     },
     async deleteUser(userId) {
@@ -73,7 +77,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
     },
     async linkAccount(account) {
       await db.insert(accounts).values({
-        id: createId(),
+        id: nanoId(),
         userId: account.userId,
         type: account.type,
         provider: account.provider,
@@ -99,7 +103,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
     },
     async createSession(data) {
       await db.insert(sessions).values({
-        id: createId(),
+        id: nanoId(),
         expires: data.expires,
         sessionToken: data.sessionToken,
         userId: data.userId,
@@ -110,7 +114,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         .where(eq(sessions.sessionToken, data.sessionToken))
         .limit(1);
       const row = rows[0];
-      if (!row) throw new Error('User not found');
+      if (!row) throw new Error("User not found");
       return row;
     },
     async getSessionAndUser(sessionToken) {
@@ -152,26 +156,61 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         .where(eq(sessions.sessionToken, session.sessionToken))
         .limit(1);
       const row = rows[0];
-      if (!row) throw new Error('Coding bug: updated session not found');
+      if (!row) throw new Error("Coding bug: updated session not found");
       return row;
     },
     async deleteSession(sessionToken) {
       await db.delete(sessions).where(eq(sessions.sessionToken, sessionToken));
     },
     async createVerificationToken(verificationToken) {
+      // First, check if a token for the given identifier already exists
+      const existingTokens = await db
+        .select()
+        .from(verificationTokens)
+        .where(eq(verificationTokens.identifier, verificationToken.identifier))
+        .limit(1);
+
+      // If a token already exists, you can return the existing token
+      // or handle it based on your business logic
+      if (existingTokens.length > 0) {
+        // For example, updating the existing token:
+        await db
+          .update(verificationTokens)
+          .set({
+            token: verificationToken.token,
+            expires: verificationToken.expires,
+            // you may update other fields as necessary
+          })
+          .where(
+            eq(verificationTokens.identifier, verificationToken.identifier)
+          );
+
+        // Return the updated token
+        return await db
+          .select()
+          .from(verificationTokens)
+          .where(
+            eq(verificationTokens.identifier, verificationToken.identifier)
+          )
+          .limit(1)
+          .then((rows) => rows[0]);
+      }
+
+      // If the token does not exist, proceed to create a new one
       await db.insert(verificationTokens).values({
         expires: verificationToken.expires,
         identifier: verificationToken.identifier,
         token: verificationToken.token,
       });
+
+      // Retrieve and return the newly created token
       const rows = await db
         .select()
         .from(verificationTokens)
         .where(eq(verificationTokens.token, verificationToken.token))
         .limit(1);
       const row = rows[0];
-      if (!row)
-        throw new Error('Coding bug: inserted verification token not found');
+      if (!row) throw new Error("Error: inserted verification token not found");
       return row;
     },
     async useVerificationToken({ identifier, token }) {

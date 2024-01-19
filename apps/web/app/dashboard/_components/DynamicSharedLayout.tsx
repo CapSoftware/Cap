@@ -22,7 +22,7 @@ export default function DynamicSharedLayout({
 }) {
   return (
     <Context.Provider value={{ spaceData, activeSpace }}>
-      <div className="h-screen min-h-full flex">
+      <div className="dashboard-layout h-screen min-h-full flex">
         <AdminDesktopNav />
         <div className="flex-1 overflow-auto focus:outline-none">
           <AdminMobileNav />

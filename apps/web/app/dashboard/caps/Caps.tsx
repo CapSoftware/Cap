@@ -9,7 +9,7 @@ export const Caps = ({
 }) => {
   return (
     <div className="py-12">
-      {data?.length === 0 ? (
+      {data?.length === 0 || data === null ? (
         <div className="min-h-full h-full flex flex-col items-center justify-center">
           <div className="w-full max-w-md mx-auto">
             <img

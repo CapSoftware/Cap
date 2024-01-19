@@ -1,5 +1,5 @@
 "use server";
-// import DynamicSharedLayout from "@/app/dashboard/_components/DynamicSharedLayout";
+import DynamicSharedLayout from "@/app/dashboard/_components/DynamicSharedLayout";
 // import {
 //   createSupabaseServerClient,
 //   getSession,
@@ -7,6 +7,8 @@
 // } from "@/utils/database/supabase/server";
 // import SupabaseProvider from "@/utils/database/supabase/provider";
 // import SupabaseListener from "@/utils/database/supabase/listener";
+import { getCurrentUser } from "@cap/database/auth/session";
+import { redirect } from "next/navigation";
 
 //TODO: Auth
 
@@ -15,6 +17,12 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const session = await getCurrentUser();
+
+  if (!session) {
+    redirect("/login");
+  }
+
   // const supabase = await createSupabaseServerClient();
   // const spaceData = await supabase
   //   .from("spaces")
@@ -26,15 +34,8 @@ export default async function DashboardLayout({
   // console.log("session", session);
 
   return (
-    <p></p>
-    // <SupabaseProvider session={session}>
-    //   <DynamicSharedLayout
-    //     spaceData={spaceData?.data}
-    //     activeSpace={activeSpace}
-    //   >
-    //     <SupabaseListener serverAccessToken={session?.access_token} />
-    //     <div className="full-layout">{children}</div>
-    //   </DynamicSharedLayout>
-    // </SupabaseProvider>
+    <DynamicSharedLayout spaceData={null} activeSpace={null}>
+      <div className="full-layout">{children}</div>
+    </DynamicSharedLayout>
   );
 }
