@@ -1,13 +1,14 @@
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import { MediaDeviceProvider } from "@/utils/recording/MediaDeviceContext";
-import { AuthProvider } from "@/utils/database/AuthContext";
 
 function App({ children }: { children: React.ReactNode }) {
-  return (
-    <AuthProvider>
-      <MediaDeviceProvider>{children}</MediaDeviceProvider>
-    </AuthProvider>
-  );
+  return <MediaDeviceProvider>{children}</MediaDeviceProvider>;
 }
+
+listen("scheme-request-received", ({ payload }) => {
+  console.log("scheme-request-received");
+  console.log(payload);
+});
 
 export default App;

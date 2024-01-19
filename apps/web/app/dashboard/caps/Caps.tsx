@@ -20,12 +20,19 @@ export const Caps = ({
           </div>
           <div className="text-center">
             <h2 className="text-2xl font-semibold mb-3">
-              Record your first cap.
+              Record your first Cap.
             </h2>
             <p className="text-xl max-w-md">
               Craft your narrative with a Cap—get projects done quicker.
             </p>
-            <Button size="lg" className="mt-8" variant="default">
+            <Button
+              onClick={() => {
+                window.open("caprecorder://");
+              }}
+              size="lg"
+              className="mt-8"
+              variant="default"
+            >
               Record a Cap
             </Button>
           </div>

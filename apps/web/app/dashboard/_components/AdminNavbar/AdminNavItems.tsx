@@ -1,24 +1,24 @@
 "use client";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Plus,
+  // Plus,
   Settings,
   LogOut,
-  ChevronDown,
+  // ChevronDown,
   Clapperboard,
   Bell,
   History,
 } from "lucide-react";
 import Link from "next/link";
 import { classNames } from "@/utils/helpers";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-} from "@cap/ui";
-import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
+// import {
+//   Command,
+//   CommandEmpty,
+//   CommandGroup,
+//   CommandInput,
+//   CommandItem,
+// } from "@cap/ui";
+// import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
 import { useState } from "react";
 import {
   Dialog,
@@ -26,10 +26,11 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
+  // DialogTrigger,
 } from "@cap/ui";
 import { NewSpace } from "@/components/forms/NewSpace";
-import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { signOut } from "next-auth/react";
+// import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 // import { handleActiveSpace } from "@/utils/database/supabase/helpers";
 // import { supabase } from "@/utils/database/supabase/client";
 
@@ -38,8 +39,8 @@ import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayou
 export const AdminNavItems = () => {
   const pathname = usePathname();
   const router = useRouter();
-  const [open, setOpen] = useState(false);
-  const { spaceData, activeSpace } = useSharedContext();
+  // const [open, setOpen] = useState(false);
+  // const { spaceData, activeSpace } = useSharedContext();
 
   const manageNavigation = [
     { name: "My Caps", href: `/dashboard/caps`, icon: Clapperboard },
@@ -49,21 +50,11 @@ export const AdminNavItems = () => {
   ];
 
   const navItemClass =
-    "flex items-center justify-start p-2 rounded-lg border border-transparent outline-none w-full";
-
-  const handleLogout = async () => {
-    // const { error } = await supabase.auth.signOut();
-
-    router.refresh();
-
-    // if (error) {
-    //   console.log({ error });
-    // }
-  };
+    "flex items-center justify-start p-2 rounded-lg outline-none w-full";
 
   return (
     <Dialog>
-      <div className="embossed mt-8 mb-4 w-full max-w-full">
+      {/* <div className="embossed mt-8 mb-4 w-full max-w-full">
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <div
@@ -74,7 +65,7 @@ export const AdminNavItems = () => {
               <div className="flex items-center w-full text-left">
                 <div>
                   <p className="text-sm">Spaces</p>
-                  <p className="font-medium">
+                  <p className="font-medium text-sm">
                     {activeSpace?.name ?? "No space found"}
                   </p>
                 </div>
@@ -89,7 +80,7 @@ export const AdminNavItems = () => {
               <CommandInput placeholder="Search spaces..." />
               <CommandEmpty>No spaces found.</CommandEmpty>
               <CommandGroup>
-                {/* {spaceData?.map((space) => (
+                {spaceData?.map((space) => (
                     <CommandItem
                       key={space.name}
                       onSelect={async () => {
@@ -100,7 +91,7 @@ export const AdminNavItems = () => {
                     >
                       {space.name}
                     </CommandItem>
-                  ))} */}
+                  ))}
                 <DialogTrigger className="w-full">
                   <CommandItem className="bg-filler aria-selected:bg-filler-2 rounded-lg">
                     <Plus className="w-4 h-auto mr-1" />
@@ -111,9 +102,9 @@ export const AdminNavItems = () => {
             </Command>
           </PopoverContent>
         </Popover>
-      </div>
+      </div> */}
       <nav
-        className="w-full flex flex-col justify-between h-full"
+        className="w-full mt-8 flex flex-col justify-between h-full"
         aria-label="Sidebar"
       >
         <div className="space-y-1">
@@ -125,8 +116,8 @@ export const AdminNavItems = () => {
               href={item.href}
               className={classNames(
                 pathname == item.href
-                  ? "bg-gradient-to-l from-tertiary-3 to-tertiary-2 border-tertiary-2"
-                  : "opacity-75 hover:opacity-100 border-transparent",
+                  ? "bg-gradient-to-l from-tertiary to-tertiary-3"
+                  : "opacity-75 hover:opacity-100",
                 navItemClass
               )}
             >
@@ -140,7 +131,7 @@ export const AdminNavItems = () => {
         </div>
         <div className="mt-auto">
           <button
-            onClick={handleLogout}
+            onClick={() => signOut()}
             className={classNames("hover:opacity-75", navItemClass)}
           >
             <LogOut className="flex-shrink-0 w-6 h-6" aria-hidden="true" />

@@ -71,6 +71,15 @@ fn main() {
             let handle = app.handle();
             let handle_clone = handle.clone();
             
+            tauri_plugin_deep_link::register(
+                "caprecorder",
+                move |request| {
+                    dbg!(&request);
+                    println!("Received request: {:?}", request);
+                    handle_clone.emit_all("scheme-request-received", request).unwrap();
+                },
+            ).unwrap();
+            
             if let Some(camera_window) = app.get_window("camera") { 
               let _ = camera_window.move_window(Position::BottomRight);
             }
@@ -78,14 +87,6 @@ fn main() {
             if let Some(options_window) = app.get_window("options") { 
               let _ = options_window.move_window(Position::Center);
             }
-
-            tauri_plugin_deep_link::register(
-                "caprecorder",
-                move |request| {
-                    dbg!(&request);
-                    handle_clone.emit_all("scheme-request-received", request).unwrap();
-                },
-            ).unwrap();
 
             let data_directory = handle.path_resolver().app_data_dir().unwrap_or_else(|| PathBuf::new());
             let recording_state = RecordingState {
