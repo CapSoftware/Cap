@@ -4,13 +4,24 @@ import { authOptions } from "@cap/database/auth/auth-options";
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  const searchParams = req.nextUrl.searchParams;
-  const redirectUrl = searchParams.get("redirectUrl") || "";
+  const cookies = req.cookies;
+
+  console.log("req:::::", req);
+
+  console.log("session:::::", session);
+  console.log("cookies:::::", cookies);
 
   if (session) {
-    return Response.redirect(redirectUrl);
+    return new Response(
+      JSON.stringify({ isLoggedIn: true, user: session.user }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
   } else {
-    // No active session
     return new Response(JSON.stringify({ isLoggedIn: false }), {
       status: 401,
       headers: {

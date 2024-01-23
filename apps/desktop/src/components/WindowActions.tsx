@@ -1,4 +1,4 @@
-import { app } from "@tauri-apps/api/window";
+import { exit } from "@tauri-apps/api/process";
 
 export const WindowActions = () => {
   const actionButtonBase = "w-3 h-3 bg-gray-500 rounded-full m-0 p-0 block";
@@ -8,7 +8,7 @@ export const WindowActions = () => {
       <div>
         <button
           onClick={() => {
-            app.exit();
+            exit();
           }}
           className={`bg-red-500 hover:bg-red-700 transition-all ${actionButtonBase}`}
         ></button>

@@ -3,14 +3,32 @@
 import { Button, Logo } from "@cap/ui";
 import { useState } from "react";
 import { login } from "@/utils/auth";
+import { getCookie } from "cookies-next";
 
 export const SignIn = () => {
   const [loading, setLoading] = useState(false);
+  const cookie = getCookie("next-auth.session-token");
 
   const handleSignIn = async () => {
     setLoading(true);
 
     login();
+  };
+
+  const getData = async () => {
+    if (!cookie) {
+      return;
+    }
+
+    console.log("cookie:");
+    console.log(cookie);
+
+    const res = await fetch("http://localhost:3000/api/session/verify", {
+      credentials: "include",
+    });
+    const data = await res.json();
+    console.log("dataaa:");
+    console.log(data);
   };
 
   return (
@@ -32,6 +50,15 @@ export const SignIn = () => {
         >
           Sign in via Cap.so
         </Button>
+        {cookie && (
+          <button
+            onClick={() => {
+              getData();
+            }}
+          >
+            get data
+          </button>
+        )}
       </div>
     </div>
   );

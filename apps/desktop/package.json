@@ -14,6 +14,7 @@
     "@cap/utils": "workspace:*",
     "@tauri-apps/api": "^1.5.0",
     "autoprefixer": "^10.4.16",
+    "cookies-next": "^4.1.0",
     "date-fns": "^3.2.0",
     "dotenv": "^16.3.1",
     "million": "^2.6.4",

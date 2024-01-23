@@ -13,7 +13,7 @@ export default function CameraPage() {
       className="pt-4"
     >
       <WindowActions />
-      <Recorder />
+      <SignIn />
     </div>
   );
 }

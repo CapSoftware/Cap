@@ -41,6 +41,9 @@ importers:
       autoprefixer:
         specifier: ^10.4.16
         version: 10.4.17(postcss@8.4.33)
+      cookies-next:
+        specifier: ^4.1.0
+        version: 4.1.0
       date-fns:
         specifier: ^3.2.0
         version: 3.2.0

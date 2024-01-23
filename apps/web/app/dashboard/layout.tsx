@@ -19,8 +19,6 @@ export default async function DashboardLayout({
 }) {
   const session = await getCurrentUser();
 
-  console.log("session", session);
-
   if (!session) {
     redirect("/login");
   }
