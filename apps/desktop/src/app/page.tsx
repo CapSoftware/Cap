@@ -1,7 +1,8 @@
-"use server";
+"use client";
 
-import { redirect } from "next/navigation";
+import { useRouter } from "next/navigation";
 
-export default async function IndexPage() {
-  redirect("/options");
+export default function IndexPage() {
+  const router = useRouter();
+  router.replace("/options");
 }

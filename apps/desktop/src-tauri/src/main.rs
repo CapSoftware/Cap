@@ -6,6 +6,8 @@ use tokio::sync::Mutex;
 use std::sync::atomic::{AtomicBool};
 use std::env;
 use tauri::{Manager};
+use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
+use window_shadows::set_shadow;
 use tauri_plugin_positioner::{WindowExt, Position};
 
 mod recording;
@@ -24,9 +26,7 @@ use ffmpeg_sidecar::{
     version::ffmpeg_version,
 };
 
-fn main() {
-    tauri_plugin_deep_link::prepare("com.cap.so");
-    
+fn main() {    
     std::panic::set_hook(Box::new(|info| {
         eprintln!("Thread panicked: {:?}", info);
     }));
@@ -66,26 +66,25 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_positioner::init())
         .setup(move |app| {
             let handle = app.handle();
-            let handle_clone = handle.clone();
-            
-            tauri_plugin_deep_link::register(
-                "caprecorder",
-                move |request| {
-                    dbg!(&request);
-                    println!("Received request: {:?}", request);
-                    handle_clone.emit_all("scheme-request-received", request).unwrap();
-                },
-            ).unwrap();
             
             if let Some(camera_window) = app.get_window("camera") { 
               let _ = camera_window.move_window(Position::BottomRight);
+              set_shadow(&camera_window, true).expect("Unsupported platform!");
             }
 
             if let Some(options_window) = app.get_window("options") { 
               let _ = options_window.move_window(Position::Center);
+              #[cfg(target_os = "macos")]
+              apply_vibrancy(&options_window, NSVisualEffectMaterial::HudWindow, None, Some(16.0)).expect("Unsupported platform! 'apply_vibrancy' is only supported on macOS");
+
+              #[cfg(target_os = "windows")]
+              apply_blur(&options_window, Some((255, 255, 255, 255))).expect("Unsupported platform! 'apply_blur' is only supported on Windows");
+            
+              set_shadow(&options_window, true).expect("Unsupported platform!");
             }
 
             let data_directory = handle.path_resolver().app_data_dir().unwrap_or_else(|| PathBuf::new());

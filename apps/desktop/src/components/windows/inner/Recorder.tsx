@@ -9,10 +9,11 @@ import { Window } from "@/components/icons/Window";
 import { ActionButton } from "@/components/recording/ActionButton";
 import { Button } from "@/components/Button";
 import { Logo } from "@/components/icons/Logo";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { showMenu } from "tauri-plugin-context-menu";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Countdown } from "./Countdown";
+import callbackTemplate from "./callbackTemplate";
 // import { AuthSession } from "@supabase/supabase-js";
 // import { supabase } from "@/utils/database/client";
 // import type { Database } from "@cap/utils";
@@ -214,14 +215,42 @@ export const Recorder = () => {
     }
   }, [stoppingRecording]);
 
+  console.log("Test...");
+
+  useEffect(() => {
+    const setupListener = async () => {
+      await listen("oauth://url", (event: any) => {
+        let deep_link = event.payload as string;
+        console.log("deep_link:");
+        console.log(deep_link);
+      });
+
+      // Start tauri oauth plugin. When receive first request
+      // When it starts, will return the server port
+      // it will kill the server
+      invoke("plugin:oauth|start", {
+        config: {
+          // Optional config, but use here to more friendly callback page
+          response: callbackTemplate,
+        },
+      }).then((port) => {
+        open(
+          "http://localhost:3000/api/authhere" +
+            "response_type=token&" +
+            "client_id=<CLIEN_ID_FROM_FIREBASE>&" +
+            `redirect_uri=http%3A//localhost:${port}&` +
+            "scope=email%20profile%20openid&" +
+            "prompt=consent"
+        );
+      });
+    };
+    setupListener();
+  }, []);
+
   return (
     <div
       data-tauri-drag-region
-      className="w-[85%] h-[85%] relative flex items-center justify-center overflow-hidden px-6 py-4 rounded-[25px] border-2 border-gray-100"
-      style={{
-        backgroundColor: "rgba(255,255,255,0.9)",
-        boxShadow: "0 0 30px rgba(0,0,0,0.2)",
-      }}
+      className="relative flex items-center justify-center overflow-hidden"
     >
       {countdownActive && (
         <Countdown
@@ -255,7 +284,7 @@ export const Recorder = () => {
           </div>
           <div>
             <label className="text-sm font-medium">Webcam / Video</label>
-            <div>
+            <div className="space-y-1">
               <ActionButton
                 width="full"
                 handler={() => handleContextClick("video")}

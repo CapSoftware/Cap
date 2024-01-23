@@ -5,6 +5,7 @@ import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
+  output: "export",
   transpilePackages: ["@cap/ui", "@cap/utils"],
   eslint: {
     ignoreDuringBuilds: true,

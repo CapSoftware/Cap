@@ -3,7 +3,7 @@ import "./styles.css";
 import { MediaDeviceProvider } from "@/utils/recording/MediaDeviceContext";
 import { Toaster } from "react-hot-toast";
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
@@ -43,9 +43,7 @@ export default async function RootLayout({
       </head>
       <body>
         <Toaster />
-        <main className="w-full overflow-hidden">
-          <MediaDeviceProvider>{children}</MediaDeviceProvider>
-        </main>
+        <MediaDeviceProvider>{children}</MediaDeviceProvider>
       </body>
     </html>
   );

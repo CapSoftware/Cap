@@ -1,3 +1,5 @@
+"use client";
+
 // import { Recorder } from "@/components/windows/inner/Recorder";
 import { SignIn } from "@/components/windows/inner/SignIn";
 // import { useAuth } from "@/utils/database/AuthContext";

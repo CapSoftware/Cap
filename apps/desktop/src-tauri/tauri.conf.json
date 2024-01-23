@@ -3,12 +3,12 @@
     "beforeDevCommand": "next dev -p 3001",
     "beforeBuildCommand": "next build",
     "devPath": "http://localhost:3001",
-    "distDir": "../.next",
+    "distDir": "../out",
     "withGlobalTauri": false
   },
   "package": {
     "productName": "Cap",
-    "version": "0.0.0"
+    "version": "0.0.1"
   },
   "tauri": {
     "allowlist": {
@@ -16,6 +16,9 @@
       "shell": {
         "all": false,
         "open": true
+      },
+      "os": {
+        "all": true
       },
       "window": {
         "all": false,
@@ -43,18 +46,19 @@
         "removeFile": true,
         "renameFile": true,
         "exists": true
+      },
+      "http": {
+        "all": true,
+        "request": true,
+        "scope": ["http://*", "https://*", "wss://*"]
       }
     },
 
     "bundle": {
       "active": true,
-      "macOS": {
-        "entitlements": "Release.entitlements",
-        "exceptionDomain": "",
-        "frameworks": []
-      },
       "targets": "all",
-      "identifier": "com.cap.so",
+      "category": "Utility",
+      "identifier": "so.cap.desktop",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
@@ -64,7 +68,7 @@
       ]
     },
     "security": {
-      "csp": null
+      "csp": "none"
     },
     "macOSPrivateApi": true,
     "windows": [
@@ -102,8 +106,8 @@
         "title": "Cap",
         "label": "options",
         "url": "/options",
-        "width": 380,
-        "height": 460,
+        "width": 285,
+        "height": 410,
         "maximized": false,
         "resizable": false,
         "fullscreen": false,

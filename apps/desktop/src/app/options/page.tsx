@@ -1,14 +1,19 @@
-"use server";
+"use client";
 
-// import { SignIn } from "@/components/windows/inner/SignIn";
+import { SignIn } from "@/components/windows/inner/SignIn";
 import { Recorder } from "@/components/windows/inner/Recorder";
-import { getCurrentUser } from "@cap/database/auth/session";
-export default async function CameraPage() {
-  const session = await getCurrentUser();
+import { WindowActions } from "@/components/WindowActions";
 
-  if (!session) {
-    return <Recorder />;
-  }
-
-  return <Recorder />;
+export default function CameraPage() {
+  return (
+    <div
+      id="app"
+      data-tauri-drag-region
+      style={{ borderRadius: "16px" }}
+      className="pt-4"
+    >
+      <WindowActions />
+      <Recorder />
+    </div>
+  );
 }

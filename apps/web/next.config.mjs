@@ -22,6 +22,27 @@ const nextConfig = {
       "@react-email/tailwind",
     ],
   },
+  async headers() {
+    return [
+      {
+        source: "/api/session/verify",
+        headers: [
+          {
+            key: "Access-Control-Allow-Origin",
+            value: "http://localhost:3001",
+          },
+          {
+            key: "Access-Control-Allow-Methods",
+            value: "GET",
+          },
+          {
+            key: "Access-Control-Allow-Credentials",
+            value: "true",
+          },
+        ],
+      },
+    ];
+  },
 };
 
 const millionConfig = {

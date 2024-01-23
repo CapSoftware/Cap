@@ -25,15 +25,10 @@ export const Caps = ({
             <p className="text-xl max-w-md">
               Craft your narrative with a Cap—get projects done quicker.
             </p>
-            <Button
-              onClick={() => {
-                window.open("caprecorder://");
-              }}
-              size="lg"
-              className="mt-8"
-              variant="default"
-            >
-              Record a Cap
+            <Button size="lg" className="mt-8" variant="default">
+              <a href={`http://localhost:3001/auth?token=`} target="_blank">
+                Record a Cap
+              </a>
             </Button>
           </div>
         </div>
