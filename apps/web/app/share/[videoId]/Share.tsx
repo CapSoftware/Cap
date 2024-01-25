@@ -1,17 +1,18 @@
 "use client";
-import type { Database } from "@cap/utils";
 
-export const Share = async ({
-  data,
-}: {
-  data: Database["public"]["Tables"]["videos"]["Row"] | null;
-}) => {
+import { videos } from "@cap/database/schema";
+import { ShareHeader } from "./_components/ShareHeader";
+import { ShareVideo } from "./_components/ShareVideo";
+
+export const Share = async ({ data }: { data: typeof videos.$inferSelect }) => {
   return (
-    <div className="wrapper py-24">
-      <h1 className="text-2xl mb-3 text-center">
-        My Video: 2024-01-12 17:32:54
-      </h1>
-      <div className="w-full max-w-[500px] h-96 mx-auto bg-gray-100 rounded-xl"></div>
+    <div className="wrapper py-6">
+      <div className="space-y-8">
+        <ShareHeader title={data.name} />
+        <ShareVideo
+          data={{ title: data.name, created: data.createdAt.toISOString() }}
+        />
+      </div>
     </div>
   );
 };

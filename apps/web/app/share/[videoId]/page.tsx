@@ -1,20 +1,25 @@
 "use server";
 import { Share } from "./Share";
-// import { createSupabaseServerClient } from "@/utils/database/supabase/server";
 import { uuidFormat } from "@cap/utils";
+import { db } from "@cap/database";
+import { eq } from "drizzle-orm";
+import { videos } from "@cap/database/schema";
 
 type Props = {
   params: { [key: string]: string | string[] | undefined };
 };
 
-//TODO: Auth
-
 export default async function ShareVideoPage(props: Props) {
-  // const supabase = await createSupabaseServerClient();
   const params = props.params;
   const videoId = uuidFormat(params.videoId as string);
 
-  // const video = await supabase.from("videos").select("*").eq("id", videoId);
+  const query = await db.select().from(videos).where(eq(videos.id, videoId));
 
-  return <Share data={null} />;
+  if (query.length === 0) {
+    return <p>No video found</p>;
+  }
+
+  const video = query[0];
+
+  return <Share data={video} />;
 }

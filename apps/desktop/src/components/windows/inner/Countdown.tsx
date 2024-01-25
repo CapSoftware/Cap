@@ -25,7 +25,7 @@ export const Countdown: React.FC<CountdownOverlayProps> = ({
     return () => clearTimeout(timerId);
   }, [countdown, onCountdownFinish]);
 
-  return countdown > 0 ? (
+  return (
     <div
       className="absolute inset-0 z-50 flex items-center justify-center"
       style={{
@@ -34,5 +34,5 @@ export const Countdown: React.FC<CountdownOverlayProps> = ({
     >
       <span className="text-white text-6xl font-bold">{countdown}</span>
     </div>
-  ) : null;
+  );
 };

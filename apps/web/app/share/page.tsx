@@ -1,9 +1,6 @@
-"use client";
-import { useRouter } from "next/navigation";
+"use server";
+import { redirect } from "next/navigation";
 
-export default function SharePage() {
-  const router = useRouter();
-  if (typeof window !== "undefined") {
-    router.replace("/");
-  }
+export default async function SharePage() {
+  redirect("/");
 }

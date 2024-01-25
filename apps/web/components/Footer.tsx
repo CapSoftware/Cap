@@ -5,7 +5,12 @@ import { usePathname } from "next/navigation";
 export const Footer = () => {
   const pathname = usePathname();
 
-  if (pathname === "/login" || pathname.includes("/dashboard")) return null;
+  if (
+    pathname === "/login" ||
+    pathname.includes("/dashboard") ||
+    pathname.includes("/share")
+  )
+    return null;
 
   return (
     <footer className="py-4 border-t">

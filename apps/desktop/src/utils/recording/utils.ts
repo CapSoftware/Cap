@@ -1,30 +1,40 @@
 export const enumerateAndStoreDevices = async () => {
-  await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-  const devices = await navigator.mediaDevices.enumerateDevices();
+  if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+    await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    const devices = await navigator.mediaDevices.enumerateDevices();
 
-  const videoDevices = devices.filter((device) => device.kind === "videoinput");
-  const audioDevices = devices.filter((device) => device.kind === "audioinput");
+    const videoDevices = devices.filter(
+      (device) => device.kind === "videoinput"
+    );
+    const audioDevices = devices.filter(
+      (device) => device.kind === "audioinput"
+    );
 
-  window.localStorage.setItem("videoDevices", JSON.stringify(videoDevices));
-  window.localStorage.setItem("audioDevices", JSON.stringify(audioDevices));
+    window.localStorage.setItem("videoDevices", JSON.stringify(videoDevices));
+    window.localStorage.setItem("audioDevices", JSON.stringify(audioDevices));
+  }
 };
 
 export const getLocalDevices = async () => {
-  const videoDevices = JSON.parse(
-    window.localStorage.getItem("videoDevices") || "[]"
-  ) as MediaDeviceInfo[];
+  if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+    const videoDevices = JSON.parse(
+      window.localStorage.getItem("videoDevices") || "[]"
+    ) as MediaDeviceInfo[];
 
-  const audioDevices = JSON.parse(
-    window.localStorage.getItem("audioDevices") || "[]"
-  ) as MediaDeviceInfo[];
+    const audioDevices = JSON.parse(
+      window.localStorage.getItem("audioDevices") || "[]"
+    ) as MediaDeviceInfo[];
 
-  return { audioDevices, videoDevices };
+    return { audioDevices, videoDevices };
+  }
 };
 
 export const getSelectedVideoProperties = async () => {
-  const videoDeviceProperties = JSON.parse(
-    window.localStorage.getItem("videoDeviceProperties") || "{}"
-  );
+  if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+    const videoDeviceProperties = JSON.parse(
+      window.localStorage.getItem("videoDeviceProperties") || "{}"
+    );
 
-  return videoDeviceProperties;
+    return videoDeviceProperties;
+  }
 };

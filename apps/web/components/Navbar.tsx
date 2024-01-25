@@ -7,7 +7,12 @@ export const Navbar = () => {
   const pathname = usePathname();
   const isHomePage = pathname === "/";
 
-  if (pathname === "/login" || pathname.includes("/dashboard")) return null;
+  if (
+    pathname === "/login" ||
+    pathname.includes("/dashboard") ||
+    pathname.includes("/share")
+  )
+    return null;
 
   return (
     <nav

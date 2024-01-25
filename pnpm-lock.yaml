@@ -141,12 +141,18 @@ importers:
       dotenv:
         specifier: ^16.3.1
         version: 16.3.1
+      drizzle-orm:
+        specifier: ^0.29.3
+        version: 0.29.3(@planetscale/database@1.13.0)(@types/react@18.2.48)(mysql2@3.7.1)(react@18.2.0)
       lucide-react:
         specifier: ^0.294.0
         version: 0.294.0(react@18.2.0)
       million:
         specifier: ^2.6.4
         version: 2.6.4
+      moment:
+        specifier: ^2.30.1
+        version: 2.30.1
       next:
         specifier: 14.1.0
         version: 14.1.0(@babel/core@7.23.7)(react-dom@18.2.0)(react@18.2.0)
@@ -7472,6 +7478,10 @@ packages:
     dependencies:
       minimist: 1.2.8
     dev: true
+
+  /moment@2.30.1:
+    resolution: {integrity: sha512-uEmtNhbDOrWPFS+hdjFCBfy9f2YoyzRpwcl+DqpC6taX21FzsTLQVbMV/W7PzNSX6x/bhC1zA3c2UQ5NzH6how==}
+    dev: false
 
   /ms@2.1.2:
     resolution: {integrity: sha512-sGkPx+VjMtmA6MX27oA4FBFELFCZZ4S4XqeGOXCv68tT+jb3vk/RyaKWP0PTKyWtmLSM0b+adUTEvbs1PEaH2w==}

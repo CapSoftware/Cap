@@ -20,12 +20,12 @@ export const SignIn = () => {
       return;
     }
 
-    console.log("cookie:");
-    console.log(cookie);
-
-    const res = await fetch("http://localhost:3000/api/session/verify", {
-      credentials: "include",
-    });
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/desktop/session/verify`,
+      {
+        credentials: "include",
+      }
+    );
     const data = await res.json();
     console.log("dataaa:");
     console.log(data);

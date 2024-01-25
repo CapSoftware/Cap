@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from "react";
-import { writeBinaryFile } from "@tauri-apps/api/fs";
+import { writeBinaryFile, createDir } from "@tauri-apps/api/fs";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { writeTextFile, readTextFile } from "@tauri-apps/api/fs";
 
@@ -67,6 +67,7 @@ export const useMediaRecorder = () => {
     async (stream: MediaStream) => {
       chunkCounter.current = 0;
       const dir = await getVideoChunksDir();
+      await createDir(dir, { recursive: true });
       const segmentListPath = await join(dir, "segment_list.txt");
       await writeTextFile({ path: segmentListPath, contents: "" });
 
