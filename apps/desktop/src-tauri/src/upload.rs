@@ -19,7 +19,7 @@ pub async fn upload_file(
             .ok_or("Invalid file path")?
             .to_string();
 
-        let file_key = format!("{}/{}/{}/{}", options.user_id, file_type, options.video_id, file_name);
+        let file_key = format!("{}/{}/{}/{}", options.user_id, options.video_id, file_type, file_name);
 
         // Here we assume your server listens on localhost:3000 and the route is `api/upload/new`
         let server_url = format!("http://localhost:3000/api/upload/new");

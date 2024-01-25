@@ -7,6 +7,7 @@ import {
   text,
   timestamp,
   index,
+  boolean,
   uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
@@ -139,16 +140,16 @@ export const videos = mysqlTable(
     name: varchar("name", { length: 255 }).notNull().default("My Video"),
     awsRegion: varchar("awsRegion", { length: 255 }),
     awsBucket: varchar("awsBucket", { length: 255 }),
-    thumbnailUrl: text("thumbnailUrl"),
-    duration: int("duration"),
     metadata: json("metadata"),
-    isPublic: int("isPublic").notNull().default(1),
+    converted: boolean("converted").notNull().default(false),
+    public: boolean("public").notNull().default(true),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },
   (table) => ({
+    idIndex: index("id_idx").on(table.id),
     ownerIdIndex: index("owner_id_idx").on(table.ownerId),
-    isPublicIndex: index("is_public_idx").on(table.isPublic),
+    publicIndex: index("is_public_idx").on(table.public),
   })
 );
 

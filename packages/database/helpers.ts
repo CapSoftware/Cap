@@ -17,3 +17,8 @@ export const nanoIdToken = customAlphabet(
   "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
   32
 );
+
+export type VideoMetadata = {
+  resolution: string;
+  framerate: string;
+};
