@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
-use std::io::{self, BufReader, BufRead, ErrorKind};
-use std::fs::File;
+use std::io::{self, BufReader, BufRead, ErrorKind, AsyncWriteExt};
+use tokio::fs::{OpenOptions, read_to_string, File};
 use std::sync::Arc;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use serde::{Serialize, Deserialize};
 use tauri::State;
+use serde_json::{Value, json};
 
 use crate::utils::ffmpeg_path_as_str;
 use crate::upload::upload_file;
@@ -33,6 +34,12 @@ pub struct RecordingOptions {
   pub aws_bucket: String,
   pub framerate: String,
   pub resolution: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct MetadataRecord {
+    start_time: String,
+    end_time: Option<String>,
 }
 
 #[tauri::command]
@@ -86,11 +93,6 @@ pub async fn start_dual_recording(
   tokio::spawn(log_output(screen_stdout, "Screen stdout".to_string()));
   tokio::spawn(log_output(screen_stderr, "Screen stderr".to_string()));
 
-  // let video_stdout = video_child.stdout.take().unwrap();
-  // let video_stderr = video_child.stderr.take().unwrap();
-  // tokio::spawn(log_output(video_stdout, "Video stdout".to_string()));
-  // tokio::spawn(log_output(video_stderr, "Video stderr".to_string()));
-
   state_guard.screen_process = Some(screen_child);
   // guard.video_process = Some(video_child);
   state_guard.upload_handles = Mutex::new(vec![]);
@@ -112,6 +114,14 @@ pub async fn start_dual_recording(
           eprintln!("An error occurred: {}", e);
       },
   }
+
+  let start_time = chrono::Utc::now();
+
+  // Add the start time to metadata.json
+  append_metadata(&data_dir.join("metadata.json"), &MetadataRecord {
+      start_time: start_time.to_rfc3339(),
+      end_time: None,
+  }).await?;
 
   Ok(())
 }
@@ -188,6 +198,11 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
         let _ = handle.await.map_err(|e| e.to_string())?;
     }
 
+    let end_time = chrono::Utc::now();
+
+    // Update the metadata.json with the end time
+    append_metadata_end_time(&data_dir.join("metadata.json"), &end_time.to_rfc3339()).await?;
+
     // All checks and uploads are done, return Ok(())
     Ok(())
 }
@@ -261,6 +276,7 @@ async fn construct_recording_args(
                     "-pix_fmt".to_string(), pix_fmt,
                     "-g".to_string(), gop,
                     "-r".to_string(), fps.to_string(),
+                    "-draw_mouse".to_string(), "1".to_string(),
                     "-f".to_string(), "segment".to_string(),
                     "-segment_time".to_string(), segment_time,
                     "-segment_format".to_string(), "matroska".to_string(),
@@ -569,4 +585,34 @@ async fn upload_remaining_chunks(
     } else {
         Err("No recording options provided".to_string())
     }
+}
+
+async fn append_metadata(file_path: &Path, record: &MetadataRecord) -> Result<(), String> {
+    let mut data = match read_to_string(file_path).await {
+        Ok(contents) => serde_json::from_str::<Vec<MetadataRecord>>(&contents).unwrap_or_default(),
+        Err(_) => vec![],
+    };
+
+    data.push(record.clone());
+
+    let new_data = serde_json::to_string(&data).map_err(|e| e.to_string())?;
+    tokio::fs::write(file_path, new_data.as_bytes()).await.map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+async fn append_metadata_end_time(file_path: &Path, end_time: &str) -> Result<(), String> {
+    let mut data = match read_to_string(file_path).await {
+        Ok(contents) => serde_json::from_str::<Vec<MetadataRecord>>(&contents).unwrap_or_default(),
+        Err(_) => vec![],
+    };
+
+    if let Some(last_record) = data.last_mut() {
+        last_record.end_time = Some(end_time.to_string());
+    }
+
+    let new_data = serde_json::to_string(&data).map_err(|e| e.to_string())?;
+    tokio::fs::write(file_path, new_data.as_bytes()).await.map_err(|e| e.to_string())?;
+
+    Ok(())
 }

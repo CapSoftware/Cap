@@ -26,9 +26,7 @@ export const Caps = ({
               Craft your narrative with a Cap—get projects done quicker.
             </p>
             <Button size="lg" className="mt-8" variant="default">
-              <a href={`http://localhost:3001/auth?token=`} target="_blank">
-                Record a Cap
-              </a>
+              Record a Cap
             </Button>
           </div>
         </div>

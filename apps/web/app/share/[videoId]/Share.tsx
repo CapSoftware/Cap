@@ -148,23 +148,30 @@ export const Share = ({
     <div className="wrapper py-6">
       <div className="space-y-8">
         <ShareHeader title={data.name} />
-        <div className="aspect-video">
+        <div>
           {loading ? (
             <p>Loading</p>
           ) : (
-            <>
-              {screenSrc && (
-                <div className="absolute bottom-2 right-0 w-[180px] h-[180px] m-0 p-0 rounded-full overflow-hidden">
+            <div className="aspect-video relative bg-gradient-to-b from-secondary to-secondary-3 p-10 flex items-center justify-center rounded-lg">
+              {videoSrc && (
+                <div className="absolute bottom-2 right-2 w-[180px] h-[180px] m-0 p-0 rounded-full overflow-hidden z-10 shadow-[0px 0px 200px rgba(0,0,0,0.18)] border-2 border-white">
                   <video
-                    ref={screenRef}
+                    ref={videoRef}
                     className="w-full h-full object-cover"
                     controls
-                    src={screenSrc}
+                    src={videoSrc}
                   />
                 </div>
               )}
-              {videoSrc && <video ref={videoRef} controls src={videoSrc} />}
-            </>
+              {screenSrc && (
+                <video
+                  className="rounded-lg"
+                  ref={screenRef}
+                  controls
+                  src={screenSrc}
+                />
+              )}
+            </div>
           )}
         </div>
       </div>

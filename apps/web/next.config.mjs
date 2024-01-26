@@ -25,11 +25,11 @@ const nextConfig = {
   async headers() {
     return [
       {
-        source: "/api/desktop/(.*)",
+        source: "/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
-            value: "http://localhost:3001",
+            value: "https://*.amazonaws.com",
           },
           {
             key: "Access-Control-Allow-Methods",
@@ -42,11 +42,11 @@ const nextConfig = {
         ],
       },
       {
-        source: "/(.*)",
+        source: "/api/desktop/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
-            value: "https://*.amazonaws.com",
+            value: "http://localhost:3001",
           },
           {
             key: "Access-Control-Allow-Methods",
