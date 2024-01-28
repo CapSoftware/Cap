@@ -1,15 +1,11 @@
 "use client";
 import { Button } from "@cap/ui";
-import type { Database } from "@cap/utils";
+import { videos } from "@cap/database/schema";
 
-export const Caps = ({
-  data,
-}: {
-  data: Database["public"]["Tables"]["videos"]["Row"][] | null;
-}) => {
+export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
   return (
     <div className="py-12">
-      {data?.length === 0 || data === null ? (
+      {data.length === 0 ? (
         <div className="min-h-full h-full flex flex-col items-center justify-center">
           <div className="w-full max-w-md mx-auto">
             <img
@@ -19,28 +15,36 @@ export const Caps = ({
             />
           </div>
           <div className="text-center">
-            <h2 className="text-2xl font-semibold mb-3">
+            <h1 className="text-2xl font-semibold mb-3">
               Record your first Cap.
-            </h2>
+            </h1>
             <p className="text-xl max-w-md">
               Craft your narrative with a Cap—get projects done quicker.
             </p>
-            <Button size="lg" className="mt-8" variant="default">
+            <Button size="default" className="mt-8" variant="default">
               Record a Cap
             </Button>
           </div>
         </div>
       ) : (
-        <div className="border-subtle bg-default mb-16 rounded-lg border bg-white subtle-shadow">
-          <ul
-            className="divide-subtle divide-y"
-            style={{ position: "relative" }}
-          >
-            {data?.map((cap, index) => {
-              return <li key={index}>{cap.name}</li>;
+        <>
+          <div className="mb-8">
+            <h1 className="text-2xl font-semibold mb-1">My Caps</h1>
+            <p>These are all of your videos created with Cap.</p>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
+            {data.map((cap, index) => {
+              return (
+                <div key={index}>
+                  <a href={`/share/${cap.id}`}>
+                    <div className="aspect-video bg-gray-100 rounded-lg mb-1"></div>
+                    <p>{cap.name}</p>
+                  </a>
+                </div>
+              );
             })}
-          </ul>
-        </div>
+          </div>
+        </>
       )}
     </div>
   );

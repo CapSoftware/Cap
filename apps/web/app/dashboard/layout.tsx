@@ -9,6 +9,7 @@ import DynamicSharedLayout from "@/app/dashboard/_components/DynamicSharedLayout
 // import SupabaseListener from "@/utils/database/supabase/listener";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { redirect } from "next/navigation";
+import { DashboardTemplate } from "@/components/templates/DashboardTemplate";
 
 //TODO: Auth
 
@@ -35,7 +36,9 @@ export default async function DashboardLayout({
 
   return (
     <DynamicSharedLayout spaceData={null} activeSpace={null}>
-      <div className="full-layout">{children}</div>
+      <div className="full-layout">
+        <DashboardTemplate>{children}</DashboardTemplate>
+      </div>
     </DynamicSharedLayout>
   );
 }

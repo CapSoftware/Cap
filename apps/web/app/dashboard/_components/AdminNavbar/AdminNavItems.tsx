@@ -50,7 +50,7 @@ export const AdminNavItems = () => {
   ];
 
   const navItemClass =
-    "flex items-center justify-start p-2 rounded-lg outline-none w-full";
+    "flex items-center justify-start p-2 rounded-lg outline-none tracking-tight w-full";
 
   return (
     <Dialog>
@@ -116,7 +116,7 @@ export const AdminNavItems = () => {
               href={item.href}
               className={classNames(
                 pathname == item.href
-                  ? "bg-gradient-to-l from-tertiary to-tertiary-3"
+                  ? "bg-gradient-to-l from-tertiary to-tertiary-3 ring-4 ring-tertiary-3"
                   : "opacity-75 hover:opacity-100",
                 navItemClass
               )}

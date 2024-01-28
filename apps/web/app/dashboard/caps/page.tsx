@@ -1,24 +1,11 @@
-"use server";
 import { Caps } from "./Caps";
-import { DashboardTemplate } from "@/components/templates/DashboardTemplate";
-// import { createSupabaseServerClient } from "@/utils/database/supabase/server";
+import { db } from "@cap/database";
+import { videos } from "@cap/database/schema";
 
-type Props = {
-  params: { [key: string]: string | string[] | undefined };
-};
+export const revalidate = 0;
 
-//TODO: Auth
+export default async function CapsPage() {
+  const videoData = await db.select().from(videos);
 
-export default async function DocumentsPage(props: Props) {
-  // const supabase = await createSupabaseServerClient();
-  // const caps = await supabase
-  //   .from("videos")
-  //   .select("*")
-  //   .order("created_at", { ascending: true });
-
-  return (
-    <DashboardTemplate>
-      <Caps data={null} />
-    </DashboardTemplate>
-  );
+  return <Caps data={videoData} />;
 }
