@@ -15,8 +15,6 @@ type Props = {
   params: { [key: string]: string | string[] | undefined };
 };
 
-const revalidate = 0;
-
 const s3Client = new S3Client({
   region: process.env.CAP_AWS_REGION || "",
   credentials: {

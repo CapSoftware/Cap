@@ -21,8 +21,7 @@ pub async fn upload_file(
 
         let file_key = format!("{}/{}/{}/{}", options.user_id, options.video_id, file_type, file_name);
 
-        // Here we assume your server listens on localhost:3000 and the route is `api/upload/new`
-        let server_url = format!("http://localhost:3000/api/upload/new");
+        let server_url = format!("http://localhost:3000/api/upload/signed");
 
         // Create the request body for the Next.js handler
         let body = serde_json::json!({

@@ -1,60 +1,58 @@
-import { S3Client } from "@aws-sdk/client-s3";
-import { createPresignedPost, PresignedPost } from "@aws-sdk/s3-presigned-post";
-import { NextRequest } from "next/server";
-
-const s3Client = new S3Client({
-  region: process.env.CAP_AWS_REGION || "",
-  credentials: {
-    accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-    secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
-  },
-});
+import { type NextRequest } from "next/server";
+import { getCurrentUser } from "@cap/database/auth/session";
+import { uploadToS3 } from "@/utils/video/upload/helpers";
 
 export async function POST(request: NextRequest) {
-  try {
-    const { userId, fileKey, awsBucket, awsRegion } = await request.json();
+  const user = await getCurrentUser();
+  const awsRegion = process.env.CAP_AWS_REGION;
+  const awsBucket = process.env.CAP_AWS_BUCKET;
+  const formData = await request.formData();
+  const filename = formData.get("filename");
+  const videoId = formData.get("videoId");
+  const blobData = formData.get("blobData");
 
-    if (!userId || !fileKey || !awsBucket || !awsRegion) {
-      return new Response(
-        JSON.stringify({ error: "Missing required fields" }),
-        {
-          status: 400,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      );
-    }
+  console.log("filename:", filename);
 
-    const Fields = {
-      "x-amz-meta-userid": userId,
-    };
+  if (!user || !awsRegion || !awsBucket || !filename || !blobData) {
+    console.error("Missing required data in /api/upload/new/route.ts");
 
-    const presignedPostData: PresignedPost = await createPresignedPost(
-      s3Client,
-      {
-        Bucket: awsBucket,
-        Key: fileKey,
-        Fields,
-        Expires: 1800,
-      }
-    );
-
-    return new Response(JSON.stringify({ presignedPostData }), {
+    return new Response(JSON.stringify({ error: true }), {
+      status: 401,
       headers: {
         "Content-Type": "application/json",
       },
     });
-  } catch (error) {
-    console.error("Error creating presigned URL", error);
-    return new Response(
-      JSON.stringify({ error: "Error creating presigned URL" }),
-      {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
-    );
   }
+
+  const fullFilepath = `${user.userId}/${videoId}/${filename}`;
+
+  const upload = await uploadToS3(
+    fullFilepath,
+    blobData,
+    user.userId,
+    awsBucket,
+    awsRegion
+  );
+
+  if (!upload) {
+    console.error("Upload failed");
+
+    return new Response(JSON.stringify({ error: true }), {
+      status: 500,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
+  console.log("Upload successful");
+
+  return new Response(
+    JSON.stringify({
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    })
+  );
 }
