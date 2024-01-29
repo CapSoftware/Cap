@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
-use std::io::{self, BufReader, BufRead, ErrorKind, AsyncWriteExt};
-use tokio::fs::{OpenOptions, read_to_string, File};
+use std::io::{self, BufReader, BufRead, ErrorKind};
+use std::fs::File;
 use std::sync::Arc;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +10,6 @@ use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use serde::{Serialize, Deserialize};
 use tauri::State;
-use serde_json::{Value, json};
 
 use crate::utils::ffmpeg_path_as_str;
 use crate::upload::upload_file;
@@ -34,12 +33,6 @@ pub struct RecordingOptions {
   pub aws_bucket: String,
   pub framerate: String,
   pub resolution: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct MetadataRecord {
-    start_time: String,
-    end_time: Option<String>,
 }
 
 #[tauri::command]
@@ -93,6 +86,11 @@ pub async fn start_dual_recording(
   tokio::spawn(log_output(screen_stdout, "Screen stdout".to_string()));
   tokio::spawn(log_output(screen_stderr, "Screen stderr".to_string()));
 
+  // let video_stdout = video_child.stdout.take().unwrap();
+  // let video_stderr = video_child.stderr.take().unwrap();
+  // tokio::spawn(log_output(video_stdout, "Video stdout".to_string()));
+  // tokio::spawn(log_output(video_stderr, "Video stderr".to_string()));
+
   state_guard.screen_process = Some(screen_child);
   // guard.video_process = Some(video_child);
   state_guard.upload_handles = Mutex::new(vec![]);
@@ -115,14 +113,6 @@ pub async fn start_dual_recording(
       },
   }
 
-  let start_time = chrono::Utc::now();
-
-  // Add the start time to metadata.json
-  append_metadata(&data_dir.join("metadata.json"), &MetadataRecord {
-      start_time: start_time.to_rfc3339(),
-      end_time: None,
-  }).await?;
-
   Ok(())
 }
 
@@ -130,80 +120,35 @@ pub async fn start_dual_recording(
 pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -> Result<(), String> {
     println!("!!STOPPING screen recording...");
 
+    // Lock the state to access shared data.
     let mut guard = state.lock().await;
 
+    // Immediately instruct ongoing operations to stop.
     guard.shutdown_flag.store(true, Ordering::SeqCst);
-    
+
+    // Immediately try to close running FFmpeg processes.
     if let Some(child_process) = &mut guard.screen_process {
-      if let Err(e) = child_process.kill().await {
-          eprintln!("Failed to kill the child process: {}", e);
-      } else {
-          println!("Child process terminated successfully.");
-      }
+        let _ = child_process.kill().await;
     }
-    // if let Some(child_process) = &mut guard.video_process {
-    //   if let Err(e) = child_process.kill().await {
-    //       eprintln!("Failed to kill the child process: {}", e);
-    //   } else {
-    //       println!("Child process terminated successfully.");
-    //   }
-    // }
-    
-    guard.screen_process = None;
-    // guard.video_process = None;
+    // Assuming there's a video_process similar to screen_process.
+    //if let Some(child_process) = &mut guard.video_process {
+    //    let _ = child_process.kill().await;
+    //}
 
-    let data_dir = guard.data_dir.as_ref()
-      .ok_or("Data directory is not set in the recording state".to_string())?;
+    // Swap out the current upload_handles for an empty vector to take ownership.
+    let mut upload_handles_lock = guard.upload_handles.lock().await;
+    let upload_handles = std::mem::take(&mut *upload_handles_lock);
 
-    let chunks_dir_screen = data_dir.join("chunks/screen");
-
-    let chunks_dir_video = data_dir.join("chunks/video");
-
-    let recording_options = guard.recording_options.clone();
-
+    // Explicitly drop the locks so other async operations can proceed.
+    drop(upload_handles_lock);
     drop(guard);
 
-    // Create join handles for the final uploads
-    let handle_screen = upload_remaining_chunks(&chunks_dir_screen, recording_options.clone(), "screen");
-    let handle_video = upload_remaining_chunks(&chunks_dir_video, recording_options.clone(), "video");
+    // Now using try_join_all with the owned join handles obtained from the state.
+    // This will wait for all the current upload handles to complete.
+    let _ = futures::future::try_join_all(upload_handles.into_iter()).await;
 
-    // Await the final upload tasks
-    tokio::select! {
-        // Await either completion or an error from the screen upload task
-        result = handle_screen => {
-            if let Err(e) = result {
-                eprintln!("Error uploading remaining screen chunks: {}", e);
-            }
-        }
-        // Await either completion or an error from the video upload task
-        result = handle_video => {
-            if let Err(e) = result {
-                eprintln!("Error uploading remaining video chunks: {}", e);
-            }
-        }
-    }
+    println!("All recordings and uploads stopped.");
 
-    let guard = state.lock().await;
-    let mut upload_handles = guard.upload_handles.lock().await;
-
-    // Drain the upload_handles to get ownership of the JoinHandles
-    let handles: Vec<_> = upload_handles.drain(..).collect();
-
-    // Explicitly drop the locks before awaiting the handles
-    drop(upload_handles);
-    drop(guard);
-
-    // Await each of the JoinHandles to completion
-    for handle in handles {
-        let _ = handle.await.map_err(|e| e.to_string())?;
-    }
-
-    let end_time = chrono::Utc::now();
-
-    // Update the metadata.json with the end time
-    append_metadata_end_time(&data_dir.join("metadata.json"), &end_time.to_rfc3339()).await?;
-
-    // All checks and uploads are done, return Ok(())
     Ok(())
 }
 
@@ -276,7 +221,6 @@ async fn construct_recording_args(
                     "-pix_fmt".to_string(), pix_fmt,
                     "-g".to_string(), gop,
                     "-r".to_string(), fps.to_string(),
-                    "-draw_mouse".to_string(), "1".to_string(),
                     "-f".to_string(), "segment".to_string(),
                     "-segment_time".to_string(), segment_time,
                     "-segment_format".to_string(), "matroska".to_string(),
@@ -487,32 +431,42 @@ async fn upload_remaining_chunks(
     chunks_dir: &PathBuf,
     options: Option<RecordingOptions>,
     video_type: &str,
+    shutdown_flag: Arc<AtomicBool>,
 ) -> Result<(), String> {
+    // Include shutdown_flag in parameters and check it inside loop to quickly react to stop signals.
+
     if let Some(actual_options) = options {
         let retry_interval = Duration::from_secs(2);
         let upload_timeout = Duration::from_secs(15);
         let file_stability_timeout = Duration::from_secs(1);
         let file_stability_checks = 2;
 
-        // Get directory entries
+        // Adjusted for immediate reaction to shutdown_flag.
+        if shutdown_flag.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
         let entries = std::fs::read_dir(chunks_dir).map_err(|e| format!("Error reading directory: {}", e))?;
 
-        // A semaphore to limit the number of concurrent uploads
-        let semaphore = Arc::new(Semaphore::new(16));
+        let semaphore = Arc::new(Semaphore::new(16)); // Control concurrency to prevent resource exhaustion.
 
-        // Create upload tasks for each file entry
         let tasks: Vec<_> = entries.filter_map(|entry| entry.ok())
-            .map(|entry| {
+            .filter_map(|entry| {
                 let path = entry.path();
-                if path.is_file() && (path.extension().map_or(false, |e| e == "mkv" || e == "webm")) {
+                if path.is_file() && (path.extension().map_or(false, |e| e == "mkv" || e == "webm")) && !shutdown_flag.load(Ordering::SeqCst) {
                     let video_type = video_type.to_string();
                     let semaphore_clone = semaphore.clone();
                     let actual_options_clone = actual_options.clone();
+                    let shutdown_flag_clone = shutdown_flag.clone();
 
-                    // Spawn a task to upload the file
                     Some(tokio::spawn(async move {
                         let _permit = semaphore_clone.acquire().await;
                         let filepath_str = path.to_str().unwrap_or_default().to_owned();
+
+                        // Quick exit if shutdown signal is received.
+                        if shutdown_flag_clone.load(Ordering::SeqCst) {
+                            return;
+                        }
 
                         // Check for file size stability
                         let mut last_size = 0;
@@ -572,47 +526,11 @@ async fn upload_remaining_chunks(
             })
             .collect();
 
-        // Wait for all the tasks to finish
-        for task in tasks {
-            if let Some(handle) = task {
-                if let Err(e) = handle.await {
-                    eprintln!("Failed to join task: {:?}", e);
-                }
-            }
-        }
+        // Await all tasks concurrently.
+        let _ = futures::future::try_join_all(tasks).await;
 
         Ok(())
     } else {
         Err("No recording options provided".to_string())
     }
-}
-
-async fn append_metadata(file_path: &Path, record: &MetadataRecord) -> Result<(), String> {
-    let mut data = match read_to_string(file_path).await {
-        Ok(contents) => serde_json::from_str::<Vec<MetadataRecord>>(&contents).unwrap_or_default(),
-        Err(_) => vec![],
-    };
-
-    data.push(record.clone());
-
-    let new_data = serde_json::to_string(&data).map_err(|e| e.to_string())?;
-    tokio::fs::write(file_path, new_data.as_bytes()).await.map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-async fn append_metadata_end_time(file_path: &Path, end_time: &str) -> Result<(), String> {
-    let mut data = match read_to_string(file_path).await {
-        Ok(contents) => serde_json::from_str::<Vec<MetadataRecord>>(&contents).unwrap_or_default(),
-        Err(_) => vec![],
-    };
-
-    if let Some(last_record) = data.last_mut() {
-        last_record.end_time = Some(end_time.to_string());
-    }
-
-    let new_data = serde_json::to_string(&data).map_err(|e| e.to_string())?;
-    tokio::fs::write(file_path, new_data.as_bytes()).await.map_err(|e| e.to_string())?;
-
-    Ok(())
 }

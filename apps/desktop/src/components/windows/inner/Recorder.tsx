@@ -7,7 +7,7 @@ import { Microphone } from "@/components/icons/Microphone";
 import { Screen } from "@/components/icons/Screen";
 import { Window } from "@/components/icons/Window";
 import { ActionButton } from "@/components/recording/ActionButton";
-import { Button } from "@/components/Button";
+import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
 import { emit, listen } from "@tauri-apps/api/event";
 import { showMenu } from "tauri-plugin-context-menu";
@@ -247,7 +247,7 @@ export const Recorder = () => {
   return (
     <div
       data-tauri-drag-region
-      className="relative flex items-center justify-center overflow-hidden"
+      className="relative flex items-center justify-center"
     >
       {countdownActive && (
         <Countdown
@@ -298,22 +298,23 @@ export const Recorder = () => {
               />
             </div>
           </div>
-          {isRecording === true ? (
-            <Button
-              variant="primary"
-              handler={handleStopAllRecordings}
-              label={
-                stoppingRecording ? currentStoppingMessage : "Stop Recording"
+          <Button
+            className="w-[97.6%] flex mx-auto"
+            onClick={() => {
+              if (isRecording) {
+                handleStopAllRecordings();
+              } else {
+                handleStartAllRecordings();
               }
-              spinner={stoppingRecording}
-            />
-          ) : (
-            <Button
-              variant="primary"
-              handler={handleStartAllRecordings}
-              label="Start Recording"
-            />
-          )}
+            }}
+            spinner={stoppingRecording}
+          >
+            {isRecording
+              ? stoppingRecording
+                ? currentStoppingMessage
+                : "Stop Recording"
+              : "Start Recording"}
+          </Button>
         </div>
       </div>
       <Toaster />
