@@ -154,15 +154,10 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
 
 fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
     if dir.exists() {
-        for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            if entry.path().is_file() {
-                std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
-            }
-        }
-    } else {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        // Instead of just reading the directory, this will also handle subdirectories.
+        std::fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
     }
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
 
     // Ensure the segment list file exists within the given directory
     // This assumes a naming convention where the segment list file is named "segment_list.txt"
@@ -193,7 +188,7 @@ async fn construct_recording_args(
     video_type: &str,
     input_index: &str, 
 ) -> Result<Vec<String>, String> {
-    let output_filename_pattern = format!("{}/recording_chunk_%03d.mkv", chunks_dir.display());
+    let output_filename_pattern = format!("{}/recording_chunk_%03d.ts", chunks_dir.display());
     let segment_list_filename = format!("{}/segment_list.txt", chunks_dir.display());
     
     ensure_segment_list_exists(PathBuf::from(&segment_list_filename))
@@ -223,7 +218,7 @@ async fn construct_recording_args(
                     "-r".to_string(), fps.to_string(),
                     "-f".to_string(), "segment".to_string(),
                     "-segment_time".to_string(), segment_time,
-                    "-segment_format".to_string(), "matroska".to_string(),
+                    "-segment_format".to_string(), "mpegts".to_string(),
                     "-segment_list".to_string(), segment_list_filename,
                     "-segment_list_type".to_string(), segment_list_type,
                     "-reset_timestamps".to_string(), "1".to_string(),
@@ -242,7 +237,7 @@ async fn construct_recording_args(
                     "-r".to_string(), fps.to_string(),
                     "-f".to_string(), "segment".to_string(),
                     "-segment_time".to_string(), segment_time,
-                    "-segment_format".to_string(), "matroska".to_string(),
+                    "-segment_format".to_string(), "mpegts".to_string(),
                     "-segment_list".to_string(), segment_list_filename,
                     "-segment_list_type".to_string(), segment_list_type,
                     "-reset_timestamps".to_string(), "1".to_string(),
@@ -448,12 +443,12 @@ async fn upload_remaining_chunks(
 
         let entries = std::fs::read_dir(chunks_dir).map_err(|e| format!("Error reading directory: {}", e))?;
 
-        let semaphore = Arc::new(Semaphore::new(16)); // Control concurrency to prevent resource exhaustion.
+        let semaphore = Arc::new(Semaphore::new(16));
 
         let tasks: Vec<_> = entries.filter_map(|entry| entry.ok())
             .filter_map(|entry| {
                 let path = entry.path();
-                if path.is_file() && (path.extension().map_or(false, |e| e == "mkv" || e == "webm")) && !shutdown_flag.load(Ordering::SeqCst) {
+                if path.is_file() && (path.extension().map_or(false, |e| e == "ts" || e == "webm")) && !shutdown_flag.load(Ordering::SeqCst) {
                     let video_type = video_type.to_string();
                     let semaphore_clone = semaphore.clone();
                     let actual_options_clone = actual_options.clone();

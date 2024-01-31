@@ -1,8 +1,10 @@
 use serde_json::Value as JsonValue;
 use std::path::{Path};
+use std::process::Command;
 use reqwest;
 
 use crate::recording::RecordingOptions;
+use crate::utils::ffmpeg_path_as_str;
 
 #[tauri::command]
 pub async fn upload_file(
@@ -12,6 +14,9 @@ pub async fn upload_file(
 ) -> Result<String, String> {
     if let Some(ref options) = options {
         println!("Uploading video...");
+
+        let video_duration = get_video_duration(&file_path).await?;
+        let video_duration_str = format!("{:.1}", video_duration);
 
         let file_name = Path::new(&file_path)
             .file_name()
@@ -26,6 +31,7 @@ pub async fn upload_file(
         // Create the request body for the Next.js handler
         let body = serde_json::json!({
             "userId": options.user_id,
+            "duration": video_duration_str,
             "fileKey": file_key,
             "awsBucket": options.aws_bucket,
             "awsRegion": options.aws_region,
@@ -65,7 +71,7 @@ pub async fn upload_file(
         let file_bytes = tokio::fs::read(&file_path).await.map_err(|e| format!("Failed to read file: {}", e))?;
         let file_part = reqwest::multipart::Part::bytes(file_bytes)
             .file_name(file_name.clone())
-            .mime_str("application/octet-stream")
+            .mime_str("video/mp2t")
             .map_err(|e| format!("Error setting MIME type: {}", e))?;
 
         form = form.part("file", file_part);
@@ -110,4 +116,46 @@ pub async fn upload_file(
     } else {
         return Err("No recording options provided".to_string());
     }
+}
+
+async fn get_video_duration(file_path: &str) -> Result<f64, String> {
+    let ffmpeg_binary_path_str = ffmpeg_path_as_str()?;
+
+    let output = Command::new(&ffmpeg_binary_path_str)
+        .args(&[
+            "-i", file_path,
+            "-f", "null",
+            "-"])
+        .output()
+        .map_err(|e| format!("Failed to execute FFmpeg for getting duration: {}", e))?;
+    
+    // Extract the duration from FFmpeg's stderr
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    println!("Stderr: {}", stderr);
+
+    let duration_line = stderr.split('\n')
+        .find(|line| line.contains("Duration"))
+        .ok_or("Duration line not found in FFmpeg output")?;
+
+    println!("Duration line: {}", duration_line);
+
+    let duration_str = duration_line.split("Duration:").nth(1).unwrap()
+        .split(',').next().unwrap()
+        .trim();
+
+    println!("Duration string: {}", duration_str);
+
+    let duration_parts: Vec<&str> = duration_str.split(':').collect();
+    if duration_parts.len() != 3 {
+        return Err("Invalid duration format".to_string());
+    }
+
+    let hours: f64 = duration_parts[0].parse().map_err(|_| "Failed to parse hours")?;
+    let minutes: f64 = duration_parts[1].parse().map_err(|_| "Failed to parse minutes")?;
+    let seconds: f64 = duration_parts[2].parse().map_err(|_| "Failed to parse seconds")?;
+
+    let total_seconds = hours * 3600.0 + minutes * 60.0 + seconds;
+
+    Ok(total_seconds)
 }

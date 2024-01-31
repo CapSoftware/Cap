@@ -52,23 +52,43 @@ export const concatenateSegments = async (
   // Read the resulting file
   const data = await ffmpeg.readFile(outputFilename);
 
-  // Convert the data to a Blob
-  const blob = new Blob([data], {
-    type: `video/${outputFormat}`,
-  });
+  // // Convert the data to a Blob
+  // const blob = new Blob([data], {
+  //   type: `video/${outputFormat}`,
+  // });
 
-  console.log("Uploading to S3...");
+  // console.log("Uploading to S3...");
 
-  const formData = new FormData();
-  formData.append("filename", outputFilename);
-  formData.append("videoId", videoId);
-  formData.append("blobData", blob);
+  // const formData = new FormData();
+  // formData.append("filename", outputFilename);
+  // formData.append("videoId", videoId);
+  // formData.append("blobData", blob);
 
-  await fetch(`${process.env.NEXT_PUBLIC_URL}/api/upload/new`, {
-    method: "POST",
-    body: formData,
-  });
+  // await fetch(`${process.env.NEXT_PUBLIC_URL}/api/upload/new`, {
+  //   method: "POST",
+  //   body: formData,
+  // });
 
   // Return the URL to the MP4 on S3
   return data;
 };
+
+export async function generateM3U8Playlist(
+  urls: { url: string; duration: string }[]
+) {
+  const baseM3U8Content = `#EXTM3U
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-TARGETDURATION:4
+#EXT-X-VERSION:4
+#EXT-X-MEDIA-SEQUENCE:0
+`;
+
+  let m3u8Content = baseM3U8Content;
+  urls.forEach((url) => {
+    m3u8Content += `#EXTINF:${url.duration},\n${url.url}\n`;
+  });
+
+  m3u8Content += "#EXT-X-ENDLIST";
+
+  return m3u8Content;
+}

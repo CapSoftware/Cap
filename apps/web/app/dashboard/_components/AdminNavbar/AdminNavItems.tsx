@@ -10,7 +10,7 @@ import {
   History,
 } from "lucide-react";
 import Link from "next/link";
-import { classNames } from "@/utils/helpers";
+import { classNames } from "@cap/utils";
 // import {
 //   Command,
 //   CommandEmpty,

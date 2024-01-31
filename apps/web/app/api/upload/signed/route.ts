@@ -12,9 +12,14 @@ const s3Client = new S3Client({
 
 export async function POST(request: NextRequest) {
   try {
-    const { userId, fileKey, awsBucket, awsRegion } = await request.json();
+    const { userId, fileKey, duration, awsBucket, awsRegion } =
+      await request.json();
 
-    if (!userId || !fileKey || !awsBucket || !awsRegion) {
+    console.log("Duration start...");
+    console.log(duration);
+    console.log("...Duration end...");
+
+    if (!userId || !duration || !fileKey || !awsBucket || !awsRegion) {
       console.error("Missing required fields in /api/upload/signed/route.ts");
 
       return new Response(
@@ -29,7 +34,9 @@ export async function POST(request: NextRequest) {
     }
 
     const Fields = {
+      "Content-Type": "video/mp2t",
       "x-amz-meta-userid": userId,
+      "x-amz-meta-duration": duration,
     };
 
     const presignedPostData: PresignedPost = await createPresignedPost(

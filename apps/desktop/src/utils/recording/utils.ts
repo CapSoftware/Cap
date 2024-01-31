@@ -16,17 +16,15 @@ export const enumerateAndStoreDevices = async () => {
 };
 
 export const getLocalDevices = async () => {
-  if (typeof navigator !== "undefined" && typeof window !== "undefined") {
-    const videoDevices = JSON.parse(
-      window.localStorage.getItem("videoDevices") || "[]"
-    ) as MediaDeviceInfo[];
+  const videoDevices = JSON.parse(
+    window.localStorage.getItem("videoDevices") || "[]"
+  ) as MediaDeviceInfo[];
 
-    const audioDevices = JSON.parse(
-      window.localStorage.getItem("audioDevices") || "[]"
-    ) as MediaDeviceInfo[];
+  const audioDevices = JSON.parse(
+    window.localStorage.getItem("audioDevices") || "[]"
+  ) as MediaDeviceInfo[];
 
-    return { audioDevices, videoDevices };
-  }
+  return { audioDevices, videoDevices };
 };
 
 export const getSelectedVideoProperties = async () => {

@@ -1,12 +1,34 @@
-import { useState, useRef, useCallback } from "react";
-import { writeBinaryFile, createDir } from "@tauri-apps/api/fs";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { FFmpeg as FfmpegType } from "@ffmpeg/ffmpeg";
+import { fetchFile } from "@ffmpeg/util";
+import {
+  writeBinaryFile,
+  writeTextFile,
+  readTextFile,
+  createDir,
+} from "@tauri-apps/api/fs";
 import { appDataDir, join } from "@tauri-apps/api/path";
-import { writeTextFile, readTextFile } from "@tauri-apps/api/fs";
 
 export const useMediaRecorder = () => {
-  const [isRecording, setIsRecording] = useState(false);
+  const isRecording = useRef(false);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
-  const chunkCounter = useRef(0);
+  const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
+  const ffmpegRef = useRef<FfmpegType | null>(null);
+  const queue = useRef<Blob[]>([]);
+  const processingQueue = useRef(false);
+  const segmentCounter = useRef(0);
+
+  useEffect(() => {
+    const loadFfmpeg = async () => {
+      const { FFmpeg } = await import("@ffmpeg/ffmpeg");
+      ffmpegRef.current = new FFmpeg();
+      setFfmpegLoaded(true);
+    };
+
+    if (!ffmpegLoaded && !ffmpegRef.current) {
+      loadFfmpeg();
+    }
+  }, [ffmpegLoaded]);
 
   const getVideoChunksDir = async () => {
     const dir = await appDataDir();
@@ -19,93 +41,195 @@ export const useMediaRecorder = () => {
 
     let fileContent;
     try {
-      // Try to read the existing content
       fileContent = await readTextFile(segmentListPath);
     } catch (error) {
-      // If there's an error (like file doesn't exist), we start with an empty string
       fileContent = "";
     }
 
-    // Create new content by appending the new file name (not the full path)
     const newContent = `${fileContent}${fileName}\n`;
-
-    // Write the new content back to the file, effectively appending it
     await writeTextFile(segmentListPath, newContent);
   };
 
-  const handleDataAvailable = useCallback(async (event: BlobEvent) => {
-    const blob = new Blob([event.data], { type: "video/webm" });
-    const buffer = await blob.arrayBuffer();
-    const dir = await getVideoChunksDir();
-    const chunkNumber = chunkCounter.current++;
-    const fileName = `recording_chunk_${String(chunkNumber).padStart(
-      3,
-      "0"
-    )}.webm`;
-    const filePath = await join(dir, fileName);
-
-    // First write the binary file
-    await writeBinaryFile({
-      path: filePath,
-      contents: buffer,
-    })
-      .then(() => {
-        // After a successful write, append to the segment list file
-        appendToSegmentListFile(fileName).catch((error) => {
-          // Handle errors during the append operation
-          console.error(
-            `Failed to append to segment list file: ${error.message}`
-          );
-        });
-      })
-      .catch((error) => {
-        // Handle errors during the file writing
-        console.error(`Failed to write video chunk: ${error.message}`);
-      });
-  }, []);
-  const startMediaRecording = useCallback(
-    async (stream: MediaStream) => {
-      chunkCounter.current = 0;
+  const saveFile = async (data: Uint8Array, fileName: string) => {
+    try {
       const dir = await getVideoChunksDir();
       await createDir(dir, { recursive: true });
-      const segmentListPath = await join(dir, "segment_list.txt");
-      await writeTextFile({ path: segmentListPath, contents: "" });
+      const filePath = await join(dir, fileName);
+      await writeBinaryFile(filePath, data);
+      await appendToSegmentListFile(fileName);
+    } catch (error) {
+      console.error("Failed to save file:", error);
+    }
+  };
 
-      // Set up and start the MediaRecorder
-      if (MediaRecorder.isTypeSupported("video/webm;codecs=h264")) {
-        mediaRecorder.current = new MediaRecorder(stream, {
-          mimeType: "video/webm;codecs=h264",
-        });
-      } else {
-        // Fallback to the default MIME type if 'webm' is not supported
-        mediaRecorder.current = new MediaRecorder(stream);
+  const processQueue = useCallback(async () => {
+    if (
+      ffmpegRef.current &&
+      !processingQueue.current &&
+      queue.current.length > 0
+    ) {
+      processingQueue.current = true;
+
+      if (ffmpegRef.current) {
+        try {
+          await ffmpegRef.current.load();
+        } catch (error) {
+          console.error("Failed to load FFmpeg:", error);
+          return;
+        }
       }
-      mediaRecorder.current.ondataavailable = handleDataAvailable;
-      mediaRecorder.current.onerror = (event: any) => {
-        console.error("Recording error:", event.error);
+
+      ffmpegRef.current.on("log", (log) => {
+        console.log("FFmpeg log:", log.message);
+      });
+
+      while (queue.current.length > 0) {
+        try {
+          const chunk = queue.current.shift();
+
+          if (!chunk) {
+            continue;
+          }
+
+          console.log("log-1");
+
+          const chunkNumber = segmentCounter.current++;
+
+          const ffmpeg = ffmpegRef.current;
+
+          if (!ffmpeg) {
+            console.error("FFmpeg not loaded");
+            return;
+          }
+
+          const inputFileName = `input-${String(chunkNumber).padStart(
+            3,
+            "0"
+          )}.mp4`;
+          const outputFileName = `output-${String(chunkNumber).padStart(
+            3,
+            "0"
+          )}.ts`;
+
+          const buffer = new Uint8Array(await chunk.arrayBuffer());
+          const videoBuffer = await fetchFile(new Blob([buffer]));
+
+          console.log("video buffer:");
+          console.log(videoBuffer);
+
+          console.log("log-2");
+
+          await ffmpeg.writeFile(inputFileName, videoBuffer);
+
+          console.log("log-3");
+
+          await ffmpeg.exec([
+            "-i",
+            inputFileName,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-tune",
+            "zerolatency",
+            "-c:a",
+            "aac",
+            "-strict",
+            "experimental",
+            "-f",
+            "mpegts",
+            outputFileName,
+          ]);
+
+          console.log("log-4");
+
+          try {
+            const savedVideo = (await ffmpeg.readFile(
+              outputFileName
+            )) as Uint8Array;
+            await saveFile(savedVideo, outputFileName);
+            console.log("log-5");
+          } catch (error) {
+            console.error("Failed to save file:", error);
+          }
+
+          console.log("log-6");
+
+          await ffmpeg.deleteFile(inputFileName);
+          await ffmpeg.deleteFile(outputFileName);
+
+          console.log("log-7");
+        } catch (error) {
+          console.error("Failed to process chunk:", error);
+        }
+      }
+
+      processingQueue.current = false;
+    }
+  }, [queue]);
+
+  const startMediaRecording = useCallback(
+    async (stream: MediaStream) => {
+      // Reset queue and counters here to ensure a fresh start
+      queue.current = []; // Clear the queue
+      segmentCounter.current = 0;
+      processingQueue.current = false;
+      isRecording.current = true;
+      console.log("Recording started");
+
+      const options = { mimeType: "video/mp4;" };
+      mediaRecorder.current = new MediaRecorder(stream, options);
+
+      mediaRecorder.current.ondataavailable = (event) => {
+        console.log(`Blob size: ${event.data.size}`);
+        if (event.data.size > 0) {
+          queue.current.push(event.data);
+          processQueue();
+        }
       };
 
-      mediaRecorder.current.start(3000);
-      setIsRecording(true);
+      mediaRecorder.current.start();
+
+      const requestDataInterval = setInterval(() => {
+        if (mediaRecorder.current && isRecording.current) {
+          console.log("Requesting data periodically");
+          mediaRecorder.current.stop();
+          mediaRecorder.current.start();
+        } else {
+          clearInterval(requestDataInterval);
+        }
+      }, 3000);
+
+      return () => {
+        if (
+          mediaRecorder.current &&
+          mediaRecorder.current.state !== "inactive"
+        ) {
+          mediaRecorder.current.stop();
+          isRecording.current = false;
+          // clearInterval(requestDataInterval);
+        }
+        console.log("Recording stopped");
+      };
     },
-    [handleDataAvailable]
+    [processQueue]
   );
 
   const stopMediaRecording = useCallback(async () => {
-    if (mediaRecorder.current && isRecording) {
-      mediaRecorder.current.onstop = async () => {
-        setIsRecording(false);
-        chunkCounter.current = 0;
+    isRecording.current = false;
 
-        console.log("Media recording stopped.");
-      };
-
-      mediaRecorder.current.stop();
+    while (processingQueue.current || queue.current.length > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
-  }, [isRecording]);
+
+    if (mediaRecorder.current && mediaRecorder.current.state !== "inactive") {
+      mediaRecorder.current.stop();
+      console.log("Media recording stopped and queue processed.");
+    }
+  }, []);
 
   return {
-    isRecording,
+    isRecording: isRecording.current,
     startMediaRecording,
     stopMediaRecording,
   };
