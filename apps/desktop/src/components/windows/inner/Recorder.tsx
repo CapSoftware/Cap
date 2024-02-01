@@ -176,9 +176,12 @@ export const Recorder = () => {
 
       console.log("Opening window...");
 
-      await openLinkInBrowser(
-        `${process.env.NEXT_PUBLIC_URL}/share/${await getLatestVideoId()}`
-      );
+      const url =
+        process.env.NODE_ENV === "development"
+          ? `${process.env.NEXT_PUBLIC_URL}/share/${await getLatestVideoId()}`
+          : `https://cap.link/${await getLatestVideoId()}`;
+
+      await openLinkInBrowser(url);
 
       setIsRecording(false);
       setCountdownActive(false);
