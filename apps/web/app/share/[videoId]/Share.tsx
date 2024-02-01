@@ -20,7 +20,7 @@ export const Share = ({ data }: { data: typeof videos.$inferSelect }) => {
     <div className="wrapper py-6">
       <div className="space-y-8">
         <ShareHeader title={data.name} />
-        <div className="aspect-video relative bg-gradient-to-b from-secondary to-secondary-3 p-16 flex items-center justify-center rounded-lg group">
+        <div className="aspect-video relative bg-black flex items-center justify-center rounded-lg group overflow-hidden">
           <div className="video-player w-[175px] h-[175px] absolute bottom-4 right-12 overflow-hidden rounded-full z-10 shadow-[0px 0px 180px rgba(255, 255, 255, 0.18)]">
             <VideoPlayer
               isPlaying={isPlaying}

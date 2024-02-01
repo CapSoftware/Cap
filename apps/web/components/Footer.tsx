@@ -8,7 +8,8 @@ export const Footer = () => {
   if (
     pathname === "/login" ||
     pathname.includes("/dashboard") ||
-    pathname.includes("/share")
+    pathname.includes("/share") ||
+    window.location.href.includes("cap.link")
   )
     return null;
 

@@ -291,7 +291,7 @@ slot:not(.dashboard-layout slot) {
   display: block;
 }
 
-.video-player slot {
+.aspect-video slot {
   width: 100%;
   height: 100%;
 }
