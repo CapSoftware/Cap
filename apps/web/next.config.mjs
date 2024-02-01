@@ -60,6 +60,20 @@ const nextConfig = {
       },
     ];
   },
+  async rewrites() {
+    return [
+      {
+        source: "/:path*",
+        has: [
+          {
+            type: "host",
+            value: "cap.link",
+          },
+        ],
+        destination: "/share/:path*",
+      },
+    ];
+  },
 };
 
 const millionConfig = {
