@@ -9,7 +9,7 @@ export const Footer = () => {
     pathname === "/login" ||
     pathname.includes("/dashboard") ||
     pathname.includes("/share") ||
-    window.location.href.includes("cap.link")
+    (typeof window !== "undefined" && window.location.href.includes("cap.link"))
   )
     return null;
 

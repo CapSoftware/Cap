@@ -27,9 +27,9 @@ const faqContent = [
       "Apart from being open source and privacy focused, Cap is also a lot more lightweight and faster to use. We also focus strongly on design and user experience.",
   },
   {
-    title: "When will v1.0.0 launch?",
+    title: "When will v0.1.0 launch?",
     answer:
-      "We're aiming to launch v1.0.0 by Q1 2024, if not sooner. However, there'll be regular Alpha builds available to download on our GitHub before then.",
+      "We're aiming to launch v0.1.0 by Q1 2024, if not sooner. However, there'll be regular Alpha builds available to download on our GitHub before then.",
   },
 ];
 
