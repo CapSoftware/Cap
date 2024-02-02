@@ -27,7 +27,7 @@ export const Countdown: React.FC<CountdownOverlayProps> = ({
 
   return (
     <div
-      className="absolute inset-0 z-50 flex items-center justify-center"
+      className="absolute inset-0 z-50 flex items-center justify-center rounded-[16px]"
       style={{
         backgroundColor: "rgba(0, 0, 0, 0.75)",
       }}

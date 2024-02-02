@@ -290,8 +290,3 @@ ul {
 slot:not(.dashboard-layout slot) {
   display: block;
 }
-
-.aspect-video slot {
-  width: 100%;
-  height: 100%;
-}

@@ -15,3 +15,18 @@ export const uuidFormat = (uuid: string) => {
 
 export const CAP_LOGO_URL =
   "https://raw.githubusercontent.com/CapSoftware/cap/main/app-icon.png";
+
+export function debounce(
+  func: (...args: any[]) => void,
+  wait: number | undefined
+) {
+  let timeout: number | undefined;
+  return function executedFunction(...args: any[]) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}

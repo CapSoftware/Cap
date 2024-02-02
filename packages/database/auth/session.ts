@@ -10,6 +10,14 @@ export const getSession = async () => {
   return session;
 };
 
+export const userSelectProps = {
+  userId: users.id,
+  email: users.email,
+  name: users.name,
+  image: users.image,
+  createdAt: users.created_at,
+};
+
 export const getCurrentUser = async () => {
   const session = await getServerSession(authOptions);
 
@@ -18,13 +26,7 @@ export const getCurrentUser = async () => {
   }
 
   const [currentUser] = await db
-    .select({
-      userId: users.id,
-      email: users.email,
-      name: users.name,
-      image: users.image,
-      createdAt: users.created_at,
-    })
+    .select(userSelectProps)
     .from(users)
     .where(eq(users.id, session?.user.id));
 

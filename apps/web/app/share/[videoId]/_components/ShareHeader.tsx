@@ -1,19 +1,16 @@
-import { LogoBadge } from "@cap/ui";
-import moment from "moment";
+import { Logo } from "@cap/ui";
+import { videos } from "@cap/database/schema";
 
-export const ShareHeader = ({
-  title,
-  createdAt,
-}: {
-  title: string;
-  createdAt: Date;
-}) => {
+export const ShareHeader = ({ data }: { data: typeof videos.$inferSelect }) => {
   return (
-    <div className="flex items-center space-x-5">
-      <LogoBadge className="w-8 h-auto" />
+    <div>
       <div>
-        <h1 className="text-2xl">{title}</h1>
-        <p className="text-gray-400">{moment(createdAt).fromNow()}</p>
+        <div className="flex items-center space-x-1">
+          <Logo className="w-[75px] h-auto" />
+          <span className="text-[9px] font-medium text-gray-400">
+            v{process.env.appVersion}
+          </span>
+        </div>
       </div>
     </div>
   );

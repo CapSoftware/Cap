@@ -140,19 +140,18 @@ export const Recorder = () => {
   };
 
   const handleStartAllRecordings = async () => {
-    setCountdownActive(true);
-
     try {
       const videoData = await prepareVideoData();
-      console.log("videoData:");
-      console.log(videoData);
       if (videoData) {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: { deviceId: selectedAudioDevice?.deviceId },
           video: { deviceId: selectedVideoDevice?.deviceId },
         });
-        await startMediaRecording(stream);
-        await startDualRecording(videoData);
+        setCountdownActive(true);
+        await Promise.all([
+          startMediaRecording(stream),
+          startDualRecording(videoData),
+        ]);
       } else {
         throw new Error("Failed to prepare video data.");
       }
@@ -167,6 +166,8 @@ export const Recorder = () => {
 
     try {
       console.log("Stopping recordings...");
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
 
       await stopMediaRecording();
 

@@ -4,6 +4,14 @@ import million from "million/compiler";
 
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
+import fs from "fs";
+import path from "path";
+
+const packageJson = JSON.parse(
+  fs.readFileSync(path.resolve("./package.json"), "utf8")
+);
+const { version } = packageJson;
+
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
@@ -73,6 +81,9 @@ const nextConfig = {
         destination: "/share/:path*",
       },
     ];
+  },
+  env: {
+    appVersion: version,
   },
 };
 

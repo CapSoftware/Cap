@@ -136,6 +136,12 @@ export const useMediaRecorder = () => {
             "aac",
             "-strict",
             "experimental",
+            "-b:a",
+            "128k",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
             "-f",
             "mpegts",
             outputFileName,
@@ -207,7 +213,6 @@ export const useMediaRecorder = () => {
         ) {
           mediaRecorder.current.stop();
           isRecording.current = false;
-          // clearInterval(requestDataInterval);
         }
         console.log("Recording stopped");
       };
