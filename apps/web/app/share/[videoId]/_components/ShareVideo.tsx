@@ -1,8 +1,8 @@
 import { videos } from "@cap/database/schema";
 import { VideoPlayer } from "./VideoPlayer";
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { Play, Pause, Maximize, VolumeX } from "lucide-react";
-import { LogoBadge } from "@cap/ui";
+import { Play, Pause, Maximize, VolumeX, Volume2 } from "lucide-react";
+import { LogoSpinner } from "@cap/ui";
 
 const formatTime = (time: number) => {
   const minutes = Math.floor(time / 60);
@@ -57,6 +57,24 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
 
   const handlePlayPauseClick = () => setIsPlaying(!isPlaying);
 
+  const handleMuteClick = () => {
+    if (!video1Ref.current || !video2Ref.current) return;
+
+    video1Ref.current.muted = !video1Ref.current.muted;
+    video2Ref.current.muted = !video2Ref.current.muted;
+  };
+
+  const handleFullscreenClick = () => {
+    const player = document.getElementById("player");
+    if (player) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        player.requestFullscreen();
+      }
+    }
+  };
+
   const watchedPercentage =
     longestDuration > 0 ? (currentTime / longestDuration) * 100 : 0;
 
@@ -82,13 +100,6 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     }
   }, [isLoading]);
 
-  const CapSpinner = () => {
-    return (
-      <div>
-        <LogoBadge className="w-10 h-auto animate-spin opacity-50" />
-      </div>
-    );
-  };
   return (
     <div
       className="relative flex h-full w-full overflow-hidden shadow-lg rounded-lg group"
@@ -96,7 +107,7 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     >
       {isLoading && (
         <div className="absolute top-0 left-0 flex items-center justify-center w-full h-full z-10">
-          <CapSpinner />
+          <LogoSpinner className="w-10 h-auto animate-spin" />
         </div>
       )}
       {isLoading === false && (
@@ -180,9 +191,13 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
                   className=" inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg"
                   tabIndex={0}
                   type="button"
-                  data-state="closed"
+                  onClick={handleMuteClick}
                 >
-                  <VolumeX className="w-auto h-6" />
+                  {video1Ref?.current?.muted && video2Ref?.current?.muted ? (
+                    <VolumeX className="w-auto h-6" />
+                  ) : (
+                    <Volume2 className="w-auto h-6" />
+                  )}
                 </button>
               </span>
               <span className="inline-flex">
@@ -191,7 +206,7 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
                   className=" inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg"
                   tabIndex={0}
                   type="button"
-                  data-state="closed"
+                  onClick={handleFullscreenClick}
                 >
                   <Maximize className="w-auto h-6" />
                 </button>

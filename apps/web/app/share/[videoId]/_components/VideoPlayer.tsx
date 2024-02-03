@@ -33,7 +33,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
         className="absolute top-0 left-0 rounded-lg w-full h-full object-cover"
         preload="auto"
         playsInline
-        controls={false} // Controls handled by parent
+        controls={false}
       />
     );
   }
