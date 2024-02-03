@@ -191,7 +191,7 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
                   className=" inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg"
                   tabIndex={0}
                   type="button"
-                  onClick={handleMuteClick}
+                  onClick={() => handleMuteClick()}
                 >
                   {video1Ref?.current?.muted && video2Ref?.current?.muted ? (
                     <VolumeX className="w-auto h-6" />
