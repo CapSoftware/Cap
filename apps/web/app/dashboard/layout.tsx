@@ -18,10 +18,14 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await getCurrentUser();
+  const user = await getCurrentUser();
 
-  if (!session) {
+  if (!user) {
     redirect("/login");
+  }
+
+  if (!user.name) {
+    redirect("/dashboard/onboarding");
   }
 
   // const supabase = await createSupabaseServerClient();
