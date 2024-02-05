@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 
@@ -11,7 +9,7 @@ export const Camera = () => {
   useEffect(() => {
     let activeStream: MediaStream | null = null;
 
-    const setupCamera = async () => {
+    async function setupCamera() {
       if (!videoRef.current || !selectedVideoDevice) {
         setIsLoading(false);
         return;
@@ -34,44 +32,31 @@ export const Camera = () => {
           },
         });
 
-        // Save stream
+        // Ensure videoRef.current is still not null
+        if (!videoRef.current) return;
+
+        videoRef.current.srcObject = stream;
+        videoRef.current.onplaying = () => setIsLoading(false);
+        await videoRef.current.play();
+
+        // Save stream for cleanup
         activeStream = stream;
-
-        const videoTrack = stream.getVideoTracks()[0];
-        const settings = videoTrack.getSettings();
-        const videoProperties = {
-          framerate: settings.frameRate ? String(settings.frameRate) : "",
-          resolution: `${settings.width}x${settings.height}`,
-        };
-        localStorage.setItem(
-          "videoDeviceProperties",
-          JSON.stringify(videoProperties)
-        );
-
-        const video = videoRef.current;
-        video.srcObject = stream;
-        video.onplaying = () => {
-          setIsLoading(false);
-        };
-        await video.play();
       } catch (err) {
         console.error(err);
         setIsLoading(false);
       }
-    };
+    }
 
     setupCamera();
 
-    // Cleanup function to stop the stream and reset loading state
     return () => {
       if (activeStream) {
         activeStream.getTracks().forEach((track) => track.stop());
         activeStream = null;
       }
-      // Avoid loading when the component is not actually loading
       setIsLoading(false);
     };
-  }, [selectedVideoDevice, videoRef]);
+  }, [selectedVideoDevice]);
 
   return (
     <div

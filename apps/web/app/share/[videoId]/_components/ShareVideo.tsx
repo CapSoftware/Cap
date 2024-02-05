@@ -18,16 +18,14 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
-  const [duration1, setDuration1] = useState(0);
-  const [duration2, setDuration2] = useState(0);
   const [longestDuration, setLongestDuration] = useState(0);
+  const [seekTime, setSeekTime] = useState(0);
+  const [seeking, setSeeking] = useState(false);
 
   useEffect(() => {
     const handleLoadedMetadata = () => {
       const loadedDuration1 = video1Ref.current?.duration || 0;
       const loadedDuration2 = video2Ref.current?.duration || 0;
-      setDuration1(loadedDuration1);
-      setDuration2(loadedDuration2);
       setLongestDuration(Math.max(loadedDuration1, loadedDuration2));
 
       if (loadedDuration1 > 0 && loadedDuration2 > 0) {
@@ -75,13 +73,51 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     }
   };
 
-  const watchedPercentage =
-    longestDuration > 0 ? (currentTime / longestDuration) * 100 : 0;
+  const handleSeekMouseDown = (event: any) => {
+    console.log("seeking2", seeking);
+    // Indicate the start of seeking
+    setSeeking(true);
+  };
+
+  const handleSeekMouseUp = (event: any) => {
+    // Apply seek on mouse up to make sure it is precise and doesn't stick to mouse moves only
+    if (!seeking) return;
+    setSeeking(false); // Stop seeking
+    const seekBar = event.currentTarget;
+    const seekTo = calculateNewTime(event, seekBar);
+    setSeekTime(seekTo); // Assume setSeekTime updates the state that determines the current time
+    applyTimeToVideos(seekTo);
+  };
+
+  const handleSeekMouseMove = (event: any) => {
+    console.log("seeking", seeking);
+    if (!seeking) return;
+    const seekBar = event.currentTarget;
+    const seekTo = calculateNewTime(event, seekBar);
+    // Optionally update a visual indicator or the current time state
+    applyTimeToVideos(seekTo);
+  };
+
+  const calculateNewTime = (event: any, seekBar: any) => {
+    const rect = seekBar.getBoundingClientRect();
+    const offsetX = event.clientX - rect.left; // Get the mouse position relative to the seek bar start
+    const relativePosition = offsetX / rect.width; // Calculate the relative position as a percentage
+    const newTime = relativePosition * longestDuration; // Calculate the new time based on the relative position
+    return newTime;
+  };
+
+  const applyTimeToVideos = (time: number) => {
+    if (video1Ref.current) video1Ref.current.currentTime = time;
+    if (video2Ref.current) video2Ref.current.currentTime = time;
+  };
 
   const handlePlay = () => {
     video1Ref.current?.play();
     video2Ref.current?.play();
   };
+
+  const watchedPercentage =
+    longestDuration > 0 ? (currentTime / longestDuration) * 100 : 0;
 
   useEffect(() => {
     if (!isLoading && isPlaying) {
@@ -116,15 +152,15 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
         >
           <button
             aria-label="Play video"
-            className=" inline-flex items-center text-sm font-medium transition ease-in-out duration-150 text-white border border-transparent hover:opacity-50 px-2 py-2 justify-center rounded-lg"
+            className=" w-full h-full flex items-center justify-center text-sm font-medium transition ease-in-out duration-150 text-white border border-transparent px-2 py-2 justify-center rounded-lg"
             tabIndex={0}
             type="button"
             onClick={() => handlePlayPauseClick()}
           >
             {isPlaying ? (
-              <Pause className="w-auto h-14" />
+              <Pause className="w-auto h-14 hover:opacity-50" />
             ) : (
-              <Play className="w-auto h-14" />
+              <Play className="w-auto h-14 hover:opacity-50" />
             )}
           </button>
         </div>
@@ -147,15 +183,22 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
       <div className="absolute bottom-0 z-20 w-full text-white bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-all">
         <div
           id="seek"
-          className="absolute left-0 right-0 block h-4 mx-4 -mt-2 group"
+          className="drag-seek absolute left-0 right-0 block h-4 mx-4 -mt-2 group z-20 cursor-pointer"
+          onMouseDown={handleSeekMouseDown}
+          onMouseMove={handleSeekMouseMove}
+          onMouseUp={handleSeekMouseUp}
+          onMouseLeave={() => setSeeking(false)}
+          onTouchStart={handleSeekMouseDown}
+          onTouchMove={handleSeekMouseMove}
+          onTouchEnd={handleSeekMouseUp}
         >
-          <div className="absolute top-1.5 w-full h-1 bg-white bg-opacity-50 rounded-full cursor-pointer" />
+          <div className="absolute top-1.5 w-full h-1 bg-white bg-opacity-50 rounded-full z-0" />
           <div
-            className="absolute top-1.5 h-1 bg-white rounded-full cursor-pointer transition-all duration-300"
+            className="absolute top-1.5 h-1 bg-white rounded-full cursor-pointer transition-all duration-300 z-0"
             style={{ width: `${watchedPercentage}%` }}
           />
           <div
-            className="absolute top-1.5 z-10 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full border border-white cursor-pointer focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-80 focus:outline-none transition-all duration-300"
+            className="drag-button absolute top-1.5 z-10 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full border border-white cursor-pointer focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-80 focus:outline-none transition-all duration-300"
             tabIndex={0}
             style={{ left: `${watchedPercentage}%` }}
           />

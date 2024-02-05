@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
   const userId = searchParams.get("userId") || "";
   const videoId = searchParams.get("videoId") || "";
   const videoType = searchParams.get("videoType") || "";
+  const thumbnail = searchParams.get("thumbnail") || "";
 
   if (!userId || !videoId) {
     return new Response(
@@ -84,6 +85,7 @@ export async function GET(request: NextRequest) {
       const screenObjectsCommand = new ListObjectsV2Command({
         Bucket: bucket,
         Prefix: screenPrefix,
+        MaxKeys: thumbnail ? 1 : undefined,
       });
       const screenObjects = await s3Client.send(screenObjectsCommand);
 
@@ -120,6 +122,7 @@ export async function GET(request: NextRequest) {
       const videoObjectsCommand = new ListObjectsV2Command({
         Bucket: bucket,
         Prefix: videoPrefix,
+        MaxKeys: thumbnail ? 1 : undefined,
       });
       const videoObjects = await s3Client.send(videoObjectsCommand);
 

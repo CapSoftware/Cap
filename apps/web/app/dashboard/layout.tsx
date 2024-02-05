@@ -24,9 +24,9 @@ export default async function DashboardLayout({
     redirect("/login");
   }
 
-  if (!user.name) {
-    redirect("/dashboard/onboarding");
-  }
+  // if (!user.name) {
+  //   redirect("/onboarding");
+  // }
 
   // const supabase = await createSupabaseServerClient();
   // const spaceData = await supabase

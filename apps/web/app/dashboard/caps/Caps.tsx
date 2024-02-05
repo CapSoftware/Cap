@@ -2,6 +2,7 @@
 import { Button } from "@cap/ui";
 import { videos } from "@cap/database/schema";
 import moment from "moment";
+import { VideoThumbnail } from "@/components/VideoThumbnail";
 
 export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
   return (
@@ -38,10 +39,16 @@ export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
               return (
                 <div
                   key={index}
-                  className="rounded-xl border border-filler overflow-hidden"
+                  className="rounded-xl border border-filler overflow-hidden group"
                 >
                   <a href={`/share/${cap.id}`}>
-                    <div className="aspect-video bg-gray-100"></div>
+                    <div>
+                      <VideoThumbnail
+                        userId={cap.ownerId}
+                        videoId={cap.id}
+                        alt={`${cap.name} Thumbnail`}
+                      />
+                    </div>
                     <div className="p-4">
                       <p className="font-medium">{cap.name}</p>
                       <p className="text-sm text-gray-400">

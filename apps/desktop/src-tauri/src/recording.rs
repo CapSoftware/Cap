@@ -60,8 +60,42 @@ pub async fn start_dual_recording(
   clean_and_create_dir(&video_chunks_dir)?;
 
   let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index);
+
   // let ffmpeg_video_args_future = construct_recording_args(&options, &video_chunks_dir, "video", &options.video_index);
   let ffmpeg_screen_args = ffmpeg_screen_args_future.await.map_err(|e| e.to_string())?;
+
+
+  let screenshot_output_path = data_dir.join("screen-capture.jpg").to_str().unwrap().to_string();
+  let ffmpeg_screen_screenshot_args = match std::env::consts::OS {
+    "macos" => vec![
+        "-f".to_string(), 
+        "avfoundation".to_string(), 
+        "-i".to_string(), 
+        options.screen_index.clone(), 
+        "-vframes".to_string(), 
+        "1".to_string(), 
+        screenshot_output_path.clone()
+    ],
+    "windows" => vec![
+        "-f".to_string(),
+        "gdigrab".to_string(), 
+        "-i".to_string(), 
+        "desktop".to_string(), 
+        "-vframes".to_string(), 
+        "1".to_string(), 
+        screenshot_output_path.clone()
+    ],
+    "linux" => vec![
+        "-f".to_string(), 
+        "x11grab".to_string(), 
+        "-i".to_string(), 
+        ":0.0".to_string(), 
+        "-vframes".to_string(), 
+        "1".to_string(), 
+        screenshot_output_path
+    ],
+    _ => return Err("Unsupported OS".to_string()),
+  };
   // let ffmpeg_video_args = ffmpeg_video_args_future.await.map_err(|e| e.to_string())?;
   
   println!("Screen args: {:?}", ffmpeg_screen_args);
@@ -85,6 +119,16 @@ pub async fn start_dual_recording(
   let screen_stderr = screen_child.stderr.take().unwrap();
   tokio::spawn(log_output(screen_stdout, "Screen stdout".to_string()));
   tokio::spawn(log_output(screen_stderr, "Screen stderr".to_string()));
+
+  let ffmpeg_binary_path_clone = ffmpeg_binary_path_str.clone();
+  let ffmpeg_screen_screenshot_args_clone = ffmpeg_screen_screenshot_args.clone();
+
+  // Spawn the screenshot task without directly awaiting it
+  tokio::spawn(async move {
+      if let Err(e) = take_screenshot(ffmpeg_binary_path_clone, ffmpeg_screen_screenshot_args_clone).await {
+          eprintln!("Failed to take screenshot: {}", e);
+      }
+  });
 
   // let video_stdout = video_child.stdout.take().unwrap();
   // let video_stderr = video_child.stderr.take().unwrap();
@@ -146,6 +190,18 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
     // Now using try_join_all with the owned join handles obtained from the state.
     // This will wait for all the current upload handles to complete.
     let _ = futures::future::try_join_all(upload_handles.into_iter()).await;
+
+    let state_guard = state.lock().await;
+    let data_dir_option = state_guard.data_dir.clone();
+    let options_clone = state_guard.recording_options.clone();  
+    let shutdown_flag_clone = state_guard.shutdown_flag.clone();
+    drop(state_guard);
+
+    if let Some(data_dir) = data_dir_option {
+        if let Err(e) = upload_jpeg_files(&data_dir, options_clone).await {
+            eprintln!("Error uploading JPEG files: {}", e);
+        }
+    }
 
     println!("All recordings and uploads stopped.");
 
@@ -528,4 +584,44 @@ async fn upload_remaining_chunks(
     } else {
         Err("No recording options provided".to_string())
     }
+}
+
+async fn take_screenshot(
+    ffmpeg_binary_path_str: String, 
+    ffmpeg_screen_screenshot_args: Vec<String>,
+) -> Result<(), String> {
+    println!("Waiting for 3 seconds before taking the screenshot...");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    
+    let mut screen_screenshot_child = tokio::process::Command::new(&ffmpeg_binary_path_str)
+        .args(&ffmpeg_screen_screenshot_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    let screen_screenshot_stdout = screen_screenshot_child.stdout.take().unwrap();
+    let screen_screenshot_stderr = screen_screenshot_child.stderr.take().unwrap();
+    tokio::spawn(log_output(screen_screenshot_stdout, "Screen screenshot stdout".to_string()));
+    tokio::spawn(log_output(screen_screenshot_stderr, "Screen screenshot stderr".to_string()));
+
+    Ok(())
+}
+
+async fn upload_jpeg_files(
+    dir_path: &PathBuf,
+    options: Option<RecordingOptions>,
+) -> Result<(), String> {
+    let dir_entries = std::fs::read_dir(dir_path).map_err(|e| format!("Failed to read dir: {}", e))?;
+    for entry in dir_entries {
+        let entry = entry.map_err(|e| format!("Failed to process dir entry: {}", e))?;
+        let path = entry.path();
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "jpeg" || ext == "jpg") {
+            let file_path_str = path.to_str().unwrap_or_default();
+            println!("Found JPEG file for upload: {}", file_path_str);
+            upload_file(options.clone(), file_path_str.to_string(), "screenshot".to_string()).await.map_err(|e| format!("Failed to upload JPEG: {}", e))?;
+        }
+    }
+
+    Ok(())
 }

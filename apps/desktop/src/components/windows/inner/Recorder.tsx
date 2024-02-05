@@ -19,7 +19,6 @@ import { useMediaRecorder } from "@/utils/recording/useMediaRecorder";
 import { getSelectedVideoProperties } from "@/utils/recording/utils";
 import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
-import { uuidParse } from "@cap/utils";
 import toast, { Toaster } from "react-hot-toast";
 import { LogicalSize, WebviewWindow, appWindow } from "@tauri-apps/api/window";
 
@@ -95,9 +94,6 @@ export const Recorder = () => {
 
     const data = await res.json();
 
-    console.log("data:");
-    console.log(data);
-
     if (!data.id || !data.user_id || !data.aws_region || !data.aws_bucket) {
       console.error("No data received");
       toast.error("No data received - please try again later.");
@@ -117,8 +113,6 @@ export const Recorder = () => {
   }) => {
     // Extracted from the useEffect hook; this starts the video recording
     console.log("Starting dual recording...");
-    console.log("video data:");
-    console.log(videoData);
     const mediaSettings = await getSelectedVideoProperties();
     if (mediaSettings?.resolution && mediaSettings?.framerate) {
       await invoke("start_dual_recording", {
@@ -143,6 +137,7 @@ export const Recorder = () => {
     try {
       const videoData = await prepareVideoData();
       if (videoData) {
+        setIsRecording(true);
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: { deviceId: selectedAudioDevice?.deviceId },
           video: { deviceId: selectedVideoDevice?.deviceId },
@@ -217,36 +212,6 @@ export const Recorder = () => {
   }, [stoppingRecording]);
 
   console.log("Test...");
-
-  useEffect(() => {
-    const setupListener = async () => {
-      await listen("oauth://url", (event: any) => {
-        let deep_link = event.payload as string;
-        console.log("deep_link:");
-        console.log(deep_link);
-      });
-
-      // Start tauri oauth plugin. When receive first request
-      // When it starts, will return the server port
-      // it will kill the server
-      invoke("plugin:oauth|start", {
-        config: {
-          // Optional config, but use here to more friendly callback page
-          response: callbackTemplate,
-        },
-      }).then((port) => {
-        open(
-          "http://localhost:3000/api/authhere" +
-            "response_type=token&" +
-            "client_id=<CLIEN_ID_FROM_FIREBASE>&" +
-            `redirect_uri=http%3A//localhost:${port}&` +
-            "scope=email%20profile%20openid&" +
-            "prompt=consent"
-        );
-      });
-    };
-    setupListener();
-  }, []);
 
   return (
     <>

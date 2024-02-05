@@ -30,6 +30,16 @@ const nextConfig = {
       "@react-email/tailwind",
     ],
   },
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "*.amazonaws.com",
+        port: "",
+        pathname: "**",
+      },
+    ],
+  },
   async headers() {
     return [
       {
