@@ -16,6 +16,7 @@ const formatTime = (time: number) => {
 export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
   const video1Ref = useRef<HTMLVideoElement>(null);
   const video2Ref = useRef<HTMLVideoElement>(null);
+  const audioPlayerRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -65,7 +66,18 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     };
   }, [seeking]);
 
-  const handlePlayPauseClick = () => setIsPlaying(!isPlaying);
+  const handlePlayPauseClick = () => {
+    setIsPlaying(!isPlaying);
+    if (!isPlaying) {
+      video1Ref.current?.play();
+      video2Ref.current?.play();
+      audioPlayerRef.current?.play();
+    } else {
+      video1Ref.current?.pause();
+      video2Ref.current?.pause();
+      audioPlayerRef.current?.pause();
+    }
+  };
 
   const handleMuteClick = () => {
     const muted = !video1Ref.current?.muted;
@@ -158,10 +170,43 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     }
   }, [isPlaying, isLoading]);
 
-  const onAudioLoaded = (duration: number) => {
-    const videoDuration = video1Ref.current?.duration || 0;
-    setLongestDuration(Math.max(duration, videoDuration));
-  };
+  useEffect(() => {
+    const video = video1Ref.current;
+    const audio = audioPlayerRef.current;
+
+    // Function to synchronize audio playback with video
+    const synchronizePlayback = () => {
+      if (!video || !audio) return;
+
+      // Calculate the time drift between audio and video
+      const drift = Math.abs(video.currentTime - audio.currentTime);
+
+      // Adjust audio currentTime if drift exceeds a small tolerance (e.g., 0.1 seconds)
+      if (drift > 0.1) {
+        audio.currentTime = video.currentTime;
+      }
+    };
+
+    // Sync audio on video seek
+    const handleSeek = () => {
+      synchronizePlayback(); // Adjust audio to match video currentTime
+      if (isPlaying) {
+        audio?.play().catch((e) => console.error("Audio playback failed:", e)); // Ensure audio resumes if it was playing
+      }
+    };
+
+    // Add event listeners
+    video?.addEventListener("seeked", handleSeek);
+    video?.addEventListener("timeupdate", synchronizePlayback);
+
+    // Cleanup event listeners
+    return () => {
+      if (video) {
+        video.removeEventListener("seeked", handleSeek);
+        video.removeEventListener("timeupdate", synchronizePlayback);
+      }
+    };
+  }, [isPlaying]); // Dependency on isPlaying ensures updates when playback state changes
 
   return (
     <div
@@ -175,7 +220,7 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
       )}
       {isLoading === false && (
         <div
-          className={`absolute top-0 left-0 w-full h-full z-10 flex items-center justify-center bg-black bg-opacity-50 transition-all opacity-0 group-hover:opacity-100`}
+          className={`absolute top-0 left-0 w-full h-full z-10 flex items-center justify-center bg-black bg-opacity-50 transition-all opacity-0 group-hover:opacity-100 z-20`}
         >
           <button
             aria-label="Play video"
@@ -193,11 +238,10 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
         </div>
       )}
       <AudioPlayer
+        ref={audioPlayerRef}
         src={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=audio`}
-        isPlaying={isPlaying}
-        currentTime={currentTime}
       />
-      <div className="w-[175px] h-[175px] absolute bottom-4 right-12 overflow-hidden rounded-full z-10 shadow-lg">
+      <div className="w-[200px] h-[200px] absolute bottom-4 right-12 overflow-hidden rounded-full z-10 shadow-lg">
         <VideoPlayer
           ref={video1Ref}
           src={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`}

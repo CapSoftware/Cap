@@ -1,57 +1,32 @@
-import React, { useEffect, useRef } from "react";
+import React, { forwardRef, useEffect } from "react";
 import Hls from "hls.js";
 
 interface AudioPlayerProps {
   src: string;
-  isPlaying: boolean;
-  currentTime: number;
 }
 
-export const AudioPlayer: React.FC<AudioPlayerProps> = ({
-  src,
-  isPlaying,
-  currentTime,
-}) => {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(
+  ({ src }, ref) => {
+    useEffect(() => {
+      if (!ref || typeof ref === "function") return;
+      const audio = ref.current;
 
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
+      if (Hls.isSupported()) {
+        const hls = new Hls();
+        hls.loadSource(src);
+        if (audio) {
+          hls.attachMedia(audio);
+        }
+        return () => {
+          if (audio) {
+            hls.destroy();
+          }
+        };
+      } else if (audio && audio.canPlayType("application/vnd.apple.mpegurl")) {
+        audio.src = src;
+      }
+    }, [src, ref]);
 
-    const hls = new Hls({
-      autoStartLoad: true,
-      enableWorker: true,
-      debug: true,
-    });
-    if (Hls.isSupported()) {
-      hls.loadSource(src);
-      hls.attachMedia(audio);
-    } else if (audio.canPlayType("application/vnd.apple.mpegurl")) {
-      audio.src = src;
-    }
-
-    return () => {
-      hls.destroy();
-    };
-  }, [src]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    if (isPlaying) {
-      audio.play().catch((e) => console.error("Audio playback failed:", e));
-    } else {
-      audio.pause();
-    }
-  }, [isPlaying]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !audio.duration) return;
-
-    audio.currentTime = currentTime;
-  }, [currentTime]);
-
-  return <audio ref={audioRef} controls={false} style={{ display: "none" }} />;
-};
+    return <audio ref={ref} controls={false} style={{ display: "none" }} />;
+  }
+);
