@@ -77,6 +77,7 @@ export async function generateM3U8Playlist(
   urls: { url: string; duration: string }[]
 ) {
   const baseM3U8Content = `#EXTM3U
+#EXT-X-INDEPENDENT-SEGMENTS
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-TARGETDURATION:4
 #EXT-X-VERSION:4

@@ -1,6 +1,6 @@
 import { videos } from "@cap/database/schema";
 import { VideoPlayer } from "./VideoPlayer";
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Play, Pause, Maximize, VolumeX, Volume2 } from "lucide-react";
 import { LogoSpinner } from "@cap/ui";
 
@@ -19,122 +19,116 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
   const [currentTime, setCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [longestDuration, setLongestDuration] = useState(0);
-  const [seekTime, setSeekTime] = useState(0);
   const [seeking, setSeeking] = useState(false);
 
   useEffect(() => {
     const handleLoadedMetadata = () => {
-      const loadedDuration1 = video1Ref.current?.duration || 0;
-      const loadedDuration2 = video2Ref.current?.duration || 0;
-      setLongestDuration(Math.max(loadedDuration1, loadedDuration2));
-
-      if (loadedDuration1 > 0 && loadedDuration2 > 0) {
-        setIsLoading(false); // Set loading to false once both videos' metadata are loaded
-      }
+      const duration1 = video1Ref.current?.duration || 0;
+      const duration2 = video2Ref.current?.duration || 0;
+      setLongestDuration(Math.max(duration1, duration2));
+      setIsLoading(!(duration1 > 0 && duration2 > 0));
     };
 
-    const handleTimeUpdate = () => {
-      if (video1Ref.current) {
-        setCurrentTime(video1Ref.current.currentTime);
-      }
-    };
-
-    const videos = [video1Ref.current, video2Ref.current].filter(Boolean);
-    videos.forEach((video) => {
-      video?.addEventListener("loadedmetadata", handleLoadedMetadata);
-      video?.addEventListener("timeupdate", handleTimeUpdate);
-    });
+    video1Ref.current?.addEventListener("loadedmetadata", handleLoadedMetadata);
+    video2Ref.current?.addEventListener("loadedmetadata", handleLoadedMetadata);
 
     return () => {
-      videos.forEach((video) => {
-        video?.removeEventListener("loadedmetadata", handleLoadedMetadata);
-        video?.removeEventListener("timeupdate", handleTimeUpdate);
-      });
+      video1Ref.current?.removeEventListener(
+        "loadedmetadata",
+        handleLoadedMetadata
+      );
+      video2Ref.current?.removeEventListener(
+        "loadedmetadata",
+        handleLoadedMetadata
+      );
     };
   }, []);
+
+  useEffect(() => {
+    const handleTimeUpdate = () => {
+      if (video1Ref.current && video2Ref.current && !seeking) {
+        const currentTime = Math.min(
+          video1Ref.current.currentTime,
+          video2Ref.current.currentTime
+        );
+        setCurrentTime(currentTime);
+      }
+    };
+
+    video1Ref.current?.addEventListener("timeupdate", handleTimeUpdate);
+    video2Ref.current?.addEventListener("timeupdate", handleTimeUpdate);
+
+    return () => {
+      video1Ref.current?.removeEventListener("timeupdate", handleTimeUpdate);
+      video2Ref.current?.removeEventListener("timeupdate", handleTimeUpdate);
+    };
+  }, [seeking]);
 
   const handlePlayPauseClick = () => setIsPlaying(!isPlaying);
 
   const handleMuteClick = () => {
-    if (!video1Ref.current || !video2Ref.current) return;
-
-    video1Ref.current.muted = !video1Ref.current.muted;
-    video2Ref.current.muted = !video2Ref.current.muted;
+    const muted = !video1Ref.current?.muted;
+    if (video1Ref.current) video1Ref.current.muted = muted;
+    if (video2Ref.current) video2Ref.current.muted = muted;
   };
 
   const handleFullscreenClick = () => {
     const player = document.getElementById("player");
-    if (player) {
-      if (document.fullscreenElement) {
-        document.exitFullscreen();
-      } else {
-        player.requestFullscreen();
-      }
+    if (!document.fullscreenElement) {
+      player
+        ?.requestFullscreen()
+        .catch((err) =>
+          console.error(
+            `Error attempting to enable full-screen mode: ${err.message} (${err.name})`
+          )
+        );
+    } else {
+      document.exitFullscreen();
     }
   };
 
-  const handleSeekMouseDown = (event: any) => {
-    console.log("seeking2", seeking);
-    // Indicate the start of seeking
-    setSeeking(true);
-  };
+  const handleSeekMouseDown = (event: any) => setSeeking(true);
 
   const handleSeekMouseUp = (event: any) => {
-    // Apply seek on mouse up to make sure it is precise and doesn't stick to mouse moves only
     if (!seeking) return;
-    setSeeking(false); // Stop seeking
+    setSeeking(false);
     const seekBar = event.currentTarget;
     const seekTo = calculateNewTime(event, seekBar);
-    setSeekTime(seekTo); // Assume setSeekTime updates the state that determines the current time
     applyTimeToVideos(seekTo);
   };
 
   const handleSeekMouseMove = (event: any) => {
-    console.log("seeking", seeking);
     if (!seeking) return;
     const seekBar = event.currentTarget;
     const seekTo = calculateNewTime(event, seekBar);
-    // Optionally update a visual indicator or the current time state
     applyTimeToVideos(seekTo);
   };
 
   const calculateNewTime = (event: any, seekBar: any) => {
     const rect = seekBar.getBoundingClientRect();
-    const offsetX = event.clientX - rect.left; // Get the mouse position relative to the seek bar start
-    const relativePosition = offsetX / rect.width; // Calculate the relative position as a percentage
-    const newTime = relativePosition * longestDuration; // Calculate the new time based on the relative position
-    return newTime;
+    const offsetX = event.clientX - rect.left;
+    const relativePosition = offsetX / rect.width;
+    return relativePosition * longestDuration;
   };
 
   const applyTimeToVideos = (time: number) => {
     if (video1Ref.current) video1Ref.current.currentTime = time;
     if (video2Ref.current) video2Ref.current.currentTime = time;
-  };
-
-  const handlePlay = () => {
-    video1Ref.current?.play();
-    video2Ref.current?.play();
+    setCurrentTime(time);
   };
 
   const watchedPercentage =
     longestDuration > 0 ? (currentTime / longestDuration) * 100 : 0;
 
   useEffect(() => {
-    if (!isLoading && isPlaying) {
+    if (isPlaying) {
       video1Ref.current?.play();
       video2Ref.current?.play();
     } else {
       video1Ref.current?.pause();
       video2Ref.current?.pause();
     }
-  }, [isLoading, isPlaying]);
-
-  //Play on load
-  useEffect(() => {
-    if (!isLoading) {
-      handlePlay();
-    }
-  }, [isLoading]);
+  }, [isPlaying]);
 
   return (
     <div
