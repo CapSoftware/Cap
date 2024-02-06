@@ -47,7 +47,7 @@ const nextConfig = {
         headers: [
           {
             key: "Access-Control-Allow-Origin",
-            value: "**",
+            value: "*",
           },
           {
             key: "Access-Control-Allow-Methods",
