@@ -79,93 +79,68 @@ export async function GET(request: NextRequest) {
   const bucket = process.env.CAP_AWS_BUCKET || "";
   const screenPrefix = `${userId}/${videoId}/screen/`;
   const videoPrefix = `${userId}/${videoId}/video/`;
+  const audioPrefix = `${userId}/${videoId}/audio/`;
 
   try {
-    if (videoType === "screen") {
-      const screenObjectsCommand = new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: screenPrefix,
-        MaxKeys: thumbnail ? 1 : undefined,
-      });
-      const screenObjects = await s3Client.send(screenObjectsCommand);
-
-      const screenChunksUrls = await Promise.all(
-        (screenObjects.Contents || []).map(async (object) => {
-          const url = await getSignedUrl(
-            s3Client,
-            new GetObjectCommand({
-              Bucket: bucket,
-              Key: object.Key,
-            }),
-            { expiresIn: 3600 }
-          );
-          const metadata = await s3Client.send(
-            new HeadObjectCommand({
-              Bucket: bucket,
-              Key: object.Key,
-            })
-          );
-
-          return { url: url, duration: metadata?.Metadata?.duration ?? "" };
-        })
-      );
-
-      const generatedScreenPlaylist = await generateM3U8Playlist(
-        screenChunksUrls
-      );
-
-      return new Response(generatedScreenPlaylist, {
-        status: 200,
-        headers: { "content-type": "application/x-mpegURL" },
-      });
-    } else if (videoType === "video") {
-      const videoObjectsCommand = new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: videoPrefix,
-        MaxKeys: thumbnail ? 1 : undefined,
-      });
-      const videoObjects = await s3Client.send(videoObjectsCommand);
-
-      const videoChunksUrls = await Promise.all(
-        (videoObjects.Contents || []).map(async (object) => {
-          const url = await getSignedUrl(
-            s3Client,
-            new GetObjectCommand({
-              Bucket: bucket,
-              Key: object.Key,
-            }),
-            { expiresIn: 3600 }
-          );
-          const metadata = await s3Client.send(
-            new HeadObjectCommand({
-              Bucket: bucket,
-              Key: object.Key,
-            })
-          );
-
-          return { url: url, duration: metadata?.Metadata?.duration ?? "" };
-        })
-      );
-
-      const generatedVideoPlaylist = await generateM3U8Playlist(
-        videoChunksUrls
-      );
-
-      return new Response(generatedVideoPlaylist, {
-        status: 200,
-        headers: { "content-type": "application/x-mpegURL" },
-      });
-    } else {
-      return new Response(
-        JSON.stringify({ error: true, message: "Invalid video type" }),
-        {
-          status: 401,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      );
+    // Handle screen, video, and now audio types
+    let objectsCommand, prefix;
+    switch (videoType) {
+      case "screen":
+        prefix = screenPrefix;
+        break;
+      case "video":
+        prefix = videoPrefix;
+        break;
+      case "audio":
+        prefix = audioPrefix;
+        break;
+      default:
+        return new Response(
+          JSON.stringify({ error: true, message: "Invalid video type" }),
+          {
+            status: 401,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        );
     }
+
+    objectsCommand = new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: prefix,
+      MaxKeys: thumbnail ? 1 : undefined,
+    });
+
+    const objects = await s3Client.send(objectsCommand);
+
+    const chunksUrls = await Promise.all(
+      (objects.Contents || []).map(async (object) => {
+        const url = await getSignedUrl(
+          s3Client,
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: object.Key,
+          }),
+          { expiresIn: 3600 }
+        );
+        const metadata = await s3Client.send(
+          new HeadObjectCommand({
+            Bucket: bucket,
+            Key: object.Key,
+          })
+        );
+
+        return { url: url, duration: metadata?.Metadata?.duration ?? "" };
+      })
+    );
+
+    const generatedPlaylist = await generateM3U8Playlist(chunksUrls);
+
+    return new Response(generatedPlaylist, {
+      status: 200,
+      headers: { "content-type": "application/x-mpegURL" },
+    });
   } catch (error) {
     console.error("Error generating video segment URLs", error);
     return new Response(

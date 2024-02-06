@@ -55,9 +55,11 @@ pub async fn start_dual_recording(
   
   let screen_chunks_dir = data_dir.join("chunks/screen");
   let video_chunks_dir = data_dir.join("chunks/video");
+  let audio_chunks_dir = data_dir.join("chunks/audio");
 
   clean_and_create_dir(&screen_chunks_dir)?;
   clean_and_create_dir(&video_chunks_dir)?;
+  clean_and_create_dir(&audio_chunks_dir)?;
 
   let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index);
 
@@ -145,8 +147,10 @@ pub async fn start_dual_recording(
 
   println!("Starting upload loops...");
 
-  let screen_upload = start_upload_loop(state.clone(), screen_chunks_dir, options.clone(), "screen".to_string(), shutdown_flag.clone());
-  let video_upload = start_upload_loop(state.clone(), video_chunks_dir, options.clone(), "video".to_string(), shutdown_flag.clone());
+  let audio_chunks_dir_arc = Some(Arc::new(audio_chunks_dir));
+
+  let screen_upload = start_upload_loop(state.clone(), screen_chunks_dir, None, options.clone(), "screen".to_string(), shutdown_flag.clone());
+  let video_upload = start_upload_loop(state.clone(), video_chunks_dir, audio_chunks_dir_arc, options.clone(), "video".to_string(), shutdown_flag.clone());
 
   match tokio::try_join!(screen_upload, video_upload) {
       Ok(_) => {
@@ -387,14 +391,12 @@ async fn construct_recording_args(
 async fn start_upload_loop(
     state: State<'_, Arc<Mutex<RecordingState>>>,
     chunks_dir: PathBuf,
+    audio_chunks_dir: Option<Arc<PathBuf>>,
     options: RecordingOptions,
     video_type: String,
     shutdown_flag: Arc<AtomicBool>,
 ) -> Result<(), String> {
     println!("Starting upload loop for {}", video_type);
-
-    //print the chunks_dir
-    println!("chunks_dir: {:?}", chunks_dir);
 
     let segment_list_path = chunks_dir.join("segment_list.txt");
     
@@ -417,8 +419,27 @@ async fn start_upload_loop(
                         let options_clone = options.clone();
                         let video_type_clone = video_type.clone();
 
+                        if let Some(audio_dir) = &audio_chunks_dir {
+                            let audio_dir_path: &Path = audio_dir.as_ref();
+                            let audio_segment_filename = segment_filename.replace(".ts", ".aac"); 
+                            let audio_segment_path = audio_dir_path.join(&audio_segment_filename);
+                            if audio_segment_path.exists() {
+                                let audio_path_str = audio_segment_path.to_str().unwrap_or_default().to_owned();
+                                let audio_options_clone = options_clone.clone();
+                                let audio_video_type_clone = video_type_clone.clone();
+                                
+                                // Schedule audio upload
+                                tokio::spawn(async move {
+                                    println!("Uploading audio for {}: {}", audio_video_type_clone, audio_path_str);
+                                    match upload_file(Some(audio_options_clone), audio_path_str, "audio".to_string()).await {
+                                        Ok(_) => println!("Audio segment uploaded successfully."),
+                                        Err(e) => eprintln!("Failed to upload audio segment: {}", e),
+                                    }
+                                });
+                            }
+                        }
+
                         let handle = tokio::spawn(async move {
-                            // Log the file path and the video type in one print, starting with "Uploading video from"
                             println!("Uploading video for {}: {}", video_type_clone, filepath_str);
   
                             match upload_file(Some(options_clone.clone()), filepath_str.clone(), video_type_clone.clone()).await {

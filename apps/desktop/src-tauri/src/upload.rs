@@ -67,11 +67,17 @@ pub async fn upload_file(
         }
 
         println!("Uploading file: {}", file_path);
+        
+        let mime_type = if file_path.to_lowercase().ends_with(".aac") {
+            "audio/aac"
+        } else {
+            "video/mp2t"
+        };
 
         let file_bytes = tokio::fs::read(&file_path).await.map_err(|e| format!("Failed to read file: {}", e))?;
         let file_part = reqwest::multipart::Part::bytes(file_bytes)
             .file_name(file_name.clone())
-            .mime_str("video/mp2t")
+            .mime_str(mime_type)
             .map_err(|e| format!("Error setting MIME type: {}", e))?;
 
         form = form.part("file", file_part);

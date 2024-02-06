@@ -162,7 +162,7 @@ export const Recorder = () => {
     try {
       console.log("Stopping recordings...");
 
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await new Promise((resolve) => setTimeout(resolve, 3500));
 
       await stopMediaRecording();
 

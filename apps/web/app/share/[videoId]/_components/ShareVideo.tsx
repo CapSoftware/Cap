@@ -3,6 +3,7 @@ import { VideoPlayer } from "./VideoPlayer";
 import { useState, useEffect, useRef } from "react";
 import { Play, Pause, Maximize, VolumeX, Volume2 } from "lucide-react";
 import { LogoSpinner } from "@cap/ui";
+import { AudioPlayer } from "./AudioPlayer";
 
 const formatTime = (time: number) => {
   const minutes = Math.floor(time / 60);
@@ -94,7 +95,19 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     setSeeking(false);
     const seekBar = event.currentTarget;
     const seekTo = calculateNewTime(event, seekBar);
+
+    // Pause both videos before adjusting the time.
+    if (isPlaying) {
+      video1Ref.current?.pause();
+      video2Ref.current?.pause();
+    }
+
     applyTimeToVideos(seekTo);
+
+    if (isPlaying) {
+      video1Ref.current?.play();
+      video2Ref.current?.play();
+    }
   };
 
   const handleSeekMouseMove = (event: any) => {
@@ -130,6 +143,26 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     }
   }, [isPlaying]);
 
+  useEffect(() => {
+    const syncPlay = () => {
+      if (video1Ref.current && video2Ref.current && !isLoading) {
+        const playPromise1 = video1Ref.current.play();
+        playPromise1.catch((e) => console.log("Play failed for video 1", e));
+        const playPromise2 = video2Ref.current.play();
+        playPromise2.catch((e) => console.log("Play failed for video 2", e));
+      }
+    };
+
+    if (isPlaying) {
+      syncPlay();
+    }
+  }, [isPlaying, isLoading]);
+
+  const onAudioLoaded = (duration: number) => {
+    const videoDuration = video1Ref.current?.duration || 0;
+    setLongestDuration(Math.max(duration, videoDuration));
+  };
+
   return (
     <div
       className="relative flex h-full w-full overflow-hidden shadow-lg rounded-lg group"
@@ -159,6 +192,11 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
           </button>
         </div>
       )}
+      <AudioPlayer
+        src={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=audio`}
+        isPlaying={isPlaying}
+        currentTime={currentTime}
+      />
       <div className="w-[175px] h-[175px] absolute bottom-4 right-12 overflow-hidden rounded-full z-10 shadow-lg">
         <VideoPlayer
           ref={video1Ref}

@@ -33,8 +33,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const contentType = fileKey.endsWith(".aac") ? "audio/aac" : "video/mp2t";
+
     const Fields = {
-      "Content-Type": "video/mp2t",
+      "Content-Type": contentType,
       "x-amz-meta-userid": userId,
       "x-amz-meta-duration": duration,
     };

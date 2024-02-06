@@ -61,13 +61,13 @@ export const useAudioRecorder = () => {
         mediaRecorder.current.onstop = async () => {
           try {
             const audioBlob = new Blob(audioChunks.current, {
-              type: "audio/mp3",
+              type: "audio/aac",
             });
             const buffer = await audioBlob.arrayBuffer();
             const dir = await dataDir();
             const filePath = await join(
               dir,
-              `cap_audio_${new Date().toISOString()}.mp3`
+              `cap_audio_${new Date().toISOString()}.aac`
             );
 
             await writeBinaryFile({

@@ -35,6 +35,11 @@ export const useMediaRecorder = () => {
     return join(dir, "chunks", "video");
   };
 
+  const getAudioChunksDir = async () => {
+    const dir = await appDataDir();
+    return join(dir, "chunks", "audio");
+  };
+
   const appendToSegmentListFile = async (fileName: string) => {
     const dir = await getVideoChunksDir();
     const segmentListPath = await join(dir, "segment_list.txt");
@@ -113,6 +118,10 @@ export const useMediaRecorder = () => {
             3,
             "0"
           )}.ts`;
+          const audioOutputFileName = `output-${String(chunkNumber).padStart(
+            3,
+            "0"
+          )}.aac`;
 
           const buffer = new Uint8Array(await chunk.arrayBuffer());
           const videoBuffer = await fetchFile(new Blob([buffer]));
@@ -129,25 +138,27 @@ export const useMediaRecorder = () => {
           await ffmpeg.exec([
             "-i",
             inputFileName,
+            "-an",
             "-c:v",
             "libx264",
             "-preset",
             "veryfast",
             "-tune",
             "zerolatency",
-            "-c:a",
-            "aac",
-            "-strict",
-            "experimental",
-            "-b:a",
-            "128k",
-            "-ac",
-            "2",
-            "-ar",
-            "44100",
             "-f",
             "mpegts",
             outputFileName,
+          ]);
+
+          await ffmpeg.exec([
+            "-i",
+            inputFileName,
+            "-vn",
+            "-acodec",
+            "aac",
+            "-b:a",
+            "128k",
+            audioOutputFileName,
           ]);
 
           console.log("log-4");
@@ -162,7 +173,18 @@ export const useMediaRecorder = () => {
             console.error("Failed to save file:", error);
           }
 
-          console.log("log-6");
+          try {
+            const savedAudio = (await ffmpeg.readFile(
+              audioOutputFileName
+            )) as Uint8Array;
+            const audioDir = await getAudioChunksDir();
+            await createDir(audioDir, { recursive: true });
+            const audioPath = await join(audioDir, audioOutputFileName);
+            await writeBinaryFile(audioPath, savedAudio);
+            console.log("Audio saved.");
+          } catch (error) {
+            console.error("Failed to save audio:", error);
+          }
 
           if (segmentCounter.current === 2) {
             const screenshotFileName = "video-capture.jpeg";
