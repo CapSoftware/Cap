@@ -43,11 +43,11 @@ const nextConfig = {
   async headers() {
     return [
       {
-        source: "/(.*)",
+        source: "/api/playlist/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
-            value: "https://*.amazonaws.com",
+            value: "**",
           },
           {
             key: "Access-Control-Allow-Methods",
@@ -60,11 +60,11 @@ const nextConfig = {
         ],
       },
       {
-        source: "/api/playlist/(.*)",
+        source: "/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
-            value: "**",
+            value: "https://*.amazonaws.com",
           },
           {
             key: "Access-Control-Allow-Methods",
