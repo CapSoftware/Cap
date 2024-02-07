@@ -12,8 +12,7 @@
     <b>Download for </b>
 		macOS ·
 		Windows ·
-		Linux ·
-		Google Chrome
+		Linux
     <br />
     <i>~ Links will be added once a release is available. ~</i>
   </p>
@@ -28,9 +27,9 @@ Cap is an open source and privacy focused alternative to Loom. It's a video mess
 
 View what's currently in progress, and what's planned for the future: [Cap Roadmap](https://capso.notion.site/7aac740edeee49b5a23be901a7cb734e)
 
-# App Architecture
+# Monorepo App Architecture
 
-React, Vite, TypeScript, Tauri, TailwindCSS.
+React, Next.js, TypeScript, Tauri, Drizzle (ORM), MySQL, TailwindCSS.
 
 # Contributing
 
