@@ -22,8 +22,8 @@ export const setWindowPosition = (
       case "bottom_right":
         appWindow.setPosition(
           new LogicalPosition(
-            windowWidth - appWidth - 125,
-            windowHeight - appHeight - 25
+            windowWidth - appWidth - 75,
+            windowHeight - appHeight
           )
         );
         return;
@@ -93,7 +93,6 @@ export const getVideoSettings = async (
 
 export const requestMediaDevicesPermission = async () => {
   try {
-    // Request permission by trying to access the user's media devices
     await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     console.log("Permissions to access media devices have been granted.");
   } catch (error) {

@@ -1,106 +1,178 @@
-import { useState, useRef } from "react";
-import { dataDir, join } from "@tauri-apps/api/path";
-import { writeBinaryFile } from "@tauri-apps/api/fs";
-import { MediaDeviceContextData } from "@/utils/recording/MediaDeviceContext";
-import { getLocalDevices } from "@/utils/recording/utils";
+import { useRef, useEffect, useCallback } from "react";
+import { appDataDir, join } from "@tauri-apps/api/path";
+import {
+  writeBinaryFile,
+  writeTextFile,
+  readTextFile,
+  createDir,
+} from "@tauri-apps/api/fs";
+import { getLatestVideoId } from "../database/utils";
 
 export const useAudioRecorder = () => {
-  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+  const isRecordingAudio = useRef(false);
   const mediaRecorder = useRef<MediaRecorder | null>(null);
-  const audioChunks = useRef<BlobPart[]>([]);
+  const queue = useRef<Blob[]>([]);
+  const processingQueue = useRef(false);
+  const segmentCounter = useRef(0);
+  const firstRecordingStarted = useRef(false);
 
-  const startAudioRecording = async (
-    selectedAudioDevice: MediaDeviceContextData["selectedAudioDevice"]
-  ) => {
-    if (!selectedAudioDevice) {
-      console.error("No audio device selected");
-      throw new Error("No audio device selected");
-    }
-
-    const { audioDevices } = await getLocalDevices();
-    const audioDeviceInfo = audioDevices.find(
-      (device) =>
-        device.kind === "audioinput" &&
-        device.label === selectedAudioDevice.label
-    );
-
-    if (!audioDeviceInfo) {
-      throw new Error("Cannot find audio device info");
-    }
-
-    const audioStream = await navigator.mediaDevices.getUserMedia({
-      audio: { deviceId: audioDeviceInfo.deviceId },
-    });
-
-    mediaRecorder.current = new MediaRecorder(audioStream);
-
-    if (mediaRecorder.current === null) {
-      console.error("mediaRecorder is null.");
-      return;
-    }
-
-    mediaRecorder.current.start();
-    setIsRecordingAudio(true);
-
-    mediaRecorder.current.ondataavailable = (event) => {
-      audioChunks.current.push(event.data);
-    };
-
-    mediaRecorder.current.onerror = (event: any) => {
-      console.error("Recording error:", event.error);
-      setIsRecordingAudio(false);
-    };
+  const getAudioSegmentsDir = async () => {
+    const dir = await appDataDir();
+    return join(dir, "chunks", "audio");
   };
 
-  const stopAudioRecording = () => {
-    return new Promise<string>((resolve, reject) => {
-      if (mediaRecorder.current && isRecordingAudio) {
-        mediaRecorder.current.stop();
+  const appendToAudioSegmentListFile = async (fileName: string) => {
+    const dir = await getAudioSegmentsDir();
+    const segmentListPath = await join(dir, "segment_list.txt");
+    let fileContent;
+    try {
+      fileContent = await readTextFile(segmentListPath);
+    } catch (error) {
+      fileContent = "";
+    }
+    const newContent = `${fileContent}${fileName}\n`;
+    await writeTextFile({ path: segmentListPath, contents: newContent });
+  };
 
-        // Event handler for when recording stops
-        mediaRecorder.current.onstop = async () => {
-          try {
-            const audioBlob = new Blob(audioChunks.current, {
-              type: "audio/aac",
-            });
-            const buffer = await audioBlob.arrayBuffer();
-            const dir = await dataDir();
-            const filePath = await join(
-              dir,
-              `cap_audio_${new Date().toISOString()}.aac`
-            );
+  const saveAudioSegment = async (data: Uint8Array, fileName: string) => {
+    const dir = await getAudioSegmentsDir();
+    await createDir(dir, { recursive: true });
+    const filePath = await join(dir, fileName);
+    await writeBinaryFile({ path: filePath, contents: data });
+    await appendToAudioSegmentListFile(fileName);
+  };
 
-            await writeBinaryFile({
-              path: filePath,
-              contents: new Uint8Array(buffer),
-            });
-            audioChunks.current = []; // Clear audio chunks
-            setIsRecordingAudio(false); // Update the recording state
-
-            // Resolve the promise with the file path
-            resolve(filePath);
-          } catch (error) {
-            console.error("Error writing audio file:", error);
-            reject(error);
-          }
-        };
-
-        // Event handler for errors
-        mediaRecorder.current.onerror = (event: any) => {
-          console.error("Recording error:", event.error);
-          reject(event.error);
-        };
-      } else {
-        console.error(
-          "stopAudioRecording was called but the mediaRecorder is not recording"
-        );
-        reject(new Error("MediaRecorder is not recording."));
+  const processQueue = useCallback(async () => {
+    if (!processingQueue.current && queue.current.length > 0) {
+      processingQueue.current = true;
+      while (queue.current.length > 0) {
+        try {
+          const chunk = queue.current.shift();
+          if (!chunk) continue;
+          const buffer = new Uint8Array(await chunk.arrayBuffer());
+          const segmentNumber = segmentCounter.current++;
+          const fileName = `audio_segment_${segmentNumber
+            .toString()
+            .padStart(3, "0")}.webm`;
+          await saveAudioSegment(buffer, fileName);
+        } catch (error) {
+          console.error("Failed to process audio chunk:", error);
+        }
       }
-    });
-  };
+      processingQueue.current = false;
+    }
+  }, []);
+
+  const sendMetadataAPI = useCallback(async () => {
+    if (!firstRecordingStarted.current) {
+      firstRecordingStarted.current = true;
+      try {
+        const videoId = getLatestVideoId();
+        const response = await fetch("/api/desktop/video/metadata/create", {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            videoId: videoId,
+            audioStartTime: Date.now(),
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`API call failed with status ${response.status}`);
+        }
+        const jsonResponse = await response.json();
+        console.log("Metadata updated successfully:", jsonResponse);
+      } catch (error) {
+        console.error("Error updating video and audio start time:", error);
+      }
+    }
+  }, []);
+
+  const startAudioRecording = useCallback(
+    async (mediaStream: MediaStream) => {
+      if (!mediaStream) {
+        console.error("Media stream is null.");
+        return;
+      }
+
+      console.log("mediaStream:", mediaStream);
+
+      const audioTracks = mediaStream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        console.error("No audio track found in the media stream.");
+        return;
+      }
+
+      const audioStream = new MediaStream(audioTracks);
+
+      mediaRecorder.current = new MediaRecorder(audioStream, {
+        mimeType: "audio/webm",
+      });
+      if (!mediaRecorder.current) {
+        console.error("mediaRecorder is null.");
+        return;
+      }
+      mediaRecorder.current.start();
+      isRecordingAudio.current = true;
+
+      mediaRecorder.current.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          queue.current.push(event.data);
+          processQueue();
+        }
+      };
+
+      await sendMetadataAPI();
+
+      const requestDataInterval = setInterval(() => {
+        if (mediaRecorder.current && isRecordingAudio.current === true) {
+          mediaRecorder.current.stop();
+          mediaRecorder.current.onstop = () => {
+            if (isRecordingAudio.current) {
+              mediaRecorder.current?.start();
+            }
+          };
+        } else {
+          clearInterval(requestDataInterval);
+        }
+      }, 3000);
+
+      return () => {
+        clearInterval(requestDataInterval);
+        if (mediaRecorder.current) {
+          mediaRecorder.current.stop();
+          isRecordingAudio.current = false;
+        }
+      };
+    },
+    [processQueue, sendMetadataAPI]
+  );
+
+  const stopAudioRecording = useCallback(async () => {
+    if (mediaRecorder.current) {
+      mediaRecorder.current.stop();
+      console.log("Audio recording stopped.");
+    }
+    isRecordingAudio.current = false;
+    while (processingQueue.current || queue.current.length > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    firstRecordingStarted.current = false;
+    console.log("Queue processed and audio recording fully stopped.");
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (isRecordingAudio.current && mediaRecorder.current) {
+        mediaRecorder.current.stop();
+        isRecordingAudio.current = false;
+      }
+    };
+  }, []);
 
   return {
-    isRecordingAudio,
+    isRecordingAudio: isRecordingAudio.current,
     startAudioRecording,
     stopAudioRecording,
   };

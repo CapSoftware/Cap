@@ -6,11 +6,12 @@ import {
   useContext,
   useEffect,
   useCallback,
+  useRef,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getLocalDevices, enumerateAndStoreDevices } from "./utils";
 
-interface Devices {
+export interface Devices {
   index: number;
   label: string;
   kind: "videoinput" | "audioinput";
@@ -30,6 +31,12 @@ export interface MediaDeviceContextData {
   getDevices: () => Promise<void>;
   isRecording: boolean;
   setIsRecording: React.Dispatch<React.SetStateAction<boolean>>;
+  startingRecording: boolean;
+  setStartingRecording: React.Dispatch<React.SetStateAction<boolean>>;
+  sharedStream: MediaStream | null;
+  startSharedStream: () => Promise<void>;
+  stopSharedStream: () => void;
+  updateTrigger: number;
 }
 
 export const MediaDeviceContext = createContext<
@@ -48,6 +55,49 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   >("screen");
   const [devices, setDevices] = useState<Devices[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [startingRecording, setStartingRecording] = useState(false);
+  const sharedStream = useRef<MediaStream | null>(null);
+  const [updateTrigger, setUpdateTrigger] = useState(0);
+
+  const updateSharedStream = useCallback((newStream: MediaStream | null) => {
+    sharedStream.current = newStream;
+    setUpdateTrigger((prev) => prev + 1);
+  }, []);
+
+  const startSharedStream = useCallback(async () => {
+    if (selectedVideoDevice || selectedAudioDevice) {
+      const constraints = {
+        video: selectedVideoDevice
+          ? {
+              deviceId: selectedVideoDevice.deviceId,
+              frameRate: { ideal: 30 },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            }
+          : false,
+        audio: selectedAudioDevice
+          ? { deviceId: selectedAudioDevice.deviceId }
+          : false,
+      };
+
+      try {
+        console.log("starting shared stream");
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        sharedStream.current = stream;
+        updateSharedStream(stream);
+      } catch (error) {
+        console.error("Failed to start shared media stream:", error);
+      }
+    }
+  }, [selectedVideoDevice, selectedAudioDevice]);
+
+  const stopSharedStream = useCallback(() => {
+    if (sharedStream) {
+      console.log("stopping shared stream");
+      sharedStream.current?.getTracks().forEach((track) => track.stop());
+      sharedStream.current = null;
+    }
+  }, [sharedStream]);
 
   const getDevices = useCallback(async () => {
     console.log("getDevices called");
@@ -94,6 +144,27 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   useEffect(() => {
     getDevices();
   }, []);
+
+  useEffect(() => {
+    // Function to start the shared stream only if not already started
+    const ensureStreamStarted = async () => {
+      if (!sharedStream.current) {
+        console.log("No active shared stream. Attempting to start.");
+        await startSharedStream();
+      } else {
+        console.log("Shared stream already active. Skipping reinitialization.");
+      }
+    };
+
+    ensureStreamStarted();
+  }, [startSharedStream]);
+
+  useEffect(() => {
+    return () => {
+      // Component cleanup
+      stopSharedStream();
+    };
+  }, [stopSharedStream]);
 
   useEffect(() => {
     let unlistenFn: any;
@@ -151,6 +222,12 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         getDevices,
         isRecording,
         setIsRecording,
+        startingRecording,
+        setStartingRecording,
+        sharedStream: sharedStream.current,
+        startSharedStream,
+        stopSharedStream,
+        updateTrigger,
       }}
     >
       {children}

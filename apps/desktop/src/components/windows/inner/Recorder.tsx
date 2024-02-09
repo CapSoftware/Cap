@@ -9,11 +9,10 @@ import { Window } from "@/components/icons/Window";
 import { ActionButton } from "@/components/recording/ActionButton";
 import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit } from "@tauri-apps/api/event";
 import { showMenu } from "tauri-plugin-context-menu";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Countdown } from "./Countdown";
-import callbackTemplate from "./callbackTemplate";
 
 import { useMediaRecorder } from "@/utils/recording/useMediaRecorder";
 import { getSelectedVideoProperties } from "@/utils/recording/utils";
@@ -30,6 +29,9 @@ export const Recorder = () => {
     selectedDisplayType,
     isRecording,
     setIsRecording,
+    startingRecording,
+    setStartingRecording,
+    sharedStream,
   } = useMediaDevices();
   const [countdownActive, setCountdownActive] = useState(false);
   const [stoppingRecording, setStoppingRecording] = useState(false);
@@ -75,6 +77,7 @@ export const Recorder = () => {
     // appWindow.hide();
     // WebviewWindow.getByLabel("camera")?.hide();
     setIsRecording(true);
+    setStartingRecording(false);
     setCountdownActive(false);
   };
 
@@ -83,6 +86,7 @@ export const Recorder = () => {
       `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create`,
       {
         credentials: "include",
+        cache: "no-store",
       }
     );
 
@@ -111,7 +115,6 @@ export const Recorder = () => {
     aws_region: string;
     aws_bucket: string;
   }) => {
-    // Extracted from the useEffect hook; this starts the video recording
     console.log("Starting dual recording...");
     const mediaSettings = await getSelectedVideoProperties();
     if (mediaSettings?.resolution && mediaSettings?.framerate) {
@@ -136,15 +139,13 @@ export const Recorder = () => {
   const handleStartAllRecordings = async () => {
     try {
       const videoData = await prepareVideoData();
-      if (videoData) {
-        setIsRecording(true);
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { deviceId: selectedAudioDevice?.deviceId },
-          video: { deviceId: selectedVideoDevice?.deviceId },
-        });
+      console.log("Video data:", videoData);
+      console.log("Shared stream:", sharedStream);
+      if (videoData && sharedStream) {
+        setStartingRecording(true);
         setCountdownActive(true);
         await Promise.all([
-          startMediaRecording(stream),
+          startMediaRecording(sharedStream),
           startDualRecording(videoData),
         ]);
       } else {
@@ -161,14 +162,32 @@ export const Recorder = () => {
 
     try {
       console.log("Stopping recordings...");
+      const videoId = await getLatestVideoId();
+      const queryParams = new URLSearchParams({
+        videoId,
+      }).toString();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/metadata/retrieve?${queryParams}`,
+        {
+          credentials: "include",
+          cache: "no-store",
+        }
+      );
 
-      await new Promise((resolve) => setTimeout(resolve, 3500));
+      const data = await res.json();
+
+      console.log("Video metadata retrieve:", data);
 
       await stopMediaRecording();
 
+      if (data?.difference) {
+        console.log("Waiting for difference...");
+        await new Promise((resolve) => setTimeout(resolve, data.difference));
+      }
+
       await invoke("stop_all_recordings");
 
-      console.log("Recordings stopped...");
+      console.log("All recordings stopped...");
 
       console.log("Opening window...");
 
@@ -277,9 +296,11 @@ export const Recorder = () => {
                   handleStartAllRecordings();
                 }
               }}
-              spinner={stoppingRecording}
+              spinner={startingRecording || stoppingRecording}
             >
-              {isRecording
+              {startingRecording
+                ? "Starting..."
+                : isRecording
                 ? stoppingRecording
                   ? currentStoppingMessage
                   : "Stop Recording"

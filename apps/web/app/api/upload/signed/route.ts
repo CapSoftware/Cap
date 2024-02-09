@@ -15,10 +15,6 @@ export async function POST(request: NextRequest) {
     const { userId, fileKey, duration, awsBucket, awsRegion } =
       await request.json();
 
-    console.log("Duration start...");
-    console.log(duration);
-    console.log("...Duration end...");
-
     if (!userId || !duration || !fileKey || !awsBucket || !awsRegion) {
       console.error("Missing required fields in /api/upload/signed/route.ts");
 
@@ -33,7 +29,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const contentType = fileKey.endsWith(".aac") ? "audio/aac" : "video/mp2t";
+    const contentType = fileKey.endsWith(".aac")
+      ? "audio/aac"
+      : fileKey.endsWith(".webm")
+      ? "audio/webm"
+      : "video/mp2t";
 
     const Fields = {
       "Content-Type": contentType,

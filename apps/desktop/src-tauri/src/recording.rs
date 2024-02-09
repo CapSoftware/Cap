@@ -9,6 +9,9 @@ use tokio::sync::{Semaphore, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 use serde::{Serialize, Deserialize};
+use std::env;
+use chrono::Utc;
+use reqwest::Client;
 use tauri::State;
 
 use crate::utils::ffmpeg_path_as_str;
@@ -54,11 +57,9 @@ pub async fn start_dual_recording(
   println!("data_dir: {:?}", data_dir);
   
   let screen_chunks_dir = data_dir.join("chunks/screen");
-  let video_chunks_dir = data_dir.join("chunks/video");
   let audio_chunks_dir = data_dir.join("chunks/audio");
 
   clean_and_create_dir(&screen_chunks_dir)?;
-  clean_and_create_dir(&video_chunks_dir)?;
   clean_and_create_dir(&audio_chunks_dir)?;
 
   let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index);
@@ -122,6 +123,12 @@ pub async fn start_dual_recording(
   tokio::spawn(log_output(screen_stdout, "Screen stdout".to_string()));
   tokio::spawn(log_output(screen_stderr, "Screen stderr".to_string()));
 
+  tokio::time::sleep(Duration::from_secs(2)).await;
+  let server_url_base: &'static str = dotenv_codegen::dotenv!("NEXT_PUBLIC_URL");
+  if let Err(e) = send_metadata_api(&options.video_id, &server_url_base).await {
+      eprintln!("Failed to send metadata API request: {}", e);
+  }
+
   let ffmpeg_binary_path_clone = ffmpeg_binary_path_str.clone();
   let ffmpeg_screen_screenshot_args_clone = ffmpeg_screen_screenshot_args.clone();
 
@@ -147,12 +154,10 @@ pub async fn start_dual_recording(
 
   println!("Starting upload loops...");
 
-  let audio_chunks_dir_arc = Some(Arc::new(audio_chunks_dir));
+  let screen_upload = start_upload_loop(state.clone(), screen_chunks_dir, options.clone(), "screen".to_string(), shutdown_flag.clone());
+  let audio_upload = start_upload_loop(state.clone(), audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone());
 
-  let screen_upload = start_upload_loop(state.clone(), screen_chunks_dir, None, options.clone(), "screen".to_string(), shutdown_flag.clone());
-  let video_upload = start_upload_loop(state.clone(), video_chunks_dir, audio_chunks_dir_arc, options.clone(), "video".to_string(), shutdown_flag.clone());
-
-  match tokio::try_join!(screen_upload, video_upload) {
+  match tokio::try_join!(screen_upload, audio_upload) {
       Ok(_) => {
           println!("Both upload loops completed successfully.");
       },
@@ -254,135 +259,78 @@ async fn construct_recording_args(
     ensure_segment_list_exists(PathBuf::from(&segment_list_filename))
         .map_err(|e| format!("Failed to ensure segment list file exists: {}", e))?;
       
-    let fps = if video_type == "screen" { "60" } else { &options.framerate };
+    let fps = if video_type == "screen" { "30" } else { &options.framerate };
     let preset = "ultrafast".to_string();
     let crf = "28".to_string();
-    let pix_fmt = "nv12".to_string();
+    let pix_fmt = "yuv420p".to_string();
     let codec = "libx264".to_string();
     let gop = "30".to_string();
     let segment_time = "3".to_string();
     let segment_list_type = "flat".to_string();
-    let input_string = format!("{}:none", input_index);
 
     match std::env::consts::OS {
         "macos" => {
-            if video_type == "screen" {
-                Ok(vec![
-                    "-f".to_string(), "avfoundation".to_string(),
-                    "-framerate".to_string(), fps.to_string(),
-                    "-i".to_string(), input_string.to_string(),
-                    "-c:v".to_string(), codec,
-                    "-preset".to_string(), preset,
-                    "-pix_fmt".to_string(), pix_fmt,
-                    "-g".to_string(), gop,
-                    "-r".to_string(), fps.to_string(),
-                    "-f".to_string(), "segment".to_string(),
-                    "-segment_time".to_string(), segment_time,
-                    "-segment_format".to_string(), "mpegts".to_string(),
-                    "-segment_list".to_string(), segment_list_filename,
-                    "-segment_list_type".to_string(), segment_list_type,
-                    "-reset_timestamps".to_string(), "1".to_string(),
-                    output_filename_pattern,
-                ])
-            } else {
-                Ok(vec![
-                    "-f".to_string(), "avfoundation".to_string(),
-                    "-video_size".to_string(), options.resolution.to_string(),
-                    "-framerate".to_string(), fps.to_string(),
-                    "-i".to_string(), input_string.to_string(),
-                    "-c:v".to_string(), codec,
-                    "-preset".to_string(), preset,
-                    "-pix_fmt".to_string(), pix_fmt,
-                    "-g".to_string(), gop,
-                    "-r".to_string(), fps.to_string(),
-                    "-f".to_string(), "segment".to_string(),
-                    "-segment_time".to_string(), segment_time,
-                    "-segment_format".to_string(), "mpegts".to_string(),
-                    "-segment_list".to_string(), segment_list_filename,
-                    "-segment_list_type".to_string(), segment_list_type,
-                    "-reset_timestamps".to_string(), "1".to_string(),
-                    output_filename_pattern,
-                ])
-            }
+            Ok(vec![
+                "-f".to_string(), "avfoundation".to_string(),
+                "-framerate".to_string(), fps.to_string(),
+                "-capture_cursor".to_string(), "1".to_string(),
+                "-thread_queue_size".to_string(), "512".to_string(),
+                "-i".to_string(), format!("{}", input_index),
+                "-c:v".to_string(), codec,
+                "-preset".to_string(), preset,
+                "-pix_fmt".to_string(), pix_fmt,
+                "-g".to_string(), gop,
+                "-r".to_string(), fps.to_string(),
+                "-an".to_string(),
+                "-f".to_string(), "segment".to_string(),
+                "-segment_time".to_string(), segment_time,
+                "-segment_format".to_string(), "mpegts".to_string(),
+                "-segment_list".to_string(), segment_list_filename,
+                "-segment_list_type".to_string(), segment_list_type,
+                "-reset_timestamps".to_string(), "1".to_string(),
+                output_filename_pattern,    
+            ])
         },
         "linux" => {
-            if video_type == "screen" {
-                Ok(vec![
-                    "-f".to_string(), "x11grab".to_string(),
-                    "-i".to_string(), format!("{}+0,0", input_index),
-                    "-draw_mouse".to_string(), "1".to_string(),
-                    "-pix_fmt".to_string(), pix_fmt,
-                    "-c:v".to_string(), codec,
-                    "-crf".to_string(), crf,
-                    "-preset".to_string(), preset,
-                    "-g".to_string(), gop,
-                    "-r".to_string(), fps.to_string(),
-                    "-f".to_string(), "segment".to_string(),
-                    "-segment_time".to_string(), segment_time,
-                    "-segment_format".to_string(), "mpegts".to_string(),
-                    "-segment_list".to_string(), segment_list_filename,
-                    "-segment_list_type".to_string(), segment_list_type,
-                    "-reset_timestamps".to_string(), "1".to_string(),
-                    output_filename_pattern,
-                ])
-            } else {
-                Ok(vec![
-                    "-f".to_string(), "x11grab".to_string(),
-                    "-i".to_string(), format!("{}+0,0", input_index),
-                    "-pix_fmt".to_string(), pix_fmt,
-                    "-c:v".to_string(), codec,
-                    "-crf".to_string(), crf,
-                    "-preset".to_string(), preset,
-                    "-g".to_string(), gop,
-                    "-r".to_string(), fps.to_string(),
-                    "-f".to_string(), "segment".to_string(),
-                    "-segment_time".to_string(), segment_time,
-                    "-segment_format".to_string(), "mpegts".to_string(),
-                    "-segment_list".to_string(), segment_list_filename,
-                    "-segment_list_type".to_string(), segment_list_type,
-                    "-reset_timestamps".to_string(), "1".to_string(),
-                    output_filename_pattern,
-                ])
-            }
+            Ok(vec![
+                "-f".to_string(), "x11grab".to_string(),
+                "-i".to_string(), format!("{}+0,0", input_index),
+                "-draw_mouse".to_string(), "1".to_string(),
+                "-pix_fmt".to_string(), pix_fmt,
+                "-c:v".to_string(), codec,
+                "-crf".to_string(), crf,
+                "-preset".to_string(), preset,
+                "-g".to_string(), gop,
+                "-r".to_string(), fps.to_string(),
+                "-an".to_string(),
+                "-f".to_string(), "segment".to_string(),
+                "-segment_time".to_string(), segment_time,
+                "-segment_format".to_string(), "mpegts".to_string(),
+                "-segment_list".to_string(), segment_list_filename,
+                "-segment_list_type".to_string(), segment_list_type,
+                "-reset_timestamps".to_string(), "1".to_string(),
+                output_filename_pattern,
+            ])
         },
         "windows" => {
-            if video_type == "screen" {
-                Ok(vec![
-                    "-f".to_string(), "gdigrab".to_string(),
-                    "-i".to_string(), "desktop".to_string(),
-                    "-pixel_format".to_string(), pix_fmt,
-                    "-c:v".to_string(), codec,
-                    "-crf".to_string(), crf,
-                    "-preset".to_string(), preset,
-                    "-g".to_string(), gop,
-                    "-r".to_string(), fps.to_string(),
-                    "-f".to_string(), "segment".to_string(),
-                    "-segment_time".to_string(), segment_time,
-                    "-segment_format".to_string(), "mpegts".to_string(),
-                    "-segment_list".to_string(), segment_list_filename,
-                    "-segment_list_type".to_string(), segment_list_type,
-                    "-reset_timestamps".to_string(), "1".to_string(),
-                    output_filename_pattern,
-                ])
-            } else {
-                Ok(vec![
-                    "-f".to_string(), "dshow".to_string(),
-                    "-i".to_string(), format!("video={}", input_index),
-                    "-pixel_format".to_string(), pix_fmt,
-                    "-c:v".to_string(), codec,
-                    "-crf".to_string(), crf,
-                    "-preset".to_string(), preset,
-                    "-g".to_string(), gop,
-                    "-r".to_string(), fps.to_string(),
-                    "-f".to_string(), "segment".to_string(),
-                    "-segment_time".to_string(), segment_time,
-                    "-segment_format".to_string(), "mpegts".to_string(),
-                    "-segment_list".to_string(), segment_list_filename,
-                    "-segment_list_type".to_string(), segment_list_type,
-                    "-reset_timestamps".to_string(), "1".to_string(),
-                    output_filename_pattern,
-                ])
-            }
+            Ok(vec![
+                "-f".to_string(), "gdigrab".to_string(),
+                "-i".to_string(), "desktop".to_string(),
+                "-pixel_format".to_string(), pix_fmt,
+                "-c:v".to_string(), codec,
+                "-crf".to_string(), crf,
+                "-preset".to_string(), preset,
+                "-g".to_string(), gop,
+                "-r".to_string(), fps.to_string(),
+                "-an".to_string(), // This is the argument to skip audio recording.
+                "-f".to_string(), "segment".to_string(),
+                "-segment_time".to_string(), segment_time,
+                "-segment_format".to_string(), "mpegts".to_string(),
+                "-segment_list".to_string(), segment_list_filename,
+                "-segment_list_type".to_string(), segment_list_type,
+                "-reset_timestamps".to_string(), "1".to_string(),
+                output_filename_pattern,
+            ])
         },
         _ => Err("Unsupported OS".to_string()),
     }
@@ -391,7 +339,6 @@ async fn construct_recording_args(
 async fn start_upload_loop(
     state: State<'_, Arc<Mutex<RecordingState>>>,
     chunks_dir: PathBuf,
-    audio_chunks_dir: Option<Arc<PathBuf>>,
     options: RecordingOptions,
     video_type: String,
     shutdown_flag: Arc<AtomicBool>,
@@ -418,26 +365,6 @@ async fn start_upload_loop(
                         let filepath_str = segment_path.to_str().unwrap_or_default().to_owned();
                         let options_clone = options.clone();
                         let video_type_clone = video_type.clone();
-
-                        if let Some(audio_dir) = &audio_chunks_dir {
-                            let audio_dir_path: &Path = audio_dir.as_ref();
-                            let audio_segment_filename = segment_filename.replace(".ts", ".aac"); 
-                            let audio_segment_path = audio_dir_path.join(&audio_segment_filename);
-                            if audio_segment_path.exists() {
-                                let audio_path_str = audio_segment_path.to_str().unwrap_or_default().to_owned();
-                                let audio_options_clone = options_clone.clone();
-                                let audio_video_type_clone = video_type_clone.clone();
-                                
-                                // Schedule audio upload
-                                tokio::spawn(async move {
-                                    println!("Uploading audio for {}: {}", audio_video_type_clone, audio_path_str);
-                                    match upload_file(Some(audio_options_clone), audio_path_str, "audio".to_string()).await {
-                                        Ok(_) => println!("Audio segment uploaded successfully."),
-                                        Err(e) => eprintln!("Failed to upload audio segment: {}", e),
-                                    }
-                                });
-                            }
-                        }
 
                         let handle = tokio::spawn(async move {
                             println!("Uploading video for {}: {}", video_type_clone, filepath_str);
@@ -525,7 +452,7 @@ async fn upload_remaining_chunks(
         let tasks: Vec<_> = entries.filter_map(|entry| entry.ok())
             .filter_map(|entry| {
                 let path = entry.path();
-                if path.is_file() && (path.extension().map_or(false, |e| e == "ts" || e == "webm")) && !shutdown_flag.load(Ordering::SeqCst) {
+                if path.is_file() && (path.extension().map_or(false, |e| e == "ts" || e == "aac")) && !shutdown_flag.load(Ordering::SeqCst) {
                     let video_type = video_type.to_string();
                     let semaphore_clone = semaphore.clone();
                     let actual_options_clone = actual_options.clone();
@@ -645,4 +572,32 @@ async fn upload_jpeg_files(
     }
 
     Ok(())
+}
+
+async fn send_metadata_api(video_id: &str, server_url_base: &str) -> Result<(), String> {
+    let client = Client::new();
+    let video_start_time = Utc::now().timestamp_millis();
+    println!("Sending metadata API request for video {}: {}", video_id, video_start_time);
+    
+    // Constructing the query parameters
+    let params = [
+        ("videoId", video_id),
+        ("videoStartTime", &video_start_time.to_string()),
+    ];
+    let server_url = format!("{}/api/desktop/video/metadata/create", server_url_base);
+    
+    match client.get(&server_url)
+        .query(&params)
+        .send()
+        .await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    let _response_body = response.text().await.map_err(|e| e.to_string())?;
+                    Ok(())
+                } else {
+                    Err(format!("API call failed with status {:?}", response.status()))
+                }
+            },
+            Err(err) => Err(err.to_string()),
+        }
 }

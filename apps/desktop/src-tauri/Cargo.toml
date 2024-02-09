@@ -28,6 +28,8 @@ tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth",
 tauri-plugin-deep-link = { git = "https://github.com/FabianLars/tauri-plugin-deep-link", branch = "main" }
 window-vibrancy = "0.4.3"
 window-shadows = "0.2.2"
+chrono = "0.4.33"
+dotenv_codegen = "0.15.0"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem

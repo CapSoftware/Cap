@@ -27,6 +27,6 @@ export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(
       }
     }, [src, ref]);
 
-    return <audio ref={ref} controls={false} style={{ display: "none" }} />;
+    return <audio ref={ref} controls={true} style={{ display: "none" }} />;
   }
 );

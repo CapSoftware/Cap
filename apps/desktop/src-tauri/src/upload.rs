@@ -1,6 +1,7 @@
 use serde_json::Value as JsonValue;
 use std::path::{Path};
 use std::process::Command;
+use std::env;
 use reqwest;
 
 use crate::recording::RecordingOptions;
@@ -26,7 +27,8 @@ pub async fn upload_file(
 
         let file_key = format!("{}/{}/{}/{}", options.user_id, options.video_id, file_type, file_name);
 
-        let server_url = format!("http://localhost:3000/api/upload/signed");
+        let server_url_base: &'static str = dotenv_codegen::dotenv!("NEXT_PUBLIC_URL");
+        let server_url = format!("{}/api/upload/signed", server_url_base);
 
         // Create the request body for the Next.js handler
         let body = serde_json::json!({
@@ -70,6 +72,8 @@ pub async fn upload_file(
         
         let mime_type = if file_path.to_lowercase().ends_with(".aac") {
             "audio/aac"
+        } else if file_path.to_lowercase().ends_with(".webm") { 
+            "audio/webm" 
         } else {
             "video/mp2t"
         };

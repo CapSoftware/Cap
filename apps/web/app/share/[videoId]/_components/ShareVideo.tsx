@@ -14,7 +14,6 @@ const formatTime = (time: number) => {
 };
 
 export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
-  const video1Ref = useRef<HTMLVideoElement>(null);
   const video2Ref = useRef<HTMLVideoElement>(null);
   const audioPlayerRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -22,66 +21,138 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [longestDuration, setLongestDuration] = useState(0);
   const [seeking, setSeeking] = useState(false);
+  const [videoMetadataLoaded, setVideoMetadataLoaded] = useState(false);
+  const [audioMetadataLoaded, setAudioMetadataLoaded] = useState(false);
 
   useEffect(() => {
-    const handleLoadedMetadata = () => {
-      const duration1 = video1Ref.current?.duration || 0;
-      const duration2 = video2Ref.current?.duration || 0;
-      setLongestDuration(Math.max(duration1, duration2));
-      setIsLoading(!(duration1 > 0 && duration2 > 0));
+    const adjustForStartTimes = () => {
+      if (!video2Ref.current || !audioPlayerRef.current) return;
+      console.log("Adjusting start times");
+
+      const videoStartTime = data.videoStartTime
+        ? new Date(data.videoStartTime).getTime()
+        : 0;
+      const audioStartTime = data.audioStartTime
+        ? new Date(data.audioStartTime).getTime()
+        : 0;
+
+      const timeDifference = videoStartTime - audioStartTime;
+
+      console.log("Time difference", timeDifference);
+
+      if (timeDifference > 0) {
+        audioPlayerRef.current.currentTime = timeDifference / 1000;
+        video2Ref.current.currentTime = 0; // Ensure video starts from the beginning
+      } else if (timeDifference < 0) {
+        video2Ref.current.currentTime = Math.abs(timeDifference / 1000);
+        audioPlayerRef.current.currentTime = 0; // Ensure audio starts from the beginning
+      }
+
+      const videoLength = video2Ref.current.duration;
+      const audioLength = audioPlayerRef.current.duration;
+
+      const lengthDifference = Math.abs(videoLength - audioLength);
+
+      if (lengthDifference > 0) {
+        console.log("Length difference detected");
+
+        if (videoLength > audioLength) {
+          video2Ref.current.currentTime =
+            video2Ref.current.currentTime - lengthDifference;
+        } else {
+          audioPlayerRef.current.currentTime =
+            audioPlayerRef.current.currentTime - lengthDifference;
+        }
+      }
+
+      console.log("refs:");
+      console.log(video2Ref.current.currentTime);
+      console.log(audioPlayerRef.current.currentTime);
+
+      console.log("Start times adjusted");
+      setIsLoading(false);
     };
 
-    video1Ref.current?.addEventListener("loadedmetadata", handleLoadedMetadata);
-    video2Ref.current?.addEventListener("loadedmetadata", handleLoadedMetadata);
+    if (videoMetadataLoaded && audioMetadataLoaded) {
+      adjustForStartTimes();
+    }
+  }, [
+    videoMetadataLoaded,
+    audioMetadataLoaded,
+    data.videoStartTime,
+    data.audioStartTime,
+  ]);
+
+  useEffect(() => {
+    const onVideoLoadedMetadata = () => {
+      setVideoMetadataLoaded(true);
+      if (video2Ref.current) {
+        setLongestDuration(video2Ref.current.duration);
+      }
+    };
+    const onAudioLoadedMetadata = () => {
+      setAudioMetadataLoaded(true);
+      if (audioPlayerRef.current) {
+        setLongestDuration(
+          Math.max(longestDuration, audioPlayerRef.current.duration)
+        );
+      }
+    };
+
+    const videoElement = video2Ref.current;
+    const audioElement = audioPlayerRef.current;
+
+    videoElement?.addEventListener("loadedmetadata", onVideoLoadedMetadata);
+    audioElement?.addEventListener("loadedmetadata", onAudioLoadedMetadata);
 
     return () => {
-      video1Ref.current?.removeEventListener(
+      videoElement?.removeEventListener(
         "loadedmetadata",
-        handleLoadedMetadata
+        onVideoLoadedMetadata
       );
-      video2Ref.current?.removeEventListener(
+      audioElement?.removeEventListener(
         "loadedmetadata",
-        handleLoadedMetadata
+        onAudioLoadedMetadata
       );
     };
   }, []);
 
   useEffect(() => {
     const handleTimeUpdate = () => {
-      if (video1Ref.current && video2Ref.current && !seeking) {
+      if (video2Ref.current && !seeking) {
         const currentTime = Math.min(
-          video1Ref.current.currentTime,
-          video2Ref.current.currentTime
+          video2Ref.current.currentTime,
+          audioPlayerRef.current?.currentTime || Infinity
         );
         setCurrentTime(currentTime);
       }
     };
 
-    video1Ref.current?.addEventListener("timeupdate", handleTimeUpdate);
-    video2Ref.current?.addEventListener("timeupdate", handleTimeUpdate);
+    const videoElement = video2Ref.current;
+    const audioElement = audioPlayerRef.current;
+
+    videoElement?.addEventListener("timeupdate", handleTimeUpdate);
+    audioElement?.addEventListener("timeupdate", handleTimeUpdate);
 
     return () => {
-      video1Ref.current?.removeEventListener("timeupdate", handleTimeUpdate);
-      video2Ref.current?.removeEventListener("timeupdate", handleTimeUpdate);
+      videoElement?.removeEventListener("timeupdate", handleTimeUpdate);
+      audioElement?.removeEventListener("timeupdate", handleTimeUpdate);
     };
   }, [seeking]);
 
   const handlePlayPauseClick = () => {
     setIsPlaying(!isPlaying);
     if (!isPlaying) {
-      video1Ref.current?.play();
       video2Ref.current?.play();
       audioPlayerRef.current?.play();
     } else {
-      video1Ref.current?.pause();
       video2Ref.current?.pause();
       audioPlayerRef.current?.pause();
     }
   };
 
   const handleMuteClick = () => {
-    const muted = !video1Ref.current?.muted;
-    if (video1Ref.current) video1Ref.current.muted = muted;
+    const muted = !video2Ref.current?.muted;
     if (video2Ref.current) video2Ref.current.muted = muted;
   };
 
@@ -110,14 +181,12 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
 
     // Pause both videos before adjusting the time.
     if (isPlaying) {
-      video1Ref.current?.pause();
       video2Ref.current?.pause();
     }
 
     applyTimeToVideos(seekTo);
 
     if (isPlaying) {
-      video1Ref.current?.play();
       video2Ref.current?.play();
     }
   };
@@ -137,7 +206,6 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
   };
 
   const applyTimeToVideos = (time: number) => {
-    if (video1Ref.current) video1Ref.current.currentTime = time;
     if (video2Ref.current) video2Ref.current.currentTime = time;
     setCurrentTime(time);
   };
@@ -147,19 +215,15 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
 
   useEffect(() => {
     if (isPlaying) {
-      video1Ref.current?.play();
       video2Ref.current?.play();
     } else {
-      video1Ref.current?.pause();
       video2Ref.current?.pause();
     }
   }, [isPlaying]);
 
   useEffect(() => {
     const syncPlay = () => {
-      if (video1Ref.current && video2Ref.current && !isLoading) {
-        const playPromise1 = video1Ref.current.play();
-        playPromise1.catch((e) => console.log("Play failed for video 1", e));
+      if (video2Ref.current && !isLoading) {
         const playPromise2 = video2Ref.current.play();
         playPromise2.catch((e) => console.log("Play failed for video 2", e));
       }
@@ -170,43 +234,43 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     }
   }, [isPlaying, isLoading]);
 
-  useEffect(() => {
-    const video = video1Ref.current;
-    const audio = audioPlayerRef.current;
+  // useEffect(() => {
+  //   const video = video2Ref.current;
+  //   const audio = audioPlayerRef.current;
 
-    // Function to synchronize audio playback with video
-    const synchronizePlayback = () => {
-      if (!video || !audio) return;
+  //   // Function to synchronize audio playback with video
+  //   const synchronizePlayback = () => {
+  //     if (!video || !audio) return;
 
-      // Calculate the time drift between audio and video
-      const drift = Math.abs(video.currentTime - audio.currentTime);
+  //     // Calculate the time drift between audio and video
+  //     const drift = Math.abs(video.currentTime - audio.currentTime);
 
-      // Adjust audio currentTime if drift exceeds a small tolerance (e.g., 0.1 seconds)
-      if (drift > 0.1) {
-        audio.currentTime = video.currentTime;
-      }
-    };
+  //     // Adjust audio currentTime if drift exceeds a small tolerance (e.g., 0.1 seconds)
+  //     if (drift > 0.1) {
+  //       audio.currentTime = video.currentTime;
+  //     }
+  //   };
 
-    // Sync audio on video seek
-    const handleSeek = () => {
-      synchronizePlayback(); // Adjust audio to match video currentTime
-      if (isPlaying) {
-        audio?.play().catch((e) => console.error("Audio playback failed:", e)); // Ensure audio resumes if it was playing
-      }
-    };
+  //   // Sync audio on video seek
+  //   const handleSeek = () => {
+  //     synchronizePlayback(); // Adjust audio to match video currentTime
+  //     if (isPlaying) {
+  //       audio?.play().catch((e) => console.error("Audio playback failed:", e)); // Ensure audio resumes if it was playing
+  //     }
+  //   };
 
-    // Add event listeners
-    video?.addEventListener("seeked", handleSeek);
-    video?.addEventListener("timeupdate", synchronizePlayback);
+  //   // Add event listeners
+  //   video?.addEventListener("seeked", handleSeek);
+  //   video?.addEventListener("timeupdate", synchronizePlayback);
 
-    // Cleanup event listeners
-    return () => {
-      if (video) {
-        video.removeEventListener("seeked", handleSeek);
-        video.removeEventListener("timeupdate", synchronizePlayback);
-      }
-    };
-  }, [isPlaying]); // Dependency on isPlaying ensures updates when playback state changes
+  //   // Cleanup event listeners
+  //   return () => {
+  //     if (video) {
+  //       video.removeEventListener("seeked", handleSeek);
+  //       video.removeEventListener("timeupdate", synchronizePlayback);
+  //     }
+  //   };
+  // }, [isPlaying]);
 
   return (
     <div
@@ -241,12 +305,6 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
         ref={audioPlayerRef}
         src={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=audio`}
       />
-      <div className="w-[200px] h-[200px] absolute bottom-4 right-12 overflow-hidden rounded-full z-10 shadow-lg">
-        <VideoPlayer
-          ref={video1Ref}
-          src={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`}
-        />
-      </div>
       <div
         className="relative block w-full h-full rounded-lg bg-black"
         style={{ paddingBottom: "min(806px, 56.25%)" }}
@@ -312,7 +370,7 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
                   type="button"
                   onClick={() => handleMuteClick()}
                 >
-                  {video1Ref?.current?.muted && video2Ref?.current?.muted ? (
+                  {video2Ref?.current?.muted ? (
                     <VolumeX className="w-auto h-6" />
                   ) : (
                     <Volume2 className="w-auto h-6" />

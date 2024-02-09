@@ -10,6 +10,7 @@ import {
   boolean,
   uniqueIndex,
   varchar,
+  bigint,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
 import { nanoIdLength } from "./helpers";
@@ -141,8 +142,9 @@ export const videos = mysqlTable(
     awsRegion: varchar("awsRegion", { length: 255 }),
     awsBucket: varchar("awsBucket", { length: 255 }),
     metadata: json("metadata"),
-    converted: boolean("converted").notNull().default(false),
     public: boolean("public").notNull().default(true),
+    videoStartTime: bigint("videoStartTime", { mode: "number" }),
+    audioStartTime: bigint("audioStartTime", { mode: "number" }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },
