@@ -8,23 +8,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Semaphore, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
+use tokio::io::AsyncBufReadExt;
+use tokio::io::{BufReader as TokioBufReader, AsyncRead};
 use serde::{Serialize, Deserialize};
-use std::env;
 use chrono::Utc;
 use reqwest::Client;
 use tauri::State;
 
 use crate::utils::ffmpeg_path_as_str;
 use crate::upload::upload_file;
+use crate::audio::AudioRecorder;
 
 pub struct RecordingState {
   pub screen_process: Option<tokio::process::Child>,
   pub video_process: Option<tokio::process::Child>,
+  pub audio_process: Option<AudioRecorder>,
   pub upload_handles: Mutex<Vec<JoinHandle<Result<(), String>>>>,
   pub recording_options: Option<RecordingOptions>,
   pub shutdown_flag: Arc<AtomicBool>,
   pub data_dir: Option<PathBuf>, 
 }
+
+unsafe impl Send for RecordingState {}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RecordingOptions {
@@ -46,6 +51,23 @@ pub async fn start_dual_recording(
   println!("Starting screen recording...");
   let mut state_guard = state.lock().await;
 
+  let data_dir = state_guard.data_dir.clone().ok_or("Data directory is not set")?;
+
+  state_guard.audio_process = Some(AudioRecorder::new());
+
+  if let Some(ref mut audio_process) = state_guard.audio_process {
+      let audio_chunks_dir = data_dir.join("chunks/audio");
+      clean_and_create_dir(&audio_chunks_dir)?;
+
+      // Convert the path to a string for the setup_recording function.
+      let audio_file_path = audio_chunks_dir.to_str().unwrap();
+
+      // Prepare RecordingOptions for the audio recorder.
+      // Ensure your RecordingOptions is available and configured correctly for use here.
+      // This assumes `options` is of type RecordingOptions and it's already populated with necessary values.
+      audio_process.setup_recording(options.clone(), audio_file_path);
+  }
+
   let shutdown_flag = Arc::new(AtomicBool::new(false));
 
   let ffmpeg_binary_path_str = ffmpeg_path_as_str()?;
@@ -57,10 +79,8 @@ pub async fn start_dual_recording(
   println!("data_dir: {:?}", data_dir);
   
   let screen_chunks_dir = data_dir.join("chunks/screen");
-  let audio_chunks_dir = data_dir.join("chunks/audio");
 
   clean_and_create_dir(&screen_chunks_dir)?;
-  clean_and_create_dir(&audio_chunks_dir)?;
 
   let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index);
 
@@ -118,16 +138,25 @@ pub async fn start_dual_recording(
   //     .spawn()
   //     .map_err(|e| e.to_string())?;
 
-  let screen_stdout = screen_child.stdout.take().unwrap();
-  let screen_stderr = screen_child.stderr.take().unwrap();
-  tokio::spawn(log_output(screen_stdout, "Screen stdout".to_string()));
-  tokio::spawn(log_output(screen_stderr, "Screen stderr".to_string()));
+  // In the part where you spawn the FFmpeg process and handle its output:
 
-  tokio::time::sleep(Duration::from_secs(2)).await;
-  let server_url_base: &'static str = dotenv_codegen::dotenv!("NEXT_PUBLIC_URL");
-  if let Err(e) = send_metadata_api(&options.video_id, &server_url_base).await {
-      eprintln!("Failed to send metadata API request: {}", e);
-  }
+  let screen_stderr = screen_child.stderr.take().unwrap();
+  let ffmpeg_start_trigger = "time=00:00:00.00".to_string();
+
+  let server_url_base: String = dotenv_codegen::dotenv!("NEXT_PUBLIC_URL").into();
+  let video_id_clone = options.video_id.clone();
+
+  let started_callback = Arc::new(move || {
+      let server_url_base = server_url_base.clone();
+      let video_id_clone = video_id_clone.clone();
+      tokio::spawn(async move {
+          if let Err(e) = send_metadata_api(&video_id_clone, &server_url_base).await {
+              eprintln!("Failed to send metadata API request: {}", e);
+          }
+      });
+  });
+
+  tokio::spawn(log_output(screen_stderr, "Screen stderr".to_string(), Some(ffmpeg_start_trigger), Some(started_callback)));
 
   let ffmpeg_binary_path_clone = ffmpeg_binary_path_str.clone();
   let ffmpeg_screen_screenshot_args_clone = ffmpeg_screen_screenshot_args.clone();
@@ -154,17 +183,16 @@ pub async fn start_dual_recording(
 
   println!("Starting upload loops...");
 
-  let screen_upload = start_upload_loop(state.clone(), screen_chunks_dir, options.clone(), "screen".to_string(), shutdown_flag.clone());
-  let audio_upload = start_upload_loop(state.clone(), audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone());
+  // let screen_upload = start_upload_loop(state.clone(), screen_chunks_dir, options.clone(), "screen".to_string(), shutdown_flag.clone());
 
-  match tokio::try_join!(screen_upload, audio_upload) {
-      Ok(_) => {
-          println!("Both upload loops completed successfully.");
-      },
-      Err(e) => {
-          eprintln!("An error occurred: {}", e);
-      },
-  }
+  // match tokio::try_join!(screen_upload) {
+  //     Ok(_) => {
+  //         println!("Both upload loops completed successfully.");
+  //     },
+  //     Err(e) => {
+  //         eprintln!("An error occurred: {}", e);
+  //     },
+  // }
 
   Ok(())
 }
@@ -182,6 +210,10 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
     // Immediately try to close running FFmpeg processes.
     if let Some(child_process) = &mut guard.screen_process {
         let _ = child_process.kill().await;
+    }
+
+    if let Some(audio_process) = &mut guard.audio_process {
+        audio_process.stop_audio_recording();
     }
     // Assuming there's a video_process similar to screen_process.
     //if let Some(child_process) = &mut guard.video_process {
@@ -203,7 +235,7 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
     let state_guard = state.lock().await;
     let data_dir_option = state_guard.data_dir.clone();
     let options_clone = state_guard.recording_options.clone();  
-    let shutdown_flag_clone = state_guard.shutdown_flag.clone();
+    let _shutdown_flag_clone = state_guard.shutdown_flag.clone();
     drop(state_guard);
 
     if let Some(data_dir) = data_dir_option {
@@ -238,12 +270,27 @@ fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
     }
 }
 
-async fn log_output(reader: impl tokio::io::AsyncRead + Unpin + Send + 'static, desc: String) {
-    use tokio::io::{AsyncBufReadExt, BufReader};
-    let mut reader = BufReader::new(reader).lines();
+async fn log_output<R>(
+    mut reader: R, 
+    description: String, 
+    start_trigger: Option<String>, 
+    started_callback: Option<Arc<dyn Fn() + Send + Sync>>
+) 
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let mut buf_reader = TokioBufReader::new(reader).lines();
 
-    while let Ok(Some(line)) = reader.next_line().await {
-        println!("{}: {}", desc, line);
+    while let Ok(Some(line)) = buf_reader.next_line().await {
+        println!("{}: {}", description, line);
+
+        if let Some(trigger) = &start_trigger {
+            if line.contains(trigger) {
+                if let Some(callback) = &started_callback {
+                    callback();
+                }
+            }
+        }
     }
 }
 
@@ -550,8 +597,8 @@ async fn take_screenshot(
 
     let screen_screenshot_stdout = screen_screenshot_child.stdout.take().unwrap();
     let screen_screenshot_stderr = screen_screenshot_child.stderr.take().unwrap();
-    tokio::spawn(log_output(screen_screenshot_stdout, "Screen screenshot stdout".to_string()));
-    tokio::spawn(log_output(screen_screenshot_stderr, "Screen screenshot stderr".to_string()));
+    tokio::spawn(log_output(screen_screenshot_stdout, "Screen screenshot stdout".to_string(), None, None));
+    tokio::spawn(log_output(screen_screenshot_stderr, "Screen screenshot stderr".to_string(), None, None));
 
     Ok(())
 }

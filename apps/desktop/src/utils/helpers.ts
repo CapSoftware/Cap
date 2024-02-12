@@ -1,3 +1,5 @@
+"use client";
+
 import { appWindow, LogicalPosition } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/api/shell";
 import { MediaDeviceContextData } from "./recording/MediaDeviceContext";
@@ -5,6 +7,10 @@ import { MediaDeviceContextData } from "./recording/MediaDeviceContext";
 export const setWindowPosition = (
   position: "bottom_center" | "bottom_right"
 ) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
   appWindow.outerSize().then((size) => {
     const appWidth = size.width / 2;
     const appHeight = size.height / 2;
@@ -32,6 +38,10 @@ export const setWindowPosition = (
 };
 
 export const openLinkInBrowser = async (url: string) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
   await open(url);
 
   return;
@@ -62,29 +72,33 @@ export const getVideoSettings = async (
   }
 
   try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoDevices = devices.filter(
-      (device) => device.kind === "videoinput"
-    );
-    const videoDeviceInfo = videoDevices[videoDevice.index].deviceId;
+    if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(
+        (device) => device.kind === "videoinput"
+      );
+      const videoDeviceInfo = videoDevices[videoDevice.index].deviceId;
 
-    if (!videoDeviceInfo) {
-      return Promise.reject("Cannot find video device info");
+      if (!videoDeviceInfo) {
+        return Promise.reject("Cannot find video device info");
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: { exact: videoDeviceInfo },
+        },
+      });
+
+      const settings = stream.getVideoTracks()[0].getSettings();
+      stream.getTracks().forEach((track) => track.stop());
+
+      return {
+        framerate: String(settings.frameRate),
+        resolution: settings.width + "x" + settings.height,
+      };
+    } else {
+      return {};
     }
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        deviceId: { exact: videoDeviceInfo },
-      },
-    });
-
-    const settings = stream.getVideoTracks()[0].getSettings();
-    stream.getTracks().forEach((track) => track.stop());
-
-    return {
-      framerate: String(settings.frameRate),
-      resolution: settings.width + "x" + settings.height,
-    };
   } catch (error) {
     console.error("Error obtaining video settings:", error);
     return {};
@@ -93,8 +107,14 @@ export const getVideoSettings = async (
 
 export const requestMediaDevicesPermission = async () => {
   try {
-    await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    console.log("Permissions to access media devices have been granted.");
+    if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+      await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+
+      console.log("Permissions to access media devices have been granted.");
+    }
   } catch (error) {
     console.error("Permissions to access media devices were denied.", error);
   }

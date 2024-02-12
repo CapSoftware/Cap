@@ -4,7 +4,8 @@
     "dev": "dotenv -e .env -- turbo run dev --no-cache",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push"
+    "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",
+    "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build"
   },
   "devDependencies": {
     "@turbo/gen": "^1.9.7",

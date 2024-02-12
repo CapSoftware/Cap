@@ -14,6 +14,7 @@ mod recording;
 mod upload;
 mod devices;
 mod utils;
+mod audio;
 
 use recording::{RecordingState, start_dual_recording, stop_all_recordings};
 use upload::upload_file;
@@ -76,7 +77,7 @@ fn main() {
               set_shadow(&camera_window, true).expect("Unsupported platform!");
             }
 
-            if let Some(options_window) = app.get_window("options") { 
+            if let Some(options_window) = app.get_window("main") { 
               let _ = options_window.move_window(Position::Center);
               #[cfg(target_os = "macos")]
               apply_vibrancy(&options_window, NSVisualEffectMaterial::MediumLight, None, Some(16.0)).expect("Unsupported platform! 'apply_vibrancy' is only supported on macOS");
@@ -91,6 +92,7 @@ fn main() {
             let recording_state = RecordingState {
                 screen_process: None,
                 video_process: None,
+                audio_process: None,
                 upload_handles: Mutex::new(vec![]),
                 recording_options: None,
                 shutdown_flag: Arc::new(AtomicBool::new(false)),

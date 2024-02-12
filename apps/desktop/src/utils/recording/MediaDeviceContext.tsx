@@ -82,6 +82,8 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
       try {
         console.log("starting shared stream");
+        if (typeof navigator === "undefined" || typeof window === "undefined")
+          return;
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         sharedStream.current = stream;
         updateSharedStream(stream);

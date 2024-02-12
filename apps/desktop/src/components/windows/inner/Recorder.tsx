@@ -61,7 +61,7 @@ export const Recorder = () => {
         },
       }));
 
-    showMenu({
+    await showMenu({
       items: [...filteredDevices],
       ...(filteredDevices.length === 0 && {
         items: [
@@ -144,10 +144,7 @@ export const Recorder = () => {
       if (videoData && sharedStream) {
         setStartingRecording(true);
         setCountdownActive(true);
-        await Promise.all([
-          startMediaRecording(sharedStream),
-          startDualRecording(videoData),
-        ]);
+        await startDualRecording(videoData);
       } else {
         throw new Error("Failed to prepare video data.");
       }
@@ -162,28 +159,6 @@ export const Recorder = () => {
 
     try {
       console.log("Stopping recordings...");
-      const videoId = await getLatestVideoId();
-      const queryParams = new URLSearchParams({
-        videoId,
-      }).toString();
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/metadata/retrieve?${queryParams}`,
-        {
-          credentials: "include",
-          cache: "no-store",
-        }
-      );
-
-      const data = await res.json();
-
-      console.log("Video metadata retrieve:", data);
-
-      await stopMediaRecording();
-
-      if (data?.difference) {
-        console.log("Waiting for difference...");
-        await new Promise((resolve) => setTimeout(resolve, data.difference));
-      }
 
       await invoke("stop_all_recordings");
 

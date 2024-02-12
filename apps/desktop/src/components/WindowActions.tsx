@@ -7,8 +7,8 @@ export const WindowActions = () => {
     <div className="absolute top-3 left-3 w-full flex items-center justify-start gap-x-2">
       <div>
         <button
-          onClick={() => {
-            exit();
+          onClick={async () => {
+            await exit();
           }}
           className={`bg-red-500 hover:bg-red-700 transition-all ${actionButtonBase}`}
         ></button>

@@ -32,16 +32,6 @@ export const Camera = () => {
   useEffect(() => {
     if (sharedStream) {
       attemptPlayback();
-      const handleTrackAdded = () => attemptPlayback();
-      const handleTrackRemoved = () => attemptPlayback();
-
-      sharedStream.addEventListener("addtrack", handleTrackAdded);
-      sharedStream.addEventListener("removetrack", handleTrackRemoved);
-
-      return () => {
-        sharedStream.removeEventListener("addtrack", handleTrackAdded);
-        sharedStream.removeEventListener("removetrack", handleTrackRemoved);
-      };
     }
   }, [sharedStream]);
 

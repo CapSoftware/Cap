@@ -19,7 +19,7 @@ export default `
   </style>
 </head>
 <body>
-  <h2>You are now signed in, and can return to the Cap desktop app.</h2>
+  <h1>You are now signed in. Please re-open the Cap desktop app to continue.</h1>
 </body>
 </html>
 `;

@@ -76,36 +76,6 @@
         "title": "Cap",
         "label": "main",
         "url": "/",
-        "width": 0,
-        "height": 0,
-        "maximized": false,
-        "resizable": true,
-        "fullscreen": false,
-        "transparent": true,
-        "decorations": false,
-        "alwaysOnTop": false,
-        "center": true
-      },
-      {
-        "title": "Cap",
-        "label": "camera",
-        "url": "/camera",
-        "width": 250,
-        "height": 250,
-        "maximized": false,
-        "resizable": false,
-        "fullscreen": false,
-        "transparent": true,
-        "decorations": false,
-        "alwaysOnTop": true,
-        "center": false,
-        "x": 0,
-        "y": 0
-      },
-      {
-        "title": "Cap",
-        "label": "options",
-        "url": "/options",
         "width": 285,
         "height": 410,
         "maximized": false,
@@ -114,8 +84,7 @@
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": false,
-        "center": true,
-        "y": 0
+        "center": true
       }
     ]
   }

@@ -5,9 +5,11 @@ import { open } from "@tauri-apps/api/shell";
 import { parse } from "url";
 
 export const openSignIn = async (port: string) => {
-  await open(
-    `${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?redirectUrl=http://localhost:${port}`
-  );
+  if (typeof window !== "undefined") {
+    await open(
+      `${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?redirectUrl=http://localhost:${port}`
+    );
+  }
 };
 
 export const login = () => {
@@ -27,14 +29,16 @@ export const login = () => {
 
     const expiresDate = new Date(parseInt(expires) * 1000);
 
-    document.cookie = `next-auth.session-token=${token}; expires=${expiresDate.toUTCString()}; path=/`;
+    if (typeof document !== "undefined") {
+      document.cookie = `next-auth.session-token=${token}; expires=${expiresDate.toUTCString()}; path=/`;
+    }
   });
 
   invoke("plugin:oauth|start", {
     config: {
       response: callbackTemplate,
     },
-  }).then((port) => {
-    openSignIn(port as string);
+  }).then(async (port) => {
+    await openSignIn(port as string);
   });
 };

@@ -11,7 +11,7 @@ const packageJson = JSON.parse(
 const { version } = packageJson;
 
 const nextConfig = {
-  reactStrictMode: true,
+  reactStrictMode: false,
   swcMinify: true,
   output: "export",
   transpilePackages: ["@cap/ui", "@cap/utils"],

@@ -36,33 +36,26 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
         ? new Date(data.audioStartTime).getTime()
         : 0;
 
-      const timeDifference = videoStartTime - audioStartTime;
+      console.log("Start times:");
+      console.log("audioStartTime: ", data.audioStartTime);
+      console.log("videoStartTime: ", data.videoStartTime);
+      console.log("length of video", video2Ref.current.duration);
+      console.log("length of audio", audioPlayerRef.current.duration);
+
+      const timeDifference = (audioStartTime - videoStartTime) / 1000;
+      const lengthDifference = Math.abs(
+        video2Ref.current.duration - audioPlayerRef.current.duration
+      );
 
       console.log("Time difference", timeDifference);
+      console.log("Length difference", lengthDifference);
 
       if (timeDifference > 0) {
-        audioPlayerRef.current.currentTime = timeDifference / 1000;
-        video2Ref.current.currentTime = 0; // Ensure video starts from the beginning
+        audioPlayerRef.current.currentTime =
+          video2Ref.current.currentTime + timeDifference;
       } else if (timeDifference < 0) {
-        video2Ref.current.currentTime = Math.abs(timeDifference / 1000);
-        audioPlayerRef.current.currentTime = 0; // Ensure audio starts from the beginning
-      }
-
-      const videoLength = video2Ref.current.duration;
-      const audioLength = audioPlayerRef.current.duration;
-
-      const lengthDifference = Math.abs(videoLength - audioLength);
-
-      if (lengthDifference > 0) {
-        console.log("Length difference detected");
-
-        if (videoLength > audioLength) {
-          video2Ref.current.currentTime =
-            video2Ref.current.currentTime - lengthDifference;
-        } else {
-          audioPlayerRef.current.currentTime =
-            audioPlayerRef.current.currentTime - lengthDifference;
-        }
+        audioPlayerRef.current.currentTime =
+          video2Ref.current.currentTime - timeDifference;
       }
 
       console.log("refs:");

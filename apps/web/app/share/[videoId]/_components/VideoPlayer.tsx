@@ -30,7 +30,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
     return (
       <video
         ref={ref}
-        className="absolute top-0 left-0 rounded-lg w-full h-full object-cover"
+        className="absolute top-0 left-0 rounded-lg w-full h-full object-contain"
         preload="auto"
         playsInline
         controls={false}

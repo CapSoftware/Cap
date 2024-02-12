@@ -1,6 +1,11 @@
+"use client";
+
 export const enumerateAndStoreDevices = async () => {
   if (typeof navigator !== "undefined" && typeof window !== "undefined") {
-    await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true,
+    });
     const devices = await navigator.mediaDevices.enumerateDevices();
 
     const videoDevices = devices.filter(
@@ -16,6 +21,10 @@ export const enumerateAndStoreDevices = async () => {
 };
 
 export const getLocalDevices = async () => {
+  if (typeof window === "undefined") {
+    return { audioDevices: [], videoDevices: [] };
+  }
+
   const videoDevices = JSON.parse(
     window.localStorage.getItem("videoDevices") || "[]"
   ) as MediaDeviceInfo[];

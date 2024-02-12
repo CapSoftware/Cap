@@ -1,3 +1,5 @@
+"use client";
+
 import { useState, useRef, useCallback, useEffect } from "react";
 import { FFmpeg as FfmpegType } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
@@ -18,6 +20,7 @@ export const useMediaRecorder = () => {
   const queue = useRef<Blob[]>([]);
   const processingQueue = useRef(false);
   const segmentCounter = useRef(0);
+  const [metadataRecorded, setMetadataRecorded] = useState(false);
 
   useEffect(() => {
     const loadFfmpeg = async () => {
@@ -209,7 +212,7 @@ export const useMediaRecorder = () => {
       console.log("stream.getTracks():");
       console.log(stream.getTracks());
 
-      const initRecorder = () => {
+      const initRecorder = async () => {
         if (
           mediaRecorder.current &&
           mediaRecorder.current.state !== "inactive"
@@ -228,7 +231,7 @@ export const useMediaRecorder = () => {
         };
         mediaRecorder.current = new MediaRecorder(stream, options);
 
-        mediaRecorder.current.ondataavailable = (event) => {
+        mediaRecorder.current.ondataavailable = async (event) => {
           console.log(`Blob size: ${event.data.size}`);
           if (event.data.size > 0) {
             queue.current.push(event.data);
@@ -241,12 +244,10 @@ export const useMediaRecorder = () => {
         };
 
         mediaRecorder.current.start();
-        console.log("MediaRecorder started:", mediaRecorder.current);
       };
 
       isRecording.current = true;
       initRecorder();
-      await sendMetadataAPI();
 
       const requestDataInterval = setInterval(() => {
         if (mediaRecorder.current && isRecording.current === true) {
@@ -259,6 +260,14 @@ export const useMediaRecorder = () => {
           clearInterval(requestDataInterval);
         }
       }, 3000);
+
+      mediaRecorder.current.onstart = async () => {
+        if (metadataRecorded === false) {
+          setMetadataRecorded(true);
+          await sendMetadataAPI();
+        }
+        console.log("MediaRecorder started:", mediaRecorder.current);
+      };
 
       return () => {
         clearInterval(requestDataInterval);
@@ -282,6 +291,7 @@ export const useMediaRecorder = () => {
     }
 
     isRecording.current = false;
+    setMetadataRecorded(false);
 
     while (processingQueue.current || queue.current.length > 0) {
       await new Promise((resolve) => setTimeout(resolve, 100));
