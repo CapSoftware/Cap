@@ -1,11 +1,17 @@
-import { invoke } from "@tauri-apps/api";
-import { listen } from "@tauri-apps/api/event";
+"use client";
+
 import callbackTemplate from "./callback.template";
-import { open } from "@tauri-apps/api/shell";
-import { parse } from "url";
+import { URL } from "url";
+
+const dynamicImports = {
+  invoke: () => import("@tauri-apps/api").then(({ invoke }) => invoke),
+  listen: () => import("@tauri-apps/api/event").then(({ listen }) => listen),
+  shell: () => import("@tauri-apps/api/shell"),
+};
 
 export const openSignIn = async (port: string) => {
-  if (typeof window !== "undefined") {
+  if (typeof window !== "undefined" && typeof navigator !== "undefined") {
+    const { open } = await dynamicImports.shell(); // Correctly accessing the shell module
     await open(
       `${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?redirectUrl=http://localhost:${port}`
     );
@@ -13,32 +19,38 @@ export const openSignIn = async (port: string) => {
 };
 
 export const login = () => {
-  listen("oauth://url", (data: { payload: string }) => {
-    if (!data.payload.includes("token")) {
-      return;
-    }
+  if (typeof window !== "undefined" && typeof navigator !== "undefined") {
+    dynamicImports.listen().then((listen) => {
+      listen("oauth://url", async (data: { payload: string }) => {
+        if (!data.payload.includes("token")) {
+          return;
+        }
 
-    const urlObject = parse(data.payload, true);
+        const urlObject = new URL(data.payload);
 
-    const token = urlObject.query.token as string;
-    const expires = urlObject.query.expires as string;
+        const token = urlObject.searchParams.get("token");
+        const expires = urlObject.searchParams.get("expires");
 
-    if (!token || !expires) {
-      return;
-    }
+        if (!token || !expires) {
+          return;
+        }
 
-    const expiresDate = new Date(parseInt(expires) * 1000);
+        const expiresDate = new Date(parseInt(expires) * 1000);
 
-    if (typeof document !== "undefined") {
-      document.cookie = `next-auth.session-token=${token}; expires=${expiresDate.toUTCString()}; path=/`;
-    }
-  });
+        if (typeof document !== "undefined") {
+          document.cookie = `next-auth.session-token=${token}; expires=${expiresDate.toUTCString()}; path=/`;
+        }
+      });
+    });
 
-  invoke("plugin:oauth|start", {
-    config: {
-      response: callbackTemplate,
-    },
-  }).then(async (port) => {
-    await openSignIn(port as string);
-  });
+    dynamicImports.invoke().then((invoke) => {
+      invoke("plugin:oauth|start", {
+        config: {
+          response: callbackTemplate,
+        },
+      }).then(async (port) => {
+        await openSignIn(port as string);
+      });
+    });
+  }
 };

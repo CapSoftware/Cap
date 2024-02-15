@@ -16,23 +16,22 @@ export const SignIn = () => {
   return (
     <div
       data-tauri-drag-region
-      className="flex items-center justify-center overflow-hidden flex-col items-center justify-center"
+      className="flex items-center justify-center flex-col items-center justify-center w-full"
     >
-      <div className="wrapper wrapper-sm">
+      <div className="w-full wrapper wrapper-sm">
         <div className="mb-12">
-          <Logo className="w-32 h-auto mx-auto" />
+          <Logo className="w-[110px] h-auto mx-auto" />
         </div>
         <div>
           <Button
             onClick={() => {
               handleSignIn();
             }}
-            variant="default"
             type="button"
             disabled={loading}
-            className="w-full"
+            className="mx-auto block"
           >
-            Sign in with browser
+            Sign in with your browser
           </Button>
         </div>
       </div>

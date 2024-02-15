@@ -1,42 +1,108 @@
-import React, { forwardRef, useEffect } from "react";
+import {
+  memo,
+  forwardRef,
+  useEffect,
+  useRef,
+  useImperativeHandle,
+} from "react";
 import Hls from "hls.js";
 
 interface VideoPlayerProps {
-  src: string;
+  videoSrc: string;
+  audioSrc?: string;
 }
 
-export const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
-  ({ src }, ref) => {
-    useEffect(() => {
-      if (!ref || typeof ref === "function") return;
-      const video = ref.current;
+export const VideoPlayer = memo(
+  forwardRef<HTMLVideoElement, VideoPlayerProps>(
+    ({ videoSrc, audioSrc }, ref) => {
+      const videoRef = useRef<HTMLVideoElement>(null);
+      const audioRef = useRef<HTMLAudioElement>(null);
+      const videoHlsInstance = useRef<Hls | null>(null);
+      const audioHlsInstance = useRef<Hls | null>(null);
 
-      if (Hls.isSupported()) {
-        const hls = new Hls();
-        hls.loadSource(src);
-        if (video) {
-          hls.attachMedia(video);
+      useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
+
+      const initializeHls = (
+        src: string,
+        media: HTMLMediaElement,
+        hlsInstance: React.MutableRefObject<Hls | null>
+      ) => {
+        if (Hls.isSupported()) {
+          const hls = new Hls();
+          hlsInstance.current = hls;
+          hls.loadSource(src);
+          hls.attachMedia(media);
+        } else if (media.canPlayType("application/vnd.apple.mpegurl")) {
+          media.src = src;
         }
+      };
+
+      useEffect(() => {
+        if (!videoRef.current) return;
+        initializeHls(videoSrc, videoRef.current, videoHlsInstance);
+
         return () => {
-          if (video) {
-            hls.destroy();
-          }
+          videoHlsInstance.current?.destroy();
         };
-      } else if (video && video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = src;
-      }
-    }, [src, ref]);
+      }, [videoSrc]);
 
-    return (
-      <video
-        ref={ref}
-        className="absolute top-0 left-0 rounded-lg w-full h-full object-contain"
-        preload="auto"
-        playsInline
-        controls={false}
-      />
-    );
-  }
+      useEffect(() => {
+        if (!audioSrc || !audioRef.current) return;
+        initializeHls(audioSrc, audioRef.current, audioHlsInstance);
+
+        return () => {
+          audioHlsInstance.current?.destroy();
+        };
+      }, [audioSrc]);
+
+      // Synchronize play, pause, and seek operations between video and audio
+      useEffect(() => {
+        if (!audioSrc || !videoRef.current || !audioRef.current) return;
+        const video = videoRef.current;
+        const audio = audioRef.current;
+
+        const playListener = async () => {
+          await audio.play();
+        };
+
+        const pauseListener = () => {
+          audio.pause();
+        };
+
+        const seekListener = () => {
+          audio.currentTime = video.currentTime;
+        };
+
+        video.addEventListener("play", playListener);
+        video.addEventListener("pause", pauseListener);
+        video.addEventListener("seeked", seekListener);
+
+        return () => {
+          video.removeEventListener("play", playListener);
+          video.removeEventListener("pause", pauseListener);
+          video.removeEventListener("seeked", seekListener);
+        };
+      }, [audioSrc]);
+
+      return (
+        <>
+          <video
+            ref={videoRef}
+            className="absolute top-0 left-0 rounded-lg w-full h-full object-contain"
+            preload="metadata"
+            playsInline
+            controls={false}
+          />
+          {audioSrc && (
+            <audio
+              muted={false}
+              ref={audioRef}
+              style={{ display: "none" }}
+              preload="metadata"
+            />
+          )}
+        </>
+      );
+    }
+  )
 );
-
-export default VideoPlayer;

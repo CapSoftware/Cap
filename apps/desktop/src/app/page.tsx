@@ -5,94 +5,83 @@ import { getCookie } from "cookies-next";
 import { SignIn } from "@/components/windows/inner/SignIn";
 import { Recorder } from "@/components/windows/inner/Recorder";
 import { WindowActions } from "@/components/WindowActions";
-import { WebviewWindow, currentMonitor } from "@tauri-apps/api/window";
+import { LogoSpinner } from "@cap/ui";
 
 export default function CameraPage() {
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [cameraWindowOpen, setCameraWindowOpen] = useState(false);
+  const [loading, setLoading] = useState(true); // Added loading state
 
   useEffect(() => {
-    const cookie = getCookie("next-auth.session-token");
-    setIsSignedIn(!!cookie);
-  }, []);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
+    const checkSignInStatus = async () => {
       const cookie = getCookie("next-auth.session-token");
       setIsSignedIn(!!cookie);
-    }, 1000);
+      setLoading(false); // Set loading to false after checking sign-in status
+    };
+
+    checkSignInStatus();
+
+    const interval = setInterval(checkSignInStatus, 1000);
 
     return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
-    if (isSignedIn) {
-      setCameraWindowOpen(true);
-      if (cameraWindowOpen) {
-        return;
-      }
+    if (isSignedIn && !cameraWindowOpen) {
+      import("@tauri-apps/api/window").then(
+        ({ currentMonitor, WebviewWindow }) => {
+          setCameraWindowOpen(true);
 
-      currentMonitor().then((monitor) => {
-        const paddingRatio = 0.125;
-        const windowWidth = 250;
-        const windowHeight = 250;
+          currentMonitor().then((monitor) => {
+            const windowWidth = 250;
+            const windowHeight = 250;
 
-        if (monitor && monitor.size) {
-          const monitorWidth = monitor.size.width;
-          const monitorHeight = monitor.size.height;
+            if (monitor && monitor.size) {
+              const x = 100;
+              const y = monitor.size.height - windowHeight - 100;
+              const scalingFactor = monitor.scaleFactor;
 
-          // calculate padding in pixels
-          const horizontalPadding = monitorWidth * paddingRatio;
-          const verticalPadding = monitorHeight * paddingRatio;
-
-          // calculate x and y
-          const x = 100;
-          const y = monitorHeight - windowHeight - verticalPadding - 100;
-
-          console.log("Opening camera window at", x, y);
-          console.log("Monitor size", monitorWidth, monitorHeight);
-          console.log("Window size", windowWidth, windowHeight);
-          console.log("Padding", horizontalPadding, verticalPadding);
-          console.log("Padding ratio", paddingRatio);
-
-          const existingCameraWindow = WebviewWindow.getByLabel("camera");
-
-          if (existingCameraWindow) {
-            console.log("Camera window already open.");
-            existingCameraWindow.close();
-          }
-
-          const cameraWindow = new WebviewWindow("camera", {
-            url: "/camera",
-            title: "Cap Camera",
-            width: windowWidth,
-            height: windowHeight,
-            x: x / 2,
-            y: y / 2,
-            maximized: false,
-            resizable: false,
-            fullscreen: false,
-            transparent: true,
-            decorations: false,
-            alwaysOnTop: true,
-            center: false,
+              const existingCameraWindow = WebviewWindow.getByLabel("camera");
+              if (existingCameraWindow) {
+                console.log("Camera window already open.");
+                existingCameraWindow.close();
+              } else {
+                new WebviewWindow("camera", {
+                  url: "/camera",
+                  title: "Cap Camera",
+                  width: windowWidth,
+                  height: windowHeight,
+                  x: x / scalingFactor,
+                  y: y / scalingFactor,
+                  maximized: false,
+                  resizable: false,
+                  fullscreen: false,
+                  transparent: true,
+                  decorations: false,
+                  alwaysOnTop: true,
+                  center: false,
+                });
+              }
+            }
           });
-
-          console.log("Camera window opened:", cameraWindow);
         }
-      });
+      );
     }
   }, [isSignedIn, cameraWindowOpen]);
 
+  // Show loading screen, a spinner or similar, to prevent flash
+  if (loading) {
+    return (
+      <div className="w-full h-full flex items-center justify-center">
+        <LogoSpinner className="w-10 h-auto animate-spin" />
+      </div>
+    );
+  }
+
   return (
-    <div
-      id="app"
-      data-tauri-drag-region
-      style={{ borderRadius: "16px" }}
-      className="pt-4"
-    >
+    <div id="app" data-tauri-drag-region style={{ borderRadius: "16px" }}>
       <WindowActions />
-      {isSignedIn ? <Recorder /> : <SignIn />}
+      {!isSignedIn ? <SignIn /> : <Recorder />}
     </div>
   );
 }

@@ -33,9 +33,6 @@ export interface MediaDeviceContextData {
   setIsRecording: React.Dispatch<React.SetStateAction<boolean>>;
   startingRecording: boolean;
   setStartingRecording: React.Dispatch<React.SetStateAction<boolean>>;
-  sharedStream: MediaStream | null;
-  startSharedStream: () => Promise<void>;
-  stopSharedStream: () => void;
   updateTrigger: number;
 }
 
@@ -63,43 +60,6 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     sharedStream.current = newStream;
     setUpdateTrigger((prev) => prev + 1);
   }, []);
-
-  const startSharedStream = useCallback(async () => {
-    if (selectedVideoDevice || selectedAudioDevice) {
-      const constraints = {
-        video: selectedVideoDevice
-          ? {
-              deviceId: selectedVideoDevice.deviceId,
-              frameRate: { ideal: 30 },
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            }
-          : false,
-        audio: selectedAudioDevice
-          ? { deviceId: selectedAudioDevice.deviceId }
-          : false,
-      };
-
-      try {
-        console.log("starting shared stream");
-        if (typeof navigator === "undefined" || typeof window === "undefined")
-          return;
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        sharedStream.current = stream;
-        updateSharedStream(stream);
-      } catch (error) {
-        console.error("Failed to start shared media stream:", error);
-      }
-    }
-  }, [selectedVideoDevice, selectedAudioDevice]);
-
-  const stopSharedStream = useCallback(() => {
-    if (sharedStream) {
-      console.log("stopping shared stream");
-      sharedStream.current?.getTracks().forEach((track) => track.stop());
-      sharedStream.current = null;
-    }
-  }, [sharedStream]);
 
   const getDevices = useCallback(async () => {
     console.log("getDevices called");
@@ -146,27 +106,6 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   useEffect(() => {
     getDevices();
   }, []);
-
-  useEffect(() => {
-    // Function to start the shared stream only if not already started
-    const ensureStreamStarted = async () => {
-      if (!sharedStream.current) {
-        console.log("No active shared stream. Attempting to start.");
-        await startSharedStream();
-      } else {
-        console.log("Shared stream already active. Skipping reinitialization.");
-      }
-    };
-
-    ensureStreamStarted();
-  }, [startSharedStream]);
-
-  useEffect(() => {
-    return () => {
-      // Component cleanup
-      stopSharedStream();
-    };
-  }, [stopSharedStream]);
 
   useEffect(() => {
     let unlistenFn: any;
@@ -226,9 +165,9 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         setIsRecording,
         startingRecording,
         setStartingRecording,
-        sharedStream: sharedStream.current,
-        startSharedStream,
-        stopSharedStream,
+        // sharedStream: sharedStream.current,
+        // startSharedStream,
+        // stopSharedStream,
         updateTrigger,
       }}
     >

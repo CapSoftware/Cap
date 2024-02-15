@@ -71,11 +71,6 @@ fn main() {
         .plugin(tauri_plugin_positioner::init())
         .setup(move |app| {
             let handle = app.handle();
-            
-            if let Some(camera_window) = app.get_window("camera") { 
-              let _ = camera_window.move_window(Position::BottomRight);
-              set_shadow(&camera_window, true).expect("Unsupported platform!");
-            }
 
             if let Some(options_window) = app.get_window("main") { 
               let _ = options_window.move_window(Position::Center);
@@ -91,6 +86,7 @@ fn main() {
             let data_directory = handle.path_resolver().app_data_dir().unwrap_or_else(|| PathBuf::new());
             let recording_state = RecordingState {
                 screen_process: None,
+                screen_process_stdin: None,
                 video_process: None,
                 audio_process: None,
                 upload_handles: Mutex::new(vec![]),

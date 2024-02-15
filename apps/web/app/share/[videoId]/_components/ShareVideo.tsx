@@ -3,7 +3,6 @@ import { VideoPlayer } from "./VideoPlayer";
 import { useState, useEffect, useRef } from "react";
 import { Play, Pause, Maximize, VolumeX, Volume2 } from "lucide-react";
 import { LogoSpinner } from "@cap/ui";
-import { AudioPlayer } from "./AudioPlayer";
 
 const formatTime = (time: number) => {
   const minutes = Math.floor(time / 60);
@@ -15,138 +14,133 @@ const formatTime = (time: number) => {
 
 export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
   const video2Ref = useRef<HTMLVideoElement>(null);
-  const audioPlayerRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [longestDuration, setLongestDuration] = useState(0);
   const [seeking, setSeeking] = useState(false);
   const [videoMetadataLoaded, setVideoMetadataLoaded] = useState(false);
-  const [audioMetadataLoaded, setAudioMetadataLoaded] = useState(false);
 
   useEffect(() => {
-    const adjustForStartTimes = () => {
-      if (!video2Ref.current || !audioPlayerRef.current) return;
-      console.log("Adjusting start times");
-
-      const videoStartTime = data.videoStartTime
-        ? new Date(data.videoStartTime).getTime()
-        : 0;
-      const audioStartTime = data.audioStartTime
-        ? new Date(data.audioStartTime).getTime()
-        : 0;
-
-      console.log("Start times:");
-      console.log("audioStartTime: ", data.audioStartTime);
-      console.log("videoStartTime: ", data.videoStartTime);
-      console.log("length of video", video2Ref.current.duration);
-      console.log("length of audio", audioPlayerRef.current.duration);
-
-      const timeDifference = (audioStartTime - videoStartTime) / 1000;
-      const lengthDifference = Math.abs(
-        video2Ref.current.duration - audioPlayerRef.current.duration
-      );
-
-      console.log("Time difference", timeDifference);
-      console.log("Length difference", lengthDifference);
-
-      if (timeDifference > 0) {
-        audioPlayerRef.current.currentTime =
-          video2Ref.current.currentTime + timeDifference;
-      } else if (timeDifference < 0) {
-        audioPlayerRef.current.currentTime =
-          video2Ref.current.currentTime - timeDifference;
-      }
-
-      console.log("refs:");
-      console.log(video2Ref.current.currentTime);
-      console.log(audioPlayerRef.current.currentTime);
-
-      console.log("Start times adjusted");
+    if (videoMetadataLoaded) {
+      console.log("Metadata loaded");
       setIsLoading(false);
-    };
-
-    if (videoMetadataLoaded && audioMetadataLoaded) {
-      adjustForStartTimes();
     }
-  }, [
-    videoMetadataLoaded,
-    audioMetadataLoaded,
-    data.videoStartTime,
-    data.audioStartTime,
-  ]);
+  }, [videoMetadataLoaded]);
 
   useEffect(() => {
     const onVideoLoadedMetadata = () => {
+      console.log("Video metadata loaded");
       setVideoMetadataLoaded(true);
       if (video2Ref.current) {
         setLongestDuration(video2Ref.current.duration);
       }
     };
-    const onAudioLoadedMetadata = () => {
-      setAudioMetadataLoaded(true);
-      if (audioPlayerRef.current) {
-        setLongestDuration(
-          Math.max(longestDuration, audioPlayerRef.current.duration)
-        );
-      }
-    };
 
     const videoElement = video2Ref.current;
-    const audioElement = audioPlayerRef.current;
 
     videoElement?.addEventListener("loadedmetadata", onVideoLoadedMetadata);
-    audioElement?.addEventListener("loadedmetadata", onAudioLoadedMetadata);
 
     return () => {
       videoElement?.removeEventListener(
         "loadedmetadata",
         onVideoLoadedMetadata
       );
-      audioElement?.removeEventListener(
-        "loadedmetadata",
-        onAudioLoadedMetadata
-      );
     };
   }, []);
 
+  const handlePlayPauseClick = async () => {
+    setIsPlaying(!isPlaying);
+
+    const videoElement = video2Ref.current;
+
+    if (!videoElement) return;
+
+    if (isPlaying) {
+      videoElement.pause();
+    } else {
+      try {
+        await videoElement.play();
+      } catch (error) {
+        console.error("Error with playing:", error);
+        setIsPlaying(false); // Revert the isPlaying state on error
+      }
+    }
+  };
+
+  const applyTimeToVideos = (time: number) => {
+    if (video2Ref.current) video2Ref.current.currentTime = time;
+    setCurrentTime(time);
+  };
+
+  // Update useEffect for playback synchronization
   useEffect(() => {
-    const handleTimeUpdate = () => {
-      if (video2Ref.current && !seeking) {
-        const currentTime = Math.min(
-          video2Ref.current.currentTime,
-          audioPlayerRef.current?.currentTime || Infinity
-        );
-        setCurrentTime(currentTime);
+    const syncPlayback = () => {
+      const videoElement = video2Ref.current;
+
+      if (!isPlaying || isLoading || !videoElement) return;
+
+      const handleTimeUpdate = () => {
+        // Avoid setting state on every time update to reduce re-renders
+        setCurrentTime(videoElement.currentTime);
+      };
+
+      videoElement.play().catch((error) => {
+        console.error("Error playing video", error);
+        setIsPlaying(false);
+      });
+      videoElement.addEventListener("timeupdate", handleTimeUpdate);
+
+      return () =>
+        videoElement.removeEventListener("timeupdate", handleTimeUpdate);
+    };
+
+    syncPlayback();
+  }, [isPlaying, isLoading]); // Add isLoading to the dependency array
+
+  // Add a useEffect for seeking behavior
+  useEffect(() => {
+    const handleSeeking = () => {
+      if (seeking && video2Ref.current) {
+        // Optional: add throttling here to reduce frequency of seek updates
+        setCurrentTime(video2Ref.current.currentTime);
       }
     };
 
     const videoElement = video2Ref.current;
-    const audioElement = audioPlayerRef.current;
 
-    videoElement?.addEventListener("timeupdate", handleTimeUpdate);
-    audioElement?.addEventListener("timeupdate", handleTimeUpdate);
+    videoElement?.addEventListener("seeking", handleSeeking);
 
     return () => {
-      videoElement?.removeEventListener("timeupdate", handleTimeUpdate);
-      audioElement?.removeEventListener("timeupdate", handleTimeUpdate);
+      videoElement?.removeEventListener("seeking", handleSeeking);
     };
-  }, [seeking]);
+  }, [seeking]); // seeking state controls when this effect re-runs
 
-  const handlePlayPauseClick = () => {
-    setIsPlaying(!isPlaying);
-    if (!isPlaying) {
+  const calculateNewTime = (event: any, seekBar: any) => {
+    const rect = seekBar.getBoundingClientRect();
+    const offsetX = event.clientX - rect.left;
+    const relativePosition = offsetX / rect.width;
+    return relativePosition * longestDuration;
+  };
+
+  // Changes specifically in handleSeekMouseMove, handleSeekMouseUp to use applyTimeToVideos directly
+  const handleSeekMouseUp = (event: any) => {
+    // Similar change as handleSeekMouseMove, no need for isPlaying check here
+    if (!seeking) return;
+    setSeeking(false);
+    const seekBar = event.currentTarget;
+    const seekTo = calculateNewTime(event, seekBar);
+    applyTimeToVideos(seekTo);
+    if (isPlaying) {
       video2Ref.current?.play();
-      audioPlayerRef.current?.play();
-    } else {
-      video2Ref.current?.pause();
-      audioPlayerRef.current?.pause();
     }
   };
 
   const handleMuteClick = () => {
-    const muted = !video2Ref.current?.muted;
-    if (video2Ref.current) video2Ref.current.muted = muted;
+    if (video2Ref.current) {
+      console.log("Mute clicked");
+      video2Ref.current.muted = video2Ref.current.muted ? false : true;
+    }
   };
 
   const handleFullscreenClick = () => {
@@ -162,45 +156,6 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     } else {
       document.exitFullscreen();
     }
-  };
-
-  const handleSeekMouseDown = (event: any) => setSeeking(true);
-
-  const handleSeekMouseUp = (event: any) => {
-    if (!seeking) return;
-    setSeeking(false);
-    const seekBar = event.currentTarget;
-    const seekTo = calculateNewTime(event, seekBar);
-
-    // Pause both videos before adjusting the time.
-    if (isPlaying) {
-      video2Ref.current?.pause();
-    }
-
-    applyTimeToVideos(seekTo);
-
-    if (isPlaying) {
-      video2Ref.current?.play();
-    }
-  };
-
-  const handleSeekMouseMove = (event: any) => {
-    if (!seeking) return;
-    const seekBar = event.currentTarget;
-    const seekTo = calculateNewTime(event, seekBar);
-    applyTimeToVideos(seekTo);
-  };
-
-  const calculateNewTime = (event: any, seekBar: any) => {
-    const rect = seekBar.getBoundingClientRect();
-    const offsetX = event.clientX - rect.left;
-    const relativePosition = offsetX / rect.width;
-    return relativePosition * longestDuration;
-  };
-
-  const applyTimeToVideos = (time: number) => {
-    if (video2Ref.current) video2Ref.current.currentTime = time;
-    setCurrentTime(time);
   };
 
   const watchedPercentage =
@@ -226,44 +181,6 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
       syncPlay();
     }
   }, [isPlaying, isLoading]);
-
-  // useEffect(() => {
-  //   const video = video2Ref.current;
-  //   const audio = audioPlayerRef.current;
-
-  //   // Function to synchronize audio playback with video
-  //   const synchronizePlayback = () => {
-  //     if (!video || !audio) return;
-
-  //     // Calculate the time drift between audio and video
-  //     const drift = Math.abs(video.currentTime - audio.currentTime);
-
-  //     // Adjust audio currentTime if drift exceeds a small tolerance (e.g., 0.1 seconds)
-  //     if (drift > 0.1) {
-  //       audio.currentTime = video.currentTime;
-  //     }
-  //   };
-
-  //   // Sync audio on video seek
-  //   const handleSeek = () => {
-  //     synchronizePlayback(); // Adjust audio to match video currentTime
-  //     if (isPlaying) {
-  //       audio?.play().catch((e) => console.error("Audio playback failed:", e)); // Ensure audio resumes if it was playing
-  //     }
-  //   };
-
-  //   // Add event listeners
-  //   video?.addEventListener("seeked", handleSeek);
-  //   video?.addEventListener("timeupdate", synchronizePlayback);
-
-  //   // Cleanup event listeners
-  //   return () => {
-  //     if (video) {
-  //       video.removeEventListener("seeked", handleSeek);
-  //       video.removeEventListener("timeupdate", synchronizePlayback);
-  //     }
-  //   };
-  // }, [isPlaying]);
 
   return (
     <div
@@ -294,29 +211,22 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
           </button>
         </div>
       )}
-      <AudioPlayer
-        ref={audioPlayerRef}
-        src={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=audio`}
-      />
       <div
         className="relative block w-full h-full rounded-lg bg-black"
         style={{ paddingBottom: "min(806px, 56.25%)" }}
       >
         <VideoPlayer
           ref={video2Ref}
-          src={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=screen`}
+          videoSrc={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=screen`}
+          audioSrc={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=audio`}
         />
       </div>
       <div className="absolute bottom-0 z-20 w-full text-white bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-all">
         <div
           id="seek"
           className="drag-seek absolute left-0 right-0 block h-4 mx-4 -mt-2 group z-20 cursor-pointer"
-          onMouseDown={handleSeekMouseDown}
-          onMouseMove={handleSeekMouseMove}
           onMouseUp={handleSeekMouseUp}
           onMouseLeave={() => setSeeking(false)}
-          onTouchStart={handleSeekMouseDown}
-          onTouchMove={handleSeekMouseMove}
           onTouchEnd={handleSeekMouseUp}
         >
           <div className="absolute top-1.5 w-full h-1 bg-white bg-opacity-50 rounded-full z-0" />

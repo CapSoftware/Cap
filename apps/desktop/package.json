@@ -11,8 +11,6 @@
     "@cap/database": "workspace:*",
     "@cap/ui": "workspace:*",
     "@cap/utils": "workspace:*",
-    "@ffmpeg/ffmpeg": "^0.12.10",
-    "@ffmpeg/util": "^0.12.1",
     "@tauri-apps/api": "^1.5.0",
     "autoprefixer": "^10.4.16",
     "cookies-next": "^4.1.0",

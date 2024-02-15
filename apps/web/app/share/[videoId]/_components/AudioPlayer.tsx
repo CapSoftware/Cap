@@ -1,32 +1,42 @@
-import React, { forwardRef, useEffect } from "react";
+import { memo, forwardRef, useEffect } from "react";
 import Hls from "hls.js";
 
-interface AudioPlayerProps {
-  src: string;
-}
+export const AudioPlayer = memo(
+  forwardRef<HTMLAudioElement, { src: string; onReady: () => void }>(
+    ({ src, onReady }, ref) => {
+      useEffect(() => {
+        const audio = ref as React.MutableRefObject<HTMLAudioElement | null>;
 
-export const AudioPlayer = forwardRef<HTMLAudioElement, AudioPlayerProps>(
-  ({ src }, ref) => {
-    useEffect(() => {
-      if (!ref || typeof ref === "function") return;
-      const audio = ref.current;
+        if (!audio.current) return;
 
-      if (Hls.isSupported()) {
-        const hls = new Hls();
-        hls.loadSource(src);
-        if (audio) {
-          hls.attachMedia(audio);
+        let hls: Hls | null = null;
+
+        if (Hls.isSupported()) {
+          hls = new Hls();
+          hls.loadSource(src);
+          hls.attachMedia(audio.current);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            onReady();
+          });
+        } else if (audio.current.canPlayType("application/vnd.apple.mpegurl")) {
+          audio.current.src = src;
+          audio.current.addEventListener(
+            "loadedmetadata",
+            () => {
+              onReady();
+            },
+            { once: true }
+          );
         }
+
         return () => {
-          if (audio) {
+          if (hls) {
             hls.destroy();
           }
         };
-      } else if (audio && audio.canPlayType("application/vnd.apple.mpegurl")) {
-        audio.src = src;
-      }
-    }, [src, ref]);
+      }, [src, onReady, ref]);
 
-    return <audio ref={ref} controls={true} style={{ display: "none" }} />;
-  }
+      return <audio ref={ref} controls={false} style={{ display: "none" }} />;
+    }
+  )
 );

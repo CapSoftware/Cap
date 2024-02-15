@@ -10,16 +10,12 @@ import { ActionButton } from "@/components/recording/ActionButton";
 import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
 import { emit } from "@tauri-apps/api/event";
-import { showMenu } from "tauri-plugin-context-menu";
 import { invoke } from "@tauri-apps/api/tauri";
 import { Countdown } from "./Countdown";
-
-import { useMediaRecorder } from "@/utils/recording/useMediaRecorder";
 import { getSelectedVideoProperties } from "@/utils/recording/utils";
 import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
 import toast, { Toaster } from "react-hot-toast";
-import { LogicalSize, WebviewWindow, appWindow } from "@tauri-apps/api/window";
 
 export const Recorder = () => {
   const {
@@ -31,15 +27,16 @@ export const Recorder = () => {
     setIsRecording,
     startingRecording,
     setStartingRecording,
-    sharedStream,
   } = useMediaDevices();
   const [countdownActive, setCountdownActive] = useState(false);
   const [stoppingRecording, setStoppingRecording] = useState(false);
   const [currentStoppingMessage, setCurrentStoppingMessage] =
     useState("Stopping Recording");
-  const { startMediaRecording, stopMediaRecording } = useMediaRecorder();
+  const [recordingTime, setRecordingTime] = useState("00:00");
 
   const handleContextClick = async (option: string) => {
+    const { showMenu } = await import("tauri-plugin-context-menu");
+
     const filteredDevices = devices
       .filter((device) =>
         option === "video"
@@ -74,8 +71,6 @@ export const Recorder = () => {
   };
 
   const handleOverlayFinished = () => {
-    // appWindow.hide();
-    // WebviewWindow.getByLabel("camera")?.hide();
     setIsRecording(true);
     setStartingRecording(false);
     setCountdownActive(false);
@@ -140,8 +135,7 @@ export const Recorder = () => {
     try {
       const videoData = await prepareVideoData();
       console.log("Video data:", videoData);
-      console.log("Shared stream:", sharedStream);
-      if (videoData && sharedStream) {
+      if (videoData) {
         setStartingRecording(true);
         setCountdownActive(true);
         await startDualRecording(videoData);
@@ -197,7 +191,7 @@ export const Recorder = () => {
 
       nextMessage();
 
-      const intervalId = setInterval(nextMessage, 2000);
+      const intervalId = setInterval(nextMessage, 2500);
 
       return () => clearInterval(intervalId);
     } else {
@@ -205,7 +199,26 @@ export const Recorder = () => {
     }
   }, [stoppingRecording]);
 
-  console.log("Test...");
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout;
+
+    if (isRecording && !startingRecording) {
+      const startTime = Date.now();
+
+      intervalId = setInterval(() => {
+        const seconds = Math.floor((Date.now() - startTime) / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const formattedSeconds =
+          seconds % 60 < 10 ? `0${seconds % 60}` : seconds % 60;
+        setRecordingTime(`${minutes}:${formattedSeconds}`);
+      }, 1000);
+    }
+
+    return () => {
+      clearInterval(intervalId);
+      setRecordingTime("00:00");
+    };
+  }, [isRecording, startingRecording]);
 
   return (
     <>
@@ -217,71 +230,78 @@ export const Recorder = () => {
       )}
       <div
         data-tauri-drag-region
-        className="relative flex items-center justify-center"
+        className="pt-4 relative flex items-center justify-center"
       >
         <div className="w-full">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <Logo className="w-24 h-auto" />
-            </div>
-          </div>
-          <div className="space-y-4 w-full">
-            <div>
-              <label className="text-sm font-medium">Display</label>
-              <div className="flex items-center space-x-1">
-                <ActionButton
-                  handler={() => console.log("Screen option selected")}
-                  icon={<Screen className="w-5 h-5" />}
-                  label="Screen"
-                  active={selectedDisplayType === "screen"}
-                />
-                <ActionButton
-                  handler={() => toast.error("This option is coming soon!")}
-                  icon={<Window className="w-5 h-5" />}
-                  label="Window"
-                  active={selectedDisplayType === "window"}
-                />
+          <div
+            className={`${
+              isRecording === true && "blur-sm pointer-events-none"
+            } mb-4`}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <Logo className="w-24 h-auto" />
               </div>
             </div>
-            <div>
-              <label className="text-sm font-medium">Webcam / Video</label>
-              <div className="space-y-1">
-                <ActionButton
-                  width="full"
-                  handler={() => handleContextClick("video")}
-                  icon={<Video className="w-5 h-5" />}
-                  label={selectedVideoDevice?.label || "Video"}
-                  active={selectedVideoDevice !== null}
-                />
-                <ActionButton
-                  width="full"
-                  handler={() => handleContextClick("audio")}
-                  icon={<Microphone className="w-5 h-5" />}
-                  label={selectedAudioDevice?.label || "Mic"}
-                  active={selectedAudioDevice !== null}
-                />
+            <div className="space-y-4 mb-4 w-full">
+              <div>
+                <label className="text-sm font-medium">Display</label>
+                <div className="flex items-center space-x-1">
+                  <ActionButton
+                    handler={() => console.log("Screen option selected")}
+                    icon={<Screen className="w-5 h-5" />}
+                    label="Screen"
+                    active={selectedDisplayType === "screen"}
+                  />
+                  <ActionButton
+                    handler={() => toast.error("This option is coming soon!")}
+                    icon={<Window className="w-5 h-5" />}
+                    label="Window"
+                    active={selectedDisplayType === "window"}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Webcam / Video</label>
+                <div className="space-y-1">
+                  <ActionButton
+                    width="full"
+                    handler={() => handleContextClick("video")}
+                    icon={<Video className="w-5 h-5" />}
+                    label={selectedVideoDevice?.label || "Video"}
+                    active={selectedVideoDevice !== null}
+                  />
+                  <ActionButton
+                    width="full"
+                    handler={() => handleContextClick("audio")}
+                    icon={<Microphone className="w-5 h-5" />}
+                    label={selectedAudioDevice?.label || "Mic"}
+                    active={selectedAudioDevice !== null}
+                  />
+                </div>
               </div>
             </div>
-            <Button
-              className="w-[97.6%] flex mx-auto"
-              onClick={() => {
-                if (isRecording) {
-                  handleStopAllRecordings();
-                } else {
-                  handleStartAllRecordings();
-                }
-              }}
-              spinner={startingRecording || stoppingRecording}
-            >
-              {startingRecording
-                ? "Starting..."
-                : isRecording
-                ? stoppingRecording
-                  ? currentStoppingMessage
-                  : "Stop Recording"
-                : "Start Recording"}
-            </Button>
           </div>
+          <Button
+            {...(isRecording && { variant: "destructive" })}
+            className="w-[97.6%] flex mx-auto"
+            onClick={() => {
+              if (isRecording) {
+                handleStopAllRecordings();
+              } else {
+                handleStartAllRecordings();
+              }
+            }}
+            spinner={startingRecording || stoppingRecording}
+          >
+            {startingRecording
+              ? "Starting..."
+              : isRecording
+              ? stoppingRecording
+                ? currentStoppingMessage
+                : `Stop - ${recordingTime}`
+              : "Start Recording"}
+          </Button>
         </div>
         <Toaster />
       </div>

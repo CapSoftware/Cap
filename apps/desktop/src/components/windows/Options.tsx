@@ -2,14 +2,22 @@
 
 // import { Recorder } from "@/components/windows/inner/Recorder";
 import { SignIn } from "@/components/windows/inner/SignIn";
+import { listen } from "@tauri-apps/api/event";
+import { appWindow } from "@tauri-apps/api/window";
 // import { useAuth } from "@/utils/database/AuthContext";
 
 export const Options = () => {
-  // const { session, userRef } = useAuth();
-  // const currentUser = userRef.current;
+  // async function setupWindowReShow() {
+  //   await listen("tauri://focus", () => {
+  //     if (appWindow.isVisible) return;
 
-  // if (currentUser) {
-  //   return <Recorder session={session} />;
+  //     appWindow
+  //       .show()
+  //       .catch((err) => console.error("Error showing window:", err));
+  //   });
   // }
+
+  // setupWindowReShow();
+
   return <SignIn />;
 };

@@ -11,7 +11,8 @@ const buttonVariants = cva(
       variant: {
         default:
           "group relative isolate font-medium inline-flex items-center justify-center overflow-hidden text-sm transition duration-300 ease-[cubic-bezier(0.4,0.36,0,1)] before:duration-300 before:ease-[cubic-bezier(0.4,0.36,0,1)] before:transtion-opacity rounded-full ring-1 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-full before:bg-gradient-to-b before:from-white/20 before:opacity-50 hover:before:opacity-100 after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:rounded-full after:bg-gradient-to-b after:from-white/10 after:from-[46%] after:to-[54%] after:mix-blend-overlay dark:ring-0 bg-primary ring-2 text-white ring-primary",
-        destructive: "bg-red-500 text-red-900 hover:bg-red-600",
+        destructive:
+          "group relative isolate font-medium inline-flex items-center justify-center overflow-hidden text-sm transition duration-300 ease-[cubic-bezier(0.4,0.36,0,1)] before:duration-300 before:ease-[cubic-bezier(0.4,0.36,0,1)] before:transtion-opacity rounded-full ring-1 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-full before:bg-gradient-to-b before:from-white/20 before:opacity-50 hover:before:opacity-100 after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:rounded-full after:bg-gradient-to-b after:from-white/10 after:from-[46%] after:to-[54%] after:mix-blend-overlay dark:ring-0 bg-red-900 ring-2 text-white ring-900",
         outline: "border border-input bg-white text-primary hover:bg-gray-50",
         secondary: "bg-secondary text-white hover:bg-secondary-1",
       },

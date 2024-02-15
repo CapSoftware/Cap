@@ -13,6 +13,7 @@ use crate::utils::ffmpeg_path_as_str;
 pub struct AudioRecorder {
     pub options: Option<RecordingOptions>,
     ffmpeg_stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
+    stream: Option<cpal::Stream>,
 }
 
 impl AudioRecorder {
@@ -21,6 +22,7 @@ impl AudioRecorder {
         AudioRecorder {
             options: None,
             ffmpeg_stdin: Arc::new(Mutex::new(None)),
+            stream: None,
         }
     }
 
@@ -33,11 +35,10 @@ impl AudioRecorder {
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
         let sample_format = match config.sample_format() {
-            SampleFormat::F32 => "f32le",
-            SampleFormat::I16 => "s16le",
             SampleFormat::I8 => "s8",
-            SampleFormat::U16 => "u16le",
-            SampleFormat::U8 => "u8",
+            SampleFormat::I16 => "s16le",
+            SampleFormat::I32 => "s32le",
+            SampleFormat::F32 => "f32le",
             _ => panic!("Unsupported sample format."),
         };
 
@@ -54,6 +55,18 @@ impl AudioRecorder {
         println!("Starting audio recording and processing...");
         let output_chunk_pattern = format!("{}/audio_recording_%03d.aac", audio_file_path_owned);
         let segment_list_filename = format!("{}/segment_list.txt", audio_file_path_owned);
+      
+        let mut audio_filters = Vec::new();
+
+        if channels > 2 {
+            audio_filters.push("pan=stereo|FL=FL+0.5*FC|FR=FR+0.5*FC");
+        }
+
+        // Add loudnorm and acompressor to the filter chain
+        audio_filters.push("loudnorm");
+        audio_filters.push("acompressor");
+
+        let audio_filters_str = audio_filters.join(",");
 
         let ffmpeg_command = vec![
             "-f", sample_format,
@@ -62,11 +75,13 @@ impl AudioRecorder {
             "-i", "-",
             "-c:a", "aac",
             "-b:a", "128k",
+            "-af", &audio_filters_str,
             "-f", "segment",
             "-segment_time", "3",
             "-segment_list", &segment_list_filename,
             &output_chunk_pattern,
         ];
+
         let mut child = Command::new(&ffmpeg_binary_path_str)
             .args(&ffmpeg_command)
             .stdin(Stdio::piped())
@@ -118,78 +133,81 @@ impl AudioRecorder {
 
         let ffmpeg_stdin_arc_clone = Arc::clone(&self.ffmpeg_stdin);
         
-        let stream: cpal::Stream = match config.sample_format() {
-            SampleFormat::F32 => {
-                device.build_input_stream(&config.into(), move |data: &[f32], _: &_| {
-                    println!("Received {} samples", data.len());
-                    let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
-                    if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
-                        let bytes = data.iter().flat_map(|&sample| sample.to_ne_bytes()).collect::<Vec<u8>>();
-                        let _ = stdin.write_all(&bytes);
-                        let _ = stdin.flush();
-                    }
-                }, err_fn, None).map_err(|_| "Failed to build input stream for F32 format")?
-            },
-            SampleFormat::I16 => {
-                device.build_input_stream(&config.into(), move |data: &[i16], _: &_| {
-                    println!("Received {} samples", data.len());
-                    let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
-                    if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
-                        let bytes = data.iter().flat_map(|&sample| {
-                            let mut buf = [0; 2];
-                            LittleEndian::write_i16(&mut buf, sample);
-                            buf.to_vec()
-                        }).collect::<Vec<u8>>();
-                        let _ = stdin.write_all(&bytes);
-                        let _ = stdin.flush();
-                    }
-                }, err_fn, None).map_err(|_| "Failed to build input stream for U16 format")?
-            },
-            SampleFormat::I8 => {
-                device.build_input_stream(&config.into(), move |data: &[i8], _: &_| {
-                    println!("Received {} samples", data.len());
-                    let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
-                    if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
-                        let bytes = data.iter().map(|&sample| sample as u8).collect::<Vec<u8>>();
-                        let _ = stdin.write_all(&bytes);
-                        let _ = stdin.flush();
-                    }
-                }, err_fn, None).map_err(|_| "Failed to build input stream for I8 format")?
-            },
-            SampleFormat::U16 => {
-                device.build_input_stream(&config.into(), move |data: &[u16], _: &_| {
-                    println!("Received {} samples", data.len());
-                    let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
-                    if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
-                        let bytes = data.iter().flat_map(|&sample| {
-                            let mut buf = [0; 2];
-                            LittleEndian::write_u16(&mut buf, sample);
-                            buf.to_vec()
-                        }).collect::<Vec<u8>>();
-                        let _ = stdin.write_all(&bytes);
-                        let _ = stdin.flush();
-                    }
-                }, err_fn, None).map_err(|_| "Failed to build input stream for U16 format")?
-            },
-            SampleFormat::U8 => {
-                device.build_input_stream(&config.into(), move |data: &[u8], _: &_| {
-                    println!("Received {} samples", data.len());
-                    let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
-                    if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
-                        let _ = stdin.write_all(data);
-                        let _ = stdin.flush();
-                    }
-                }, err_fn, None).map_err(|_| "Failed to build input stream for U8 format")?
-            },
-            _ => return Err("Unsupported sample format"),
+      let stream_result: Result<cpal::Stream, cpal::BuildStreamError> = match sample_format {
+          SampleFormat::I8 => device.build_input_stream(
+              &config.into(),
+              move |data: &[i8], _: &_| {
+                let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
+                if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
+                    let bytes = data.iter().map(|&sample| sample as u8).collect::<Vec<u8>>();
+                    let _ = stdin.write_all(&bytes);
+                    let _ = stdin.flush();
+                }
+              },
+              err_fn,
+              None,
+          ),
+          SampleFormat::I16 => device.build_input_stream(
+              &config.into(),
+              move |data: &[i16], _: &_| {
+                let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
+                if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
+                    let mut bytes = vec![0; data.len() * 2];
+                    LittleEndian::write_i16_into(data, &mut bytes);
+                    let _ = stdin.write_all(&bytes);
+                    let _ = stdin.flush();
+                }
+              },
+              err_fn,
+              None,
+          ),
+          SampleFormat::I32 => device.build_input_stream(
+              &config.into(),
+              move |data: &[i32], _: &_| {
+                let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
+                if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
+                    let mut bytes = vec![0; data.len() * 4];
+                    LittleEndian::write_i32_into(data, &mut bytes);
+                    let _ = stdin.write_all(&bytes);
+                    let _ = stdin.flush();
+                }
+              },
+              err_fn,
+              None, 
+          ),
+          SampleFormat::F32 => device.build_input_stream(
+              &config.into(),
+              move |data: &[f32], _: &_| {
+                  let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
+                  if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
+                      let bytes = bytemuck::cast_slice::<f32, u8>(data);
+                      if let Err(e) = stdin.write_all(bytes) {
+                          eprintln!("Failed to write data to FFmpeg stdin: {}", e);
+                      }
+                  }
+              },
+              err_fn,
+              None,
+          ),
+          _sample_format => Err(cpal::BuildStreamError::DeviceNotAvailable),
         };
 
-        stream.play().unwrap();
+        let stream = stream_result.map_err(|_| "Failed to build input stream")?;
+        stream.play().map_err(|_| "Failed to play stream")?;
+
+        self.stream = Some(stream);
 
         Ok(())
     }
 
     pub fn stop_audio_recording(&mut self) -> Result<(), &'static str> {
+        if let Some(ref mut stream) = self.stream {
+            stream.pause().map_err(|_| "Failed to pause stream")?;
+            println!("Stopped audio recording.");
+        } else {
+            return Err("Recording was not started");
+        }
+
         let mut ffmpeg_stdin_opt = self.ffmpeg_stdin.lock().map_err(|_| "Failed to acquire lock on ffmpeg stdin")?;
         
         if ffmpeg_stdin_opt.is_some() {

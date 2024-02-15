@@ -1,44 +1,47 @@
 // @refresh reset
 
-import React, { useEffect, useRef, useMemo, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 
 export const Camera = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { sharedStream } = useMediaDevices();
+  const { selectedVideoDevice } = useMediaDevices();
   const [isLoading, setIsLoading] = useState(true);
 
-  const attemptPlayback = () => {
-    const videoElement = videoRef.current;
-    if (videoElement && !videoElement.srcObject) {
-      console.log("Assigning stream to video element.");
-      videoElement.srcObject = sharedStream;
-      setIsLoading(false);
-    }
-
-    if (videoElement && videoElement.paused) {
-      console.log("Attempting to play video.");
-      videoElement
-        .play()
-        .then(() => {
-          console.log("Video playback started successfully.");
-        })
-        .catch((error) => {
-          console.log(`Error attempting to play video: ${error.message}`);
-        });
-    }
-  };
-
   useEffect(() => {
-    if (sharedStream) {
-      attemptPlayback();
-    }
-  }, [sharedStream]);
+    if (!videoRef.current || !selectedVideoDevice) return;
+    const video = videoRef.current;
+    const constraints = {
+      video: {
+        deviceId: selectedVideoDevice.deviceId,
+      },
+    };
+
+    navigator.mediaDevices
+      .getUserMedia(constraints)
+      .then((stream) => {
+        video.srcObject = stream;
+        video.play();
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        console.error(err);
+      });
+
+    return () => {
+      if (video.srcObject) {
+        const stream = video.srcObject as MediaStream;
+        stream.getTracks().forEach((track) => {
+          track.stop();
+        });
+      }
+    };
+  }, [selectedVideoDevice]);
 
   return (
     <div
       data-tauri-drag-region
-      className="w-[250px] h-[250px] bg-gray-200 rounded-full m-0 p-0 relative overflow-hidden flex items-center justify-center"
+      className="w-full h-full bg-gray-200 rounded-full m-0 p-0 relative overflow-hidden flex items-center justify-center border-none outline-none focus:outline-none"
     >
       {isLoading && (
         <div className="w-full h-full absolute top-0 left-0 bg-gray-200 z-10 flex items-center justify-center">

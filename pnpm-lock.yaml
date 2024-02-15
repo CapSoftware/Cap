@@ -56,6 +56,9 @@ importers:
       dotenv:
         specifier: ^16.3.1
         version: 16.3.1
+      hls.js:
+        specifier: ^1.5.3
+        version: 1.5.3
       million:
         specifier: ^2.6.4
         version: 2.6.4
