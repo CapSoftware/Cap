@@ -81,7 +81,7 @@ export default function CameraPage() {
   return (
     <div id="app" data-tauri-drag-region style={{ borderRadius: "16px" }}>
       <WindowActions />
-      {!isSignedIn ? <SignIn /> : <Recorder />}
+      {isSignedIn ? <Recorder /> : <SignIn />}
     </div>
   );
 }

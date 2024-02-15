@@ -1,7 +1,6 @@
 "use client";
 
 import callbackTemplate from "./callback.template";
-import { URL } from "url";
 
 const dynamicImports = {
   invoke: () => import("@tauri-apps/api").then(({ invoke }) => invoke),
@@ -26,6 +25,7 @@ export const login = () => {
           return;
         }
 
+        // Direct use of the URL global object
         const urlObject = new URL(data.payload);
 
         const token = urlObject.searchParams.get("token");
