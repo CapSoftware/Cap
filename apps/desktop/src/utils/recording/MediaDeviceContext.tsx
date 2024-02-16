@@ -62,7 +62,6 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   }, []);
 
   const getDevices = useCallback(async () => {
-    console.log("getDevices called");
     await enumerateAndStoreDevices();
 
     try {

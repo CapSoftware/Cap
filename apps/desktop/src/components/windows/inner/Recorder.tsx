@@ -28,7 +28,7 @@ export const Recorder = () => {
     startingRecording,
     setStartingRecording,
   } = useMediaDevices();
-  const [countdownActive, setCountdownActive] = useState(false);
+  // const [countdownActive, setCountdownActive] = useState(false);
   const [stoppingRecording, setStoppingRecording] = useState(false);
   const [currentStoppingMessage, setCurrentStoppingMessage] =
     useState("Stopping Recording");
@@ -70,11 +70,11 @@ export const Recorder = () => {
     });
   };
 
-  const handleOverlayFinished = () => {
-    setIsRecording(true);
-    setStartingRecording(false);
-    setCountdownActive(false);
-  };
+  // const handleOverlayFinished = () => {
+  //   setIsRecording(true);
+  //   setStartingRecording(false);
+  //   // setCountdownActive(false);
+  // };
 
   const prepareVideoData = async () => {
     const res = await fetch(
@@ -113,10 +113,14 @@ export const Recorder = () => {
     console.log("Starting dual recording...");
     const mediaSettings = await getSelectedVideoProperties();
     if (mediaSettings?.resolution && mediaSettings?.framerate) {
+      console.log("Setting recording as active...");
+      setIsRecording(true);
+      setStartingRecording(false);
       await invoke("start_dual_recording", {
         options: {
           user_id: videoData.user_id,
           video_id: videoData.id,
+          audio_name: selectedAudioDevice?.label,
           aws_region: videoData.aws_region,
           aws_bucket: videoData.aws_bucket,
           screen_index: "Capture screen 0",
@@ -137,14 +141,14 @@ export const Recorder = () => {
       console.log("Video data:", videoData);
       if (videoData) {
         setStartingRecording(true);
-        setCountdownActive(true);
+        // setCountdownActive(true);
         await startDualRecording(videoData);
       } else {
         throw new Error("Failed to prepare video data.");
       }
     } catch (error) {
       console.error("Error starting recordings:", error);
-      setCountdownActive(false);
+      // setCountdownActive(false);
     }
   };
 
@@ -168,14 +172,14 @@ export const Recorder = () => {
       await openLinkInBrowser(url);
 
       setIsRecording(false);
-      setCountdownActive(false);
+      // setCountdownActive(false);
       setStoppingRecording(false);
     } catch (error) {
-      console.error("Error invoking upload_file:", error);
+      console.error("Error stopping recording:", error);
     }
 
     setIsRecording(false);
-    setCountdownActive(false);
+    // setCountdownActive(false);
     setStoppingRecording(false);
   };
 
@@ -222,12 +226,12 @@ export const Recorder = () => {
 
   return (
     <>
-      {countdownActive && (
+      {/* {countdownActive && (
         <Countdown
           countdownFrom={3}
           onCountdownFinish={handleOverlayFinished}
         />
-      )}
+      )} */}
       <div
         data-tauri-drag-region
         className="pt-4 relative flex items-center justify-center"

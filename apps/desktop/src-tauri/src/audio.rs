@@ -1,8 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
-use std::io::{BufReader, BufRead};
 use std::process::{Stdio, Command};
-use std::thread;
 use std::io::Write;
 use byteorder::{ByteOrder, LittleEndian};
 use std::sync::{Arc, Mutex};
@@ -13,6 +11,7 @@ use crate::utils::ffmpeg_path_as_str;
 pub struct AudioRecorder {
     pub options: Option<RecordingOptions>,
     ffmpeg_stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
+    device_name: Option<String>,
     stream: Option<cpal::Stream>,
 }
 
@@ -22,16 +21,44 @@ impl AudioRecorder {
         AudioRecorder {
             options: None,
             ffmpeg_stdin: Arc::new(Mutex::new(None)),
+            device_name: None,
             stream: None,
         }
     }
 
-    pub fn setup_recording(&mut self, options: RecordingOptions, audio_file_path: &str) {
+    pub fn setup_recording(&mut self, options: RecordingOptions, audio_file_path: &str, custom_device: Option<&str>) -> Result<(), &'static str> {
         self.options = Some(options);
         
         let host = cpal::default_host();
-        let device = host.default_input_device().expect("No input device available");
-        let config = device.default_input_config().expect("Failed to get default input config");
+        let devices = host.devices().expect("Failed to get devices");
+        
+        let mut input_devices = devices.filter_map(|device| {
+            let supported_input_configs = device.supported_input_configs();
+            if supported_input_configs.is_ok() && supported_input_configs.unwrap().count() > 0 {
+                Some(device)
+            } else {
+                None
+            }
+        });
+
+        let device = if let Some(custom_device_name) = custom_device {
+            input_devices
+                .find(|d| d.name().map(|name| name == custom_device_name).unwrap_or(false))
+                .unwrap_or_else(|| host.default_input_device().expect("No default input device available"))
+        } else {
+            host.default_input_device().expect("No default input device available")
+        };
+
+        println!("Using audio device: {}", device.name().expect("Failed to get device name"));
+
+        let config = device.supported_input_configs()
+            .expect("Failed to get supported input configs")
+            .find(|c| c.sample_format() == SampleFormat::F32 || c.sample_format() == SampleFormat::I16 || c.sample_format() == SampleFormat::I8 || c.sample_format() == SampleFormat::I32)
+            .unwrap_or_else(||
+                device.supported_input_configs().expect("Failed to get supported input configs").next().expect("No supported input config")
+            )
+            .with_max_sample_rate();
+
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
         let sample_format = match config.sample_format() {
@@ -62,9 +89,7 @@ impl AudioRecorder {
             audio_filters.push("pan=stereo|FL=FL+0.5*FC|FR=FR+0.5*FC");
         }
 
-        // Add loudnorm and acompressor to the filter chain
         audio_filters.push("loudnorm");
-        audio_filters.push("acompressor");
 
         let audio_filters_str = audio_filters.join(",");
 
@@ -90,42 +115,7 @@ impl AudioRecorder {
             .spawn()
             .expect("ffmpeg command failed to start");
 
-        thread::spawn(move || {
-            let stdout = BufReader::new(child.stdout.take().expect("failed to get stdout"));
-            for line in stdout.lines() {
-                match line {
-                    Ok(line) => eprintln!("Audio stdout: {}", line),
-                    Err(e) => eprintln!("Error reading FFmpeg stdout: {}", e),
-                }
-            }
-        });
-
-        thread::spawn(move || {
-            let stderr = BufReader::new(child.stderr.take().expect("failed to get stderr"));
-            for line in stderr.lines() {
-                match line {
-                    Ok(line) => eprintln!("Audio stderr: {}", line),
-                    Err(e) => eprintln!("Error reading FFmpeg stderr: {}", e),
-                }
-            }
-        });
-            
         let stdin = child.stdin.take().expect("failed to get stdin");
-        *self.ffmpeg_stdin.lock().unwrap() = Some(stdin);
-
-        self.start_audio_recording().expect("Failed to start audio recording");
-    }
-
-    pub fn start_audio_recording(&mut self) -> Result<(), &'static str> {
-        let host = cpal::default_host();
-        let device = host.default_input_device().ok_or("Unable to find default input device")?;
-        let config: cpal::SupportedStreamConfig = device
-            .default_input_config()
-            .expect("Failed to get default input config");
-        println!("Default input config: {:?}", config);     
-        let sample_format = config.sample_format();
-
-        println!("Starting audio recording with sample format: {:?}", sample_format);
 
         let err_fn = move |err| {
             eprintln!("an error occurred on stream: {}", err);
@@ -133,7 +123,7 @@ impl AudioRecorder {
 
         let ffmpeg_stdin_arc_clone = Arc::clone(&self.ffmpeg_stdin);
         
-      let stream_result: Result<cpal::Stream, cpal::BuildStreamError> = match sample_format {
+        let stream_result: Result<cpal::Stream, cpal::BuildStreamError> = match config.sample_format() {
           SampleFormat::I8 => device.build_input_stream(
               &config.into(),
               move |data: &[i8], _: &_| {
@@ -193,9 +183,20 @@ impl AudioRecorder {
         };
 
         let stream = stream_result.map_err(|_| "Failed to build input stream")?;
-        stream.play().map_err(|_| "Failed to play stream")?;
-
         self.stream = Some(stream);
+        *self.ffmpeg_stdin.lock().unwrap() = Some(stdin);
+        self.device_name = Some(device.name().expect("Failed to get device name"));
+
+        Ok(())
+    }
+
+    pub fn start_audio_recording(&mut self) -> Result<(), &'static str> {
+        if let Some(ref mut stream) = self.stream {
+            stream.play().map_err(|_| "Failed to play stream")?;
+            println!("Started audio recording.");
+        } else {
+            println!("Audio recording was not started.");
+        }
 
         Ok(())
     }
@@ -221,3 +222,26 @@ impl AudioRecorder {
     }
 }
 
+#[tauri::command]
+pub fn enumerate_audio_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    let default_device = host.default_input_device().expect("No default input device available");
+    let default_device_name = default_device.name().expect("Failed to get default device name");
+
+    let devices = host.devices().expect("Failed to get devices");
+    let mut input_device_names: Vec<String> = devices
+        .filter_map(|device| {
+            let supported_input_configs = device.supported_input_configs();
+            if supported_input_configs.is_ok() && supported_input_configs.unwrap().count() > 0 {
+                device.name().ok()
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    input_device_names.retain(|name| name != &default_device_name);
+    input_device_names.insert(0, default_device_name);
+
+    input_device_names
+}

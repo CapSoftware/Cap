@@ -13,7 +13,7 @@ export const VideoThumbnail = ({
   videoId,
   alt,
 }: VideoThumbnailProps) => {
-  const [imageUrls, setImageUrls] = useState({ screen: "", video: "" });
+  const [imageUrls, setImageUrls] = useState({ screen: "" });
   const [loading, setLoading] = useState(true);
 
   // Fetch the pre-signed URLs on component mount
@@ -25,7 +25,7 @@ export const VideoThumbnail = ({
         );
         if (response.ok) {
           const data = await response.json();
-          setImageUrls({ screen: data.screen, video: data.video });
+          setImageUrls({ screen: data.screen });
         } else {
           console.error("Failed to fetch pre-signed URLs");
         }
@@ -44,18 +44,6 @@ export const VideoThumbnail = ({
         loading ? "bg-gray-200" : "bg-black"
       }`}
     >
-      {imageUrls.video && (
-        <div className="absolute bottom-2 right-2 w-[50px] h-[50px] z-10 rounded-full overflow-hidden">
-          <Image
-            src={imageUrls.video}
-            alt="Video Thumbnail"
-            layout="fill"
-            objectFit="cover"
-            className="w-full h-full"
-            onLoadingComplete={() => setLoading(false)}
-          />
-        </div>
-      )}
       {imageUrls.screen && (
         <Image
           src={imageUrls.screen}

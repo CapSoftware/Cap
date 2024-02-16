@@ -4,17 +4,14 @@ export const openLinkInBrowser = async (url: string) => {
   let open:
     | ((path: string, openWith?: string) => Promise<void>)
     | ((arg0: string) => any);
-  import("@tauri-apps/api/shell").then((shell) => {
-    open = shell.open;
-  });
+  const shellImport = await import("@tauri-apps/api/shell");
+  open = shellImport.open;
 
   if (typeof window === "undefined") {
     return;
   }
 
-  if (!open) {
-    await open(url);
-  }
+  await open(url);
 
   return;
 };

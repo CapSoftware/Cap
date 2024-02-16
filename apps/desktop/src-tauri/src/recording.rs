@@ -8,8 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync:: {Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use tokio::io::{BufReader as TokioBufReader, AsyncRead};
+use tokio::io::{AsyncWriteExt};
 use serde::{Serialize, Deserialize};
 use chrono::Utc;
 use reqwest::Client;
@@ -27,7 +26,9 @@ pub struct RecordingState {
   pub upload_handles: Mutex<Vec<JoinHandle<Result<(), String>>>>,
   pub recording_options: Option<RecordingOptions>,
   pub shutdown_flag: Arc<AtomicBool>,
-  pub data_dir: Option<PathBuf>, 
+  pub video_uploading_finished: Arc<AtomicBool>,
+  pub audio_uploading_finished: Arc<AtomicBool>,
+  pub data_dir: Option<PathBuf>
 }
 
 unsafe impl Send for RecordingState {}
@@ -38,6 +39,7 @@ pub struct RecordingOptions {
   pub video_id: String,
   pub screen_index: String,
   pub video_index: String,
+  pub audio_name: String,
   pub aws_region: String,
   pub aws_bucket: String,
   pub framerate: String,
@@ -57,9 +59,8 @@ pub async fn start_dual_recording(
   let ffmpeg_binary_path_str = ffmpeg_path_as_str()?;
 
   let data_dir = state_guard.data_dir.as_ref()
-      .ok_or("Data directory is not set in the recording state".to_string())?;
+      .ok_or("Data directory is not set in the recording state".to_string())?.clone();
 
-  //print the data_dir
   println!("data_dir: {:?}", data_dir);
   
   let screen_chunks_dir = data_dir.join("chunks/screen");
@@ -67,15 +68,26 @@ pub async fn start_dual_recording(
   clean_and_create_dir(&screen_chunks_dir)?;
   clean_and_create_dir(&audio_chunks_dir)?;
 
+  state_guard.audio_process = Some(AudioRecorder::new());
+  
+  let audio_name = if options.audio_name.is_empty() {
+    None
+  } else {
+    Some(options.audio_name.clone())
+  };
+
+  if let Some(ref mut audio_process) = state_guard.audio_process {
+      let audio_file_path = audio_chunks_dir.to_str().unwrap();
+      audio_process.setup_recording(options.clone(), audio_file_path, audio_name.as_deref()).map_err(|e| e.to_string())?;
+  }
+  
   let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index);
-
-  // let ffmpeg_video_args_future = construct_recording_args(&options, &video_chunks_dir, "video", &options.video_index);
   let ffmpeg_screen_args = ffmpeg_screen_args_future.await.map_err(|e| e.to_string())?;
-
 
   let screenshot_output_path = data_dir.join("screen-capture.jpg").to_str().unwrap().to_string();
   let ffmpeg_screen_screenshot_args = match std::env::consts::OS {
     "macos" => vec![
+        "-y".to_string(),
         "-f".to_string(), 
         "avfoundation".to_string(), 
         "-i".to_string(), 
@@ -85,6 +97,7 @@ pub async fn start_dual_recording(
         screenshot_output_path.clone()
     ],
     "windows" => vec![
+        "-y".to_string(),
         "-f".to_string(),
         "gdigrab".to_string(), 
         "-i".to_string(), 
@@ -94,20 +107,23 @@ pub async fn start_dual_recording(
         screenshot_output_path.clone()
     ],
     "linux" => vec![
+        "-y".to_string(),
         "-f".to_string(), 
         "x11grab".to_string(), 
         "-i".to_string(), 
         ":0.0".to_string(), 
         "-vframes".to_string(), 
         "1".to_string(), 
-        screenshot_output_path
+        screenshot_output_path.clone()
     ],
     _ => return Err("Unsupported OS".to_string()),
   };
-  // let ffmpeg_video_args = ffmpeg_video_args_future.await.map_err(|e| e.to_string())?;
   
   println!("Screen args: {:?}", ffmpeg_screen_args);
-  // println!("Video args: {:?}", ffmpeg_video_args);
+
+  if let Some(mut audio_process) = state_guard.audio_process.take() {
+    audio_process.start_audio_recording().expect("Failed to start audio recording");
+  }
 
   let mut screen_child = tokio::process::Command::new(&ffmpeg_binary_path_str)
       .args(&ffmpeg_screen_args)
@@ -116,71 +132,39 @@ pub async fn start_dual_recording(
       .stderr(Stdio::piped())
       .spawn()
       .map_err(|e| e.to_string())?;
+  
+  let screen_process_stdin = screen_child.stdin.take().ok_or("Failed to open stdin for screen recording process".to_string())?;
 
-  // let mut video_child = tokio::process::Command::new(&ffmpeg_binary_path_str)
-  //     .args(&ffmpeg_video_args)
-  //     .stdout(Stdio::piped())
-  //     .stderr(Stdio::piped())
-  //     .spawn()
-  //     .map_err(|e| e.to_string())?;
 
-  // In the part where you spawn the FFmpeg process and handle its output:
-
-  let screen_stderr = screen_child.stderr.take().unwrap();
-  let ffmpeg_start_trigger = "time=00:00:00.00".to_string();
-
-  let server_url_base: String = dotenv_codegen::dotenv!("NEXT_PUBLIC_URL").into();
-  let video_id_clone = options.video_id.clone();
-
-  let started_callback = Arc::new(move || {
-      let server_url_base = server_url_base.clone();
-      let video_id_clone = video_id_clone.clone();
-      tokio::spawn(async move {
-          if let Err(e) = send_metadata_api(&video_id_clone, &server_url_base).await {
-              eprintln!("Failed to send metadata API request: {}", e);
-          }
-      });
-  });
-
-  state_guard.audio_process = Some(AudioRecorder::new());
-
-  if let Some(ref mut audio_process) = state_guard.audio_process {
-      let audio_file_path = audio_chunks_dir.to_str().unwrap();
-      audio_process.setup_recording(options.clone(), audio_file_path);
-  }
-
-  tokio::spawn(log_output(screen_stderr, "Screen stderr".to_string(), Some(ffmpeg_start_trigger), Some(started_callback)));
-
-  let ffmpeg_binary_path_clone = ffmpeg_binary_path_str.clone();
-  let ffmpeg_screen_screenshot_args_clone = ffmpeg_screen_screenshot_args.clone();
+  let options_clone = state_guard.recording_options.clone();  
 
   // Spawn the screenshot task without directly awaiting it
   tokio::spawn(async move {
-      if let Err(e) = take_screenshot(ffmpeg_binary_path_clone, ffmpeg_screen_screenshot_args_clone).await {
-          eprintln!("Failed to take screenshot: {}", e);
+      if let Err(e) = take_screenshot(
+          ffmpeg_binary_path_str.clone(),
+          ffmpeg_screen_screenshot_args.clone(),
+          screenshot_output_path.clone(),
+          options_clone.clone(),
+      ).await {
+          eprintln!("Failed to take and upload screenshot: {}", e);
       }
   });
 
-  let screen_process_stdin = screen_child.stdin.take().ok_or("Failed to open stdin for screen recording process".to_string())?;
-
-  // let video_stdout = video_child.stdout.take().unwrap();
-  // let video_stderr = video_child.stderr.take().unwrap();
-  // tokio::spawn(log_output(video_stdout, "Video stdout".to_string()));
-  // tokio::spawn(log_output(video_stderr, "Video stderr".to_string()));
-
   state_guard.screen_process = Some(screen_child);
   state_guard.screen_process_stdin = Some(screen_process_stdin);
-  // guard.video_process = Some(video_child);
   state_guard.upload_handles = Mutex::new(vec![]);
   state_guard.recording_options = Some(options.clone());
   state_guard.shutdown_flag = shutdown_flag.clone();
+  state_guard.video_uploading_finished = Arc::new(AtomicBool::new(false));
+  state_guard.audio_uploading_finished = Arc::new(AtomicBool::new(false));
+
+  let screen_upload = start_upload_loop(screen_chunks_dir, options.clone(), "screen".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
+  let audio_upload = start_upload_loop(audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone(), state_guard.audio_uploading_finished.clone());
 
   drop(state_guard);
 
   println!("Starting upload loops...");
 
-  let screen_upload = start_upload_loop(state.clone(), screen_chunks_dir, options.clone(), "screen".to_string(), shutdown_flag.clone());
-  let audio_upload = start_upload_loop(state.clone(), audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone());
 
   match tokio::try_join!(screen_upload, audio_upload) {
       Ok(_) => {
@@ -198,13 +182,8 @@ pub async fn start_dual_recording(
 pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -> Result<(), String> {
     println!("!!STOPPING screen recording...");
 
-    // Lock the state to access shared data.
     let mut guard = state.lock().await;
-
-    // Immediately instruct ongoing operations to stop.
-    guard.shutdown_flag.store(true, Ordering::SeqCst);
-
-    // Immediately try to close running FFmpeg processes.
+    
     if let Some(stdin) = guard.screen_process_stdin.take() {
         if let Err(e) = graceful_stop_ffmpeg(stdin).await {
             eprintln!("Failed to send quit command to FFmpeg: {}", e);
@@ -212,7 +191,7 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
     }
 
     if let Some(audio_process) = &mut guard.audio_process {
-        audio_process.stop_audio_recording().expect("Failed to stop audio recording");
+      audio_process.stop_audio_recording().expect("Failed to stop audio recording");
     }
 
     if let Some(mut child) = guard.screen_process.take() {
@@ -222,35 +201,14 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
         }
     }
 
-    // Assuming there's a video_process similar to screen_process.
-    //if let Some(child_process) = &mut guard.video_process {
-    //    let _ = child_process.kill().await;
-    //}
+    guard.shutdown_flag.store(true, Ordering::SeqCst);
 
-    // Swap out the current upload_handles for an empty vector to take ownership.
-    let mut upload_handles_lock = guard.upload_handles.lock().await;
-    let upload_handles = std::mem::take(&mut *upload_handles_lock);
-
-    // Explicitly drop the locks so other async operations can proceed.
-    drop(upload_handles_lock);
-    drop(guard);
-
-    // Now using try_join_all with the owned join handles obtained from the state.
-    // This will wait for all the current upload handles to complete.
-    let _ = futures::future::try_join_all(upload_handles.into_iter()).await;
-
-    let state_guard = state.lock().await;
-    let data_dir_option = state_guard.data_dir.clone();
-    let options_clone = state_guard.recording_options.clone();  
-    let _shutdown_flag_clone = state_guard.shutdown_flag.clone();
-    drop(state_guard);
-
-    if let Some(data_dir) = data_dir_option {
-        if let Err(e) = upload_jpeg_files(&data_dir, options_clone).await {
-            eprintln!("Error uploading JPEG files: {}", e);
-        }
+    while !guard.video_uploading_finished.load(Ordering::SeqCst) 
+        || !guard.audio_uploading_finished.load(Ordering::SeqCst) {
+        println!("Waiting for uploads to finish...");
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
-
+    
     println!("All recordings and uploads stopped.");
 
     Ok(())
@@ -263,41 +221,14 @@ fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
     }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
 
-    // Ensure the segment list file exists within the given directory
-    // This assumes a naming convention where the segment list file is named "segment_list.txt"
     let segment_list_path = dir.join("segment_list.txt");
     match File::open(&segment_list_path) {
-        Ok(_) => Ok(()), // File already exists, return Ok(())
+        Ok(_) => Ok(()),
         Err(ref e) if e.kind() == ErrorKind::NotFound => {
-            // Create the file if it does not exist, but ignore the returned File object
             File::create(&segment_list_path).map_err(|e| e.to_string())?;
-            Ok(()) // Now the file is created, return Ok(())
+            Ok(())
         },
-        Err(e) => Err(e.to_string()), // Handle other possible file I/O errors
-    }
-}
-
-async fn log_output<R>(
-    reader: R, 
-    description: String, 
-    start_trigger: Option<String>, 
-    started_callback: Option<Arc<dyn Fn() + Send + Sync>>
-) 
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    let mut buf_reader = TokioBufReader::new(reader).lines();
-
-    while let Ok(Some(line)) = buf_reader.next_line().await {
-        println!("{}: {}", description, line);
-
-        if let Some(trigger) = &start_trigger {
-            if line.contains(trigger) {
-                if let Some(callback) = &started_callback {
-                    callback();
-                }
-            }
-        }
+        Err(e) => Err(e.to_string()), 
     }
 }
 
@@ -391,63 +322,64 @@ async fn construct_recording_args(
 }
 
 async fn start_upload_loop(
-    state: State<'_, Arc<Mutex<RecordingState>>>,
     chunks_dir: PathBuf,
     options: RecordingOptions,
     video_type: String,
     shutdown_flag: Arc<AtomicBool>,
+    uploading_finished: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    println!("Starting upload loop for {}", video_type);
-
-    let segment_list_path = chunks_dir.join("segment_list.txt");
-    
     let mut watched_segments: HashSet<String> = HashSet::new();
+    let mut ongoing_tasks: Vec<JoinHandle<Result<(), String>>> = vec![];
 
     loop {
-        if shutdown_flag.load(Ordering::SeqCst) {
-            println!("Shutdown flag set, exiting upload loop for {}", video_type);
-            break;
+        if shutdown_flag.load(Ordering::SeqCst) && ongoing_tasks.is_empty() {
+            break; 
         }
 
-        match load_segment_list(&segment_list_path) {
-            Ok(new_segments) => {
-                for segment_filename in new_segments {
-                    let segment_path = chunks_dir.join(&segment_filename);
+        let current_segments = load_segment_list(&chunks_dir.join("segment_list.txt"))
+            .map_err(|e| e.to_string())?
+            .difference(&watched_segments)
+            .cloned()
+            .collect::<HashSet<String>>();
 
-                    // Check if the segment is new and schedule it for upload
-                    if segment_path.is_file() && watched_segments.insert(segment_filename.clone()) {
-                        let filepath_str = segment_path.to_str().unwrap_or_default().to_owned();
-                        let options_clone = options.clone();
-                        let video_type_clone = video_type.clone();
+        for segment_filename in &current_segments {
+            let segment_path = chunks_dir.join(segment_filename);
+            if segment_path.is_file() {
+                let options_clone = options.clone();
+                let video_type_clone = video_type.clone();
+                let filepath_str = segment_path.to_str().unwrap_or_default().to_owned();
 
-                        let handle = tokio::spawn(async move {
-                            println!("Uploading video for {}: {}", video_type_clone, filepath_str);
-  
-                            match upload_file(Some(options_clone.clone()), filepath_str.clone(), video_type_clone.clone()).await {
-                                Ok(file_key) => {
-                                    println!("Chunk uploaded: {}", file_key);
-                                },
-                                Err(e) => {
-                                    eprintln!("Failed to upload chunk {}: {}", filepath_str, e);
-                                }
-                            }
-
-                            Ok(())
-                        });
-
-                        // Store the handle in the state for later awaits or cancels if required.
-                        let guard = state.lock().await;
-                        guard.upload_handles.lock().await.push(handle);
-
-                        drop(guard);
-                    }
-                }
+                // Spawn an upload task for each new segment
+                let upload_task = tokio::spawn(async move {
+                    println!("Uploading video for {}: {}", video_type_clone, filepath_str);
+                    upload_file(Some(options_clone), filepath_str, video_type_clone).await.map(|_| ())
+                });
+                ongoing_tasks.push(upload_task);
             }
-            Err(e) => eprintln!("Failed to read segment list for {}: {}", video_type, e),
+            watched_segments.insert(segment_filename.clone());
         }
 
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        let mut i = 0;
+        while i != ongoing_tasks.len() {
+            let task = &mut ongoing_tasks[i];
+            tokio::select! {
+                _ = task => {
+                    ongoing_tasks.remove(i);
+                },
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {
+                    i += 1;
+                },
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
+    for task in ongoing_tasks {
+        let _ = task.await;
+    }
+
+    uploading_finished.store(true, Ordering::SeqCst);
 
     Ok(())
 }
@@ -480,122 +412,16 @@ fn load_segment_list(segment_list_path: &Path) -> io::Result<HashSet<String>> {
     Ok(segments)
 }
 
-// Unused for now
-// async fn upload_remaining_chunks(
-//     chunks_dir: &PathBuf,
-//     options: Option<RecordingOptions>,
-//     video_type: &str,
-//     shutdown_flag: Arc<AtomicBool>,
-// ) -> Result<(), String> {
-//     // Include shutdown_flag in parameters and check it inside loop to quickly react to stop signals.
-
-//     if let Some(actual_options) = options {
-//         let retry_interval = Duration::from_secs(2);
-//         let upload_timeout = Duration::from_secs(15);
-//         let file_stability_timeout = Duration::from_secs(1);
-//         let file_stability_checks = 2;
-
-//         // Adjusted for immediate reaction to shutdown_flag.
-//         if shutdown_flag.load(Ordering::SeqCst) {
-//             return Ok(());
-//         }
-
-//         let entries = std::fs::read_dir(chunks_dir).map_err(|e| format!("Error reading directory: {}", e))?;
-
-//         let semaphore = Arc::new(Semaphore::new(16));
-
-//         let tasks: Vec<_> = entries.filter_map(|entry| entry.ok())
-//             .filter_map(|entry| {
-//                 let path = entry.path();
-//                 if path.is_file() && (path.extension().map_or(false, |e| e == "ts" || e == "aac")) && !shutdown_flag.load(Ordering::SeqCst) {
-//                     let video_type = video_type.to_string();
-//                     let semaphore_clone = semaphore.clone();
-//                     let actual_options_clone = actual_options.clone();
-//                     let shutdown_flag_clone = shutdown_flag.clone();
-
-//                     Some(tokio::spawn(async move {
-//                         let _permit = semaphore_clone.acquire().await;
-//                         let filepath_str = path.to_str().unwrap_or_default().to_owned();
-
-//                         // Quick exit if shutdown signal is received.
-//                         if shutdown_flag_clone.load(Ordering::SeqCst) {
-//                             return;
-//                         }
-
-//                         // Check for file size stability
-//                         let mut last_size = 0;
-//                         let mut stable_count = 0;
-//                         while stable_count < file_stability_checks {
-//                             if !path.exists() {
-//                                 eprintln!("File does not exist: {}", path.display());
-//                                 break; // Exit the loop if the file does not exist
-//                             }
-//                             match std::fs::metadata(&path) {
-//                                 Ok(metadata) => {
-//                                     let current_size = metadata.len();
-//                                     if last_size == current_size {
-//                                         stable_count += 1;
-//                                     } else {
-//                                         last_size = current_size;
-//                                         stable_count = 0;
-//                                     }
-//                                 },
-//                                 Err(e) => {
-//                                     eprintln!("Failed to get file metadata: {}", e);
-//                                     break; // Exit the loop if any other error occurs
-//                                 }
-//                             }
-//                             tokio::time::sleep(file_stability_timeout).await;
-//                         }
-
-//                         println!("File size stable: {}", filepath_str);
-
-//                         // Proceed with upload after confirming file stability
-//                         let mut attempts = 0;
-//                         // Retry loop with timeout
-//                         while attempts < 3 {
-//                             attempts += 1;
-//                             match timeout(upload_timeout, upload_file(Some(actual_options_clone.clone()), filepath_str.clone(), video_type.clone())).await {
-//                                 Ok(Ok(_)) => {
-//                                     // Upload succeeded
-//                                     println!("Successful upload on attempt {}", attempts);
-//                                     break; // Break out of the loop on success
-//                                 }
-//                                 Ok(Err(e)) => {
-//                                     // Upload failed but did not timeout
-//                                     eprintln!("Failed to upload (attempt {}): {}", attempts, e);
-//                                 }
-//                                 Err(_) => {
-//                                     // Upload attempt timed out
-//                                     eprintln!("Upload attempt timed out (attempt {})", attempts);
-//                                 }
-//                             }
-//                             // Wait for retry_interval before retrying
-//                             tokio::time::sleep(retry_interval).await;
-//                         }
-//                     }))
-//                 } else {
-//                     None
-//                 }
-//             })
-//             .collect();
-
-//         // Await all tasks concurrently.
-//         let _ = futures::future::try_join_all(tasks).await;
-
-//         Ok(())
-//     } else {
-//         Err("No recording options provided".to_string())
-//     }
-// }
-
 async fn take_screenshot(
     ffmpeg_binary_path_str: String, 
     ffmpeg_screen_screenshot_args: Vec<String>,
+    screenshot_path: String,
+    options: Option<RecordingOptions>,
 ) -> Result<(), String> {
     println!("Waiting for 3 seconds before taking the screenshot...");
     tokio::time::sleep(Duration::from_secs(3)).await;
     
+    // Start the FFmpeg process for taking a screenshot
     let mut screen_screenshot_child = tokio::process::Command::new(&ffmpeg_binary_path_str)
         .args(&ffmpeg_screen_screenshot_args)
         .stdout(Stdio::piped())
@@ -603,10 +429,21 @@ async fn take_screenshot(
         .spawn()
         .map_err(|e| e.to_string())?;
 
-    let screen_screenshot_stdout = screen_screenshot_child.stdout.take().unwrap();
-    let screen_screenshot_stderr = screen_screenshot_child.stderr.take().unwrap();
-    tokio::spawn(log_output(screen_screenshot_stdout, "Screen screenshot stdout".to_string(), None, None));
-    tokio::spawn(log_output(screen_screenshot_stderr, "Screen screenshot stderr".to_string(), None, None));
+    match screen_screenshot_child.wait().await {
+        Ok(status) if status.success() => {
+            println!("Screenshot captured: {}", &screenshot_path);
+            if let Some(ref opts) = options {
+                match upload_file(Some(opts.clone()), screenshot_path.clone(), "screenshot".to_string()).await {
+                    Ok(_) => println!("Screenshot uploaded successfully."),
+                    Err(e) => eprintln!("Failed to upload screenshot: {}", e),
+                }
+            } else {
+                eprintln!("No recording options set, skipping upload.");
+            }
+        },
+        Ok(_) => eprintln!("Screenshot command completed, but may have failed."),
+        Err(e) => eprintln!("Failed to execute screenshot command: {}", e),
+    }
 
     Ok(())
 }
@@ -657,7 +494,6 @@ async fn send_metadata_api(video_id: &str, server_url_base: &str) -> Result<(), 
 }
 
 async fn graceful_stop_ffmpeg(mut stdin: tokio::process::ChildStdin) -> Result<(), std::io::Error> {
-    // Sending 'q' followed by newline tells FFmpeg to quit gracefully
     stdin.write_all(b"q\n").await?;
     Ok(())
 }

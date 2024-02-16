@@ -29,5 +29,5 @@ This is a very top level guide right now, but the basics are:
 3. Clone .env.example and rename it to .env
 4. Add your own API keys to the .env file
 5. Run the app with `pnpm dev`
-6. Make sure the app can be built without any errors with `pnpm build`
+6. Make sure both the the desktop app, and web app can be built without any errors. For the desktop app, use `pnpm tauri:build`. For the web app, use `pnpm build`
 7. Submit a PR with your changes

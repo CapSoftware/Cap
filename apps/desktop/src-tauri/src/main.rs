@@ -18,6 +18,7 @@ mod audio;
 
 use recording::{RecordingState, start_dual_recording, stop_all_recordings};
 use upload::upload_file;
+use audio::{enumerate_audio_devices};
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
@@ -92,6 +93,8 @@ fn main() {
                 upload_handles: Mutex::new(vec![]),
                 recording_options: None,
                 shutdown_flag: Arc::new(AtomicBool::new(false)),
+                video_uploading_finished: Arc::new(AtomicBool::new(false)),
+                audio_uploading_finished: Arc::new(AtomicBool::new(false)),
                 data_dir: Some(data_directory),
             };
 
@@ -102,6 +105,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             start_dual_recording,
             stop_all_recordings,
+            enumerate_audio_devices,
             upload_file
         ])
         .plugin(tauri_plugin_context_menu::init())

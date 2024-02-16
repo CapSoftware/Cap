@@ -4,6 +4,15 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export const revalidate = 3500;
 
+type FileKey = {
+  type: "screen";
+  key: string;
+};
+
+type ResponseObject = {
+  screen: string | null;
+};
+
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const userId = searchParams.get("userId");
@@ -31,21 +40,15 @@ export async function GET(request: NextRequest) {
   });
 
   const bucket = process.env.CAP_AWS_BUCKET;
-  const fileKeys = [
+  const fileKeys: FileKey[] = [
     {
-      type: "screen" as "screen" | "video",
+      type: "screen",
       key: `${userId}/${videoId}/screenshot/screen-capture.jpg`,
-    },
-    {
-      type: "video" as "screen" | "video",
-      key: `${userId}/${videoId}/screenshot/video-capture.jpeg`,
     },
   ];
 
-  // Initialize a response object
-  const responseObject: { screen: string | null; video: string | null } = {
+  const responseObject: ResponseObject = {
     screen: null,
-    video: null,
   };
 
   await Promise.all(
@@ -59,8 +62,6 @@ export async function GET(request: NextRequest) {
         responseObject[type] = url;
       } catch (error) {
         console.error("Error generating URL for:", key, error);
-
-        // Set the response object to null if an error occurred
         responseObject[type] = null;
       }
     })
