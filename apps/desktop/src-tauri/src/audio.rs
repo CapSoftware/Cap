@@ -1,16 +1,20 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
-use std::process::{Stdio, Command};
-use std::io::Write;
+use std::process::{Stdio};
 use byteorder::{ByteOrder, LittleEndian};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
+
+use tokio::sync::Mutex;
+use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::process::{Command, ChildStderr, ChildStdin};
 
 use crate::recording::RecordingOptions;
-use crate::utils::ffmpeg_path_as_str;
+use crate::utils::{ffmpeg_path_as_str, monitor_and_log_recording_start};
 
 pub struct AudioRecorder {
     pub options: Option<RecordingOptions>,
-    ffmpeg_stdin: Arc<Mutex<Option<std::process::ChildStdin>>>,
+    ffmpeg_process: Option<tokio::process::Child>,
+    ffmpeg_stdin: Option<Arc<Mutex<ChildStdin>>>,
     device_name: Option<String>,
     stream: Option<cpal::Stream>,
 }
@@ -20,17 +24,19 @@ impl AudioRecorder {
     pub fn new() -> Self {
         AudioRecorder {
             options: None,
-            ffmpeg_stdin: Arc::new(Mutex::new(None)),
+            ffmpeg_process: None,
+            ffmpeg_stdin: None,
             device_name: None,
             stream: None,
         }
     }
 
-    pub fn setup_recording(&mut self, options: RecordingOptions, audio_file_path: &str, custom_device: Option<&str>) -> Result<(), &'static str> {
+    pub async fn start_audio_recording(&mut self, options: RecordingOptions, audio_file_path: &str, custom_device: Option<&str>) -> Result<(), String> {
         self.options = Some(options);
         
         let host = cpal::default_host();
         let devices = host.devices().expect("Failed to get devices");
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
         
         let mut input_devices = devices.filter_map(|device| {
             let supported_input_configs = device.supported_input_configs();
@@ -93,7 +99,7 @@ impl AudioRecorder {
 
         let audio_filters_str = audio_filters.join(",");
 
-        let ffmpeg_command = vec![
+        let ffmpeg_command: Vec<String> = vec![
             "-f", sample_format,
             "-ar", &sample_rate_str,
             "-ac", &channels_str,
@@ -105,34 +111,40 @@ impl AudioRecorder {
             "-segment_time", "3",
             "-segment_list", &segment_list_filename,
             &output_chunk_pattern,
-        ];
+        ].into_iter().map(|s| s.to_string()).collect();
 
-        let mut child = Command::new(&ffmpeg_binary_path_str)
-            .args(&ffmpeg_command)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("ffmpeg command failed to start");
+        let video_id = self.options.as_ref().unwrap().video_id.clone();
 
-        let stdin = child.stdin.take().expect("failed to get stdin");
+        let mut child = start_audio_recording_process(&ffmpeg_binary_path_str, &video_id, &ffmpeg_command)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut stdin = child.stdin.take().expect("failed to take child stdin");
+        let stdin = Arc::new(Mutex::new(stdin));
+        let stdin_clone = Arc::clone(&stdin);
+
+        tokio::spawn(async move {
+            while let Some(bytes) = rx.recv().await {
+                let mut stdin_guard = stdin_clone.lock().await;
+                if stdin_guard.write_all(&bytes).await.is_err() {
+                    eprintln!("Failed to write to FFmpeg stdin");
+                    break;
+                }
+            }
+        });
 
         let err_fn = move |err| {
             eprintln!("an error occurred on stream: {}", err);
         };
-
-        let ffmpeg_stdin_arc_clone = Arc::clone(&self.ffmpeg_stdin);
         
         let stream_result: Result<cpal::Stream, cpal::BuildStreamError> = match config.sample_format() {
           SampleFormat::I8 => device.build_input_stream(
               &config.into(),
               move |data: &[i8], _: &_| {
-                let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
-                if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
-                    let bytes = data.iter().map(|&sample| sample as u8).collect::<Vec<u8>>();
-                    let _ = stdin.write_all(&bytes);
-                    let _ = stdin.flush();
-                }
+                  let bytes = data.iter().map(|&sample| sample as u8).collect::<Vec<u8>>();
+                  if tx.try_send(bytes).is_err() {
+                      eprintln!("Channel send error. Dropping data.");
+                  }
               },
               err_fn,
               None,
@@ -140,13 +152,11 @@ impl AudioRecorder {
           SampleFormat::I16 => device.build_input_stream(
               &config.into(),
               move |data: &[i16], _: &_| {
-                let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
-                if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
-                    let mut bytes = vec![0; data.len() * 2];
-                    LittleEndian::write_i16_into(data, &mut bytes);
-                    let _ = stdin.write_all(&bytes);
-                    let _ = stdin.flush();
-                }
+                  let mut bytes = vec![0; data.len() * 2];
+                  LittleEndian::write_i16_into(data, &mut bytes);
+                  if tx.try_send(bytes).is_err() {
+                      eprintln!("Channel send error. Dropping data.");
+                  }
               },
               err_fn,
               None,
@@ -154,13 +164,11 @@ impl AudioRecorder {
           SampleFormat::I32 => device.build_input_stream(
               &config.into(),
               move |data: &[i32], _: &_| {
-                let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
-                if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
-                    let mut bytes = vec![0; data.len() * 4];
-                    LittleEndian::write_i32_into(data, &mut bytes);
-                    let _ = stdin.write_all(&bytes);
-                    let _ = stdin.flush();
-                }
+                  let mut bytes = vec![0; data.len() * 4];
+                  LittleEndian::write_i32_into(data, &mut bytes);
+                  if tx.try_send(bytes).is_err() {
+                      eprintln!("Channel send error. Dropping data.");
+                  }
               },
               err_fn,
               None, 
@@ -168,12 +176,9 @@ impl AudioRecorder {
           SampleFormat::F32 => device.build_input_stream(
               &config.into(),
               move |data: &[f32], _: &_| {
-                  let mut ffmpeg_stdin_lock = ffmpeg_stdin_arc_clone.lock().unwrap();
-                  if let Some(ref mut stdin) = *ffmpeg_stdin_lock {
-                      let bytes = bytemuck::cast_slice::<f32, u8>(data);
-                      if let Err(e) = stdin.write_all(bytes) {
-                          eprintln!("Failed to write data to FFmpeg stdin: {}", e);
-                      }
+                  let bytes = bytemuck::cast_slice::<f32, u8>(data).to_vec();
+                  if tx.try_send(bytes).is_err() {
+                      eprintln!("Channel send error. Dropping data.");
                   }
               },
               err_fn,
@@ -183,41 +188,51 @@ impl AudioRecorder {
         };
 
         let stream = stream_result.map_err(|_| "Failed to build input stream")?;
+
         self.stream = Some(stream);
-        *self.ffmpeg_stdin.lock().unwrap() = Some(stdin);
+        self.ffmpeg_process = Some(child);
+        self.ffmpeg_stdin = Some(stdin);
         self.device_name = Some(device.name().expect("Failed to get device name"));
+        
+        self.trigger_play()?;
 
         Ok(())
     }
 
-    pub fn start_audio_recording(&mut self) -> Result<(), &'static str> {
+    pub fn trigger_play (&mut self) -> Result<(), &'static str> {
         if let Some(ref mut stream) = self.stream {
             stream.play().map_err(|_| "Failed to play stream")?;
-            println!("Started audio recording.");
-        } else {
-            println!("Audio recording was not started.");
-        }
-
-        Ok(())
-    }
-
-    pub fn stop_audio_recording(&mut self) -> Result<(), &'static str> {
-        if let Some(ref mut stream) = self.stream {
-            stream.pause().map_err(|_| "Failed to pause stream")?;
-            println!("Stopped audio recording.");
+            println!("Audio recording playing.");
         } else {
             return Err("Recording was not started");
         }
 
-        let mut ffmpeg_stdin_opt = self.ffmpeg_stdin.lock().map_err(|_| "Failed to acquire lock on ffmpeg stdin")?;
-        
-        if ffmpeg_stdin_opt.is_some() {
-            *ffmpeg_stdin_opt = None;
-            println!("Stopped audio recording and signaled FFmpeg to terminate.");
+        Ok(())
+    }
+
+    pub async fn stop_audio_recording(&mut self) -> Result<(), String> {
+        if let Some(ref mut stream) = self.stream {
+            stream.pause().map_err(|_| "Failed to pause stream")?;
+            println!("Audio recording paused.");
         } else {
-            return Err("Recording was not started or FFmpeg stdin was already closed");
+            return Err("Recording was not started".to_string());
         }
-        
+
+        if let Some(stdin_arc) = &self.ffmpeg_stdin {
+            let mut stdin = stdin_arc.lock().await;
+            if stdin.write_all(b"q").await.is_err() {
+                return Err("Failed to write to FFmpeg stdin".to_string());
+            }
+        }
+
+        if let Some(ref mut child) = self.ffmpeg_process {
+            if let Err(e) = child.wait().await {
+                return Err(format!("Failed to wait for FFmpeg process: {}", e));
+            }
+        } else {
+            return Err("FFmpeg process was not available".to_string());
+        }
+
         Ok(())
     }
 }
@@ -244,4 +259,25 @@ pub fn enumerate_audio_devices() -> Vec<String> {
     input_device_names.insert(0, default_device_name);
 
     input_device_names
+}
+
+async fn start_audio_recording_process(ffmpeg_binary_path_str: &str, video_id: &str, audio_args: &[String]) -> Result<(tokio::process::Child), std::io::Error> {
+    let mut child = Command::new(ffmpeg_binary_path_str)
+        .args(audio_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    
+    let stderr = child.stderr.take().expect("failed to take child stdout");
+
+    let video_id_owned = video_id.to_owned();
+
+    tokio::spawn(async move {
+        if let Err(e) = monitor_and_log_recording_start(stderr, &video_id_owned, "audio").await {
+            eprintln!("Failed to monitor and log audio recording start: {}", e);
+        }
+    });
+
+    Ok(child)
 }

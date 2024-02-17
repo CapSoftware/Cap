@@ -217,6 +217,8 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
       >
         <VideoPlayer
           ref={video2Ref}
+          videoStartTime={data.videoStartTime}
+          audioStartTime={data.audioStartTime}
           videoSrc={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=screen`}
           audioSrc={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=audio`}
         />

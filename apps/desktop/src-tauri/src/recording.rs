@@ -10,11 +10,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration};
 use tokio::io::{AsyncWriteExt};
 use serde::{Serialize, Deserialize};
-use chrono::Utc;
-use reqwest::Client;
 use tauri::State;
+use tokio::process::{Command, ChildStderr, ChildStdin};
 
-use crate::utils::ffmpeg_path_as_str;
+use crate::utils::{ffmpeg_path_as_str, monitor_and_log_recording_start};
 use crate::upload::upload_file;
 use crate::audio::AudioRecorder;
 
@@ -32,6 +31,9 @@ pub struct RecordingState {
 }
 
 unsafe impl Send for RecordingState {}
+unsafe impl Sync for RecordingState {}
+unsafe impl Send for AudioRecorder {}
+unsafe impl Sync for AudioRecorder {}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RecordingOptions {
@@ -53,7 +55,7 @@ pub async fn start_dual_recording(
 ) -> Result<(), String> {
   println!("Starting screen recording...");
   let mut state_guard = state.lock().await;
-
+  
   let shutdown_flag = Arc::new(AtomicBool::new(false));
 
   let ffmpeg_binary_path_str = ffmpeg_path_as_str()?;
@@ -75,11 +77,6 @@ pub async fn start_dual_recording(
   } else {
     Some(options.audio_name.clone())
   };
-
-  if let Some(ref mut audio_process) = state_guard.audio_process {
-      let audio_file_path = audio_chunks_dir.to_str().unwrap();
-      audio_process.setup_recording(options.clone(), audio_file_path, audio_name.as_deref()).map_err(|e| e.to_string())?;
-  }
   
   let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index);
   let ffmpeg_screen_args = ffmpeg_screen_args_future.await.map_err(|e| e.to_string())?;
@@ -121,20 +118,24 @@ pub async fn start_dual_recording(
   
   println!("Screen args: {:?}", ffmpeg_screen_args);
 
-  if let Some(mut audio_process) = state_guard.audio_process.take() {
-    audio_process.start_audio_recording().expect("Failed to start audio recording");
+  if let Some(ref mut audio_process) = state_guard.audio_process {
+      let audio_file_path = audio_chunks_dir.to_str().unwrap();
+      audio_process.start_audio_recording(options.clone(), audio_file_path, audio_name.as_deref()).await.map_err(|e| e.to_string())?;
   }
 
-  let mut screen_child = tokio::process::Command::new(&ffmpeg_binary_path_str)
-      .args(&ffmpeg_screen_args)
-      .stdin(Stdio::piped())
-      .stdout(Stdio::piped())
-      .stderr(Stdio::piped())
-      .spawn()
-      .map_err(|e| e.to_string())?;
-  
-  let screen_process_stdin = screen_child.stdin.take().ok_or("Failed to open stdin for screen recording process".to_string())?;
+  println!("Starting screen recording process...");
 
+  let (screen_child, screen_stderr, screen_stdin) = start_screen_recording_process(&ffmpeg_binary_path_str, &ffmpeg_screen_args)
+    .await
+    .map_err(|e| e.to_string())?;
+
+  println!("Screen recording process started.");
+
+  let video_id_clone = options.video_id.clone();
+  let screen_started_future = monitor_and_log_recording_start(screen_stderr, &video_id_clone, "video");
+
+  let _ = screen_started_future.await.map_err(|e| e.to_string())?;
+  
 
   let options_clone = state_guard.recording_options.clone();  
 
@@ -151,7 +152,9 @@ pub async fn start_dual_recording(
   });
 
   state_guard.screen_process = Some(screen_child);
-  state_guard.screen_process_stdin = Some(screen_process_stdin);
+  println!("Set screen child");
+  state_guard.screen_process_stdin = Some(screen_stdin);
+  println!("Set screen stdin");
   state_guard.upload_handles = Mutex::new(vec![]);
   state_guard.recording_options = Some(options.clone());
   state_guard.shutdown_flag = shutdown_flag.clone();
@@ -184,20 +187,17 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
 
     let mut guard = state.lock().await;
     
+    if let Some(mut audio_process) = guard.audio_process.take() {
+        println!("Stopping audio recording...");
+        audio_process.stop_audio_recording().await.expect("Failed to stop audio recording");
+    }
+
+    println!("Stopping screen recording...");
+
     if let Some(stdin) = guard.screen_process_stdin.take() {
+        println!("Sending quit command to FFmpeg...");
         if let Err(e) = graceful_stop_ffmpeg(stdin).await {
             eprintln!("Failed to send quit command to FFmpeg: {}", e);
-        }
-    }
-
-    if let Some(audio_process) = &mut guard.audio_process {
-      audio_process.stop_audio_recording().expect("Failed to stop audio recording");
-    }
-
-    if let Some(mut child) = guard.screen_process.take() {
-        match child.wait().await {
-            Ok(status) => println!("FFmpeg process exited with status: {}", status),
-            Err(e) => eprintln!("Failed to wait for FFmpeg process to exit: {}", e),
         }
     }
 
@@ -206,7 +206,7 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
     while !guard.video_uploading_finished.load(Ordering::SeqCst) 
         || !guard.audio_uploading_finished.load(Ordering::SeqCst) {
         println!("Waiting for uploads to finish...");
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     
     println!("All recordings and uploads stopped.");
@@ -330,10 +330,14 @@ async fn start_upload_loop(
 ) -> Result<(), String> {
     let mut watched_segments: HashSet<String> = HashSet::new();
     let mut ongoing_tasks: Vec<JoinHandle<Result<(), String>>> = vec![];
+    let mut is_final_loop = false;
 
     loop {
-        if shutdown_flag.load(Ordering::SeqCst) && ongoing_tasks.is_empty() {
-            break; 
+        if shutdown_flag.load(Ordering::SeqCst) {
+            if is_final_loop {
+                break;
+            }
+            is_final_loop = true;
         }
 
         let current_segments = load_segment_list(&chunks_dir.join("segment_list.txt"))
@@ -372,7 +376,7 @@ async fn start_upload_loop(
             }
         }
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     for task in ongoing_tasks {
@@ -466,31 +470,18 @@ async fn upload_jpeg_files(
     Ok(())
 }
 
-async fn send_metadata_api(video_id: &str, server_url_base: &str) -> Result<(), String> {
-    let client = Client::new();
-    let video_start_time = Utc::now().timestamp_millis();
-    println!("Sending metadata API request for video {}: {}", video_id, video_start_time);
+async fn start_screen_recording_process(ffmpeg_binary_path_str: &str, ffmpeg_screen_args: &[String]) -> Result<(tokio::process::Child, ChildStderr, ChildStdin), io::Error> {
+    let mut child = Command::new(ffmpeg_binary_path_str)
+        .args(ffmpeg_screen_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
     
-    let params = [
-        ("videoId", video_id),
-        ("videoStartTime", &video_start_time.to_string()),
-    ];
-    let server_url = format!("{}/api/desktop/video/metadata/create", server_url_base);
+    let stderr = child.stderr.take().expect("failed to take child stdout");
+    let stdin = child.stdin.take().expect("failed to take child stdin");
     
-    match client.get(&server_url)
-        .query(&params)
-        .send()
-        .await {
-            Ok(response) => {
-                if response.status().is_success() {
-                    let _response_body = response.text().await.map_err(|e| e.to_string())?;
-                    Ok(())
-                } else {
-                    Err(format!("API call failed with status {:?}", response.status()))
-                }
-            },
-            Err(err) => Err(err.to_string()),
-        }
+    Ok((child, stderr, stdin))
 }
 
 async fn graceful_stop_ffmpeg(mut stdin: tokio::process::ChildStdin) -> Result<(), std::io::Error> {

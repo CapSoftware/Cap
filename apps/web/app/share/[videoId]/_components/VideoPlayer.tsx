@@ -10,11 +10,13 @@ import Hls from "hls.js";
 interface VideoPlayerProps {
   videoSrc: string;
   audioSrc?: string;
+  videoStartTime: number | null; // These are Unix timestamps
+  audioStartTime: number | null;
 }
 
 export const VideoPlayer = memo(
   forwardRef<HTMLVideoElement, VideoPlayerProps>(
-    ({ videoSrc, audioSrc }, ref) => {
+    ({ videoSrc, audioSrc, videoStartTime, audioStartTime }, ref) => {
       const videoRef = useRef<HTMLVideoElement>(null);
       const audioRef = useRef<HTMLAudioElement>(null);
       const videoHlsInstance = useRef<Hls | null>(null);
@@ -32,6 +34,15 @@ export const VideoPlayer = memo(
           hlsInstance.current = hls;
           hls.loadSource(src);
           hls.attachMedia(media);
+          media.onloadedmetadata = () => {
+            if (media === videoRef.current && videoStartTime) {
+              const videoCurrentTime = Date.now() / 1000 - videoStartTime;
+              videoRef.current.currentTime = Math.max(0, videoCurrentTime);
+            } else if (media === audioRef.current && audioStartTime) {
+              const audioCurrentTime = Date.now() / 1000 - audioStartTime;
+              audioRef.current.currentTime = Math.max(0, audioCurrentTime);
+            }
+          };
         } else if (media.canPlayType("application/vnd.apple.mpegurl")) {
           media.src = src;
         }
@@ -55,34 +66,7 @@ export const VideoPlayer = memo(
         };
       }, [audioSrc]);
 
-      // Synchronize play, pause, and seek operations between video and audio
-      useEffect(() => {
-        if (!audioSrc || !videoRef.current || !audioRef.current) return;
-        const video = videoRef.current;
-        const audio = audioRef.current;
-
-        const playListener = async () => {
-          await audio.play();
-        };
-
-        const pauseListener = () => {
-          audio.pause();
-        };
-
-        const seekListener = () => {
-          audio.currentTime = video.currentTime;
-        };
-
-        video.addEventListener("play", playListener);
-        video.addEventListener("pause", pauseListener);
-        video.addEventListener("seeked", seekListener);
-
-        return () => {
-          video.removeEventListener("play", playListener);
-          video.removeEventListener("pause", pauseListener);
-          video.removeEventListener("seeked", seekListener);
-        };
-      }, [audioSrc]);
+      // No need for a separate useEffect for synchronization since it's handled within initializeHls
 
       return (
         <>

@@ -9,10 +9,10 @@ export async function GET(request: NextRequest) {
   try {
     const url = new URL(request.url);
     const videoId = url.searchParams.get("videoId");
-    const videoStartTime = url.searchParams.get("videoStartTime");
-    const audioStartTime = url.searchParams.get("audioStartTime");
+    const startTime = url.searchParams.get("startTime");
+    const logType = url.searchParams.get("logType");
 
-    if (!videoId || (!videoStartTime && !audioStartTime)) {
+    if (!videoId || (!startTime && !logType)) {
       return new Response(
         JSON.stringify({ error: "Missing required fields" }),
         {
@@ -24,19 +24,19 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    if (videoStartTime) {
+    if (logType === "video") {
       console.log("...Updating video start time...");
       await db
         .update(videos)
-        .set({ videoStartTime: Number(videoStartTime) })
+        .set({ videoStartTime: Number(startTime) })
         .where(eq(videos.id, videoId));
     }
 
-    if (audioStartTime) {
+    if (logType === "audio") {
       console.log("...Updating audio start time...");
       await db
         .update(videos)
-        .set({ audioStartTime: Number(audioStartTime) })
+        .set({ audioStartTime: Number(startTime) })
         .where(eq(videos.id, videoId));
     }
 

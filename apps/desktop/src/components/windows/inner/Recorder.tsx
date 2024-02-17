@@ -137,17 +137,17 @@ export const Recorder = () => {
 
   const handleStartAllRecordings = async () => {
     try {
+      setStartingRecording(true);
       const videoData = await prepareVideoData();
       console.log("Video data:", videoData);
       if (videoData) {
-        setStartingRecording(true);
-        // setCountdownActive(true);
         await startDualRecording(videoData);
       } else {
         throw new Error("Failed to prepare video data.");
       }
     } catch (error) {
       console.error("Error starting recordings:", error);
+      setStartingRecording(false);
       // setCountdownActive(false);
     }
   };

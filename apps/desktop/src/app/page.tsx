@@ -10,21 +10,26 @@ import { LogoSpinner } from "@cap/ui";
 export default function CameraPage() {
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [cameraWindowOpen, setCameraWindowOpen] = useState(false);
-  const [loading, setLoading] = useState(true); // Added loading state
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const checkSignInStatus = async () => {
       const cookie = getCookie("next-auth.session-token");
-      setIsSignedIn(!!cookie);
-      setLoading(false); // Set loading to false after checking sign-in status
+      const signedIn = !!cookie;
+
+      if (signedIn !== isSignedIn) {
+        setIsSignedIn(signedIn);
+      }
+      if (loading) {
+        setLoading(false);
+      }
     };
 
     checkSignInStatus();
-
     const interval = setInterval(checkSignInStatus, 1000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [isSignedIn, loading]);
 
   useEffect(() => {
     if (isSignedIn && !cameraWindowOpen) {
@@ -78,7 +83,6 @@ export default function CameraPage() {
     }
   }, [isSignedIn, cameraWindowOpen]);
 
-  // Show loading screen, a spinner or similar, to prevent flash
   if (loading) {
     return (
       <div className="w-full h-full flex items-center justify-center">
