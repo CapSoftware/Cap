@@ -38,22 +38,14 @@ export default function CameraPage() {
           setCameraWindowOpen(true);
 
           currentMonitor().then((monitor) => {
-            const windowWidth = 250;
-            const windowHeight = 250;
+            const windowWidth = 230;
+            const windowHeight = 230;
 
             if (monitor && monitor.size) {
-              const x = 100;
-              const y = monitor.size.height * 0.66;
               const scalingFactor = monitor.scaleFactor;
-
-              console.log("x", x);
-              console.log("y", y);
-              console.log("scalingFactor", scalingFactor);
-              console.log("monitor", monitor);
-              console.log("monitor.size", monitor.size);
-              console.log("monitor.size.height", monitor.size.height);
-              console.log("windowHeight", windowHeight);
-              console.log("windowWidth", windowWidth);
+              const x = 100;
+              const y =
+                monitor.size.height / scalingFactor - windowHeight - 100;
 
               const existingCameraWindow = WebviewWindow.getByLabel("camera");
               if (existingCameraWindow) {
@@ -66,7 +58,7 @@ export default function CameraPage() {
                   width: windowWidth,
                   height: windowHeight,
                   x: x / scalingFactor,
-                  y: y / scalingFactor,
+                  y: y,
                   maximized: false,
                   resizable: false,
                   fullscreen: false,

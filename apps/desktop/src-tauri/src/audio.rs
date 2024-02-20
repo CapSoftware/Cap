@@ -5,8 +5,8 @@ use byteorder::{ByteOrder, LittleEndian};
 use std::sync::{Arc};
 
 use tokio::sync::Mutex;
-use tokio::io::{AsyncWriteExt, BufReader};
-use tokio::process::{Command, ChildStderr, ChildStdin};
+use tokio::io::{AsyncWriteExt};
+use tokio::process::{Command, ChildStdin};
 
 use crate::recording::RecordingOptions;
 use crate::utils::{ffmpeg_path_as_str, monitor_and_log_recording_start};
@@ -119,9 +119,10 @@ impl AudioRecorder {
             .await
             .map_err(|e| e.to_string())?;
 
-        let mut stdin = child.stdin.take().expect("failed to take child stdin");
-        let stdin = Arc::new(Mutex::new(stdin));
-        let stdin_clone = Arc::clone(&stdin);
+        let stdin = child.stdin.take().expect("failed to take child stdin");
+        let stdin_arc = Arc::new(Mutex::new(stdin));
+        let stdin_clone = Arc::clone(&stdin_arc);
+        let stdin_global = Arc::clone(&stdin_arc);
 
         tokio::spawn(async move {
             while let Some(bytes) = rx.recv().await {
@@ -191,7 +192,7 @@ impl AudioRecorder {
 
         self.stream = Some(stream);
         self.ffmpeg_process = Some(child);
-        self.ffmpeg_stdin = Some(stdin);
+        self.ffmpeg_stdin = Some(stdin_global);
         self.device_name = Some(device.name().expect("Failed to get device name"));
         
         self.trigger_play()?;
@@ -219,22 +220,30 @@ impl AudioRecorder {
         }
 
         if let Some(stdin_arc) = &self.ffmpeg_stdin {
-            let mut stdin = stdin_arc.lock().await;
-            if stdin.write_all(b"q").await.is_err() {
-                return Err("Failed to write to FFmpeg stdin".to_string());
-            }
+            drop(stdin_arc); // Explicitly drop the stdin Arc<Mutex<ChildStdin>> to close stdin.
+            println!("Stdin closed for FFmpeg process.");
         }
 
+        println!("Killing FFmpeg process...");
         if let Some(ref mut child) = self.ffmpeg_process {
-            if let Err(e) = child.wait().await {
-                return Err(format!("Failed to wait for FFmpeg process: {}", e));
+            match child.kill().await {
+                Ok(_) => println!("FFmpeg process was killed successfully."),
+                Err(e) => return Err(format!("Failed to kill FFmpeg process: {}", e)),
+            }
+
+            // Await the process to ensure it has been terminated.
+            match child.wait().await {
+                Ok(status) => println!("FFmpeg process terminated with status: {}", status),
+                Err(e) => println!("Error waiting for FFmpeg process to terminate: {}", e),
             }
         } else {
-            return Err("FFmpeg process was not available".to_string());
+            return Err("FFmpeg process was not started".to_string());
         }
 
+        println!("Audio recording stopped.");
         Ok(())
     }
+
 }
 
 #[tauri::command]

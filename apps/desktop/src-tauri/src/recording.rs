@@ -321,6 +321,8 @@ async fn construct_recording_args(
     }
 }
 
+use futures::future::join_all;
+
 async fn start_upload_loop(
     chunks_dir: PathBuf,
     options: RecordingOptions,
@@ -329,10 +331,9 @@ async fn start_upload_loop(
     uploading_finished: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut watched_segments: HashSet<String> = HashSet::new();
-    let mut ongoing_tasks: Vec<JoinHandle<Result<(), String>>> = vec![];
     let mut is_final_loop = false;
-
     loop {
+        let mut upload_tasks = vec![];
         if shutdown_flag.load(Ordering::SeqCst) {
             if is_final_loop {
                 break;
@@ -351,40 +352,25 @@ async fn start_upload_loop(
             if segment_path.is_file() {
                 let options_clone = options.clone();
                 let video_type_clone = video_type.clone();
-                let filepath_str = segment_path.to_str().unwrap_or_default().to_owned();
-
-                // Spawn an upload task for each new segment
-                let upload_task = tokio::spawn(async move {
+                let segment_path_clone = segment_path.clone();
+                // Create a task for each file to be uploaded
+                upload_tasks.push(tokio::spawn(async move {
+                    let filepath_str = segment_path_clone.to_str().unwrap_or_default().to_owned();
                     println!("Uploading video for {}: {}", video_type_clone, filepath_str);
                     upload_file(Some(options_clone), filepath_str, video_type_clone).await.map(|_| ())
-                });
-                ongoing_tasks.push(upload_task);
+                }));
             }
             watched_segments.insert(segment_filename.clone());
         }
 
-        let mut i = 0;
-        while i != ongoing_tasks.len() {
-            let task = &mut ongoing_tasks[i];
-            tokio::select! {
-                _ = task => {
-                    ongoing_tasks.remove(i);
-                },
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                    i += 1;
-                },
-            }
+        // Await all initiated upload tasks in parallel
+        if !upload_tasks.is_empty() {
+            let _ = join_all(upload_tasks).await;
         }
 
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-
-    for task in ongoing_tasks {
-        let _ = task.await;
-    }
-
     uploading_finished.store(true, Ordering::SeqCst);
-
     Ok(())
 }
 

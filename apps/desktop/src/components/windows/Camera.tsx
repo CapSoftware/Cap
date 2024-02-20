@@ -2,11 +2,13 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
+import { CloseX } from "@/components/icons/CloseX";
 
 export const Camera = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { selectedVideoDevice } = useMediaDevices();
   const [isLoading, setIsLoading] = useState(true);
+  const tauriWindowImport = import("@tauri-apps/api/window");
 
   useEffect(() => {
     if (!videoRef.current || !selectedVideoDevice) return;
@@ -38,10 +40,45 @@ export const Camera = () => {
     };
   }, [selectedVideoDevice]);
 
+  const setWindowSize = async (type: "sm" | "lg") => {
+    tauriWindowImport.then(
+      ({ currentMonitor, appWindow, LogicalSize, LogicalPosition }) => {
+        currentMonitor().then((monitor) => {
+          const windowWidth = type === "sm" ? 230 : 400;
+          const windowHeight = type === "sm" ? 230 : 400;
+
+          if (monitor && monitor.size) {
+            const scalingFactor = monitor.scaleFactor;
+            const x = 100;
+            const y = monitor.size.height / scalingFactor - windowHeight - 100;
+
+            console.log(
+              scalingFactor,
+              x,
+              y,
+              windowWidth,
+              windowHeight,
+              monitor
+            );
+
+            appWindow.setSize(new LogicalSize(windowWidth, windowHeight));
+            appWindow.setPosition(new LogicalPosition(x / scalingFactor, y));
+          }
+        });
+      }
+    );
+  };
+
+  const closeWindow = () => {
+    import("@tauri-apps/api/window").then(({ appWindow }) => {
+      appWindow.close();
+    });
+  };
+
   return (
     <div
       data-tauri-drag-region
-      className="w-full h-full bg-gray-200 rounded-full m-0 p-0 relative overflow-hidden flex items-center justify-center border-none outline-none focus:outline-none"
+      className="group w-full h-full bg-gray-200 rounded-full m-0 p-0 relative overflow-hidden flex items-center justify-center border-none outline-none focus:outline-none"
     >
       {isLoading && (
         <div className="w-full h-full absolute top-0 left-0 bg-gray-200 z-10 flex items-center justify-center">
@@ -72,6 +109,33 @@ export const Camera = () => {
           </svg>
         </div>
       )}
+      <div className="opacity-0 group-hover:opacity-100 absolute bottom-3 left-1/2 transform -translate-x-1/2 bg-gray-800 rounded-xl z-20 grid grid-cols-3 overflow-hidden">
+        <div className="h-full flex items-center justify-center p-2 hover:bg-gray-900">
+          <button
+            onClick={() => {
+              closeWindow();
+            }}
+          >
+            <CloseX className="w-5 h-5 stroke-gray-200" />
+          </button>
+        </div>
+        <div className="h-full flex items-center justify-center p-2 hover:bg-gray-900">
+          <button
+            onClick={async () => {
+              await setWindowSize("sm");
+            }}
+            className="w-2 h-2 bg-gray-200 rounded-full"
+          ></button>
+        </div>
+        <div className="h-full flex items-center justify-center p-2 hover:bg-gray-900">
+          <button
+            onClick={async () => {
+              await setWindowSize("lg");
+            }}
+            className="w-4 h-4 bg-gray-200 rounded-full"
+          ></button>
+        </div>
+      </div>
       <video
         ref={videoRef}
         autoPlay
