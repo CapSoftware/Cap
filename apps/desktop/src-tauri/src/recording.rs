@@ -12,6 +12,7 @@ use tokio::io::{AsyncWriteExt};
 use serde::{Serialize, Deserialize};
 use tauri::State;
 use tokio::process::{Command, ChildStderr, ChildStdin};
+use tokio::join;
 
 use crate::utils::{ffmpeg_path_as_str, monitor_and_log_recording_start};
 use crate::upload::upload_file;
@@ -69,8 +70,6 @@ pub async fn start_dual_recording(
   let audio_chunks_dir = data_dir.join("chunks/audio");
   clean_and_create_dir(&screen_chunks_dir)?;
   clean_and_create_dir(&audio_chunks_dir)?;
-
-  state_guard.audio_process = Some(AudioRecorder::new());
   
   let audio_name = if options.audio_name.is_empty() {
     None
@@ -118,24 +117,20 @@ pub async fn start_dual_recording(
   
   println!("Screen args: {:?}", ffmpeg_screen_args);
 
-  if let Some(ref mut audio_process) = state_guard.audio_process {
-      let audio_file_path = audio_chunks_dir.to_str().unwrap();
-      audio_process.start_audio_recording(options.clone(), audio_file_path, audio_name.as_deref()).await.map_err(|e| e.to_string())?;
-  }
+  // Prepare screen and audio recording concurrently
+  let ffmpeg_binary_path_str = ffmpeg_path_as_str()?;
+  let screen_recording_preparation = prepare_screen_recording(&ffmpeg_binary_path_str, &options, &screen_chunks_dir);
+  let audio_recording_preparation = prepare_audio_recording(&options, &audio_chunks_dir);
 
-  println!("Starting screen recording process...");
+  // Start both recordings concurrently
+  let (screen_recording_result, audio_recording_result) = join!(
+    screen_recording_preparation,
+    audio_recording_preparation
+  );
 
-  let (screen_child, screen_stderr, screen_stdin) = start_screen_recording_process(&ffmpeg_binary_path_str, &ffmpeg_screen_args)
-    .await
-    .map_err(|e| e.to_string())?;
-
-  println!("Screen recording process started.");
-
-  let video_id_clone = options.video_id.clone();
-  let screen_started_future = monitor_and_log_recording_start(screen_stderr, &video_id_clone, "video");
-
-  let _ = screen_started_future.await.map_err(|e| e.to_string())?;
-  
+  // Handle the results of both operations
+  let (screen_child, screen_stdin) = screen_recording_result.map_err(|e| e.to_string())?;
+  let audio_process = audio_recording_result.map_err(|e| e.to_string())?;
 
   let options_clone = state_guard.recording_options.clone();  
 
@@ -155,6 +150,7 @@ pub async fn start_dual_recording(
   println!("Set screen child");
   state_guard.screen_process_stdin = Some(screen_stdin);
   println!("Set screen stdin");
+  state_guard.audio_process = Some(audio_process);
   state_guard.upload_handles = Mutex::new(vec![]);
   state_guard.recording_options = Some(options.clone());
   state_guard.shutdown_flag = shutdown_flag.clone();
@@ -187,11 +183,6 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
 
     let mut guard = state.lock().await;
     
-    if let Some(mut audio_process) = guard.audio_process.take() {
-        println!("Stopping audio recording...");
-        audio_process.stop_audio_recording().await.expect("Failed to stop audio recording");
-    }
-
     println!("Stopping screen recording...");
 
     if let Some(stdin) = guard.screen_process_stdin.take() {
@@ -199,6 +190,11 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
         if let Err(e) = graceful_stop_ffmpeg(stdin).await {
             eprintln!("Failed to send quit command to FFmpeg: {}", e);
         }
+    }
+
+    if let Some(mut audio_process) = guard.audio_process.take() {
+        println!("Stopping audio recording...");
+        audio_process.stop_audio_recording().await.expect("Failed to stop audio recording");
     }
 
     guard.shutdown_flag.store(true, Ordering::SeqCst);
@@ -257,15 +253,18 @@ async fn construct_recording_args(
         "macos" => {
             Ok(vec![
                 "-f".to_string(), "avfoundation".to_string(),
-                "-framerate".to_string(), fps.to_string(),
+                "-framerate".to_string(), "240".to_string(),
                 "-capture_cursor".to_string(), "1".to_string(),
                 "-thread_queue_size".to_string(), "512".to_string(),
                 "-i".to_string(), format!("{}", input_index),
+                "-probesize".to_string(), "32".to_string(),
+                "-analyzeduration".to_string(), "0".to_string(),
                 "-c:v".to_string(), codec,
                 "-preset".to_string(), preset,
+                "-tune".to_string(), "zerolatency".to_string(),
                 "-pix_fmt".to_string(), pix_fmt,
                 "-g".to_string(), gop,
-                "-r".to_string(), fps.to_string(),
+                "-r".to_string(), "60".to_string(),
                 "-an".to_string(),
                 "-f".to_string(), "segment".to_string(),
                 "-segment_time".to_string(), segment_time,
@@ -273,6 +272,10 @@ async fn construct_recording_args(
                 "-segment_list".to_string(), segment_list_filename,
                 "-segment_list_type".to_string(), segment_list_type,
                 "-reset_timestamps".to_string(), "1".to_string(),
+                "-use_wallclock_as_timestamps".to_string(), "1".to_string(),
+                "-fflags".to_string(), "nobuffer".to_string(),
+                "-flags".to_string(), "low_delay".to_string(),
+                "-strict".to_string(), "experimental".to_string(),
                 output_filename_pattern,    
             ])
         },
@@ -454,6 +457,36 @@ async fn upload_jpeg_files(
     }
 
     Ok(())
+}
+
+async fn prepare_screen_recording(
+  ffmpeg_binary_path_str: &str,
+  options: &RecordingOptions,
+  screen_chunks_dir: &Path,
+) -> Result<(tokio::process::Child, ChildStdin), String> {
+  let ffmpeg_screen_args = construct_recording_args(options, screen_chunks_dir, "screen", &options.screen_index).await.map_err(|e| e.to_string())?;
+  let (screen_child, mut screen_stderr, screen_stdin) = start_screen_recording_process(ffmpeg_binary_path_str, &ffmpeg_screen_args).await.map_err(|e| e.to_string())?;
+  
+  let video_id = options.video_id.clone();
+  tokio::spawn(async move {
+    if let Err(e) = monitor_and_log_recording_start(screen_stderr, &video_id, "video").await {
+      eprintln!("Error monitoring screen recording start: {}", e);
+    }
+  });
+
+  Ok((screen_child, screen_stdin))
+}
+
+async fn prepare_audio_recording(
+  options: &RecordingOptions,
+  audio_chunks_dir: &Path,
+) -> Result<AudioRecorder, String> {
+  // Assuming `AudioRecorder::start_audio_recording` is an async function.
+  // Prepare your AudioRecorder and start recording
+  let mut audio_recorder = AudioRecorder::new();
+  let audio_file_path = audio_chunks_dir.to_str().unwrap(); // Handle errors as needed
+  audio_recorder.start_audio_recording(options.clone(), audio_file_path, None).await?;
+  Ok(audio_recorder)
 }
 
 async fn start_screen_recording_process(ffmpeg_binary_path_str: &str, ffmpeg_screen_args: &[String]) -> Result<(tokio::process::Child, ChildStderr, ChildStdin), io::Error> {

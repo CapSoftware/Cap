@@ -12,6 +12,8 @@
     "@cap/ui": "workspace:*",
     "@cap/utils": "workspace:*",
     "@tauri-apps/api": "^1.5.0",
+    "@tensorflow-models/body-pix": "^2.2.1",
+    "@tensorflow/tfjs": "^4.17.0",
     "autoprefixer": "^10.4.16",
     "cookies-next": "^4.1.0",
     "date-fns": "^3.2.0",

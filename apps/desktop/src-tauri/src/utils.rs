@@ -43,8 +43,8 @@ pub async fn monitor_and_log_recording_start(stderr: ChildStderr, video_id: &str
     let mut lines = reader.lines();
 
     while let Some(line) = lines.next_line().await? {
-        if line.contains("00:00") {
-            let timestamp = Utc::now().timestamp() as f64;
+        if line.contains("001") && line.contains("for writing") {
+            let timestamp = Utc::now().timestamp_millis() as f64;
             println!("{} recording started at timestamp: {}", log_type, timestamp);
             if send_metadata_api(video_id, timestamp, log_type).await.is_err() {
                 eprintln!("Failed to send metadata to API.");

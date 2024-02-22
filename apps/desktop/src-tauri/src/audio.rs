@@ -4,9 +4,9 @@ use std::process::{Stdio};
 use byteorder::{ByteOrder, LittleEndian};
 use std::sync::{Arc};
 
-use tokio::sync::Mutex;
 use tokio::io::{AsyncWriteExt};
 use tokio::process::{Command, ChildStdin};
+use tokio::sync::{mpsc, Mutex};
 
 use crate::recording::RecordingOptions;
 use crate::utils::{ffmpeg_path_as_str, monitor_and_log_recording_start};
@@ -17,6 +17,7 @@ pub struct AudioRecorder {
     ffmpeg_stdin: Option<Arc<Mutex<ChildStdin>>>,
     device_name: Option<String>,
     stream: Option<cpal::Stream>,
+    audio_channel_sender: Option<mpsc::Sender<Vec<u8>>>,
 }
 
 impl AudioRecorder {
@@ -28,6 +29,7 @@ impl AudioRecorder {
             ffmpeg_stdin: None,
             device_name: None,
             stream: None,
+            audio_channel_sender: None,
         }
     }
 
@@ -37,6 +39,8 @@ impl AudioRecorder {
         let host = cpal::default_host();
         let devices = host.devices().expect("Failed to get devices");
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+        let tx_clone = tx.clone();
+        self.audio_channel_sender = Some(tx);
         
         let mut input_devices = devices.filter_map(|device| {
             let supported_input_configs = device.supported_input_configs();
@@ -103,13 +107,18 @@ impl AudioRecorder {
             "-f", sample_format,
             "-ar", &sample_rate_str,
             "-ac", &channels_str,
-            "-i", "-",
+            "-i", "pipe:0",
             "-c:a", "aac",
             "-b:a", "128k",
             "-af", &audio_filters_str,
             "-f", "segment",
             "-segment_time", "3",
             "-segment_list", &segment_list_filename,
+            "-reset_timestamps", "1",
+            "-use_wallclock_as_timestamps", "1",
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-strict", "experimental",
             &output_chunk_pattern,
         ].into_iter().map(|s| s.to_string()).collect();
 
@@ -143,7 +152,7 @@ impl AudioRecorder {
               &config.into(),
               move |data: &[i8], _: &_| {
                   let bytes = data.iter().map(|&sample| sample as u8).collect::<Vec<u8>>();
-                  if tx.try_send(bytes).is_err() {
+                  if tx_clone.try_send(bytes).is_err() {
                       eprintln!("Channel send error. Dropping data.");
                   }
               },
@@ -155,7 +164,7 @@ impl AudioRecorder {
               move |data: &[i16], _: &_| {
                   let mut bytes = vec![0; data.len() * 2];
                   LittleEndian::write_i16_into(data, &mut bytes);
-                  if tx.try_send(bytes).is_err() {
+                  if tx_clone.try_send(bytes).is_err() {
                       eprintln!("Channel send error. Dropping data.");
                   }
               },
@@ -167,7 +176,7 @@ impl AudioRecorder {
               move |data: &[i32], _: &_| {
                   let mut bytes = vec![0; data.len() * 4];
                   LittleEndian::write_i32_into(data, &mut bytes);
-                  if tx.try_send(bytes).is_err() {
+                  if tx_clone.try_send(bytes).is_err() {
                       eprintln!("Channel send error. Dropping data.");
                   }
               },
@@ -178,7 +187,7 @@ impl AudioRecorder {
               &config.into(),
               move |data: &[f32], _: &_| {
                   let bytes = bytemuck::cast_slice::<f32, u8>(data).to_vec();
-                  if tx.try_send(bytes).is_err() {
+                  if tx_clone.try_send(bytes).is_err() {
                       eprintln!("Channel send error. Dropping data.");
                   }
               },
@@ -212,6 +221,10 @@ impl AudioRecorder {
     }
 
     pub async fn stop_audio_recording(&mut self) -> Result<(), String> {
+        if let Some(sender) = self.audio_channel_sender.take() {
+            drop(sender);
+        }
+
         if let Some(ref mut stream) = self.stream {
             stream.pause().map_err(|_| "Failed to pause stream")?;
             println!("Audio recording paused.");
@@ -219,25 +232,21 @@ impl AudioRecorder {
             return Err("Recording was not started".to_string());
         }
 
-        if let Some(stdin_arc) = &self.ffmpeg_stdin {
-            drop(stdin_arc); // Explicitly drop the stdin Arc<Mutex<ChildStdin>> to close stdin.
-            println!("Stdin closed for FFmpeg process.");
-        }
-
-        println!("Killing FFmpeg process...");
-        if let Some(ref mut child) = self.ffmpeg_process {
-            match child.kill().await {
-                Ok(_) => println!("FFmpeg process was killed successfully."),
-                Err(e) => return Err(format!("Failed to kill FFmpeg process: {}", e)),
+        println!("Sending quit command to FFmpeg...");
+        if let Some(stdin_arc) = self.ffmpeg_stdin.take() {
+            let mut stdin_guard = stdin_arc.lock().await;
+            if let Err(e) = stdin_guard.write_all(b"q\n").await {
+                eprintln!("Failed to send quit command to FFmpeg: {}", e);
+                return Err("Failed to send quit command to FFmpeg".to_string());
             }
 
-            // Await the process to ensure it has been terminated.
-            match child.wait().await {
-                Ok(status) => println!("FFmpeg process terminated with status: {}", status),
-                Err(e) => println!("Error waiting for FFmpeg process to terminate: {}", e),
-            }
-        } else {
-            return Err("FFmpeg process was not started".to_string());
+            stdin_guard.flush().await.expect("Failed to flush FFmpeg stdin");
+
+            println!("Quit command sent to FFmpeg. Waiting for FFmpeg to process...");
+
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            println!("Finalizing FFmpeg process...");
         }
 
         println!("Audio recording stopped.");

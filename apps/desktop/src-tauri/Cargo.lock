@@ -499,6 +499,7 @@ dependencies = [
  "dotenv_codegen",
  "ffmpeg-sidecar",
  "futures",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
