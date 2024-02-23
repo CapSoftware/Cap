@@ -13,7 +13,33 @@ edition = "2021"
 tauri-build = { version = "1.5.0", features = [] }
 
 [dependencies]
-tauri = { version = "1.5.0", features = [ "fs-copy-file", "fs-read-dir", "window-minimize", "os-all", "window-set-always-on-top", "http-all", "fs-read-file", "fs-exists", "window-close", "window-start-dragging", "fs-remove-dir", "window-show", "window-set-position", "window-hide", "window-maximize", "fs-write-file", "fs-rename-file", "shell-open", "window-unminimize", "fs-create-dir", "window-unmaximize", "window-set-ignore-cursor-events", "fs-remove-file", "macos-private-api", "devtools"] }
+tauri = { version = "1.5.0", features = [
+    "fs-copy-file",
+    "fs-read-dir",
+    "window-minimize",
+    "os-all",
+    "window-set-always-on-top",
+    "http-all",
+    "fs-read-file",
+    "fs-exists",
+    "window-close",
+    "window-start-dragging",
+    "fs-remove-dir",
+    "window-show",
+    "window-set-position",
+    "window-hide",
+    "window-maximize",
+    "fs-write-file",
+    "fs-rename-file",
+    "shell-open",
+    "window-unminimize",
+    "fs-create-dir",
+    "window-unmaximize",
+    "window-set-ignore-cursor-events",
+    "fs-remove-file",
+    "macos-private-api",
+    "devtools",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri-plugin-context-menu = "0.7.0"
@@ -34,6 +60,7 @@ dotenv_codegen = "0.15.0"
 byteorder = "1.4.3"
 bytemuck = "1.14.3"
 regex = "1"
+log = "0.4.20"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
