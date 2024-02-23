@@ -3,8 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "next-start": "next dev",
+    "next-build": "next build",
     "dev": "tauri dev",
-    "build": "tsc && next build",
+    "build": "tauri build",
     "tauri": "tauri"
   },
   "dependencies": {
