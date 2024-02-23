@@ -1,13 +1,13 @@
-"use client";
-
-import React, { useState, useEffect } from "react";
+import type { NextPage } from "next";
 import { getCookie } from "cookies-next";
+import { useEffect, useState } from "react";
 import { SignIn } from "@/components/windows/inner/SignIn";
 import { Recorder } from "@/components/windows/inner/Recorder";
 import { WindowActions } from "@/components/WindowActions";
 import { LogoSpinner } from "@cap/ui";
+import Page from "../Page";
 
-export default function CameraPage() {
+const Home: NextPage = () => {
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [cameraWindowOpen, setCameraWindowOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -77,16 +77,22 @@ export default function CameraPage() {
 
   if (loading) {
     return (
-      <div className="w-full h-full flex items-center justify-center">
-        <LogoSpinner className="w-10 h-auto animate-spin" />
-      </div>
+      <Page>
+        <div className="w-full h-full flex items-center justify-center">
+          <LogoSpinner className="w-10 h-auto animate-spin" />
+        </div>
+      </Page>
     );
   }
 
   return (
-    <div id="app" data-tauri-drag-region style={{ borderRadius: "16px" }}>
-      <WindowActions />
-      {isSignedIn ? <Recorder /> : <SignIn />}
-    </div>
+    <Page>
+      <div id="app" data-tauri-drag-region style={{ borderRadius: "16px" }}>
+        <WindowActions />
+        {isSignedIn ? <Recorder /> : <SignIn />}
+      </div>
+    </Page>
   );
-}
+};
+
+export default Home;
