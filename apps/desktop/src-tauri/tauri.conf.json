@@ -1,4 +1,5 @@
 {
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "build": {
     "beforeDevCommand": "next dev -p 3001",
     "beforeBuildCommand": "next build",
@@ -76,15 +77,8 @@
         "title": "Cap",
         "label": "main",
         "url": "/",
-        "width": 285,
-        "height": 410,
-        "maximized": false,
-        "resizable": false,
-        "fullscreen": false,
-        "transparent": true,
-        "decorations": false,
-        "alwaysOnTop": false,
-        "center": true
+        "width": 1280,
+        "height": 800
       }
     ]
   }
