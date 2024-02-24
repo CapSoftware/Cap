@@ -1,9 +1,10 @@
 import type { NextPage } from "next";
+import Link from "next/link";
+import Image from "next/image";
 import { getCookie } from "cookies-next";
 import { useEffect, useState } from "react";
-import { SignIn } from "@/components/windows/inner/SignIn";
-import { Recorder } from "@/components/windows/inner/Recorder";
-import { WindowActions } from "@/components/WindowActions";
+import { useRouter } from "next/router";
+
 import { LogoSpinner } from "@cap/ui";
 import Page from "../Page";
 
@@ -11,6 +12,7 @@ const Home: NextPage = () => {
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [cameraWindowOpen, setCameraWindowOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const router = useRouter();
 
   useEffect(() => {
     const checkSignInStatus = async () => {
@@ -75,10 +77,14 @@ const Home: NextPage = () => {
     }
   }, [isSignedIn, cameraWindowOpen]);
 
+  const onClick = () => {
+    router.push("/signin");
+  };
+
   if (loading) {
     return (
       <Page>
-        <div className="w-full h-full flex items-center justify-center">
+        <div className="w-screen h-screen flex items-center justify-center">
           <LogoSpinner className="w-10 h-auto animate-spin" />
         </div>
       </Page>
@@ -87,10 +93,38 @@ const Home: NextPage = () => {
 
   return (
     <Page>
-      <div id="app" data-tauri-drag-region style={{ borderRadius: "16px" }}>
-        <WindowActions />
-        {isSignedIn ? <Recorder /> : <SignIn />}
-      </div>
+      <section className="bg-gray-50 dark:bg-gray-900">
+        <div className="flex flex-col items-center justify-center px-6 py-8 mx-auto md:h-screen lg:py-0">
+          <a
+            href="/"
+            className="flex items-center gap-2 mb-6 text-2xl font-semibold text-gray-900 dark:text-white"
+          >
+            <Image src="/images/logo.png" height={32} width={32} alt="logo" />
+            Cap App
+          </a>
+
+          <div className="flex items-center gap-5">
+            <Link href="/signin">
+              <button
+                type="button"
+                className="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-blue-600 dark:hover:bg-blue-700 focus:outline-none dark:focus:ring-blue-800"
+              >
+                Sign In
+              </button>
+            </Link>
+
+            <Link href="/signin">
+              <button
+                type="button"
+                className="text-white bg-blue-700 hover:bg-blue-800 focus:ring-4 focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-blue-600 dark:hover:bg-blue-700 focus:outline-none dark:focus:ring-blue-800"
+                onClick={onClick}
+              >
+                Sign Up
+              </button>
+            </Link>
+          </div>
+        </div>
+      </section>
     </Page>
   );
 };

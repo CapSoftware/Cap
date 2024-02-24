@@ -13,7 +13,7 @@ const { version } = packageJson;
 const nextConfig = {
   reactStrictMode: false,
   swcMinify: true,
-  output: "export",
+  // output: "export",
   transpilePackages: ["@cap/ui", "@cap/utils"],
   eslint: {
     ignoreDuringBuilds: true,
