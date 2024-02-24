@@ -1,5 +1,5 @@
 import type { NextPage } from "next";
-import Main from "@/views/Main";
+import Main from "@/views/Main1";
 
 const IndexPage: NextPage = () => {
   return <Main />;
