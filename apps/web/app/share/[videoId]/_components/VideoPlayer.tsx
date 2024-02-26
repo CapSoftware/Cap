@@ -10,13 +10,11 @@ import Hls from "hls.js";
 interface VideoPlayerProps {
   videoSrc: string;
   audioSrc?: string;
-  videoStartTime: number | null;
-  audioStartTime: number | null;
 }
 
 export const VideoPlayer = memo(
   forwardRef<HTMLVideoElement, VideoPlayerProps>(
-    ({ videoSrc, audioSrc, videoStartTime, audioStartTime }, ref) => {
+    ({ videoSrc, audioSrc }, ref) => {
       const videoRef = useRef<HTMLVideoElement>(null);
       const audioRef = useRef<HTMLAudioElement>(null);
       const videoHlsInstance = useRef<Hls | null>(null);
@@ -58,30 +56,6 @@ export const VideoPlayer = memo(
       }, [audioSrc]);
 
       useEffect(() => {
-        if (
-          !videoRef.current ||
-          !audioSrc ||
-          !audioRef.current ||
-          videoStartTime === null ||
-          audioStartTime === null
-        )
-          return;
-
-        const timeDifferenceInSeconds =
-          (audioStartTime - videoStartTime) / 1000;
-
-        console.log("timeDifferenceInSeconds", timeDifferenceInSeconds);
-
-        if (timeDifferenceInSeconds > 0) {
-          videoRef.current.currentTime = timeDifferenceInSeconds;
-          audioRef.current.currentTime = 0;
-        } else {
-          audioRef.current.currentTime = -timeDifferenceInSeconds;
-          videoRef.current.currentTime = 0;
-        }
-      }, [videoStartTime, audioStartTime, audioSrc]);
-
-      useEffect(() => {
         if (!audioSrc || !videoRef.current || !audioRef.current) return;
         const video = videoRef.current;
         const audio = audioRef.current;
@@ -98,24 +72,14 @@ export const VideoPlayer = memo(
           }
         };
 
-        const seekListener = () => {
-          if (audioStartTime !== null && videoStartTime !== null) {
-            const startOffsetSeconds = (audioStartTime - videoStartTime) / 1000;
-            console.log("startOffsetSeconds", startOffsetSeconds);
-            audio.currentTime = video.currentTime + startOffsetSeconds;
-          }
-        };
-
         video.addEventListener("play", playListener);
         video.addEventListener("pause", pauseListener);
-        video.addEventListener("seeked", seekListener);
 
         return () => {
           video.removeEventListener("play", playListener);
           video.removeEventListener("pause", pauseListener);
-          video.removeEventListener("seeked", seekListener);
         };
-      }, [audioSrc, videoStartTime, audioStartTime]);
+      }, [audioSrc]);
 
       return (
         <>

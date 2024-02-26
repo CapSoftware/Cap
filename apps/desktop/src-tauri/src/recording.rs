@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
-use std::io::{self, BufReader, BufRead, ErrorKind};
+use std::io::{self, BufReader, BufRead, ErrorKind, ErrorKind::WouldBlock};
 use std::fs::File;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::ops::{Deref, DerefMut};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Instant};
 use tokio::sync:: {Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration};
@@ -13,14 +14,18 @@ use serde::{Serialize, Deserialize};
 use tauri::State;
 use tokio::process::{Command, ChildStderr, ChildStdin};
 use tokio::join;
+use futures::future::join_all;
 
 use crate::utils::{ffmpeg_path_as_str, monitor_and_log_recording_start};
 use crate::upload::upload_file;
+
 use crate::audio::AudioRecorder;
+
+const FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000 / 30);
 
 pub struct RecordingState {
   pub screen_process: Option<tokio::process::Child>,
-  pub screen_process_stdin: Option<tokio::process::ChildStdin>,
+  pub screen_process_stdin: Option<Arc<Mutex<ChildStdin>>>,
   pub video_process: Option<tokio::process::Child>,
   pub audio_process: Option<AudioRecorder>,
   pub upload_handles: Mutex<Vec<JoinHandle<Result<(), String>>>>,
@@ -59,17 +64,21 @@ pub async fn start_dual_recording(
   
   let shutdown_flag = Arc::new(AtomicBool::new(false));
 
-  let ffmpeg_binary_path_str = ffmpeg_path_as_str()?;
+  // let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+  // let display = Display::primary().map_err(|_| "Failed to find primary display".to_string())?;
+  // let (w, h) = (display.width(), display.height());
+  // let adjusted_height = h & !1;
+  // let capture_size = w * adjusted_height * 4;
 
   let data_dir = state_guard.data_dir.as_ref()
       .ok_or("Data directory is not set in the recording state".to_string())?.clone();
 
   println!("data_dir: {:?}", data_dir);
   
-  let screen_chunks_dir = data_dir.join("chunks/screen");
   let audio_chunks_dir = data_dir.join("chunks/audio");
-  clean_and_create_dir(&screen_chunks_dir)?;
+  let video_chunks_dir = data_dir.join("chunks/video");
   clean_and_create_dir(&audio_chunks_dir)?;
+  clean_and_create_dir(&video_chunks_dir)?;
   
   let audio_name = if options.audio_name.is_empty() {
     None
@@ -77,8 +86,8 @@ pub async fn start_dual_recording(
     Some(options.audio_name.clone())
   };
   
-  let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index);
-  let ffmpeg_screen_args = ffmpeg_screen_args_future.await.map_err(|e| e.to_string())?;
+  // let ffmpeg_screen_args_future = construct_recording_args(&options, &screen_chunks_dir, "screen", &options.screen_index, w, adjusted_height);
+  // let ffmpeg_screen_args = ffmpeg_screen_args_future.await.map_err(|e| e.to_string())?;
 
   let screenshot_output_path = data_dir.join("screen-capture.jpg").to_str().unwrap().to_string();
   let ffmpeg_screen_screenshot_args = match std::env::consts::OS {
@@ -115,22 +124,30 @@ pub async fn start_dual_recording(
     _ => return Err("Unsupported OS".to_string()),
   };
   
-  println!("Screen args: {:?}", ffmpeg_screen_args);
+  // println!("Screen args: {:?}", ffmpeg_screen_args);
 
   // Prepare screen and audio recording concurrently
   let ffmpeg_binary_path_str = ffmpeg_path_as_str()?;
-  let screen_recording_preparation = prepare_screen_recording(&ffmpeg_binary_path_str, &options, &screen_chunks_dir);
-  let audio_recording_preparation = prepare_audio_recording(&options, &audio_chunks_dir);
+  // let screen_recording_preparation = prepare_screen_recording(&ffmpeg_binary_path_str, &options, &screen_chunks_dir, w, adjusted_height);
+  let audio_recording_preparation = prepare_audio_recording(&options, &audio_chunks_dir, &video_chunks_dir, audio_name);
 
-  // Start both recordings concurrently
-  let (screen_recording_result, audio_recording_result) = join!(
-    screen_recording_preparation,
-    audio_recording_preparation
-  );
+  let audio_recording_result = audio_recording_preparation.await.map_err(|e| e.to_string())?;
 
   // Handle the results of both operations
-  let (screen_child, screen_stdin) = screen_recording_result.map_err(|e| e.to_string())?;
-  let audio_process = audio_recording_result.map_err(|e| e.to_string())?;
+  // let (screen_child, screen_stdin) = screen_recording_result.map_err(|e| e.to_string())?;
+
+  // let screen_stdin_arc = Arc::new(Mutex::new(screen_stdin));
+  // let stdin_clone = Arc::clone(&screen_stdin_arc);
+
+  // tokio::spawn(async move {
+  //     while let Some(frame_data) = rx.recv().await {
+  //         let mut stdin_locked = stdin_clone.lock().await;
+  //         if let Err(e) = stdin_locked.write_all(&frame_data).await {
+  //             eprintln!("Failed to write frame data to FFmpeg's stdin: {}", e);
+  //             break;
+  //         }
+  //     }
+  // });
 
   let options_clone = state_guard.recording_options.clone();  
 
@@ -146,18 +163,62 @@ pub async fn start_dual_recording(
       }
   });
 
-  state_guard.screen_process = Some(screen_child);
-  println!("Set screen child");
-  state_guard.screen_process_stdin = Some(screen_stdin);
-  println!("Set screen stdin");
-  state_guard.audio_process = Some(audio_process);
+  // state_guard.screen_process = Some(screen_child);
+  // println!("Set screen child");
+  // state_guard.screen_process_stdin = Some(screen_stdin_arc);
+  // println!("Set screen stdin");
+  state_guard.audio_process = Some(audio_recording_result);
   state_guard.upload_handles = Mutex::new(vec![]);
   state_guard.recording_options = Some(options.clone());
   state_guard.shutdown_flag = shutdown_flag.clone();
   state_guard.video_uploading_finished = Arc::new(AtomicBool::new(false));
   state_guard.audio_uploading_finished = Arc::new(AtomicBool::new(false));
 
-  let screen_upload = start_upload_loop(screen_chunks_dir, options.clone(), "screen".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
+  // let _capturer_thread = {
+  //     println!("Starting video capture thread...");
+  //     let shutdown_flag = shutdown_flag.clone();
+  //     tokio::spawn(async move {
+  //         println!("Starting video capture...");
+
+  //         let mut safe_capturer = SafeCapturer(Capturer::new(display).expect("Failed to start capture"));
+  //         let mut next_frame_time = Instant::now();
+  //         while !shutdown_flag.load(Ordering::SeqCst) {
+  //             let now = Instant::now();
+  //             if now < next_frame_time {
+  //                 std::thread::sleep(next_frame_time - now);
+  //             }
+  //             next_frame_time = Instant::now() + FRAME_INTERVAL;
+
+  //             let frame_data = match safe_capturer.frame() {
+  //                 Ok(frame) => {
+  //                     let stride = frame[..capture_size].len() / adjusted_height;
+  //                     let mut frame_data = Vec::with_capacity(capture_size);
+  //                     for row in 0..adjusted_height {
+  //                         let start = row * stride;
+  //                         let end = start + stride;
+  //                         frame_data.extend_from_slice(&frame[start..end]);
+  //                     }
+  //                     Some(frame_data)
+  //                 },
+  //                 Err(error) if error.kind() == WouldBlock => {
+  //                     continue;
+  //                 },
+  //                 Err(error) => return Err(format!("Capture error: {}", error)),
+  //             };
+
+  //             if let Some(frame_data) = frame_data {
+  //                 if let Err(e) = tx.send(frame_data).await {
+  //                     eprintln!("Failed to send frame data through channel: {}", e);
+  //                     break;
+  //                 }
+  //             }
+  //         }
+
+  //         Ok(())
+  //     })
+  // };
+
+  let screen_upload = start_upload_loop(video_chunks_dir.clone(), options.clone(), "video".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
   let audio_upload = start_upload_loop(audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone(), state_guard.audio_uploading_finished.clone());
 
   drop(state_guard);
@@ -184,20 +245,21 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
     let mut guard = state.lock().await;
     
     println!("Stopping screen recording...");
+    
+    guard.shutdown_flag.store(true, Ordering::SeqCst);
 
-    if let Some(stdin) = guard.screen_process_stdin.take() {
-        println!("Sending quit command to FFmpeg...");
-        if let Err(e) = graceful_stop_ffmpeg(stdin).await {
-            eprintln!("Failed to send quit command to FFmpeg: {}", e);
-        }
-    }
+    // if let Some(stdin) = guard.screen_process_stdin.take() {
+    //     println!("Sending quit command to FFmpeg...");
+    //     let mut stdin_locked = stdin.lock().await;
+    //     if let Err(e) = graceful_stop_ffmpeg(&mut stdin_locked).await {
+    //         eprintln!("Failed to send quit command to FFmpeg: {}", e);
+    //     }
+    // }
 
     if let Some(mut audio_process) = guard.audio_process.take() {
         println!("Stopping audio recording...");
         audio_process.stop_audio_recording().await.expect("Failed to stop audio recording");
     }
-
-    guard.shutdown_flag.store(true, Ordering::SeqCst);
 
     while !guard.video_uploading_finished.load(Ordering::SeqCst) 
         || !guard.audio_uploading_finished.load(Ordering::SeqCst) {
@@ -228,103 +290,95 @@ fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
     }
 }
 
-async fn construct_recording_args(
-    options: &RecordingOptions,
-    chunks_dir: &Path, 
-    video_type: &str,
-    input_index: &str, 
-) -> Result<Vec<String>, String> {
-    let output_filename_pattern = format!("{}/recording_chunk_%03d.ts", chunks_dir.display());
-    let segment_list_filename = format!("{}/segment_list.txt", chunks_dir.display());
+// async fn construct_recording_args(
+//     options: &RecordingOptions,
+//     chunks_dir: &Path, 
+//     video_type: &str,
+//     input_index: &str, 
+//     w: usize,
+//     adjusted_height: usize,
+// ) -> Result<Vec<String>, String> {
+//     let output_filename_pattern = format!("{}/recording_chunk_%03d.ts", chunks_dir.display());
+//     let segment_list_filename = format!("{}/segment_list.txt", chunks_dir.display());
     
-    ensure_segment_list_exists(PathBuf::from(&segment_list_filename))
-        .map_err(|e| format!("Failed to ensure segment list file exists: {}", e))?;
+//     ensure_segment_list_exists(PathBuf::from(&segment_list_filename))
+//         .map_err(|e| format!("Failed to ensure segment list file exists: {}", e))?;
       
-    let fps = if video_type == "screen" { "30" } else { &options.framerate };
-    let preset = "ultrafast".to_string();
-    let crf = "28".to_string();
-    let pix_fmt = "yuv420p".to_string();
-    let codec = "libx264".to_string();
-    let gop = "30".to_string();
-    let segment_time = "3".to_string();
-    let segment_list_type = "flat".to_string();
+//     let fps = if video_type == "screen" { "30" } else { &options.framerate };
+//     let preset = "veryfast".to_string();
+//     let crf = "28".to_string();
+//     let pix_fmt = "yuv420p".to_string();
+//     let codec = "libx264".to_string();
+//     let segment_time = "3".to_string();
+//     let segment_list_type = "flat".to_string();
 
-    match std::env::consts::OS {
-        "macos" => {
-            Ok(vec![
-                "-f".to_string(), "avfoundation".to_string(),
-                "-framerate".to_string(), "240".to_string(),
-                "-capture_cursor".to_string(), "1".to_string(),
-                "-thread_queue_size".to_string(), "512".to_string(),
-                "-i".to_string(), format!("{}", input_index),
-                "-probesize".to_string(), "32".to_string(),
-                "-analyzeduration".to_string(), "0".to_string(),
-                "-c:v".to_string(), codec,
-                "-preset".to_string(), preset,
-                "-tune".to_string(), "zerolatency".to_string(),
-                "-pix_fmt".to_string(), pix_fmt,
-                "-g".to_string(), gop,
-                "-r".to_string(), "60".to_string(),
-                "-an".to_string(),
-                "-f".to_string(), "segment".to_string(),
-                "-segment_time".to_string(), segment_time,
-                "-segment_format".to_string(), "mpegts".to_string(),
-                "-segment_list".to_string(), segment_list_filename,
-                "-segment_list_type".to_string(), segment_list_type,
-                "-reset_timestamps".to_string(), "1".to_string(),
-                "-use_wallclock_as_timestamps".to_string(), "1".to_string(),
-                "-fflags".to_string(), "nobuffer".to_string(),
-                "-flags".to_string(), "low_delay".to_string(),
-                "-strict".to_string(), "experimental".to_string(),
-                output_filename_pattern,    
-            ])
-        },
-        "linux" => {
-            Ok(vec![
-                "-f".to_string(), "x11grab".to_string(),
-                "-i".to_string(), format!("{}+0,0", input_index),
-                "-draw_mouse".to_string(), "1".to_string(),
-                "-pix_fmt".to_string(), pix_fmt,
-                "-c:v".to_string(), codec,
-                "-crf".to_string(), crf,
-                "-preset".to_string(), preset,
-                "-g".to_string(), gop,
-                "-r".to_string(), fps.to_string(),
-                "-an".to_string(),
-                "-f".to_string(), "segment".to_string(),
-                "-segment_time".to_string(), segment_time,
-                "-segment_format".to_string(), "mpegts".to_string(),
-                "-segment_list".to_string(), segment_list_filename,
-                "-segment_list_type".to_string(), segment_list_type,
-                "-reset_timestamps".to_string(), "1".to_string(),
-                output_filename_pattern,
-            ])
-        },
-        "windows" => {
-            Ok(vec![
-                "-f".to_string(), "gdigrab".to_string(),
-                "-i".to_string(), "desktop".to_string(),
-                "-pixel_format".to_string(), pix_fmt,
-                "-c:v".to_string(), codec,
-                "-crf".to_string(), crf,
-                "-preset".to_string(), preset,
-                "-g".to_string(), gop,
-                "-r".to_string(), fps.to_string(),
-                "-an".to_string(), // This is the argument to skip audio recording.
-                "-f".to_string(), "segment".to_string(),
-                "-segment_time".to_string(), segment_time,
-                "-segment_format".to_string(), "mpegts".to_string(),
-                "-segment_list".to_string(), segment_list_filename,
-                "-segment_list_type".to_string(), segment_list_type,
-                "-reset_timestamps".to_string(), "1".to_string(),
-                output_filename_pattern,
-            ])
-        },
-        _ => Err("Unsupported OS".to_string()),
-    }
-}
-
-use futures::future::join_all;
+//     match std::env::consts::OS {
+//         "macos" => {
+//             Ok(vec![
+//                 "-f".to_string(), "rawvideo".to_string(),
+//                 "-pix_fmt".to_string(), "bgra".to_string(),
+//                 "-s".to_string(), format!("{}x{}", w, adjusted_height),
+//                 "-r".to_string(), "30".to_string(),
+//                 "-thread_queue_size".to_string(), "8192".to_string(),
+//                 "-i".to_string(), "pipe:0".to_string(),
+//                 "-c:v".to_string(), "libx264".to_string(),
+//                 "-preset".to_string(), preset,
+//                 "-pix_fmt".to_string(), pix_fmt,
+//                 "-vsync".to_string(), "1".to_string(),
+//                 "-r".to_string(), "30".to_string(),
+//                 "-an".to_string(),
+//                 "-f".to_string(), "segment".to_string(),
+//                 "-segment_time".to_string(), segment_time,
+//                 "-segment_format".to_string(), "mpegts".to_string(),
+//                 "-segment_list".to_string(), segment_list_filename,
+//                 "-segment_list_type".to_string(), segment_list_type,
+//                 "-reset_timestamps".to_string(), "1".to_string(),
+//                 "-use_wallclock_as_timestamps".to_string(), "1".to_string(),
+//                 output_filename_pattern,    
+//             ])
+//         },
+//         "linux" => {
+//             Ok(vec![
+//                 "-f".to_string(), "x11grab".to_string(),
+//                 "-i".to_string(), format!("{}+0,0", input_index),
+//                 "-draw_mouse".to_string(), "1".to_string(),
+//                 "-pix_fmt".to_string(), pix_fmt,
+//                 "-c:v".to_string(), codec,
+//                 "-crf".to_string(), crf,
+//                 "-preset".to_string(), preset,
+//                 "-r".to_string(), fps.to_string(),
+//                 "-an".to_string(),
+//                 "-f".to_string(), "segment".to_string(),
+//                 "-segment_time".to_string(), segment_time,
+//                 "-segment_format".to_string(), "mpegts".to_string(),
+//                 "-segment_list".to_string(), segment_list_filename,
+//                 "-segment_list_type".to_string(), segment_list_type,
+//                 "-reset_timestamps".to_string(), "1".to_string(),
+//                 output_filename_pattern,
+//             ])
+//         },
+//         "windows" => {
+//             Ok(vec![
+//                 "-f".to_string(), "gdigrab".to_string(),
+//                 "-i".to_string(), "desktop".to_string(),
+//                 "-pixel_format".to_string(), pix_fmt,
+//                 "-c:v".to_string(), codec,
+//                 "-crf".to_string(), crf,
+//                 "-preset".to_string(), preset,
+//                 "-r".to_string(), fps.to_string(),
+//                 "-an".to_string(), // This is the argument to skip audio recording.
+//                 "-f".to_string(), "segment".to_string(),
+//                 "-segment_time".to_string(), segment_time,
+//                 "-segment_format".to_string(), "mpegts".to_string(),
+//                 "-segment_list".to_string(), segment_list_filename,
+//                 "-segment_list_type".to_string(), segment_list_type,
+//                 "-reset_timestamps".to_string(), "1".to_string(),
+//                 output_filename_pattern,
+//             ])
+//         },
+//         _ => Err("Unsupported OS".to_string()),
+//     }
+// }
 
 async fn start_upload_loop(
     chunks_dir: PathBuf,
@@ -459,51 +513,56 @@ async fn upload_jpeg_files(
     Ok(())
 }
 
-async fn prepare_screen_recording(
-  ffmpeg_binary_path_str: &str,
-  options: &RecordingOptions,
-  screen_chunks_dir: &Path,
-) -> Result<(tokio::process::Child, ChildStdin), String> {
-  let ffmpeg_screen_args = construct_recording_args(options, screen_chunks_dir, "screen", &options.screen_index).await.map_err(|e| e.to_string())?;
-  let (screen_child, mut screen_stderr, screen_stdin) = start_screen_recording_process(ffmpeg_binary_path_str, &ffmpeg_screen_args).await.map_err(|e| e.to_string())?;
+// async fn prepare_screen_recording(
+//   ffmpeg_binary_path_str: &str,
+//   options: &RecordingOptions,
+//   screen_chunks_dir: &Path,
+//   w: usize,
+//   adjusted_height: usize,
+// ) -> Result<(tokio::process::Child, ChildStdin), String> {
+//   let ffmpeg_screen_args = construct_recording_args(options, screen_chunks_dir, "screen", &options.screen_index, w, adjusted_height).await.map_err(|e| e.to_string())?;
+//   let (screen_child, screen_stderr, screen_stdin) = start_screen_recording_process(ffmpeg_binary_path_str, &ffmpeg_screen_args).await.map_err(|e| e.to_string())?;
   
-  let video_id = options.video_id.clone();
-  tokio::spawn(async move {
-    if let Err(e) = monitor_and_log_recording_start(screen_stderr, &video_id, "video").await {
-      eprintln!("Error monitoring screen recording start: {}", e);
-    }
-  });
+//   let video_id = options.video_id.clone();
+//   tokio::spawn(async move {
+//     if let Err(e) = monitor_and_log_recording_start(screen_stderr, &video_id, "video").await {
+//       eprintln!("Error monitoring screen recording start: {}", e);
+//     }
+//   });
 
-  Ok((screen_child, screen_stdin))
-}
+//   Ok((screen_child, screen_stdin))
+// }
 
 async fn prepare_audio_recording(
   options: &RecordingOptions,
   audio_chunks_dir: &Path,
+  video_chunks_dir: &Path,
+  audio_name: Option<String>,
 ) -> Result<AudioRecorder, String> {
   // Assuming `AudioRecorder::start_audio_recording` is an async function.
   // Prepare your AudioRecorder and start recording
   let mut audio_recorder = AudioRecorder::new();
-  let audio_file_path = audio_chunks_dir.to_str().unwrap(); // Handle errors as needed
-  audio_recorder.start_audio_recording(options.clone(), audio_file_path, None).await?;
+  let audio_file_path = audio_chunks_dir.to_str().unwrap();
+  let video_file_path = video_chunks_dir.to_str().unwrap();
+  audio_recorder.start_audio_recording(options.clone(), audio_file_path, video_file_path, audio_name.as_ref().map(String::as_str)).await?;
   Ok(audio_recorder)
 }
 
-async fn start_screen_recording_process(ffmpeg_binary_path_str: &str, ffmpeg_screen_args: &[String]) -> Result<(tokio::process::Child, ChildStderr, ChildStdin), io::Error> {
-    let mut child = Command::new(ffmpeg_binary_path_str)
-        .args(ffmpeg_screen_args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+// async fn start_screen_recording_process(ffmpeg_binary_path_str: &str, ffmpeg_screen_args: &[String]) -> Result<(tokio::process::Child, ChildStderr, ChildStdin), io::Error> {
+//     let mut child = Command::new(ffmpeg_binary_path_str)
+//         .args(ffmpeg_screen_args)
+//         .stdin(Stdio::piped())
+//         .stdout(Stdio::piped())
+//         .stderr(Stdio::piped())
+//         .spawn()?;
     
-    let stderr = child.stderr.take().expect("failed to take child stdout");
-    let stdin = child.stdin.take().expect("failed to take child stdin");
+//     let stderr = child.stderr.take().expect("failed to take child stdout");
+//     let stdin = child.stdin.take().expect("failed to take child stdin");
     
-    Ok((child, stderr, stdin))
-}
+//     Ok((child, stderr, stdin))
+// }
 
-async fn graceful_stop_ffmpeg(mut stdin: tokio::process::ChildStdin) -> Result<(), std::io::Error> {
-    stdin.write_all(b"q\n").await?;
-    Ok(())
-}
+// async fn graceful_stop_ffmpeg(stdin: &mut tokio::process::ChildStdin) -> Result<(), std::io::Error> {
+//     stdin.write_all(b"q\n").await?;
+//     Ok(())
+// }

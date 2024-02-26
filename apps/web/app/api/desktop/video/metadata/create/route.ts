@@ -12,7 +12,12 @@ export async function GET(request: NextRequest) {
     const startTime = url.searchParams.get("startTime");
     const logType = url.searchParams.get("logType");
 
-    if (!videoId || (!startTime && !logType)) {
+    console.log("...Updating video or audio start time...");
+    console.log("videoId", videoId);
+    console.log("startTime", startTime);
+    console.log("logType", logType);
+
+    if (!videoId || !startTime || !logType) {
       return new Response(
         JSON.stringify({ error: "Missing required fields" }),
         {
@@ -28,7 +33,7 @@ export async function GET(request: NextRequest) {
       console.log("...Updating video start time...");
       await db
         .update(videos)
-        .set({ videoStartTime: Number(startTime) })
+        .set({ videoStartTime: startTime.toString() })
         .where(eq(videos.id, videoId));
     }
 
@@ -36,7 +41,7 @@ export async function GET(request: NextRequest) {
       console.log("...Updating audio start time...");
       await db
         .update(videos)
-        .set({ audioStartTime: Number(startTime) })
+        .set({ audioStartTime: startTime.toString() })
         .where(eq(videos.id, videoId));
     }
 

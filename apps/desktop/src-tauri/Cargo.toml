@@ -34,6 +34,7 @@ dotenv_codegen = "0.15.0"
 byteorder = "1.4.3"
 bytemuck = "1.14.3"
 regex = "1"
+capture = { path = "./src/capture" }
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
