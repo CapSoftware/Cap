@@ -500,7 +500,6 @@ dependencies = [
  "ffmpeg-sidecar",
  "futures",
  "log",
- "opencv",
  "regex",
  "reqwest",
  "serde",
@@ -603,16 +602,6 @@ dependencies = [
  "serde",
  "wasm-bindgen",
  "windows-targets 0.52.0",
-]
-
-[[package]]
-name = "clang"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84c044c781163c001b913cd018fc95a628c50d0d2dfea8bca77dad71edb16e37"
-dependencies = [
- "clang-sys",
- "libc",
 ]
 
 [[package]]
@@ -2225,19 +2214,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jobslot"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e21650a7eb4eb51339b77d6c015e8fcba5966ed2deea61df6cc653241be77fc"
-dependencies = [
- "cfg-if",
- "getrandom 0.2.12",
- "libc",
- "scopeguard",
- "windows-sys 0.52.0",
-]
-
-[[package]]
 name = "jpeg-decoder"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2839,39 +2815,6 @@ checksum = "2078c0039e6a54a0c42c28faa984e115fb4c2d5bf2208f77d1961002df8576f8"
 dependencies = [
  "pathdiff",
  "windows-sys 0.42.0",
-]
-
-[[package]]
-name = "opencv"
-version = "0.88.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96a686d8bc74fac172642bb5cb3fd2679ccc1b85d4f7ccedd273757174f1dbcd"
-dependencies = [
- "cc",
- "dunce",
- "jobslot",
- "libc",
- "num-traits",
- "once_cell",
- "opencv-binding-generator",
- "pkg-config",
- "semver",
- "shlex",
- "vcpkg",
-]
-
-[[package]]
-name = "opencv-binding-generator"
-version = "0.84.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e842c276fd00b26100de550e2b47f6ded4f06213c62f0575cb7242aecde2efd"
-dependencies = [
- "clang",
- "clang-sys",
- "dunce",
- "once_cell",
- "percent-encoding",
- "regex",
 ]
 
 [[package]]
@@ -5871,8 +5814,3 @@ dependencies = [
  "quote",
  "syn 1.0.109",
 ]
-
-[[patch.unused]]
-name = "cc"
-version = "1.0.79"
-source = "git+https://github.com/rust-lang/cc-rs.git?tag=1.0.79#e5bbdfa1fa468c028cb38fee6c35a3cf2e5a2736"

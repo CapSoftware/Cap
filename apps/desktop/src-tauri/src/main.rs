@@ -5,7 +5,7 @@ use std::env;
 mod app;
 mod utils;
 
-use app::{audio, recording, setup, upload, video};
+use app::{audio, recording, setup, upload};
 
 #[tokio::main]
 async fn main() {
@@ -18,7 +18,6 @@ async fn main() {
             recording::stop_all_recordings,
             audio::enumerate_audio_devices,
             upload::upload_file,
-            // video::capture
         ])
         .setup(setup::init)
         .run(tauri::generate_context!())
