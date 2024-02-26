@@ -12,6 +12,9 @@ edition = "2021"
 [build-dependencies]
 tauri-build = { version = "1.5.0", features = [] }
 
+[patch.crates-io]
+cc = { git = "https://github.com/rust-lang/cc-rs.git", version = "1.0", tag = "1.0.79" }
+
 [dependencies]
 tauri = { version = "1.5.0", features = [
     "fs-copy-file",
@@ -61,6 +64,8 @@ byteorder = "1.4.3"
 bytemuck = "1.14.3"
 regex = "1"
 log = "0.4.20"
+opencv = "0.88.8"
+thiserror = "1.0.57"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
