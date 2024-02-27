@@ -12,45 +12,65 @@ export const openSignIn = async (port: string) => {
   if (typeof window !== "undefined" && typeof navigator !== "undefined") {
     const { open } = await dynamicImports.shell(); // Correctly accessing the shell module
     await open(
-      `${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?redirectUrl=http://localhost:${port}`
+      `${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?port=${port}`
     );
   }
 };
 
 export const login = () => {
   if (typeof window !== "undefined" && typeof navigator !== "undefined") {
-    dynamicImports.listen().then((listen) => {
-      listen("oauth://url", async (data: { payload: string }) => {
-        if (!data.payload.includes("token")) {
-          return;
-        }
+    console.log("login here");
 
-        // Direct use of the URL global object
-        const urlObject = new URL(data.payload);
+    dynamicImports
+      .listen()
+      .then((listen) => {
+        listen("oauth://url", async (data: { payload: string }) => {
+          console.log("oauth://url", data.payload);
 
-        const token = urlObject.searchParams.get("token");
-        const expires = urlObject.searchParams.get("expires");
+          if (!data.payload.includes("token")) {
+            return;
+          }
 
-        if (!token || !expires) {
-          return;
-        }
+          // Direct use of the URL global object
+          const urlObject = new URL(data.payload);
 
-        const expiresDate = new Date(parseInt(expires) * 1000);
+          const token = urlObject.searchParams.get("token");
+          const expires = urlObject.searchParams.get("expires");
 
-        if (typeof document !== "undefined") {
-          document.cookie = `next-auth.session-token=${token}; expires=${expiresDate.toUTCString()}; path=/`;
-        }
+          console.log("token", token);
+
+          if (!token || !expires) {
+            return;
+          }
+
+          const expiresDate = new Date(parseInt(expires) * 1000);
+
+          if (typeof document !== "undefined") {
+            document.cookie = `next-auth.session-token=${token}; expires=${expiresDate.toUTCString()}; path=/`;
+          }
+        });
+      })
+      .catch((error) => {
+        console.error("Error listening for oauth://url", error);
       });
-    });
 
-    dynamicImports.invoke().then((invoke) => {
-      invoke("plugin:oauth|start", {
-        config: {
-          response: callbackTemplate,
-        },
-      }).then(async (port) => {
-        await openSignIn(port as string);
+    dynamicImports
+      .invoke()
+      .then((invoke) => {
+        invoke("plugin:oauth|start", {
+          config: {
+            response: callbackTemplate,
+          },
+        })
+          .then(async (port) => {
+            await openSignIn(port as string);
+          })
+          .catch((error) => {
+            console.error("Error invoking oauth plugin", error);
+          });
+      })
+      .catch((error) => {
+        console.error("Error 2 invoking oauth plugin", error);
       });
-    });
   }
 };

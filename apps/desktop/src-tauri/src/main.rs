@@ -5,10 +5,11 @@ use std::path::PathBuf;
 use tokio::sync::Mutex;
 use std::sync::atomic::{AtomicBool};
 use std::env;
-use tauri::{Manager};
+use tauri::{command, Manager, Window};
 use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 use window_shadows::set_shadow;
 use tauri_plugin_positioner::{WindowExt, Position};
+use tauri_plugin_oauth::start;
 
 mod recording;
 mod upload;
@@ -67,6 +68,14 @@ fn main() {
         Ok(())
     }
 
+    #[command]
+    async fn start_server(window: Window) -> Result<u16, String> {
+        start(move |url| {
+            let _ = window.emit("redirect_uri", url);
+        })
+        .map_err(|err| err.to_string())
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_positioner::init())
@@ -106,7 +115,8 @@ fn main() {
             start_dual_recording,
             stop_all_recordings,
             enumerate_audio_devices,
-            upload_file
+            upload_file,
+            start_server
         ])
         .plugin(tauri_plugin_context_menu::init())
         .run(tauri::generate_context!())

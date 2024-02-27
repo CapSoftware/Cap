@@ -6,7 +6,7 @@ import { getToken, encode } from "next-auth/jwt";
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
   const searchParams = req.nextUrl.searchParams;
-  const redirectUrl = searchParams.get("redirectUrl") || "";
+  const port = searchParams.get("port") || "";
 
   const token = await getToken({
     req,
@@ -14,12 +14,7 @@ export async function GET(req: NextRequest) {
   });
 
   if (!token) {
-    return new Response(JSON.stringify({ isLoggedIn: false }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.redirect(`${process.env.NEXT_PUBLIC_URL}/login`);
   }
 
   const encodedToken = await encode({
@@ -28,17 +23,12 @@ export async function GET(req: NextRequest) {
   });
 
   const returnUrl = new URL(
-    `${redirectUrl}?token=${encodedToken}&expires=${token?.exp}`
+    `http://localhost:${port}?token=${encodedToken}&expires=${token?.exp}`
   );
 
   if (session) {
-    return Response.redirect(returnUrl);
+    return Response.redirect(returnUrl.href);
   } else {
-    return new Response(JSON.stringify({ isLoggedIn: false }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.redirect(`${process.env.NEXT_PUBLIC_URL}/login`);
   }
 }
