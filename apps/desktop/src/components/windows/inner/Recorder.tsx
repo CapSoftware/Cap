@@ -16,6 +16,7 @@ import { getSelectedVideoProperties } from "@/utils/recording/utils";
 import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
 import toast, { Toaster } from "react-hot-toast";
+import { authFetch } from "@/utils/auth/helpers";
 
 export const Recorder = () => {
   const {
@@ -77,11 +78,16 @@ export const Recorder = () => {
   // };
 
   const prepareVideoData = async () => {
-    const res = await fetch(
+    const session = JSON.parse(localStorage.getItem("session"));
+    const token = session?.token;
+    const res = await authFetch(
       `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create`,
       {
         credentials: "include",
         cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       }
     );
 

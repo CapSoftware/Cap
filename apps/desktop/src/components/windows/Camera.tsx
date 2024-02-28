@@ -199,40 +199,42 @@ export const Camera = () => {
           </svg>
         </div>
       )}
-      <div className="opacity-0 group-hover:opacity-100 absolute bottom-3 left-1/2 transform -translate-x-1/2 bg-gray-800 rounded-xl z-20 grid grid-cols-4 overflow-hidden">
-        <div className="h-full flex items-center justify-center p-2 hover:bg-gray-900">
-          <button
-            onClick={() => {
-              closeWindow();
-            }}
-          >
+      <div className="opacity-0 group-hover:opacity-100 absolute top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 rounded-xl z-20 grid grid-cols-4 overflow-hidden">
+        <div
+          onClick={() => {
+            closeWindow();
+          }}
+          className="h-full flex items-center justify-center p-2 hover:bg-gray-900"
+        >
+          <div>
             <CloseX className="w-5 h-5 stroke-gray-200" />
-          </button>
+          </div>
         </div>
-        <div className="h-full flex items-center justify-center p-2 hover:bg-gray-900">
-          <button
-            onClick={async () => {
-              await setWindowSize("sm");
-            }}
-            className="w-2 h-2 m-0 p-0 bg-gray-200 rounded-full"
-          ></button>
+        <div
+          onClick={async () => {
+            await setWindowSize("sm");
+          }}
+          className="h-full flex items-center justify-center p-2 hover:bg-gray-900"
+        >
+          <span className="w-1 h-1 m-0 p-0 bg-gray-200 rounded-full"></span>
         </div>
-        <div className="h-full flex items-center justify-center p-2 hover:bg-gray-900">
-          <button
-            onClick={async () => {
-              await setWindowSize("lg");
-            }}
-            className="w-4 h-4 bg-gray-200 rounded-full"
-          ></button>
+        <div
+          onClick={async () => {
+            await setWindowSize("lg");
+          }}
+          className="h-full flex items-center justify-center p-2 hover:bg-gray-900"
+        >
+          <span className="w-3 h-3 bg-gray-200 rounded-full"></span>
         </div>
-        <div className="h-full flex items-center justify-center p-2 hover:bg-gray-900">
-          <button
-            onClick={() => {
-              toggleBackgroundBlur();
-            }}
-          >
+        <div
+          onClick={() => {
+            toggleBackgroundBlur();
+          }}
+          className="h-full flex items-center justify-center p-2 hover:bg-gray-900"
+        >
+          <div>
             <Focus className="w-5 h-5 stroke-gray-200" />
-          </button>
+          </div>
         </div>
       </div>
       <canvas

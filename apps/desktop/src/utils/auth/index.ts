@@ -1,7 +1,6 @@
 "use client";
 
 import callbackTemplate from "./callback.template";
-import { setCookie } from "cookies-next";
 
 const dynamicImports = {
   invoke: () => import("@tauri-apps/api").then(({ invoke }) => invoke),

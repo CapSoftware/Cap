@@ -89,7 +89,7 @@ const nextConfig = {
           },
           {
             key: "Access-Control-Allow-Headers",
-            value: "*",
+            value: "Content-Type, Authorization",
           },
           {
             key: "Access-Control-Allow-Credentials",
@@ -110,7 +110,7 @@ const nextConfig = {
           },
           {
             key: "Access-Control-Allow-Headers",
-            value: "*",
+            value: "Content-Type, Authorization",
           },
           {
             key: "Access-Control-Allow-Credentials",
