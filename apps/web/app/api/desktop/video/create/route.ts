@@ -4,17 +4,6 @@ import { videos } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 
-export async function OPTIONS(req: NextRequest) {
-  return new Response(null, {
-    status: 200,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    },
-  });
-}
-
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
   const awsRegion = process.env.CAP_AWS_REGION;
@@ -25,9 +14,6 @@ export async function GET(req: NextRequest) {
       status: 401,
       headers: {
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
       },
     });
   }
@@ -52,9 +38,6 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
       },
     }
   );
