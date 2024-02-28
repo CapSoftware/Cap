@@ -1,18 +1,8 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-};
-
-export async function OPTIONS(req: NextRequest) {
-  return NextResponse.json({}, { headers: corsHeaders });
-}
 
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
@@ -24,7 +14,6 @@ export async function GET(req: NextRequest) {
       status: 401,
       headers: {
         "Content-Type": "application/json",
-        ...corsHeaders,
       },
     });
   }
@@ -38,7 +27,7 @@ export async function GET(req: NextRequest) {
     awsBucket: awsBucket,
   });
 
-  return new NextResponse(
+  return new Response(
     JSON.stringify({
       id: id,
       user_id: user.userId,
@@ -49,7 +38,6 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         "Content-Type": "application/json",
-        ...corsHeaders,
       },
     }
   );

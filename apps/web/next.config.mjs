@@ -123,7 +123,7 @@ const nextConfig = {
         headers: [
           {
             key: "Access-Control-Allow-Origin",
-            value: "tauri://localhost/",
+            value: "tauri://localhost",
           },
           {
             key: "Access-Control-Allow-Methods",

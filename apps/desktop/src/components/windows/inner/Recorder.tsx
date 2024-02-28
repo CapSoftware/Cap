@@ -83,6 +83,7 @@ export const Recorder = () => {
     const res = await authFetch(
       `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create`,
       {
+        credentials: "include",
         cache: "no-store",
         headers: {
           Authorization: `Bearer ${token}`,
