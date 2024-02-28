@@ -37,16 +37,20 @@ export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
   const awsRegion = process.env.CAP_AWS_REGION;
   const awsBucket = process.env.CAP_AWS_BUCKET;
-  const origin = req.nextUrl.origin;
+  const params = req.nextUrl.searchParams;
+  const origin = params.get("origin") || null;
+  const originalOrigin = req.nextUrl.origin;
 
   if (!user) {
     return new Response(JSON.stringify({ error: true }), {
       status: 401,
       headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-          ? origin
-          : "null",
+        "Access-Control-Allow-Origin":
+          origin && allowedOrigins.includes(origin)
+            ? origin
+            : allowedOrigins.includes(originalOrigin)
+            ? originalOrigin
+            : "null",
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "Authorization",
@@ -73,10 +77,12 @@ export async function GET(req: NextRequest) {
     {
       status: 200,
       headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-          ? origin
-          : "null",
+        "Access-Control-Allow-Origin":
+          origin && allowedOrigins.includes(origin)
+            ? origin
+            : allowedOrigins.includes(originalOrigin)
+            ? originalOrigin
+            : "null",
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
         "Access-Control-Allow-Headers": "Authorization",
