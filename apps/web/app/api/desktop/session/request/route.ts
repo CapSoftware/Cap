@@ -14,7 +14,9 @@ export async function GET(req: NextRequest) {
   });
 
   if (!token) {
-    return Response.redirect(`${process.env.NEXT_PUBLIC_URL}/login`);
+    return Response.redirect(
+      `${process.env.NEXT_PUBLIC_URL}/login?next=api/desktop/session/request?port=${port}`
+    );
   }
 
   const encodedToken = await encode({
