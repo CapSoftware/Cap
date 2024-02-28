@@ -96,6 +96,7 @@ const nextConfig = {
             value: "true",
           },
         ],
+      },
       {
         source: "/api/desktop/(.*)",
         headers: [
