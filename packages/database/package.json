@@ -18,6 +18,7 @@
     "drizzle-orm": "^0.29.3",
     "mysql2": "^3.7.0",
     "nanoid": "^5.0.4",
+    "next": "14.1.0",
     "next-auth": "^4.24.5",
     "react-email": "^1.10.1",
     "resend": "3.0.0"

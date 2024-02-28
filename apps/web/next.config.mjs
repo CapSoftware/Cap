@@ -60,19 +60,19 @@ const nextConfig = {
         ],
       },
       {
-        source: "/(.*)",
+        source: "/api/desktop/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
-            value: "https://*.amazonaws.com",
+            value: "tauri://localhost",
           },
           {
             key: "Access-Control-Allow-Methods",
-            value: "GET",
+            value: "GET, POST, PUT, DELETE, OPTIONS",
           },
           {
-            key: "Access-Control-Allow-Credentials",
-            value: "true",
+            key: "Access-Control-Allow-Headers",
+            value: "Content-Type, Authorization",
           },
         ],
       },
@@ -81,7 +81,7 @@ const nextConfig = {
         headers: [
           {
             key: "Access-Control-Allow-Origin",
-            value: "*",
+            value: "http://localhost:3001",
           },
           {
             key: "Access-Control-Allow-Methods",
