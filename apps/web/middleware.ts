@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 
+const VERCEL_DEPLOYMENT = !!process.env.VERCEL_URL;
+
 export function middleware(request: NextRequest) {
   if (request.nextUrl.pathname.includes("/api/desktop/")) {
     const token = request.headers.get("authorization")?.split(" ")[1];
 
-    const cookieIsSet = request.cookies.get("next-auth.session-token");
+    const cookieIsSet = request.cookies.get(
+      `${
+        process.env.NEXT_PUBLIC_ENVIRONMENT === "development" ? "__Secure-" : ""
+      }next-auth.session-token`
+    );
 
     if (cookieIsSet) {
       console.log("Cookie is set");
@@ -14,9 +20,13 @@ export function middleware(request: NextRequest) {
     if (token && !cookieIsSet) {
       const response = NextResponse.next();
       response.cookies.set({
-        name: "next-auth.session-token",
+        name: `${VERCEL_DEPLOYMENT ? "__Secure-" : ""}next-auth.session-token`,
         value: token,
         path: "/",
+        sameSite: "lax",
+        secure: VERCEL_DEPLOYMENT,
+        httpOnly: true,
+        domain: VERCEL_DEPLOYMENT ? ".cap.so" : undefined,
       });
       return response;
     }

@@ -7,6 +7,12 @@ import type { NextAuthOptions } from "next-auth";
 import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
 
+const VERCEL_DEPLOYMENT = !!process.env.VERCEL_URL;
+
+export const config = {
+  maxDuration: 120,
+};
+
 export const authOptions: NextAuthOptions = {
   adapter: DrizzleAdapter(db),
   debug: true,
@@ -28,6 +34,18 @@ export const authOptions: NextAuthOptions = {
       },
     }),
   ],
+  cookies: {
+    sessionToken: {
+      name: `${VERCEL_DEPLOYMENT ? "__Secure-" : ""}next-auth.session-token`,
+      options: {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        domain: VERCEL_DEPLOYMENT ? ".cap.so" : undefined,
+        secure: VERCEL_DEPLOYMENT,
+      },
+    },
+  },
   callbacks: {
     async session({ token, session }) {
       if (token) {

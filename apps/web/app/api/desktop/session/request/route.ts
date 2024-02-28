@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
 
   if (!token) {
     return Response.redirect(
-      `${process.env.NEXT_PUBLIC_URL}/login?next=api/desktop/session/request?port=${port}`
+      `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?port=${port}`
     );
   }
 
