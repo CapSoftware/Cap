@@ -4,18 +4,18 @@ import { videos } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 
+const allowedOrigins = [
+  process.env.NEXT_PUBLIC_URL,
+  "http://localhost:3001",
+  "tauri://localhost",
+  "http://tauri.localhost",
+  "https://tauri.localhost",
+];
+
 export async function OPTIONS(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
-
-  const allowedOrigins = [
-    process.env.NEXT_PUBLIC_URL,
-    "http://localhost:3001",
-    "tauri://localhost",
-    "http://tauri.localhost",
-    "https://tauri.localhost",
-  ];
 
   return new Response(null, {
     status: 200,
