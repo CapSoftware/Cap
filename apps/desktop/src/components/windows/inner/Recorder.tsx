@@ -84,6 +84,7 @@ export const Recorder = () => {
       `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create`,
       {
         method: "GET",
+        credentials: "include",
         cache: "no-store",
         headers: {
           Authorization: `Bearer ${token}`,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export function middleware(request: NextRequest) {
-  if (request.nextUrl.pathname.startsWith("/api/desktop/")) {
+  if (request.nextUrl.pathname.includes("/api/desktop/")) {
     const token = request.headers.get("authorization")?.split(" ")[1];
 
     const cookieIsSet = request.cookies.get("next-auth.session-token");
