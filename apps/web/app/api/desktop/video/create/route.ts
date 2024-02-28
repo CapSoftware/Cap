@@ -7,11 +7,6 @@ import { nanoId } from "@cap/database/helpers";
 export async function OPTIONS(req: NextRequest) {
   return new Response(null, {
     status: 200,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    },
   });
 }
 
