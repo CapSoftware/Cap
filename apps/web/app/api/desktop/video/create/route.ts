@@ -24,6 +24,7 @@ export async function GET(req: NextRequest) {
       status: 401,
       headers: {
         "Content-Type": "application/json",
+        ...corsHeaders,
       },
     });
   }
