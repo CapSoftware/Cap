@@ -81,7 +81,48 @@ const nextConfig = {
         headers: [
           {
             key: "Access-Control-Allow-Origin",
-            value: "tauri://localhost",
+            value: "https://tauri.localhost",
+          },
+          {
+            key: "Access-Control-Allow-Methods",
+            value: "GET, POST, PUT, DELETE, OPTIONS",
+          },
+          {
+            key: "Access-Control-Allow-Headers",
+            value: "Content-Type, Authorization",
+          },
+          {
+            key: "Access-Control-Allow-Credentials",
+            value: "true",
+          },
+        ],
+      {
+        source: "/api/desktop/(.*)",
+        headers: [
+          {
+            key: "Access-Control-Allow-Origin",
+            value: "http://tauri.localhost",
+          },
+          {
+            key: "Access-Control-Allow-Methods",
+            value: "GET, POST, PUT, DELETE, OPTIONS",
+          },
+          {
+            key: "Access-Control-Allow-Headers",
+            value: "Content-Type, Authorization",
+          },
+          {
+            key: "Access-Control-Allow-Credentials",
+            value: "true",
+          },
+        ],
+      },
+      {
+        source: "/api/desktop/(.*)",
+        headers: [
+          {
+            key: "Access-Control-Allow-Origin",
+            value: "tauri://localhost/",
           },
           {
             key: "Access-Control-Allow-Methods",
