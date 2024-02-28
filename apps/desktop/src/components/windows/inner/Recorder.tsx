@@ -81,7 +81,7 @@ export const Recorder = () => {
     const session = JSON.parse(localStorage.getItem("session"));
     const token = session?.token;
     const res = await authFetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create`,
+      `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create?origin=${window.location.origin}`,
       {
         method: "GET",
         credentials: "include",
