@@ -214,7 +214,7 @@ export const Camera = () => {
             onClick={async () => {
               await setWindowSize("sm");
             }}
-            className="w-2 h-2 bg-gray-200 rounded-full"
+            className="w-2 h-2 m-0 p-0 bg-gray-200 rounded-full"
           ></button>
         </div>
         <div className="h-full flex items-center justify-center p-2 hover:bg-gray-900">

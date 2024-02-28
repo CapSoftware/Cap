@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { getCookie } from "cookies-next";
 import { SignIn } from "@/components/windows/inner/SignIn";
 import { Recorder } from "@/components/windows/inner/Recorder";
 import { WindowActions } from "@/components/WindowActions";
@@ -13,23 +12,20 @@ export default function CameraPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const checkSignInStatus = async () => {
-      const cookie = getCookie("next-auth.session-token");
-      const signedIn = !!cookie;
-
-      if (signedIn !== isSignedIn) {
-        setIsSignedIn(signedIn);
+    const checkSession = setInterval(() => {
+      const session = localStorage.getItem("session");
+      if (session) {
+        const { token, expires } = JSON.parse(session);
+        if (token && new Date(expires * 1000) > new Date()) {
+          setIsSignedIn(true);
+          clearInterval(checkSession);
+        }
       }
-      if (loading) {
-        setLoading(false);
-      }
-    };
+      setLoading(false);
+    }, 1000);
 
-    checkSignInStatus();
-    const interval = setInterval(checkSignInStatus, 1000);
-
-    return () => clearInterval(interval);
-  }, [isSignedIn, loading]);
+    return () => clearInterval(checkSession);
+  }, []);
 
   useEffect(() => {
     if (isSignedIn && !cameraWindowOpen) {
@@ -85,8 +81,14 @@ export default function CameraPage() {
 
   return (
     <div id="app" data-tauri-drag-region style={{ borderRadius: "16px" }}>
-      <WindowActions />
-      {isSignedIn ? <Recorder /> : <SignIn />}
+      {isSignedIn ? (
+        <>
+          <WindowActions />
+          <Recorder />
+        </>
+      ) : (
+        <SignIn />
+      )}
     </div>
   );
 }

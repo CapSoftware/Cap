@@ -81,6 +81,27 @@ const nextConfig = {
         headers: [
           {
             key: "Access-Control-Allow-Origin",
+            value: "tauri://localhost",
+          },
+          {
+            key: "Access-Control-Allow-Methods",
+            value: "GET, POST, PUT, DELETE, OPTIONS",
+          },
+          {
+            key: "Access-Control-Allow-Headers",
+            value: "*",
+          },
+          {
+            key: "Access-Control-Allow-Credentials",
+            value: "true",
+          },
+        ],
+      },
+      {
+        source: "/api/desktop/(.*)",
+        headers: [
+          {
+            key: "Access-Control-Allow-Origin",
             value: "http://localhost:3001",
           },
           {

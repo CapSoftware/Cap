@@ -1,6 +1,7 @@
 "use client";
 
 import callbackTemplate from "./callback.template";
+import { setCookie } from "cookies-next";
 
 const dynamicImports = {
   invoke: () => import("@tauri-apps/api").then(({ invoke }) => invoke),
@@ -37,16 +38,19 @@ export const login = () => {
           const token = urlObject.searchParams.get("token");
           const expires = urlObject.searchParams.get("expires");
 
-          console.log("token", token);
-
           if (!token || !expires) {
+            console.error("Missing token or expires");
             return;
           }
 
-          const expiresDate = new Date(parseInt(expires) * 1000);
-
-          if (typeof document !== "undefined") {
-            document.cookie = `next-auth.session-token=${token}; expires=${expiresDate.toUTCString()}; path=/`;
+          try {
+            localStorage.setItem(
+              "session",
+              JSON.stringify({ token: token, expires: expires })
+            );
+            console.log("Setting localstorage");
+          } catch (error) {
+            console.error("Error setting item in localStorage", error);
           }
         });
       })
