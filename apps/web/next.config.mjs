@@ -43,7 +43,24 @@ const nextConfig = {
   async headers() {
     return [
       {
-        source: "/api/playlist/(.*)",
+        source: "/api/(.*)",
+        headers: [
+          {
+            key: "Access-Control-Allow-Origin",
+            value: "https://cap.so",
+          },
+          {
+            key: "Access-Control-Allow-Methods",
+            value: "GET",
+          },
+          {
+            key: "Access-Control-Allow-Credentials",
+            value: "true",
+          },
+        ],
+      },
+      {
+        source: "/api/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
