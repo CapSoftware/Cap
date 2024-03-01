@@ -20,7 +20,7 @@ export function middleware(request: NextRequest) {
         value: token,
         path: "/",
         sameSite: "none",
-        secure: false,
+        secure: true,
         httpOnly: true,
       });
       return response;
