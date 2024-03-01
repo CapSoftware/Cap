@@ -12,7 +12,11 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { generateM3U8Playlist } from "@/utils/video/ffmpeg/helpers";
 
-const allowedOrigins = [process.env.NEXT_PUBLIC_URL, "https://cap.link"];
+const allowedOrigins = [
+  process.env.NEXT_PUBLIC_URL,
+  "https://cap.link",
+  "cap.link",
+];
 
 export const revalidate = 3500;
 
