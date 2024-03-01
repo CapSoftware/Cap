@@ -39,7 +39,7 @@ export const authOptions: NextAuthOptions = {
       name: `${VERCEL_DEPLOYMENT ? "__Secure-" : ""}next-auth.session-token`,
       options: {
         httpOnly: true,
-        sameSite: "lax",
+        sameSite: "none",
         path: "/",
         domain: VERCEL_DEPLOYMENT ? ".cap.so" : undefined,
         secure: VERCEL_DEPLOYMENT,

@@ -23,7 +23,7 @@ export function middleware(request: NextRequest) {
         name: `${VERCEL_DEPLOYMENT ? "__Secure-" : ""}next-auth.session-token`,
         value: token,
         path: "/",
-        sameSite: "lax",
+        sameSite: "none",
         secure: VERCEL_DEPLOYMENT,
         httpOnly: true,
         domain: VERCEL_DEPLOYMENT ? ".cap.so" : undefined,
