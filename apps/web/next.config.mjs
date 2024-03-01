@@ -44,37 +44,28 @@ const nextConfig = {
     return [
       {
         source: "/api/playlist/(.*)",
-        headers: [
-          {
-            key: "Access-Control-Allow-Origin",
-            value: "https://cap.so",
-          },
-          {
-            key: "Access-Control-Allow-Methods",
-            value: "GET, POST, PUT, DELETE, OPTIONS",
-          },
-          {
-            key: "Access-Control-Allow-Credentials",
-            value: "true",
-          },
-        ],
-      },
-      {
-        source: "/api/playlist/(.*)",
-        headers: [
-          {
-            key: "Access-Control-Allow-Origin",
-            value: "https://cap.link",
-          },
-          {
-            key: "Access-Control-Allow-Methods",
-            value: "GET, POST, PUT, DELETE, OPTIONS",
-          },
-          {
-            key: "Access-Control-Allow-Credentials",
-            value: "true",
-          },
-        ],
+        headers: async (req) => {
+          const allowedOrigins = ["https://cap.so", "https://cap.link"];
+          const origin = req.headers.origin;
+          if (allowedOrigins.includes(origin)) {
+            return [
+              {
+                key: "Access-Control-Allow-Origin",
+                value: origin,
+              },
+              {
+                key: "Access-Control-Allow-Methods",
+                value: "GET, POST, PUT, DELETE, OPTIONS",
+              },
+              {
+                key: "Access-Control-Allow-Credentials",
+                value: "true",
+              },
+            ];
+          } else {
+            return [];
+          }
+        },
       },
       {
         source: "/api/desktop/(.*)",
