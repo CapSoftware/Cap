@@ -24,9 +24,7 @@ export async function GET(req: NextRequest) {
 
   const response = NextResponse.next();
   response.cookies.set({
-    name: `${
-      process.env.NEXT_PUBLIC_ENVIRONMENT === "development" ? "__Secure-" : ""
-    }next-auth.session-token`,
+    name: `next-auth.session-token`,
     value: token,
     path: "/",
   });

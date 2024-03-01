@@ -36,13 +36,12 @@ export const authOptions: NextAuthOptions = {
   ],
   cookies: {
     sessionToken: {
-      name: `${VERCEL_DEPLOYMENT ? "__Secure-" : ""}next-auth.session-token`,
+      name: `next-auth.session-token`,
       options: {
         httpOnly: true,
         sameSite: "none",
         path: "/",
-        domain: VERCEL_DEPLOYMENT ? ".cap.so" : undefined,
-        secure: VERCEL_DEPLOYMENT,
+        secure: false,
       },
     },
   },
