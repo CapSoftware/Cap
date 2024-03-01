@@ -23,7 +23,7 @@ export async function OPTIONS(request: NextRequest) {
       "Access-Control-Allow-Origin": allowedOrigins.includes(
         request.nextUrl.origin
       )
-        ? origin
+        ? request.nextUrl.origin
         : "null",
       "Access-Control-Allow-Credentials": "true",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
           "Access-Control-Allow-Origin": allowedOrigins.includes(
             request.nextUrl.origin
           )
-            ? origin
+            ? request.nextUrl.origin
             : "null",
           "Access-Control-Allow-Credentials": "true",
           "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -70,7 +70,7 @@ export async function GET(request: NextRequest) {
           "Access-Control-Allow-Origin": allowedOrigins.includes(
             request.nextUrl.origin
           )
-            ? origin
+            ? request.nextUrl.origin
             : "null",
           "Access-Control-Allow-Credentials": "true",
           "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -93,7 +93,7 @@ export async function GET(request: NextRequest) {
             "Access-Control-Allow-Origin": allowedOrigins.includes(
               request.nextUrl.origin
             )
-              ? origin
+              ? request.nextUrl.origin
               : "null",
             "Access-Control-Allow-Credentials": "true",
             "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -138,7 +138,7 @@ export async function GET(request: NextRequest) {
               "Access-Control-Allow-Origin": allowedOrigins.includes(
                 request.nextUrl.origin
               )
-                ? origin
+                ? request.nextUrl.origin
                 : "null",
               "Access-Control-Allow-Credentials": "true",
               "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -185,7 +185,7 @@ export async function GET(request: NextRequest) {
         "Access-Control-Allow-Origin": allowedOrigins.includes(
           request.nextUrl.origin
         )
-          ? origin
+          ? request.nextUrl.origin
           : "null",
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -201,7 +201,7 @@ export async function GET(request: NextRequest) {
           "Access-Control-Allow-Origin": allowedOrigins.includes(
             request.nextUrl.origin
           )
-            ? origin
+            ? request.nextUrl.origin
             : "null",
           "Access-Control-Allow-Credentials": "true",
           "Access-Control-Allow-Methods": "GET, OPTIONS",
