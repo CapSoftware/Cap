@@ -44,10 +44,12 @@ export const Camera = () => {
   }, [selectedVideoDevice]);
 
   useEffect(() => {
-    let animationFrameId;
+    let animationId;
 
-    const loadBodyPixAndApply = async () => {
-      if (!videoRef.current || !canvasRef.current) return;
+    const performSegmentationAndBlur = async () => {
+      if (!isBackgroundBlur || !videoRef.current || !canvasRef.current) {
+        return;
+      }
 
       const net = await bodyPix.load({
         architecture: "MobileNetV1",
@@ -56,75 +58,52 @@ export const Camera = () => {
         quantBytes: 2,
       });
 
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext("2d");
-
-      // Create an off-screen canvas for blurring the background
-      const offscreenCanvas = document.createElement("canvas");
-      offscreenCanvas.width = canvas.width;
-      offscreenCanvas.height = canvas.height;
-      const offscreenCtx = offscreenCanvas.getContext("2d");
-
       const draw = async () => {
         if (
+          !isBackgroundBlur ||
           !videoRef.current ||
-          !canvasRef.current ||
-          video.paused ||
-          video.ended
+          videoRef.current.paused ||
+          videoRef.current.ended
         )
           return;
 
-        if (isBackgroundBlur) {
-          const segmentation = await net.segmentPerson(video, {
-            internalResolution: "medium",
-            segmentationThreshold: 0.7,
-            flipHorizontal: false,
-            maxDetections: 1,
-            scoreThreshold: 0.2,
-            nmsRadius: 20,
-          });
+        const segmentation = await net.segmentPerson(videoRef.current, {
+          internalResolution: "medium",
+          segmentationThreshold: 0.7,
+        });
 
-          // Draw the video frame to the off-screen canvas
-          offscreenCtx.drawImage(video, 0, 0);
-          offscreenCtx.filter = "blur(8px)";
-          ctx.filter = "none";
+        bodyPix.drawBokehEffect(
+          canvasRef.current,
+          videoRef.current,
+          segmentation,
+          6,
+          3
+        );
 
-          // Apply the blurred image from the off-screen canvas to the main canvas
-          ctx.drawImage(offscreenCanvas, 0, 0);
-
-          // Now draw the clear part (foreground) by using the mask from segmentation
-          const foregroundColor = { r: 0, g: 0, b: 0, a: 0 }; // Change these values as per your requirement
-          const foreground = bodyPix.toMask(segmentation, foregroundColor);
-          ctx.putImageData(foreground, 0, 0);
-        } else {
-          // If background blur is not enabled, simply draw the video frame
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        }
-
-        animationFrameId = requestAnimationFrame(draw);
+        animationId = requestAnimationFrame(draw);
       };
 
-      if (video.readyState >= 2) {
+      videoRef.current.onloadedmetadata = () => {
+        canvasRef.current.width = videoRef.current.videoWidth;
+        canvasRef.current.height = videoRef.current.videoHeight;
         draw();
-      } else {
-        video.onloadedmetadata = () => {
-          draw();
-        };
+      };
+
+      if (videoRef.current.readyState >= 4) {
+        canvasRef.current.width = videoRef.current.videoWidth;
+        canvasRef.current.height = videoRef.current.videoHeight;
+        draw();
       }
     };
 
-    loadBodyPixAndApply();
+    performSegmentationAndBlur();
 
     return () => {
-      if (animationFrameId) {
-        cancelAnimationFrame(animationFrameId);
+      if (animationId) {
+        cancelAnimationFrame(animationId);
       }
     };
-  }, [isBackgroundBlur, selectedVideoDevice]);
+  }, [isBackgroundBlur]);
 
   const toggleBackgroundBlur = () => {
     setIsBackgroundBlur(!isBackgroundBlur);
