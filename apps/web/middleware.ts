@@ -16,7 +16,9 @@ export function middleware(request: NextRequest) {
     if (token && !cookieIsSet) {
       const response = NextResponse.next();
       response.cookies.set({
-        name: "next-auth.session-token",
+        name: VERCEL_DEPLOYMENT
+          ? "__Secure-next-auth.session-token"
+          : "next-auth.session-token",
         value: token,
         path: "/",
         sameSite: "none",
