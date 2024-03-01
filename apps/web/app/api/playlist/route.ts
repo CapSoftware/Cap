@@ -12,7 +12,24 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { generateM3U8Playlist } from "@/utils/video/ffmpeg/helpers";
 
+const allowedOrigins = [process.env.NEXT_PUBLIC_URL, "https://cap.link"];
+
 export const revalidate = 3500;
+
+export async function OPTIONS(request: NextRequest) {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      "Access-Control-Allow-Origin": allowedOrigins.includes(
+        request.nextUrl.origin
+      )
+        ? origin
+        : "null",
+      "Access-Control-Allow-Credentials": "true",
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+    },
+  });
+}
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -30,7 +47,13 @@ export async function GET(request: NextRequest) {
       {
         status: 401,
         headers: {
-          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": allowedOrigins.includes(
+            request.nextUrl.origin
+          )
+            ? origin
+            : "null",
+          "Access-Control-Allow-Credentials": "true",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
         },
       }
     );
@@ -44,7 +67,13 @@ export async function GET(request: NextRequest) {
       {
         status: 401,
         headers: {
-          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": allowedOrigins.includes(
+            request.nextUrl.origin
+          )
+            ? origin
+            : "null",
+          "Access-Control-Allow-Credentials": "true",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
         },
       }
     );
@@ -61,7 +90,13 @@ export async function GET(request: NextRequest) {
         {
           status: 401,
           headers: {
-            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": allowedOrigins.includes(
+              request.nextUrl.origin
+            )
+              ? origin
+              : "null",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
           },
         }
       );
@@ -100,7 +135,13 @@ export async function GET(request: NextRequest) {
           {
             status: 401,
             headers: {
-              "Content-Type": "application/json",
+              "Access-Control-Allow-Origin": allowedOrigins.includes(
+                request.nextUrl.origin
+              )
+                ? origin
+                : "null",
+              "Access-Control-Allow-Credentials": "true",
+              "Access-Control-Allow-Methods": "GET, OPTIONS",
             },
           }
         );
@@ -139,7 +180,16 @@ export async function GET(request: NextRequest) {
 
     return new Response(generatedPlaylist, {
       status: 200,
-      headers: { "content-type": "application/x-mpegURL" },
+      headers: {
+        "content-type": "application/x-mpegURL",
+        "Access-Control-Allow-Origin": allowedOrigins.includes(
+          request.nextUrl.origin
+        )
+          ? origin
+          : "null",
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+      },
     });
   } catch (error) {
     console.error("Error generating video segment URLs", error);
