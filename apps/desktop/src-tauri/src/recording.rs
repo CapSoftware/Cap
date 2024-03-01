@@ -50,8 +50,6 @@ pub struct RecordingOptions {
   pub audio_name: String,
   pub aws_region: String,
   pub aws_bucket: String,
-  pub framerate: String,
-  pub resolution: String,
 }
 
 #[tauri::command]

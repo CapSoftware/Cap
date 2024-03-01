@@ -11,8 +11,6 @@ import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
 import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/tauri";
-import { Countdown } from "./Countdown";
-import { getSelectedVideoProperties } from "@/utils/recording/utils";
 import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
 import toast, { Toaster } from "react-hot-toast";
@@ -118,28 +116,21 @@ export const Recorder = () => {
     aws_bucket: string;
   }) => {
     console.log("Starting dual recording...");
-    const mediaSettings = await getSelectedVideoProperties();
-    if (mediaSettings?.resolution && mediaSettings?.framerate) {
-      console.log("Setting recording as active...");
-      setIsRecording(true);
-      setStartingRecording(false);
-      await invoke("start_dual_recording", {
-        options: {
-          user_id: videoData.user_id,
-          video_id: videoData.id,
-          audio_name: selectedAudioDevice?.label,
-          aws_region: videoData.aws_region,
-          aws_bucket: videoData.aws_bucket,
-          screen_index: "Capture screen 0",
-          video_index: String(selectedVideoDevice?.index),
-          ...mediaSettings,
-        },
-      }).catch((error) => {
-        console.error("Error invoking start_screen_recording:", error);
-      });
-    } else {
-      console.error("Invalid media settings for dual recording");
-    }
+    setIsRecording(true);
+    setStartingRecording(false);
+    await invoke("start_dual_recording", {
+      options: {
+        user_id: videoData.user_id,
+        video_id: videoData.id,
+        audio_name: selectedAudioDevice?.label,
+        aws_region: videoData.aws_region,
+        aws_bucket: videoData.aws_bucket,
+        screen_index: "Capture screen 0",
+        video_index: String(selectedVideoDevice?.index),
+      },
+    }).catch((error) => {
+      console.error("Error invoking start_screen_recording:", error);
+    });
   };
 
   const handleStartAllRecordings = async () => {
