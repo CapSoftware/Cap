@@ -43,7 +43,24 @@ const nextConfig = {
   async headers() {
     return [
       {
-        source: "/api/(.*)",
+        source: "/api/playlist/(.*)",
+        headers: [
+          {
+            key: "Access-Control-Allow-Origin",
+            value: "https://cap.link",
+          },
+          {
+            key: "Access-Control-Allow-Methods",
+            value: "GET",
+          },
+          {
+            key: "Access-Control-Allow-Credentials",
+            value: "true",
+          },
+        ],
+      },
+      {
+        source: "/api/desktop/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
@@ -64,7 +81,7 @@ const nextConfig = {
         ],
       },
       {
-        source: "/api/(.*)",
+        source: "/api/desktop/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
@@ -85,7 +102,7 @@ const nextConfig = {
         ],
       },
       {
-        source: "/api/(.*)",
+        source: "/api/desktop/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
@@ -106,7 +123,7 @@ const nextConfig = {
         ],
       },
       {
-        source: "/api/(.*)",
+        source: "/api/desktop/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
