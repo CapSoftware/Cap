@@ -3,6 +3,7 @@ import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
+import { cookies } from "next/headers";
 
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
@@ -34,12 +35,26 @@ export async function OPTIONS(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
+  const token = req.headers.get("authorization")?.split(" ")[1];
+  if (token) {
+    cookies().set({
+      name: "next-auth.session-token",
+      value: token,
+      path: "/",
+      sameSite: "none",
+      secure: true,
+      httpOnly: true,
+    });
+  }
+
   const user = await getCurrentUser();
   const awsRegion = process.env.CAP_AWS_REGION;
   const awsBucket = process.env.CAP_AWS_BUCKET;
   const params = req.nextUrl.searchParams;
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
+
+  console.log("cookies:", cookies().getAll());
 
   if (!user) {
     return new Response(JSON.stringify({ error: true }), {
