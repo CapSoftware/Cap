@@ -198,7 +198,13 @@ export async function GET(request: NextRequest) {
       {
         status: 500,
         headers: {
-          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": allowedOrigins.includes(
+            request.nextUrl.origin
+          )
+            ? origin
+            : "null",
+          "Access-Control-Allow-Credentials": "true",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
         },
       }
     );
