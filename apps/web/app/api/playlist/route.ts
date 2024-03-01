@@ -21,13 +21,13 @@ const allowedOrigins = [
 export const revalidate = 3500;
 
 export async function OPTIONS(request: NextRequest) {
+  const origin = request.headers.get("origin") as string;
+
   return new Response(null, {
     status: 200,
     headers: {
-      "Access-Control-Allow-Origin": allowedOrigins.includes(
-        request.nextUrl.origin
-      )
-        ? request.nextUrl.origin
+      "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+        ? origin
         : "null",
       "Access-Control-Allow-Credentials": "true",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
   const videoId = searchParams.get("videoId") || "";
   const videoType = searchParams.get("videoType") || "";
   const thumbnail = searchParams.get("thumbnail") || "";
+  const origin = request.headers.get("origin") as string;
 
   if (!userId || !videoId) {
     return new Response(
@@ -51,10 +52,8 @@ export async function GET(request: NextRequest) {
       {
         status: 401,
         headers: {
-          "Access-Control-Allow-Origin": allowedOrigins.includes(
-            request.nextUrl.origin
-          )
-            ? request.nextUrl.origin
+          "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+            ? origin
             : "null",
           "Access-Control-Allow-Credentials": "true",
           "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -71,10 +70,8 @@ export async function GET(request: NextRequest) {
       {
         status: 401,
         headers: {
-          "Access-Control-Allow-Origin": allowedOrigins.includes(
-            request.nextUrl.origin
-          )
-            ? request.nextUrl.origin
+          "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+            ? origin
             : "null",
           "Access-Control-Allow-Credentials": "true",
           "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -94,10 +91,8 @@ export async function GET(request: NextRequest) {
         {
           status: 401,
           headers: {
-            "Access-Control-Allow-Origin": allowedOrigins.includes(
-              request.nextUrl.origin
-            )
-              ? request.nextUrl.origin
+            "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+              ? origin
               : "null",
             "Access-Control-Allow-Credentials": "true",
             "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -139,10 +134,8 @@ export async function GET(request: NextRequest) {
           {
             status: 401,
             headers: {
-              "Access-Control-Allow-Origin": allowedOrigins.includes(
-                request.nextUrl.origin
-              )
-                ? request.nextUrl.origin
+              "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+                ? origin
                 : "null",
               "Access-Control-Allow-Credentials": "true",
               "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -186,10 +179,8 @@ export async function GET(request: NextRequest) {
       status: 200,
       headers: {
         "content-type": "application/x-mpegURL",
-        "Access-Control-Allow-Origin": allowedOrigins.includes(
-          request.nextUrl.origin
-        )
-          ? request.nextUrl.origin
+        "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+          ? origin
           : "null",
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -202,10 +193,8 @@ export async function GET(request: NextRequest) {
       {
         status: 500,
         headers: {
-          "Access-Control-Allow-Origin": allowedOrigins.includes(
-            request.nextUrl.origin
-          )
-            ? request.nextUrl.origin
+          "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+            ? origin
             : "null",
           "Access-Control-Allow-Credentials": "true",
           "Access-Control-Allow-Methods": "GET, OPTIONS",
