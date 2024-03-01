@@ -194,7 +194,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("Error generating video segment URLs", error);
     return new Response(
-      JSON.stringify({ error: true, message: "Error generating video URLs" }),
+      JSON.stringify({ error: error, message: "Error generating video URLs" }),
       {
         status: 500,
         headers: {
