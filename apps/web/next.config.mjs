@@ -43,7 +43,7 @@ const nextConfig = {
   async headers() {
     return [
       {
-        source: "/api/(.*)",
+        source: "/api/playlist/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
@@ -51,7 +51,7 @@ const nextConfig = {
           },
           {
             key: "Access-Control-Allow-Methods",
-            value: "GET",
+            value: "GET, POST, PUT, DELETE, OPTIONS",
           },
           {
             key: "Access-Control-Allow-Credentials",
@@ -60,7 +60,7 @@ const nextConfig = {
         ],
       },
       {
-        source: "/api/(.*)",
+        source: "/api/playlist/(.*)",
         headers: [
           {
             key: "Access-Control-Allow-Origin",
@@ -68,7 +68,7 @@ const nextConfig = {
           },
           {
             key: "Access-Control-Allow-Methods",
-            value: "GET",
+            value: "GET, POST, PUT, DELETE, OPTIONS",
           },
           {
             key: "Access-Control-Allow-Credentials",
