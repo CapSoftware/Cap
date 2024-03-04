@@ -163,7 +163,7 @@ body {
 }
 
 #app {
-  @apply bg-gradient-to-b from-[rgba(255,255,255,0.9)] to-[rgba(255,255,255,0.1)];
+  @apply bg-gradient-to-b from-[rgba(255,255,255,0.92)] to-[rgba(255,255,255,0.2)];
 }
 
 * {

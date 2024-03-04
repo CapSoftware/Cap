@@ -1,7 +1,6 @@
 use serde_json::Value as JsonValue;
 use std::path::{Path};
 use std::process::Command;
-use std::env;
 use reqwest;
 
 use crate::recording::RecordingOptions;

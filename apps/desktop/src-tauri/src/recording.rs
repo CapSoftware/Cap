@@ -57,8 +57,11 @@ pub async fn start_dual_recording(
   
   let audio_chunks_dir = data_dir.join("chunks/audio");
   let video_chunks_dir = data_dir.join("chunks/video");
+  let screenshot_dir = data_dir.join("screenshots");
+
   clean_and_create_dir(&audio_chunks_dir)?;
   clean_and_create_dir(&video_chunks_dir)?;
+  clean_and_create_dir(&screenshot_dir)?;
   
   let audio_name = if options.audio_name.is_empty() {
     None
@@ -66,7 +69,7 @@ pub async fn start_dual_recording(
     Some(options.audio_name.clone())
   };
   
-  let media_recording_preparation = prepare_media_recording(&options, &audio_chunks_dir, &video_chunks_dir, audio_name);
+  let media_recording_preparation = prepare_media_recording(&options, &audio_chunks_dir, &video_chunks_dir, &screenshot_dir, audio_name);
   let media_recording_result = media_recording_preparation.await.map_err(|e| e.to_string())?;
 
   state_guard.media_process = Some(media_recording_result);
@@ -76,8 +79,8 @@ pub async fn start_dual_recording(
   state_guard.video_uploading_finished = Arc::new(AtomicBool::new(false));
   state_guard.audio_uploading_finished = Arc::new(AtomicBool::new(false));
 
-  let screen_upload = start_upload_loop(video_chunks_dir.clone(), options.clone(), "video".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
-  let audio_upload = start_upload_loop(audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone(), state_guard.audio_uploading_finished.clone());
+  let screen_upload = start_upload_loop(video_chunks_dir.clone(), Some(screenshot_dir.clone()), options.clone(), "video".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
+  let audio_upload = start_upload_loop(audio_chunks_dir, None, options.clone(), "audio".to_string(), shutdown_flag.clone(), state_guard.audio_uploading_finished.clone());
 
   drop(state_guard);
 
@@ -127,19 +130,24 @@ fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
     }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
 
-    let segment_list_path = dir.join("segment_list.txt");
-    match File::open(&segment_list_path) {
-        Ok(_) => Ok(()),
-        Err(ref e) if e.kind() == ErrorKind::NotFound => {
-            File::create(&segment_list_path).map_err(|e| e.to_string())?;
-            Ok(())
-        },
-        Err(e) => Err(e.to_string()), 
+    if !dir.to_string_lossy().contains("screenshots") {
+      let segment_list_path = dir.join("segment_list.txt");
+      match File::open(&segment_list_path) {
+          Ok(_) => Ok(()),
+          Err(ref e) if e.kind() == ErrorKind::NotFound => {
+              File::create(&segment_list_path).map_err(|e| e.to_string())?;
+              Ok(())
+          },
+          Err(e) => Err(e.to_string()), 
+      }
+    } else {
+      Ok(())
     }
 }
 
 async fn start_upload_loop(
     chunks_dir: PathBuf,
+    screenshot_dir: Option<PathBuf>,
     options: RecordingOptions,
     video_type: String,
     shutdown_flag: Arc<AtomicBool>,
@@ -147,6 +155,8 @@ async fn start_upload_loop(
 ) -> Result<(), String> {
     let mut watched_segments: HashSet<String> = HashSet::new();
     let mut is_final_loop = false;
+    let mut screenshot_uploaded = false;
+
     loop {
         let mut upload_tasks = vec![];
         if shutdown_flag.load(Ordering::SeqCst) {
@@ -178,12 +188,27 @@ async fn start_upload_loop(
             watched_segments.insert(segment_filename.clone());
         }
 
+        if let Some(screenshot_dir) = &screenshot_dir {
+            let screenshot_path = screenshot_dir.join("screen-capture.jpg");
+            if !screenshot_uploaded && screenshot_path.is_file() {
+                let options_clone = options.clone();
+                let video_type_clone = video_type.clone();
+                let screenshot_path_clone = screenshot_path.clone();
+                upload_tasks.push(tokio::spawn(async move {
+                    let filepath_str = screenshot_path_clone.to_str().unwrap_or_default().to_owned();
+                    println!("Uploading screenshot for {}: {}", video_type_clone, filepath_str);
+                    upload_file(Some(options_clone), filepath_str, "screenshot".to_string()).await.map(|_| ())
+                }));
+                screenshot_uploaded = true;
+            }
+        }
+
         // Await all initiated upload tasks in parallel
         if !upload_tasks.is_empty() {
             let _ = join_all(upload_tasks).await;
         }
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     uploading_finished.store(true, Ordering::SeqCst);
     Ok(())
@@ -207,12 +232,14 @@ fn load_segment_list(segment_list_path: &Path) -> io::Result<HashSet<String>> {
 async fn prepare_media_recording(
   options: &RecordingOptions,
   audio_chunks_dir: &Path,
+  screenshot_dir: &Path,
   video_chunks_dir: &Path,
   audio_name: Option<String>,
 ) -> Result<MediaRecorder, String> {
   let mut media_recorder = MediaRecorder::new();
   let audio_file_path = audio_chunks_dir.to_str().unwrap();
   let video_file_path = video_chunks_dir.to_str().unwrap();
-  media_recorder.start_media_recording(options.clone(), audio_file_path, video_file_path, audio_name.as_ref().map(String::as_str)).await?;
+  let screenshot_dir_path = screenshot_dir.to_str().unwrap();
+  media_recorder.start_media_recording(options.clone(), audio_file_path, screenshot_dir_path, video_file_path, audio_name.as_ref().map(String::as_str)).await?;
   Ok(media_recorder)
 }

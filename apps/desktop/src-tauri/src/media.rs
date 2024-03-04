@@ -5,6 +5,9 @@ use byteorder::{ByteOrder, LittleEndian};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::io::{ErrorKind::WouldBlock, Error};
 use std::time::{Instant, Duration};
+use std::fs::File;
+use std::path::Path;
+use image::{ImageBuffer, Rgba};
 
 use tokio::io::{AsyncWriteExt};
 use tokio::process::{Command, Child, ChildStdin};
@@ -50,7 +53,7 @@ impl MediaRecorder {
         }
     }
 
-    pub async fn start_media_recording(&mut self, options: RecordingOptions, audio_file_path: &str, video_file_path: &str, custom_device: Option<&str>) -> Result<(), String> {
+    pub async fn start_media_recording(&mut self, options: RecordingOptions, audio_file_path: &str, video_file_path: &str, screenshot_file_path: &str, custom_device: Option<&str>) -> Result<(), String> {
         self.options = Some(options);
         
         let host = cpal::default_host();
@@ -134,124 +137,129 @@ impl MediaRecorder {
             eprintln!("an error occurred on stream: {}", err);
         };
         
-        println!("Building input stream...");
-        
-        let stream_result: Result<cpal::Stream, cpal::BuildStreamError> = match config.sample_format() {
-          SampleFormat::I8 => device.build_input_stream(
-              &config.into(),
-              {
-                  let audio_start_time = Arc::clone(&audio_start_time);
-                  move |data: &[i8], _: &_| {
-                      let mut first_frame_time_guard = audio_start_time.try_lock();
-                      
-                      let bytes = data.iter().map(|&sample| sample as u8).collect::<Vec<u8>>();
-                      if let Some(sender) = &audio_channel_sender {
-                        if sender.try_send(bytes).is_err() {
-                          eprintln!("Channel send error. Dropping data.");
-                        }
-                      }
-                      
-                      if let Ok(ref mut start_time_option) = first_frame_time_guard {
-                          if start_time_option.is_none() {
-                              **start_time_option = Some(Instant::now()); 
+        if custom_device != Some("None") {
+            println!("Building input stream...");
 
-                              println!("Audio start time captured");
-                          }
-                      }
-                  }
-              },
-              err_fn,
-              None,
-          ),
-          SampleFormat::I16 => device.build_input_stream(
-              &config.into(),
-              {
-                  let audio_start_time = Arc::clone(&audio_start_time); 
-                  move |data: &[i16], _: &_| {
-                      let mut first_frame_time_guard = audio_start_time.try_lock();
-
-                      let mut bytes = vec![0; data.len() * 2];
-                      LittleEndian::write_i16_into(data, &mut bytes);
-                      if let Some(sender) = &audio_channel_sender {
-                          if sender.try_send(bytes).is_err() {
+            let stream_result: Result<cpal::Stream, cpal::BuildStreamError> = match config.sample_format() {
+              SampleFormat::I8 => device.build_input_stream(
+                  &config.into(),
+                  {
+                      let audio_start_time = Arc::clone(&audio_start_time);
+                      move |data: &[i8], _: &_| {
+                          let mut first_frame_time_guard = audio_start_time.try_lock();
+                          
+                          let bytes = data.iter().map(|&sample| sample as u8).collect::<Vec<u8>>();
+                          if let Some(sender) = &audio_channel_sender {
+                            if sender.try_send(bytes).is_err() {
                               eprintln!("Channel send error. Dropping data.");
+                            }
+                          }
+                          
+                          if let Ok(ref mut start_time_option) = first_frame_time_guard {
+                              if start_time_option.is_none() {
+                                  **start_time_option = Some(Instant::now()); 
+
+                                  println!("Audio start time captured");
+                              }
                           }
                       }
+                  },
+                  err_fn,
+                  None,
+              ),
+              SampleFormat::I16 => device.build_input_stream(
+                  &config.into(),
+                  {
+                      let audio_start_time = Arc::clone(&audio_start_time); 
+                      move |data: &[i16], _: &_| {
+                          let mut first_frame_time_guard = audio_start_time.try_lock();
 
-                      if let Ok(ref mut start_time_option) = first_frame_time_guard {
-                          if start_time_option.is_none() {
-                              **start_time_option = Some(Instant::now()); 
+                          let mut bytes = vec![0; data.len() * 2];
+                          LittleEndian::write_i16_into(data, &mut bytes);
+                          if let Some(sender) = &audio_channel_sender {
+                              if sender.try_send(bytes).is_err() {
+                                  eprintln!("Channel send error. Dropping data.");
+                              }
+                          }
 
-                              println!("Audio start time captured");
+                          if let Ok(ref mut start_time_option) = first_frame_time_guard {
+                              if start_time_option.is_none() {
+                                  **start_time_option = Some(Instant::now()); 
+
+                                  println!("Audio start time captured");
+                              }
                           }
                       }
-                  }
-              },
-              err_fn,
-              None,
-          ),
-          SampleFormat::I32 => device.build_input_stream(
-              &config.into(),
-              {
-                  let audio_start_time = Arc::clone(&audio_start_time);
-                  move |data: &[i32], _: &_| {
-                      let mut first_frame_time_guard = audio_start_time.try_lock();
+                  },
+                  err_fn,
+                  None,
+              ),
+              SampleFormat::I32 => device.build_input_stream(
+                  &config.into(),
+                  {
+                      let audio_start_time = Arc::clone(&audio_start_time);
+                      move |data: &[i32], _: &_| {
+                          let mut first_frame_time_guard = audio_start_time.try_lock();
 
-                      let mut bytes = vec![0; data.len() * 2];
-                      LittleEndian::write_i32_into(data, &mut bytes);
-                      if let Some(sender) = &audio_channel_sender {
-                          if sender.try_send(bytes).is_err() {
-                              eprintln!("Channel send error. Dropping data.");
+                          let mut bytes = vec![0; data.len() * 2];
+                          LittleEndian::write_i32_into(data, &mut bytes);
+                          if let Some(sender) = &audio_channel_sender {
+                              if sender.try_send(bytes).is_err() {
+                                  eprintln!("Channel send error. Dropping data.");
+                              }
+                          }
+
+                          if let Ok(ref mut start_time_option) = first_frame_time_guard {
+                              if start_time_option.is_none() {
+                                  **start_time_option = Some(Instant::now()); 
+
+                                  println!("Audio start time captured");
+                              }
                           }
                       }
+                  },
+                  err_fn,
+                  None,
+              ),
+              SampleFormat::F32 => device.build_input_stream(
+                  &config.into(),
+                  {
+                      let audio_start_time = Arc::clone(&audio_start_time);
+                      move |data: &[f32], _: &_| {
+                          let mut first_frame_time_guard = audio_start_time.try_lock();
 
-                      if let Ok(ref mut start_time_option) = first_frame_time_guard {
-                          if start_time_option.is_none() {
-                              **start_time_option = Some(Instant::now()); 
+                          let mut bytes = vec![0; data.len() * 4];
+                          LittleEndian::write_f32_into(data, &mut bytes);
+                          if let Some(sender) = &audio_channel_sender {
+                              if sender.try_send(bytes).is_err() {
+                                  eprintln!("Channel send error. Dropping data.");
+                              }
+                          }
 
-                              println!("Audio start time captured");
+                          if let Ok(ref mut start_time_option) = first_frame_time_guard {
+                              if start_time_option.is_none() {
+                                  **start_time_option = Some(Instant::now()); 
+
+                                  println!("Audio start time captured");
+                              }
                           }
                       }
-                  }
-              },
-              err_fn,
-              None,
-          ),
-          SampleFormat::F32 => device.build_input_stream(
-              &config.into(),
-              {
-                  let audio_start_time = Arc::clone(&audio_start_time);
-                  move |data: &[f32], _: &_| {
-                      let mut first_frame_time_guard = audio_start_time.try_lock();
-
-                      let mut bytes = vec![0; data.len() * 4];
-                      LittleEndian::write_f32_into(data, &mut bytes);
-                      if let Some(sender) = &audio_channel_sender {
-                          if sender.try_send(bytes).is_err() {
-                              eprintln!("Channel send error. Dropping data.");
-                          }
-                      }
-
-                      if let Ok(ref mut start_time_option) = first_frame_time_guard {
-                          if start_time_option.is_none() {
-                              **start_time_option = Some(Instant::now()); 
-
-                              println!("Audio start time captured");
-                          }
-                      }
-                  }
-              },
-              err_fn,
-              None,
-          ),
-          _sample_format => Err(cpal::BuildStreamError::DeviceNotAvailable),
-        };
-
-        let stream = stream_result.map_err(|_| "Failed to build input stream")?;
-        self.stream = Some(stream);
-        self.trigger_play()?;
+                  },
+                  err_fn,
+                  None,
+              ),
+              _sample_format => Err(cpal::BuildStreamError::DeviceNotAvailable),
+            };
+            
+            let stream = stream_result.map_err(|_| "Failed to build input stream")?;
+            self.stream = Some(stream);
+            self.trigger_play()?;
+        }
 
         let video_start_time_clone = Arc::clone(&video_start_time); 
+        let screenshot_file_path_owned = format!("{}/screen-capture.jpg", screenshot_file_path);
+        let capture_frame_at = Duration::from_secs(3);
+
         std::thread::spawn(move || {
             println!("Starting video recording capture thread...");
 
@@ -263,11 +271,28 @@ impl MediaRecorder {
             let mut frame_count = 0u32;
             let start_time = Instant::now();
             let mut time_next = Instant::now() + spf;
+            let mut screenshot_captured: bool = false;
 
             while !should_stop.load(Ordering::SeqCst) {
                 let now = Instant::now();
 
                 if now >= time_next {
+
+                    if now - start_time >= capture_frame_at && !screenshot_captured {
+                        if let Ok(frame) = capturer.frame() {
+                            screenshot_captured = true;
+                            let path = Path::new(&screenshot_file_path_owned);
+                            let image: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
+                                w.try_into().unwrap(), 
+                                adjusted_height.try_into().unwrap(), 
+                                frame.to_vec()
+                            ).expect("Failed to create image buffer");
+                            image.save_with_format(&path, image::ImageFormat::Jpeg).expect("Failed to save screenshot");
+
+                            println!("Screenshot captured and saved to {:?}", path);
+                        }
+                    }
+
                     let mut frame_data = Vec::with_capacity(capture_size);
 
                     match capturer.frame() {
@@ -335,8 +360,6 @@ impl MediaRecorder {
 
         audio_filters.push("loudnorm");
 
-        let audio_filters_str = audio_filters.join(",");
-
         let mut ffmpeg_audio_command: Vec<String> = vec![
             "-f", sample_format,
             "-ar", &sample_rate_str,
@@ -375,21 +398,32 @@ impl MediaRecorder {
             &video_output_chunk_pattern,
         ].into_iter().map(|s| s.to_string()).collect();
 
-        println!("Adjusting FFmpeg commands based on start times...");
-        adjust_ffmpeg_commands_based_on_start_times(
-            Arc::clone(&audio_start_time),
-            Arc::clone(&video_start_time),
-            &mut ffmpeg_audio_command,
-            &mut ffmpeg_video_command,
-        ).await;
+        if custom_device != Some("None") {
+            println!("Adjusting FFmpeg commands based on start times...");
+            adjust_ffmpeg_commands_based_on_start_times(
+                Arc::clone(&audio_start_time),
+                Arc::clone(&video_start_time),
+                &mut ffmpeg_audio_command,
+                &mut ffmpeg_video_command,
+            ).await;
+        }
 
         println!("Starting FFmpeg audio and video processes...");
 
-        let ((audio_child, audio_stdin), (video_child, video_stdin)) = self.start_ffmpeg_processes(&ffmpeg_binary_path_str, &ffmpeg_audio_command, &ffmpeg_video_command).await.map_err(|e| e.to_string())?;
+        let mut audio_stdin: Option<ChildStdin> = None;
+        let mut audio_child: Option<Child> = None;
+
+        if custom_device != Some("None") {
+            let (child, stdin) = self.start_audio_ffmpeg_processes(&ffmpeg_binary_path_str, &ffmpeg_audio_command).await.map_err(|e| e.to_string())?;
+            audio_child = Some(child);
+            audio_stdin = Some(stdin);
+        }
+
+        let (video_child, video_stdin) = self.start_video_ffmpeg_processes(&ffmpeg_binary_path_str, &ffmpeg_video_command).await.map_err(|e| e.to_string())?;
         
         if let Some(ffmpeg_audio_stdin) = &self.ffmpeg_audio_stdin {
             let mut audio_stdin_lock = ffmpeg_audio_stdin.lock().await;
-            *audio_stdin_lock = Some(audio_stdin);
+            *audio_stdin_lock = audio_stdin;
             drop(audio_stdin_lock);
         }
 
@@ -399,17 +433,19 @@ impl MediaRecorder {
             drop(video_stdin_lock);
         }
 
-        tokio::spawn(async move {
-            while let Some(bytes) = &audio_channel_receiver.lock().await.as_mut().unwrap().recv().await {
-                if let Some(audio_stdin_arc) = &ffmpeg_audio_stdin{
-                    let mut audio_stdin_guard = audio_stdin_arc.lock().await;
-                    if let Some(ref mut stdin) = *audio_stdin_guard {
-                        stdin.write_all(&bytes).await.expect("Failed to write audio data to FFmpeg stdin");
+        if custom_device != Some("None") {
+            tokio::spawn(async move {
+                while let Some(bytes) = &audio_channel_receiver.lock().await.as_mut().unwrap().recv().await {
+                    if let Some(audio_stdin_arc) = &ffmpeg_audio_stdin{
+                        let mut audio_stdin_guard = audio_stdin_arc.lock().await;
+                        if let Some(ref mut stdin) = *audio_stdin_guard {
+                            stdin.write_all(&bytes).await.expect("Failed to write audio data to FFmpeg stdin");
+                        }
+                        drop(audio_stdin_guard);
                     }
-                    drop(audio_stdin_guard);
                 }
-            }
-        });
+            });
+        }
 
         tokio::spawn(async move {
             while let Some(bytes) = &video_channel_receiver.lock().await.as_mut().unwrap().recv().await {
@@ -423,7 +459,10 @@ impl MediaRecorder {
             }
         });
         
-        self.ffmpeg_audio_process = Some(audio_child);
+        if custom_device != Some("None") {
+            self.ffmpeg_audio_process = audio_child;
+        }
+
         self.ffmpeg_video_process = Some(video_child);
         self.device_name = Some(device.name().expect("Failed to get device name"));
         
@@ -437,7 +476,7 @@ impl MediaRecorder {
             stream.play().map_err(|_| "Failed to play stream")?;
             println!("Audio recording playing.");
         } else {
-            return Err("Recording was not started");
+            return Err("Starting the recording did not work");
         }
 
         Ok(())
@@ -472,7 +511,7 @@ impl MediaRecorder {
             stream.pause().map_err(|_| "Failed to pause stream")?;
             println!("Audio recording paused.");
         } else {
-            return Err("Recording was not started".to_string());
+            return Err("Original recording was not started".to_string());
         }
 
         if let Some(process) = &mut self.ffmpeg_audio_process {
@@ -487,19 +526,28 @@ impl MediaRecorder {
         Ok(())
     }
 
-    async fn start_ffmpeg_processes(
+    async fn start_audio_ffmpeg_processes(
         &self,
         ffmpeg_binary_path: &str,
         audio_ffmpeg_command: &[String],
-        video_ffmpeg_command: &[String],
-    ) -> Result<((Child, ChildStdin), (Child, ChildStdin)), Error> {
+    ) -> Result<((Child, ChildStdin)), Error> {
         let mut audio_process = start_recording_process(ffmpeg_binary_path, audio_ffmpeg_command).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        let mut video_process = start_recording_process(ffmpeg_binary_path, video_ffmpeg_command).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
         let audio_stdin = audio_process.stdin.take().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Failed to take audio stdin"))?;
+
+        Ok(((audio_process, audio_stdin)))
+    }
+
+    async fn start_video_ffmpeg_processes(
+        &self,
+        ffmpeg_binary_path: &str,
+        video_ffmpeg_command: &[String],
+    ) -> Result<((Child, ChildStdin)), Error> {
+        let mut video_process = start_recording_process(ffmpeg_binary_path, video_ffmpeg_command).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
         let video_stdin = video_process.stdin.take().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Failed to take video stdin"))?;
 
-        Ok(((audio_process, audio_stdin), (video_process, video_stdin)))
+        Ok(((video_process, video_stdin)))
     }
 
 }

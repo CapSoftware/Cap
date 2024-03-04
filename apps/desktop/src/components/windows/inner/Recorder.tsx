@@ -240,7 +240,7 @@ export const Recorder = () => {
           seconds % 60 < 10 ? `0${seconds % 60}` : seconds % 60;
         setRecordingTime(`${minutes}:${formattedSeconds}`);
 
-        if (seconds >= 600) {
+        if (seconds >= 300) {
           handleStopAllRecordings();
         }
       }, 1000);
@@ -282,7 +282,7 @@ export const Recorder = () => {
                   <ActionButton
                     handler={() => console.log("Screen option selected")}
                     icon={<Screen className="w-5 h-5" />}
-                    label="Screen"
+                    label="Full screen"
                     active={selectedDisplayType === "screen"}
                   />
                   <ActionButton
@@ -302,6 +302,8 @@ export const Recorder = () => {
                     icon={<Video className="w-5 h-5" />}
                     label={selectedVideoDevice?.label || "Video"}
                     active={selectedVideoDevice !== null}
+                    recordingOption={true}
+                    optionName="Video"
                   />
                   <ActionButton
                     width="full"
@@ -309,6 +311,8 @@ export const Recorder = () => {
                     icon={<Microphone className="w-5 h-5" />}
                     label={selectedAudioDevice?.label || "Mic"}
                     active={selectedAudioDevice !== null}
+                    recordingOption={true}
+                    optionName="Audio"
                   />
                 </div>
               </div>
@@ -335,7 +339,7 @@ export const Recorder = () => {
               : "Start Recording"}
           </Button>
           <div className="text-center mt-3">
-            <p className="text-sm text-gray-500">10 min recording limit</p>
+            <p className="text-sm text-gray-600">5 min recording limit</p>
           </div>
         </div>
         <Toaster />
