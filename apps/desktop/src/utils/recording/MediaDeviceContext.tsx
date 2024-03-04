@@ -9,7 +9,11 @@ import {
   useRef,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { getLocalDevices, enumerateAndStoreDevices } from "./utils";
+import {
+  getLocalDevices,
+  enumerateAndStoreDevices,
+  initializeCameraWindow,
+} from "./utils";
 
 export interface Devices {
   index: number;
@@ -119,9 +123,15 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
             payload: { type: "video" | "audio"; device: Devices };
           }) => {
             if (payload && payload.device) {
+              console.log("change-device event:", payload);
               if (payload.type === "video") {
-                console.log("receiving video payload:");
-                console.log(payload);
+                import("@tauri-apps/api/window").then(({ WebviewWindow }) => {
+                  if (WebviewWindow.getByLabel("camera")) {
+                    WebviewWindow.getByLabel("camera").close();
+                  } else {
+                    initializeCameraWindow();
+                  }
+                });
                 if (selectedVideoDevice?.index !== payload.device.index) {
                   setSelectedVideoDevice(payload.device);
                 }

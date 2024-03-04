@@ -7,7 +7,7 @@ export const WindowActions = () => {
   const actionButtonBase = "w-3 h-3 bg-gray-500 rounded-full m-0 p-0 block";
 
   return (
-    <div className="w-full flex items-center -mt-3">
+    <div className="w-full flex items-center -mt-3 z-20 absolute top-5">
       <div className="flex flex-grow items-center justify-between px-3">
         <div className="flex space-x-2">
           <div>

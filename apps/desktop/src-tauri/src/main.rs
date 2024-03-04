@@ -15,11 +15,11 @@ mod recording;
 mod upload;
 mod devices;
 mod utils;
-mod audio;
+mod media;
 
 use recording::{RecordingState, start_dual_recording, stop_all_recordings};
 use upload::upload_file;
-use audio::{enumerate_audio_devices};
+use media::{enumerate_audio_devices};
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
@@ -76,6 +76,33 @@ fn main() {
         .map_err(|err| err.to_string())
     }
 
+    #[tauri::command]
+    fn open_screen_capture_preferences() {
+        #[cfg(target_os = "macos")]
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn()
+            .expect("failed to open system preferences");
+    }
+
+    #[tauri::command]
+    fn open_mic_preferences() {
+        #[cfg(target_os = "macos")]
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            .spawn()
+            .expect("failed to open system preferences");
+    }
+
+    #[tauri::command]
+    fn open_camera_preferences() {
+        #[cfg(target_os = "macos")]
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
+            .spawn()
+            .expect("failed to open system preferences");
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_positioner::init())
@@ -95,10 +122,7 @@ fn main() {
 
             let data_directory = handle.path_resolver().app_data_dir().unwrap_or_else(|| PathBuf::new());
             let recording_state = RecordingState {
-                screen_process: None,
-                screen_process_stdin: None,
-                video_process: None,
-                audio_process: None,
+                media_process: None,
                 upload_handles: Mutex::new(vec![]),
                 recording_options: None,
                 shutdown_flag: Arc::new(AtomicBool::new(false)),
@@ -116,7 +140,10 @@ fn main() {
             stop_all_recordings,
             enumerate_audio_devices,
             upload_file,
-            start_server
+            start_server,
+            open_screen_capture_preferences,
+            open_mic_preferences,
+            open_camera_preferences
         ])
         .plugin(tauri_plugin_context_menu::init())
         .run(tauri::generate_context!())

@@ -47,3 +47,37 @@ export const requestMediaDevicesPermission = async () => {
     console.error("Permissions to access media devices were denied.", error);
   }
 };
+
+export const getPermissions = () => {
+  try {
+    if (typeof window !== "undefined") {
+      const permissions = localStorage.getItem("permissions");
+
+      if (permissions) {
+        return JSON.parse(permissions);
+      }
+    }
+  } catch (error) {
+    console.error("Failed to get permissions:", error);
+  }
+
+  return { camera: false, microphone: false, screen: false, confirmed: false };
+};
+
+export const savePermissions = async (permission: string, value: boolean) => {
+  try {
+    if (typeof window !== "undefined") {
+      let permissions = await getPermissions();
+
+      permissions = permissions
+        ? permissions
+        : { camera: false, microphone: false, screen: false, confirmed: false };
+
+      permissions[permission] = value;
+
+      localStorage.setItem("permissions", JSON.stringify(permissions));
+    }
+  } catch (error) {
+    console.error("Failed to save permissions:", error);
+  }
+};

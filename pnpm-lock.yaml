@@ -317,6 +317,9 @@ importers:
       nanoid:
         specifier: ^5.0.4
         version: 5.0.4
+      next:
+        specifier: 14.1.0
+        version: 14.1.0(@babel/core@7.23.7)(react-dom@18.2.0)(react@18.2.0)
       next-auth:
         specifier: ^4.24.5
         version: 4.24.5(next@14.1.0)(nodemailer@6.9.8)(react-dom@18.2.0)(react@18.2.0)

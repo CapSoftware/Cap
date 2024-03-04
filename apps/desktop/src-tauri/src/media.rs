@@ -9,15 +9,14 @@ use std::time::{Instant, Duration};
 use tokio::io::{AsyncWriteExt};
 use tokio::process::{Command, Child, ChildStdin};
 use tokio::sync::{mpsc, Mutex};
-use tokio::time::{self};
 
 use crate::recording::RecordingOptions;
-use crate::utils::{ffmpeg_path_as_str, monitor_and_log_recording_start};
+use crate::utils::{ffmpeg_path_as_str};
 use capture::{Capturer, Display};
 
 const FRAME_RATE: u64 = 30;
 
-pub struct AudioRecorder {
+pub struct MediaRecorder {
     pub options: Option<RecordingOptions>,
     ffmpeg_audio_process: Option<tokio::process::Child>,
     ffmpeg_video_process: Option<tokio::process::Child>,
@@ -32,10 +31,10 @@ pub struct AudioRecorder {
     should_stop: Arc<AtomicBool>,
 }
 
-impl AudioRecorder {
+impl MediaRecorder {
 
     pub fn new() -> Self {
-        AudioRecorder {
+        MediaRecorder {
             options: None,
             ffmpeg_audio_process: None,
             ffmpeg_video_process: None,
@@ -51,7 +50,7 @@ impl AudioRecorder {
         }
     }
 
-    pub async fn start_audio_recording(&mut self, options: RecordingOptions, audio_file_path: &str, video_file_path: &str, custom_device: Option<&str>) -> Result<(), String> {
+    pub async fn start_media_recording(&mut self, options: RecordingOptions, audio_file_path: &str, video_file_path: &str, custom_device: Option<&str>) -> Result<(), String> {
         self.options = Some(options);
         
         let host = cpal::default_host();
@@ -444,7 +443,7 @@ impl AudioRecorder {
         Ok(())
     }
 
-    pub async fn stop_audio_recording(&mut self) -> Result<(), String> {
+    pub async fn stop_media_recording(&mut self) -> Result<(), String> {
         if let Some(ref ffmpeg_audio_stdin) = self.ffmpeg_audio_stdin {
             let mut audio_stdin_guard = ffmpeg_audio_stdin.lock().await;
             if let Some(mut audio_stdin) = audio_stdin_guard.take() {

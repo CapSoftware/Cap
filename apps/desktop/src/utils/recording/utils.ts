@@ -49,3 +49,40 @@ export const getSelectedVideoProperties = async () => {
     return videoDeviceProperties;
   }
 };
+
+export const initializeCameraWindow = async () => {
+  import("@tauri-apps/api/window").then(({ currentMonitor, WebviewWindow }) => {
+    currentMonitor().then((monitor) => {
+      const windowWidth = 230;
+      const windowHeight = 230;
+
+      if (monitor && monitor.size) {
+        const scalingFactor = monitor.scaleFactor;
+        const x = 100;
+        const y = monitor.size.height / scalingFactor - windowHeight - 100;
+
+        const existingCameraWindow = WebviewWindow.getByLabel("camera");
+        if (existingCameraWindow) {
+          console.log("Camera window already open.");
+          existingCameraWindow.close();
+        } else {
+          new WebviewWindow("camera", {
+            url: "/camera",
+            title: "Cap Camera",
+            width: windowWidth,
+            height: windowHeight,
+            x: x / scalingFactor,
+            y: y,
+            maximized: false,
+            resizable: false,
+            fullscreen: false,
+            transparent: true,
+            decorations: false,
+            alwaysOnTop: true,
+            center: false,
+          });
+        }
+      }
+    });
+  });
+};

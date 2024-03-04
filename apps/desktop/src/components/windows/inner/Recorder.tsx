@@ -32,6 +32,7 @@ export const Recorder = () => {
   const [currentStoppingMessage, setCurrentStoppingMessage] =
     useState("Stopping Recording");
   const [recordingTime, setRecordingTime] = useState("00:00");
+  const [canStopRecording, setCanStopRecording] = useState(false);
 
   const handleContextClick = async (option: string) => {
     const { showMenu } = await import("tauri-plugin-context-menu");
@@ -56,6 +57,25 @@ export const Recorder = () => {
           }
         },
       }));
+
+    filteredDevices.push({
+      label: "None",
+      disabled: false,
+      event: async () => {
+        try {
+          await emit("change-device", {
+            type: option,
+            device: {
+              label: "None",
+              index: -1,
+              kind: option === "video" ? "videoinput" : "audioinput",
+            },
+          });
+        } catch (error) {
+          console.error("Failed to emit change-device event:", error);
+        }
+      },
+    });
 
     await showMenu({
       items: [...filteredDevices],
@@ -151,6 +171,10 @@ export const Recorder = () => {
   };
 
   const handleStopAllRecordings = async () => {
+    if (!canStopRecording) {
+      toast.error("Recording must be for a minimum of 3 seconds.");
+      return;
+    }
     setStoppingRecording(true);
 
     try {
@@ -207,12 +231,18 @@ export const Recorder = () => {
     if (isRecording && !startingRecording) {
       const startTime = Date.now();
 
+      setTimeout(() => setCanStopRecording(true), 5000);
+
       intervalId = setInterval(() => {
         const seconds = Math.floor((Date.now() - startTime) / 1000);
         const minutes = Math.floor(seconds / 60);
         const formattedSeconds =
           seconds % 60 < 10 ? `0${seconds % 60}` : seconds % 60;
         setRecordingTime(`${minutes}:${formattedSeconds}`);
+
+        if (seconds >= 600) {
+          handleStopAllRecordings();
+        }
       }, 1000);
     }
 
@@ -232,7 +262,7 @@ export const Recorder = () => {
       )} */}
       <div
         data-tauri-drag-region
-        className="pt-4 relative flex items-center justify-center"
+        className="w-full h-full px-3 pt-4 relative flex items-center justify-center"
       >
         <div className="w-full">
           <div
@@ -265,7 +295,7 @@ export const Recorder = () => {
               </div>
               <div>
                 <label className="text-sm font-medium">Webcam / Video</label>
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <ActionButton
                     width="full"
                     handler={() => handleContextClick("video")}
@@ -286,7 +316,7 @@ export const Recorder = () => {
           </div>
           <Button
             {...(isRecording && { variant: "destructive" })}
-            className="w-[97.6%] flex mx-auto"
+            className="w-full flex mx-auto"
             onClick={() => {
               if (isRecording) {
                 handleStopAllRecordings();
@@ -304,6 +334,9 @@ export const Recorder = () => {
                 : `Stop - ${recordingTime}`
               : "Start Recording"}
           </Button>
+          <div className="text-center mt-3">
+            <p className="text-sm text-gray-500">10 min recording limit</p>
+          </div>
         </div>
         <Toaster />
       </div>
