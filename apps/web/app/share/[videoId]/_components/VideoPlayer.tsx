@@ -72,12 +72,18 @@ export const VideoPlayer = memo(
           }
         };
 
+        const seekListener = () => {
+          audio.currentTime = video.currentTime;
+        };
+
         video.addEventListener("play", playListener);
         video.addEventListener("pause", pauseListener);
+        video.addEventListener("seeked", seekListener);
 
         return () => {
           video.removeEventListener("play", playListener);
           video.removeEventListener("pause", pauseListener);
+          video.removeEventListener("seeked", seekListener);
         };
       }, [audioSrc]);
 

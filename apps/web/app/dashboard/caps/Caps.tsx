@@ -3,8 +3,11 @@ import { Button } from "@cap/ui";
 import { videos } from "@cap/database/schema";
 import moment from "moment";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
+import { useRouter } from "next/navigation";
 
 export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
+  const { push } = useRouter();
+
   return (
     <div className="py-12">
       {data.length === 0 ? (
@@ -23,8 +26,15 @@ export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
             <p className="text-xl max-w-md">
               Craft your narrative with a Cap—get projects done quicker.
             </p>
-            <Button size="default" className="mt-8" variant="default">
-              Record a Cap
+            <Button
+              onClick={() => {
+                push("/download");
+              }}
+              size="default"
+              className="mt-8 relative"
+              variant="default"
+            >
+              Download Cap
             </Button>
           </div>
         </div>

@@ -44,8 +44,8 @@ export const AdminNavItems = () => {
 
   const manageNavigation = [
     { name: "My Caps", href: `/dashboard/caps`, icon: Clapperboard },
-    { name: "Notifications", href: `/dashboard/notifications`, icon: Bell },
-    { name: "History", href: `/dashboard/history`, icon: History },
+    // { name: "Notifications", href: `/dashboard/notifications`, icon: Bell },
+    // { name: "History", href: `/dashboard/history`, icon: History },
     { name: "Settings", href: `/dashboard/settings`, icon: Settings },
   ];
 
@@ -116,7 +116,7 @@ export const AdminNavItems = () => {
               href={item.href}
               className={classNames(
                 pathname == item.href
-                  ? "bg-gradient-to-l from-tertiary to-tertiary-3 ring-4 ring-tertiary-3"
+                  ? "bg-gradient-to-l from-tertiary-3 to-tertiary ring-4 ring-tertiary-2"
                   : "opacity-75 hover:opacity-100",
                 navItemClass
               )}

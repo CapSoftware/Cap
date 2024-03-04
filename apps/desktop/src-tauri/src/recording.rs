@@ -197,6 +197,7 @@ async fn start_upload_loop(
                 upload_tasks.push(tokio::spawn(async move {
                     let filepath_str = screenshot_path_clone.to_str().unwrap_or_default().to_owned();
                     println!("Uploading screenshot for {}: {}", video_type_clone, filepath_str);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     upload_file(Some(options_clone), filepath_str, "screenshot".to_string()).await.map(|_| ())
                 }));
                 screenshot_uploaded = true;

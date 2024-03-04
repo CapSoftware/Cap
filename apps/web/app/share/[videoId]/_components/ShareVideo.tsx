@@ -13,13 +13,36 @@ const formatTime = (time: number) => {
 };
 
 export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
-  const video2Ref = useRef<HTMLVideoElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [longestDuration, setLongestDuration] = useState(0);
   const [seeking, setSeeking] = useState(false);
   const [videoMetadataLoaded, setVideoMetadataLoaded] = useState(false);
+  const [overlayVisible, setOverlayVisible] = useState(true);
+  const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    const handleMouseMove = () => {
+      setOverlayVisible(true);
+      if (overlayTimeoutRef.current) {
+        clearTimeout(overlayTimeoutRef.current);
+      }
+      overlayTimeoutRef.current = setTimeout(() => {
+        setOverlayVisible(false);
+      }, 1000);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      if (overlayTimeoutRef.current) {
+        clearTimeout(overlayTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (videoMetadataLoaded) {
@@ -32,12 +55,12 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     const onVideoLoadedMetadata = () => {
       console.log("Video metadata loaded");
       setVideoMetadataLoaded(true);
-      if (video2Ref.current) {
-        setLongestDuration(video2Ref.current.duration);
+      if (videoRef.current) {
+        setLongestDuration(videoRef.current.duration);
       }
     };
 
-    const videoElement = video2Ref.current;
+    const videoElement = videoRef.current;
 
     videoElement?.addEventListener("loadedmetadata", onVideoLoadedMetadata);
 
@@ -52,7 +75,7 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
   const handlePlayPauseClick = async () => {
     setIsPlaying(!isPlaying);
 
-    const videoElement = video2Ref.current;
+    const videoElement = videoRef.current;
 
     if (!videoElement) return;
 
@@ -69,14 +92,14 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
   };
 
   const applyTimeToVideos = (time: number) => {
-    if (video2Ref.current) video2Ref.current.currentTime = time;
+    if (videoRef.current) videoRef.current.currentTime = time;
     setCurrentTime(time);
   };
 
   // Update useEffect for playback synchronization
   useEffect(() => {
     const syncPlayback = () => {
-      const videoElement = video2Ref.current;
+      const videoElement = videoRef.current;
 
       if (!isPlaying || isLoading || !videoElement) return;
 
@@ -101,13 +124,13 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
   // Add a useEffect for seeking behavior
   useEffect(() => {
     const handleSeeking = () => {
-      if (seeking && video2Ref.current) {
+      if (seeking && videoRef.current) {
         // Optional: add throttling here to reduce frequency of seek updates
-        setCurrentTime(video2Ref.current.currentTime);
+        setCurrentTime(videoRef.current.currentTime);
       }
     };
 
-    const videoElement = video2Ref.current;
+    const videoElement = videoRef.current;
 
     videoElement?.addEventListener("seeking", handleSeeking);
 
@@ -123,6 +146,10 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     return relativePosition * longestDuration;
   };
 
+  const handleSeekMouseDown = () => {
+    setSeeking(true);
+  };
+
   // Changes specifically in handleSeekMouseMove, handleSeekMouseUp to use applyTimeToVideos directly
   const handleSeekMouseUp = (event: any) => {
     // Similar change as handleSeekMouseMove, no need for isPlaying check here
@@ -132,14 +159,21 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
     const seekTo = calculateNewTime(event, seekBar);
     applyTimeToVideos(seekTo);
     if (isPlaying) {
-      video2Ref.current?.play();
+      videoRef.current?.play();
     }
   };
 
+  const handleSeekMouseMove = (event: any) => {
+    if (!seeking) return;
+    const seekBar = event.currentTarget;
+    const seekTo = calculateNewTime(event, seekBar);
+    applyTimeToVideos(seekTo); // This will just update the current time in state but not the video currentTime because that should happen on mouse up to avoid too many updates.
+  };
+
   const handleMuteClick = () => {
-    if (video2Ref.current) {
+    if (videoRef.current) {
       console.log("Mute clicked");
-      video2Ref.current.muted = video2Ref.current.muted ? false : true;
+      videoRef.current.muted = videoRef.current.muted ? false : true;
     }
   };
 
@@ -163,16 +197,16 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
 
   useEffect(() => {
     if (isPlaying) {
-      video2Ref.current?.play();
+      videoRef.current?.play();
     } else {
-      video2Ref.current?.pause();
+      videoRef.current?.pause();
     }
   }, [isPlaying]);
 
   useEffect(() => {
     const syncPlay = () => {
-      if (video2Ref.current && !isLoading) {
-        const playPromise2 = video2Ref.current.play();
+      if (videoRef.current && !isLoading) {
+        const playPromise2 = videoRef.current.play();
         playPromise2.catch((e) => console.log("Play failed for video 2", e));
       }
     };
@@ -194,7 +228,9 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
       )}
       {isLoading === false && (
         <div
-          className={`absolute top-0 left-0 w-full h-full z-10 flex items-center justify-center bg-black bg-opacity-50 transition-all opacity-0 group-hover:opacity-100 z-20`}
+          className={`absolute top-0 left-0 w-full h-full z-10 flex items-center justify-center bg-black bg-opacity-50 transition-all opacity-0 ${
+            overlayVisible && "group-hover:opacity-100"
+          } z-20`}
         >
           <button
             aria-label="Play video"
@@ -216,7 +252,7 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
         style={{ paddingBottom: "min(806px, 56.25%)" }}
       >
         <VideoPlayer
-          ref={video2Ref}
+          ref={videoRef}
           videoSrc={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`}
           audioSrc={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=audio`}
         />
@@ -225,6 +261,8 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
         <div
           id="seek"
           className="drag-seek absolute left-0 right-0 block h-4 mx-4 -mt-2 group z-20 cursor-pointer"
+          onMouseDown={handleSeekMouseDown}
+          onMouseMove={handleSeekMouseMove}
           onMouseUp={handleSeekMouseUp}
           onMouseLeave={() => setSeeking(false)}
           onTouchEnd={handleSeekMouseUp}
@@ -273,7 +311,7 @@ export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
                   type="button"
                   onClick={() => handleMuteClick()}
                 >
-                  {video2Ref?.current?.muted ? (
+                  {videoRef?.current?.muted ? (
                     <VolumeX className="w-auto h-6" />
                   ) : (
                     <Volume2 className="w-auto h-6" />

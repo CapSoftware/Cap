@@ -18,8 +18,6 @@ const allowedOrigins = [
   "cap.link",
 ];
 
-export const revalidate = 3500;
-
 export async function OPTIONS(request: NextRequest) {
   const origin = request.headers.get("origin") as string;
 

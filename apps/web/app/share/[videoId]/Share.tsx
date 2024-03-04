@@ -5,6 +5,7 @@ import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
 import { videos } from "@cap/database/schema";
 import { userSelectProps } from "@cap/database/auth/session";
+import { Toolbar } from "./_components/Toolbar";
 // million-ignore
 export const Share = ({
   data,
@@ -18,11 +19,16 @@ export const Share = ({
       <div className="space-y-6">
         <ShareHeader data={data} />
         <ShareVideo data={data} />
-        <div>
-          <h1 className="text-2xl">{data.name}</h1>
-          <p className="text-gray-400">
-            about {moment(data.createdAt).fromNow()}
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl">{data.name}</h1>
+            <p className="text-gray-400">
+              about {moment(data.createdAt).fromNow()}
+            </p>
+          </div>
+          <div className="flex">
+            <Toolbar />
+          </div>
         </div>
       </div>
     </div>

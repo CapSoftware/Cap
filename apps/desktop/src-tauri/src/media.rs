@@ -282,10 +282,17 @@ impl MediaRecorder {
                         if let Ok(frame) = capturer.frame() {
                             screenshot_captured = true;
                             let path = Path::new(&screenshot_file_path_owned);
+                            let mut rgba_frame: Vec<u8> = vec![0; frame.len()];
+                            for (i, chunk) in frame.chunks_exact(4).enumerate() {
+                                rgba_frame[i * 4] = chunk[2];
+                                rgba_frame[i * 4 + 1] = chunk[1];
+                                rgba_frame[i * 4 + 2] = chunk[0];
+                                rgba_frame[i * 4 + 3] = chunk[3];
+                            }
                             let image: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
                                 w.try_into().unwrap(), 
                                 adjusted_height.try_into().unwrap(), 
-                                frame.to_vec()
+                                rgba_frame
                             ).expect("Failed to create image buffer");
                             image.save_with_format(&path, image::ImageFormat::Jpeg).expect("Failed to save screenshot");
 
