@@ -8,6 +8,18 @@ module.exports = function (app, options) {
       "../../packages/*/src/**/*.{ts,tsx,html,stories.tsx}",
     ],
     theme: {
+      fontWeight: {
+        thin: "300",
+        hairline: "300",
+        extralight: "300",
+        light: "300",
+        normal: "400",
+        medium: "500",
+        semibold: "600",
+        bold: "600",
+        extrabold: "600",
+        "extra-bold": "600",
+      },
       extend: {
         colors: {
           border: "hsl(var(--border))",
@@ -65,9 +77,24 @@ module.exports = function (app, options) {
         fontFamily: {
           primary: ["Geist", "sans-serif"],
         },
+        keyframes: {
+          flyEmoji: {
+            "0%": {
+              transform: "translateY(0) scale(1)",
+              opacity: "0.7",
+            },
+            "100%": {
+              transform: "translateY(-150px) scale(2)",
+              opacity: "0",
+            },
+          },
+        },
+        animation: {
+          flyEmoji: "flyEmoji 1s forwards",
+        },
       },
     },
-    plugins: [],
+    plugins: [require("tailwindcss-animate")],
   };
   return config;
 };

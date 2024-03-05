@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { MessageSquare } from "lucide-react";
 
+// million-ignore
 export const Toolbar = () => {
   const [currentEmoji, setCurrentEmoji] = useState<{
     emoji: string;
@@ -58,7 +60,7 @@ export const Toolbar = () => {
 
   return (
     <>
-      <div className="bg-white border border-gray-300 rounded-full mx-auto mt-4 mb-4">
+      <div className="bg-white border border-gray-200 rounded-full mx-auto shadow-lg">
         <div className="grid items-center justify-start">
           <div className="p-2">
             <div className="grid items-center justify-start grid-flow-col">
@@ -69,6 +71,13 @@ export const Toolbar = () => {
                   label={reaction.label}
                 />
               ))}
+              <div className="w-[2px] bg-gray-200 h-full mx-2"></div>
+              <div className="flex items-center">
+                <button className="text-sm font-medium bg-transparent py-1 px-2 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0">
+                  <MessageSquare className="w-[22px] h-auto" />
+                  <span className="ml-1">Comment</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

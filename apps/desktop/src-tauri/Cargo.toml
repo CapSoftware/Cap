@@ -36,6 +36,7 @@ bytemuck = "1.14.3"
 regex = "1"
 capture = { path = "./src/capture" }
 image = "0.24.9"
+notify = "6.1.1"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem

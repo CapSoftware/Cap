@@ -6,6 +6,14 @@
   font-family: "Geist";
   src: url("/fonts/Geist-SemiBold.woff2") format("woff2"),
     url("/fonts/Geist-SemiBold.woff") format("woff");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  src: url("/fonts/Geist-Medium.woff2") format("woff2");
   font-weight: 500;
   font-style: normal;
   font-display: swap;
@@ -145,6 +153,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: antialiased;
   font-smooth: always;
+  text-rendering: optimizeLegibility;
   width: 100%;
   height: 100%;
   border: none;

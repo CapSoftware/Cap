@@ -33,6 +33,7 @@ export const Recorder = () => {
     useState("Stopping Recording");
   const [recordingTime, setRecordingTime] = useState("00:00");
   const [canStopRecording, setCanStopRecording] = useState(false);
+  const [hasStartedRecording, setHasStartedRecording] = useState(false);
 
   const handleContextClick = async (option: string) => {
     const { showMenu } = await import("tauri-plugin-context-menu");
@@ -135,9 +136,14 @@ export const Recorder = () => {
     aws_region: string;
     aws_bucket: string;
   }) => {
+    if (hasStartedRecording) {
+      console.log("Recording has already started.");
+      return;
+    }
     console.log("Starting dual recording...");
     setIsRecording(true);
     setStartingRecording(false);
+    setHasStartedRecording(true);
     await invoke("start_dual_recording", {
       options: {
         user_id: videoData.user_id,
@@ -166,7 +172,6 @@ export const Recorder = () => {
     } catch (error) {
       console.error("Error starting recordings:", error);
       setStartingRecording(false);
-      // setCountdownActive(false);
     }
   };
 
@@ -194,7 +199,7 @@ export const Recorder = () => {
       await openLinkInBrowser(url);
 
       setIsRecording(false);
-      // setCountdownActive(false);
+      setHasStartedRecording(false);
       setStoppingRecording(false);
     } catch (error) {
       console.error("Error stopping recording:", error);

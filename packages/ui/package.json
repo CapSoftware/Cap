@@ -27,6 +27,7 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.18.0",
     "tailwindcss": "^3.3.3",
+    "tailwindcss-animate": "^1.0.6",
     "tauri-plugin-context-menu": "^0.5.0",
     "tauri-plugin-positioner-api": "^0.2.7",
     "tsconfig": "workspace:*",

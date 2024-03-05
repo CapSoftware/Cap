@@ -15,6 +15,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::recording::RecordingOptions;
 use crate::utils::{ffmpeg_path_as_str};
+use crate::upload::upload_file;
 use capture::{Capturer, Display};
 
 const FRAME_RATE: u64 = 30;
@@ -54,7 +55,7 @@ impl MediaRecorder {
     }
 
     pub async fn start_media_recording(&mut self, options: RecordingOptions, audio_file_path: &str, video_file_path: &str, screenshot_file_path: &str, custom_device: Option<&str>) -> Result<(), String> {
-        self.options = Some(options);
+        self.options = Some(options.clone());
         
         let host = cpal::default_host();
         let devices = host.devices().expect("Failed to get devices");
@@ -259,7 +260,7 @@ impl MediaRecorder {
         let video_start_time_clone = Arc::clone(&video_start_time); 
         let screenshot_file_path_owned = format!("{}/screen-capture.jpg", screenshot_file_path);
         let capture_frame_at = Duration::from_secs(3);
-
+        
         std::thread::spawn(move || {
             println!("Starting video recording capture thread...");
 
@@ -272,31 +273,60 @@ impl MediaRecorder {
             let start_time = Instant::now();
             let mut time_next = Instant::now() + spf;
             let mut screenshot_captured: bool = false;
-
+            
             while !should_stop.load(Ordering::SeqCst) {
-                let now = Instant::now();
+              let options_clone = options.clone();
+              let now = Instant::now();
 
                 if now >= time_next {
 
                     if now - start_time >= capture_frame_at && !screenshot_captured {
                         if let Ok(frame) = capturer.frame() {
                             screenshot_captured = true;
-                            let path = Path::new(&screenshot_file_path_owned);
-                            let mut rgba_frame: Vec<u8> = vec![0; frame.len()];
-                            for (i, chunk) in frame.chunks_exact(4).enumerate() {
-                                rgba_frame[i * 4] = chunk[2];
-                                rgba_frame[i * 4 + 1] = chunk[1];
-                                rgba_frame[i * 4 + 2] = chunk[0];
-                                rgba_frame[i * 4 + 3] = chunk[3];
-                            }
-                            let image: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
-                                w.try_into().unwrap(), 
-                                adjusted_height.try_into().unwrap(), 
-                                rgba_frame
-                            ).expect("Failed to create image buffer");
-                            image.save_with_format(&path, image::ImageFormat::Jpeg).expect("Failed to save screenshot");
+                            let screenshot_file_path_owned_cloned = screenshot_file_path_owned.clone(); 
+                            let w_cloned = w.clone();
+                            
+                            let frame_clone = frame.to_vec();
+                            std::thread::spawn(move || {
+                                let mut frame_data = Vec::with_capacity(capture_size);
+                                let stride = frame_clone[..capture_size].len() / adjusted_height;
+                                let rt = tokio::runtime::Runtime::new().unwrap();
 
-                            println!("Screenshot captured and saved to {:?}", path);
+                                for row in 0..h { 
+                                    let start = row * stride;
+                                    let end = start + stride;
+                                    let mut row_data = frame_clone[start..end].to_vec();
+                                    for chunk in row_data.chunks_mut(4) {
+                                        chunk.swap(0, 2);
+                                    }
+                                    frame_data.extend_from_slice(&row_data);
+                                }
+
+                                let path = Path::new(&screenshot_file_path_owned_cloned);
+                                let image: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
+                                    w_cloned.try_into().unwrap(), 
+                                    h.try_into().unwrap(), 
+                                    frame_data
+                                ).expect("Failed to create image buffer");
+                                match image.save_with_format(&path, image::ImageFormat::Jpeg) {
+                                    Ok(_) => {
+                                        rt.block_on(async {
+                                            let upload_task = tokio::spawn(upload_file(Some(options_clone), screenshot_file_path_owned_cloned.clone(), "screenshot".to_string()));
+                                            match upload_task.await {
+                                                Ok(result) => {
+                                                    match result {
+                                                        Ok(_) => println!("Screenshot captured and saved to {:?}", path),
+                                                        Err(e) => eprintln!("Failed to upload file: {}", e),
+                                                    }
+                                                },
+                                                Err(e) => eprintln!("Failed to join task: {}", e),
+                                            }
+                                        });
+                                        println!("Screenshot captured and saved to {:?}", path);
+                                    },
+                                    Err(e) => eprintln!("Failed to save screenshot: {}", e),
+                                }
+                            });
                         }
                     }
 

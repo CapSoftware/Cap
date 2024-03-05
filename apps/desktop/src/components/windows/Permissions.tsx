@@ -80,7 +80,7 @@ export const Permissions = () => {
             <div className="flex items-center">
               <div></div>
               <div>
-                <p className="font-bold text-sm capitalize">{permission}</p>
+                <p className="font-semibold text-sm capitalize">{permission}</p>
                 <p className="text-xs">To share your {permission}</p>
               </div>
             </div>
