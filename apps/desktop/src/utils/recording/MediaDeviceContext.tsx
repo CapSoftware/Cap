@@ -123,7 +123,9 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
             payload: { type: "video" | "audio"; device: Devices };
           }) => {
             if (payload && payload.device) {
-              console.log("change-device event:", payload);
+              if (window.fathom !== undefined) {
+                window.fathom.trackEvent(`${payload.type}_device_change`);
+              }
               if (payload.type === "video") {
                 import("@tauri-apps/api/window").then(({ WebviewWindow }) => {
                   if (WebviewWindow.getByLabel("camera")) {

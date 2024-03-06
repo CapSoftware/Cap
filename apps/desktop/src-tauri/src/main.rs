@@ -103,6 +103,11 @@ fn main() {
             .expect("failed to open system preferences");
     }
 
+    let _guard = sentry::init(("https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200", sentry::ClientOptions {
+      release: sentry::release_name!(),
+      ..Default::default()
+    }));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_positioner::init())

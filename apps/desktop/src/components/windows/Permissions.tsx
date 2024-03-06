@@ -41,6 +41,9 @@ export const Permissions = () => {
 
   const handleAllPermissionsEnabled = async () => {
     await savePermissions("confirmed", true);
+    if (window.fathom !== undefined) {
+      window.fathom.trackEvent("permissions_enabled");
+    }
   };
 
   useEffect(() => {

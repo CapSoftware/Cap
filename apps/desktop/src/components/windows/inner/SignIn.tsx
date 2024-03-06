@@ -10,6 +10,10 @@ export const SignIn = () => {
   const handleSignIn = async () => {
     setLoading(true);
 
+    if (window.fathom !== undefined) {
+      window.fathom.trackEvent("signin_started");
+    }
+
     login();
   };
 

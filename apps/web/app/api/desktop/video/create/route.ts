@@ -29,7 +29,7 @@ export async function OPTIONS(req: NextRequest) {
           : "null",
       "Access-Control-Allow-Credentials": "true",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Authorization",
+      "Access-Control-Allow-Headers": "Authorization, sentry-trace, baggage",
     },
   });
 }
@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
             : "null",
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Authorization",
+        "Access-Control-Allow-Headers": "Authorization, sentry-trace, baggage",
       },
     });
   }
@@ -100,7 +100,7 @@ export async function GET(req: NextRequest) {
             : "null",
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Authorization",
+        "Access-Control-Allow-Headers": "Authorization, sentry-trace, baggage",
       },
     }
   );

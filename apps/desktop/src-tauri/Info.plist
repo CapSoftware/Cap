@@ -6,6 +6,8 @@
     <string>Request camera access for WebRTC</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Request microphone access for WebRTC</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Request screen capture access</string>
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>

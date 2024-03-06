@@ -16,6 +16,12 @@ import { openLinkInBrowser } from "@/utils/helpers";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 
+declare global {
+  interface Window {
+    fathom: any;
+  }
+}
+
 export const Recorder = () => {
   const {
     devices,
@@ -27,7 +33,6 @@ export const Recorder = () => {
     startingRecording,
     setStartingRecording,
   } = useMediaDevices();
-  // const [countdownActive, setCountdownActive] = useState(false);
   const [stoppingRecording, setStoppingRecording] = useState(false);
   const [currentStoppingMessage, setCurrentStoppingMessage] =
     useState("Stopping Recording");
@@ -144,6 +149,9 @@ export const Recorder = () => {
     setIsRecording(true);
     setStartingRecording(false);
     setHasStartedRecording(true);
+    if (window.fathom !== undefined) {
+      window.fathom.trackEvent("start_recording");
+    }
     await invoke("start_dual_recording", {
       options: {
         user_id: videoData.user_id,
@@ -177,7 +185,7 @@ export const Recorder = () => {
 
   const handleStopAllRecordings = async () => {
     if (!canStopRecording) {
-      toast.error("Recording must be for a minimum of 3 seconds.");
+      toast.error("Recording must be for a minimum of 5 seconds.");
       return;
     }
     setStoppingRecording(true);
@@ -186,6 +194,10 @@ export const Recorder = () => {
       console.log("Stopping recordings...");
 
       await invoke("stop_all_recordings");
+
+      if (window.fathom !== undefined) {
+        window.fathom.trackEvent("stop_recording");
+      }
 
       console.log("All recordings stopped...");
 
@@ -285,13 +297,23 @@ export const Recorder = () => {
                 <label className="text-sm font-medium">Display</label>
                 <div className="flex items-center space-x-1">
                   <ActionButton
-                    handler={() => console.log("Screen option selected")}
+                    handler={() => {
+                      console.log("Screen option selected");
+                      if (window.fathom !== undefined) {
+                        window.fathom.trackEvent("screen_option");
+                      }
+                    }}
                     icon={<Screen className="w-5 h-5" />}
                     label="Full screen"
                     active={selectedDisplayType === "screen"}
                   />
                   <ActionButton
-                    handler={() => toast.error("This option is coming soon!")}
+                    handler={() => {
+                      toast.error("This option is coming soon!");
+                      if (window.fathom !== undefined) {
+                        window.fathom.trackEvent("window_option");
+                      }
+                    }}
                     icon={<Window className="w-5 h-5" />}
                     label="Window"
                     active={selectedDisplayType === "window"}

@@ -31,7 +31,6 @@ export const login = () => {
             return;
           }
 
-          // Direct use of the URL global object
           const urlObject = new URL(data.payload);
 
           const token = urlObject.searchParams.get("token");
@@ -47,6 +46,9 @@ export const login = () => {
               "session",
               JSON.stringify({ token: token, expires: expires })
             );
+            if (window.fathom !== undefined) {
+              window.fathom.trackEvent("signin_success");
+            }
             console.log("Setting localstorage");
           } catch (error) {
             console.error("Error setting item in localStorage", error);

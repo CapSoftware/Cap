@@ -44,6 +44,11 @@ export default function RootLayout({
       <body>
         <Toaster />
         <MediaDeviceProvider>{children}</MediaDeviceProvider>
+        <script
+          src="https://cdn.usefathom.com/script.js"
+          data-site="EWKEUHSN"
+          defer
+        ></script>
       </body>
     </html>
   );
