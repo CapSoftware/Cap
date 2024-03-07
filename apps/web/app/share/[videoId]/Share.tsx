@@ -16,8 +16,8 @@ export const Share = ({
   return (
     <div className="wrapper py-5">
       <div className="space-y-6">
-        <ShareHeader data={data} />
-        <ShareVideo data={data} />
+        <ShareHeader data={data} user={user} />
+        <ShareVideo data={data} user={user} />
         <div className="flex justify-center">
           <Toolbar />
         </div>

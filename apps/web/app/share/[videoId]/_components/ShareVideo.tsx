@@ -3,6 +3,7 @@ import { VideoPlayer } from "./VideoPlayer";
 import { useState, useEffect, useRef } from "react";
 import { Play, Pause, Maximize, VolumeX, Volume2 } from "lucide-react";
 import { LogoSpinner } from "@cap/ui";
+import { userSelectProps } from "@cap/database/auth/session";
 
 const formatTime = (time: number) => {
   const minutes = Math.floor(time / 60);
@@ -12,7 +13,13 @@ const formatTime = (time: number) => {
     .padStart(2, "0")}`;
 };
 
-export const ShareVideo = ({ data }: { data: typeof videos.$inferSelect }) => {
+export const ShareVideo = ({
+  data,
+  user,
+}: {
+  data: typeof videos.$inferSelect;
+  user: typeof userSelectProps | null;
+}) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
