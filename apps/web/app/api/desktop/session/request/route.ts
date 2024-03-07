@@ -1,8 +1,7 @@
 import { type NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@cap/database/auth/auth-options";
-import { decode, encode } from "next-auth/jwt";
-import { cookies } from "next/headers";
+import { decode } from "next-auth/jwt";
 
 export async function GET(req: NextRequest) {
   const searchParams = req.nextUrl.searchParams;

@@ -7,8 +7,6 @@ import type { NextAuthOptions } from "next-auth";
 import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
 
-const VERCEL_DEPLOYMENT = !!process.env.VERCEL_URL;
-
 export const config = {
   maxDuration: 120,
 };

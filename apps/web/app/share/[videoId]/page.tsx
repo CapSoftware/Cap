@@ -13,6 +13,7 @@ export default async function ShareVideoPage(props: Props) {
   const params = props.params;
   const videoId = params.videoId as string;
   const user = (await getCurrentUser()) as typeof userSelectProps | null;
+  const userId = user?.userId as string | undefined;
 
   const query = await db.select().from(videos).where(eq(videos.id, videoId));
 
@@ -21,6 +22,12 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   const video = query[0];
+
+  if (video.public === false) {
+    if (video.public === false && userId !== video.ownerId) {
+      return <p>Video is private</p>;
+    }
+  }
 
   return <Share data={video} user={user} />;
 }
