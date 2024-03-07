@@ -44,32 +44,6 @@ export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
             <h1 className="text-2xl font-semibold mb-1">My Caps</h1>
             <p>These are all of your videos created with Cap.</p>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-            {data.map((cap, index) => {
-              return (
-                <div
-                  key={index}
-                  className="rounded-xl border border-filler overflow-hidden group"
-                >
-                  <a href={`/share/${cap.id}`}>
-                    <div>
-                      <VideoThumbnail
-                        userId={cap.ownerId}
-                        videoId={cap.id}
-                        alt={`${cap.name} Thumbnail`}
-                      />
-                    </div>
-                    <div className="p-4">
-                      <p className="font-medium">{cap.name}</p>
-                      <p className="text-sm text-gray-400">
-                        {moment(cap.createdAt).fromNow()}
-                      </p>
-                    </div>
-                  </a>
-                </div>
-              );
-            })}
-          </div>
         </>
       )}
     </div>
