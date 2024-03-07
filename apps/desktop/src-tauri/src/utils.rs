@@ -3,6 +3,39 @@ use std::process::{Command};
 use ffmpeg_sidecar::{
     paths::sidecar_dir,
 };
+use capture::{Capturer, Display};
+use std::time::{Duration, Instant};
+
+#[tauri::command]
+pub fn has_screen_capture_access() -> bool {
+    let display = match Display::primary() {
+        Ok(display) => display,
+        Err(_) => return false,
+    };
+    
+    let mut capturer = match Capturer::new(display) {
+        Ok(capturer) => capturer,
+        Err(_) => return false,
+    };
+
+    let start = Instant::now();
+
+    loop {
+        if start.elapsed() > Duration::from_secs(2) {
+            return false;
+        }
+
+        match capturer.frame() {
+            Ok(_frame) => {
+                return true;
+            },
+            Err(_) => {
+                continue;
+            }
+        };
+    }
+}
+
 
 pub fn run_command(command: &str, args: Vec<&str>) -> Result<(String, String), String> {
     let output = Command::new(command)

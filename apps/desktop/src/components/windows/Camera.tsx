@@ -2,13 +2,10 @@ import React, { useEffect, useRef, useState } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { CloseX } from "@/components/icons/CloseX";
 import { Focus } from "@/components/icons/Focus";
-import * as bodyPix from "@tensorflow-models/body-pix";
-import "@tensorflow/tfjs-backend-webgl";
 
 export const Camera = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [isBackgroundBlur, setIsBackgroundBlur] = useState(false);
   const { selectedVideoDevice } = useMediaDevices();
   const [isLoading, setIsLoading] = useState(true);
   const tauriWindowImport = import("@tauri-apps/api/window");
@@ -42,72 +39,6 @@ export const Camera = () => {
       }
     };
   }, [selectedVideoDevice]);
-
-  useEffect(() => {
-    let animationId;
-
-    const performSegmentationAndBlur = async () => {
-      if (!isBackgroundBlur || !videoRef.current || !canvasRef.current) {
-        return;
-      }
-
-      const net = await bodyPix.load({
-        architecture: "MobileNetV1",
-        outputStride: 16,
-        multiplier: 0.75,
-        quantBytes: 2,
-      });
-
-      const draw = async () => {
-        if (
-          !isBackgroundBlur ||
-          !videoRef.current ||
-          videoRef.current.paused ||
-          videoRef.current.ended
-        )
-          return;
-
-        const segmentation = await net.segmentPerson(videoRef.current, {
-          internalResolution: "medium",
-          segmentationThreshold: 0.7,
-        });
-
-        bodyPix.drawBokehEffect(
-          canvasRef.current,
-          videoRef.current,
-          segmentation,
-          6,
-          3
-        );
-
-        animationId = requestAnimationFrame(draw);
-      };
-
-      videoRef.current.onloadedmetadata = () => {
-        canvasRef.current.width = videoRef.current.videoWidth;
-        canvasRef.current.height = videoRef.current.videoHeight;
-        draw();
-      };
-
-      if (videoRef.current.readyState >= 4) {
-        canvasRef.current.width = videoRef.current.videoWidth;
-        canvasRef.current.height = videoRef.current.videoHeight;
-        draw();
-      }
-    };
-
-    performSegmentationAndBlur();
-
-    return () => {
-      if (animationId) {
-        cancelAnimationFrame(animationId);
-      }
-    };
-  }, [isBackgroundBlur]);
-
-  const toggleBackgroundBlur = () => {
-    setIsBackgroundBlur(!isBackgroundBlur);
-  };
 
   const setWindowSize = async (type: "sm" | "lg") => {
     tauriWindowImport.then(
@@ -205,21 +136,10 @@ export const Camera = () => {
         >
           <span className="w-3 h-3 bg-gray-200 rounded-full"></span>
         </div>
-        <div
-          onClick={() => {
-            toggleBackgroundBlur();
-          }}
-          className="h-full flex items-center justify-center p-2 hover:bg-gray-900"
-        >
-          <div>
-            <Focus className="w-5 h-5 stroke-gray-200" />
-          </div>
-        </div>
       </div>
       <canvas
         ref={canvasRef}
         className="absolute top-0 left-0 w-full h-full object-cover pointer-events-none"
-        style={{ display: isBackgroundBlur ? "block" : "none" }}
       ></canvas>
       <video
         ref={videoRef}
@@ -227,7 +147,6 @@ export const Camera = () => {
         playsInline
         muted
         className="absolute top-0 left-0 w-full h-full object-cover pointer-events-none"
-        style={{ visibility: isBackgroundBlur ? "hidden" : "visible" }}
       />
     </div>
   );

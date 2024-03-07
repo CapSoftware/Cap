@@ -16,6 +16,68 @@ export const Permissions = () => {
     microphone: false,
   });
 
+  const checkScreenCapture = async () => {
+    const hasAccess = await invoke("has_screen_capture_access");
+    console.log("hasAccess", hasAccess);
+    if (hasAccess) {
+      await savePermissions("screen", true);
+      setPermissions((prev) => ({
+        ...prev,
+        screen: true,
+      }));
+    }
+  };
+
+  const checkCameraAccess = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      // Assuming access is granted if the above line doesn't throw an error
+      await savePermissions("camera", true);
+      setPermissions((prev) => ({
+        ...prev,
+        camera: true,
+      }));
+      // Stop using the camera after checking access
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (error) {
+      console.log("Camera access denied");
+    }
+  };
+
+  const checkMicrophoneAccess = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Assuming access is granted if the above line doesn't throw an error
+      await savePermissions("microphone", true);
+      setPermissions((prev) => ({
+        ...prev,
+        microphone: true,
+      }));
+      // Stop using the microphone after checking access
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (error) {
+      console.log("Microphone access denied");
+    }
+  };
+
+  useEffect(() => {
+    const checkPermissions = async () => {
+      if (!permissions.screen) {
+        checkScreenCapture();
+      }
+      if (!permissions.camera) {
+        await checkCameraAccess();
+      }
+      if (!permissions.microphone) {
+        await checkMicrophoneAccess();
+      }
+    };
+
+    const checkPermissionInterval = setInterval(checkPermissions, 1000);
+
+    return () => clearInterval(checkPermissionInterval);
+  }, [permissions]);
+
   const handlePermissionOpened = (permission: string) => {
     if (permission === "screen") {
       invoke("open_screen_capture_preferences");
@@ -28,14 +90,6 @@ export const Permissions = () => {
     setPermissionsOpened((prev) => ({
       ...prev,
       [permission]: !prev[permission],
-    }));
-  };
-
-  const handlePermissionConfirm = async (permission: string) => {
-    await savePermissions(permission, true);
-    setPermissions((prev) => ({
-      ...prev,
-      [permission]: true,
     }));
   };
 
@@ -99,9 +153,7 @@ export const Permissions = () => {
                     : "outline"
                 }
                 onClick={() => {
-                  permissionsOpened[permission] === true
-                    ? handlePermissionConfirm(permission)
-                    : handlePermissionOpened(permission);
+                  handlePermissionOpened(permission);
                 }}
               >
                 {permissions && permissions[permission] === true

@@ -20,6 +20,7 @@ mod media;
 use recording::{RecordingState, start_dual_recording, stop_all_recordings};
 use upload::upload_file;
 use media::{enumerate_audio_devices};
+use utils::{has_screen_capture_access};
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
@@ -148,7 +149,8 @@ fn main() {
             start_server,
             open_screen_capture_preferences,
             open_mic_preferences,
-            open_camera_preferences
+            open_camera_preferences,
+            has_screen_capture_access
         ])
         .plugin(tauri_plugin_context_menu::init())
         .run(tauri::generate_context!())
