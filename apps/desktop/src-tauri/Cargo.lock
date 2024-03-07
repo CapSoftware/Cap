@@ -496,8 +496,6 @@ dependencies = [
  "byteorder",
  "capture",
  "chrono",
- "core-foundation",
- "core-graphics 0.23.1",
  "cpal",
  "dotenv_codegen",
  "ffmpeg-sidecar",

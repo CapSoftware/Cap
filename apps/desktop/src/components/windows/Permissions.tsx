@@ -4,11 +4,11 @@ import { savePermissions, getPermissions } from "@/utils/helpers";
 import { invoke } from "@tauri-apps/api/tauri";
 
 export const Permissions = () => {
-  const [permissionsOpened, setPermissionsOpened] = useState({
+  const permissionsOpened = {
     screen: false,
     camera: false,
     microphone: false,
-  });
+  };
 
   const [permissions, setPermissions] = useState({
     screen: false,
@@ -86,11 +86,6 @@ export const Permissions = () => {
     } else if (permission === "microphone") {
       invoke("open_mic_preferences");
     }
-
-    setPermissionsOpened((prev) => ({
-      ...prev,
-      [permission]: !prev[permission],
-    }));
   };
 
   const handleAllPermissionsEnabled = async () => {
@@ -148,8 +143,6 @@ export const Permissions = () => {
                 variant={
                   permissions && permissions[permission] === true
                     ? "default"
-                    : permissionsOpened[permission] === true
-                    ? "default"
                     : "outline"
                 }
                 onClick={() => {
@@ -158,8 +151,6 @@ export const Permissions = () => {
               >
                 {permissions && permissions[permission] === true
                   ? "Enabled"
-                  : permissionsOpened[permission] === true
-                  ? "Confirm"
                   : "Enable"}
               </Button>
             </div>

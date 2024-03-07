@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { CloseX } from "@/components/icons/CloseX";
-import { Focus } from "@/components/icons/Focus";
 
 export const Camera = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -109,7 +108,7 @@ export const Camera = () => {
           </svg>
         </div>
       )}
-      <div className="opacity-0 group-hover:opacity-100 absolute top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 rounded-xl z-20 grid grid-cols-4 overflow-hidden">
+      <div className="opacity-0 group-hover:opacity-100 absolute top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 rounded-xl z-20 grid grid-cols-3 overflow-hidden">
         <div
           onClick={() => {
             closeWindow();

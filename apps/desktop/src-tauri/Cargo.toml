@@ -11,6 +11,7 @@ edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "1.5.0", features = [] }
+ffmpeg-sidecar = "0.5.1"
 
 [dependencies]
 tauri = { version = "1.5.0", features = [ "macos-private-api", "window-set-position", "fs-write-file", "fs-remove-file", "fs-read-file", "fs-rename-file", "fs-exists", "fs-remove-dir", "fs-read-dir", "fs-copy-file", "fs-create-dir", "window-set-ignore-cursor-events", "window-unminimize", "window-minimize", "window-close", "window-show", "window-start-dragging", "window-hide", "window-unmaximize", "window-maximize", "window-set-always-on-top", "shell-open", "devtools", "os-all", "http-all"] }

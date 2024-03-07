@@ -52,6 +52,10 @@ const nextConfig = {
         ],
         destination: "/share/:path*",
       },
+      {
+        source: "/r/:path*",
+        destination: "https://go.cap.link/:path*",
+      },
     ];
   },
   env: {
