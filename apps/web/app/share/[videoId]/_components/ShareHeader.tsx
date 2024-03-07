@@ -17,7 +17,7 @@ export const ShareHeader = ({ data }: { data: typeof videos.$inferSelect }) => {
         <div>
           <h1 className="text-2xl">{data.name}</h1>
           <p className="text-gray-400 text-sm">
-            about {moment(data.createdAt).fromNow()}
+            {moment(data.createdAt).fromNow()}
           </p>
         </div>
       </div>
