@@ -54,7 +54,7 @@ const nextConfig = {
       },
       {
         source: "/r/:path*",
-        destination: "https://go.cap.link/:path*",
+        destination: "https://dub.cap.link/:path*",
       },
     ];
   },
