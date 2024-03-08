@@ -5,6 +5,7 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
+import { LinkIcon } from "lucide-react";
 
 export const ShareHeader = ({
   data,
@@ -80,6 +81,23 @@ export const ShareHeader = ({
             <p className="text-gray-400 text-sm">
               {moment(data.createdAt).fromNow()}
             </p>
+          </div>
+          <div>
+            <button
+              className="bg-white p-2 w-8 h-8 rounded-lg flex items-center justify-center border hover:border-primary-3 transition-all"
+              onClick={() => {
+                if (process.env.NEXT_PUBLIC_IS_CAP) {
+                  navigator.clipboard.writeText(`https://cap.link/${data.id}`);
+                } else {
+                  navigator.clipboard.writeText(
+                    `${process.env.NEXT_PUBLIC_URL}/share/${data.id}`
+                  );
+                }
+                toast.success("Link copied to clipboard!");
+              }}
+            >
+              <LinkIcon className="w-5 h-5" />
+            </button>
           </div>
         </div>
         {user !== null && (

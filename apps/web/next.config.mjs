@@ -50,7 +50,7 @@ const nextConfig = {
             value: "cap.link",
           },
         ],
-        destination: "/share/:path*",
+        destination: "https://cap.so/share/:path*",
       },
       {
         source: "/r/:path*",
