@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { CloseX } from "@/components/icons/CloseX";
+import { emit } from "@tauri-apps/api/event";
 
 export const Camera = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -69,7 +70,15 @@ export const Camera = () => {
   };
 
   const closeWindow = () => {
-    import("@tauri-apps/api/window").then(({ appWindow }) => {
+    import("@tauri-apps/api/window").then(async ({ appWindow }) => {
+      await emit("change-device", {
+        type: "video",
+        device: {
+          label: "None",
+          index: -1,
+          kind: "video",
+        },
+      });
       appWindow.close();
     });
   };
