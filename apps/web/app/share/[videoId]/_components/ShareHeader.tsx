@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
 import { LinkIcon } from "lucide-react";
+import { Tooltip } from "react-tooltip";
 
 export const ShareHeader = ({
   data,
@@ -42,76 +43,83 @@ export const ShareHeader = ({
   };
 
   return (
-    <div>
-      <div className="md:flex md:items-center md:justify-between space-x-0 md:space-x-6">
-        <div className="flex items-center md:justify-between space-x-6">
-          <div>
-            <a
-              href={`${process.env.NEXT_PUBLIC_URL}?referrer=${data.id}`}
-              target="_blank"
-            >
-              <LogoBadge className="w-8 h-auto" />
-            </a>
-          </div>
-          <div>
-            {isEditing ? (
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                onBlur={handleBlur}
-                onKeyDown={handleKeyDown}
-                autoFocus
-                className="text-2xl font-semibold"
-              />
-            ) : (
-              <h1
-                className="text-2xl"
+    <>
+      <Tooltip data-tooltip-id="clipboard" />
+      <div>
+        <div className="md:flex md:items-center md:justify-between space-x-0 md:space-x-6">
+          <div className="flex items-center md:justify-between space-x-6">
+            <div>
+              <a
+                href={`${process.env.NEXT_PUBLIC_URL}?referrer=${data.id}`}
+                target="_blank"
+              >
+                <LogoBadge className="w-8 h-auto" />
+              </a>
+            </div>
+            <div>
+              {isEditing ? (
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  onBlur={handleBlur}
+                  onKeyDown={handleKeyDown}
+                  autoFocus
+                  className="text-2xl font-semibold"
+                />
+              ) : (
+                <h1
+                  className="text-2xl"
+                  onClick={() => {
+                    if (
+                      user !== null &&
+                      user.userId.toString() === data.ownerId
+                    ) {
+                      setIsEditing(true);
+                    }
+                  }}
+                >
+                  {title}
+                </h1>
+              )}
+              <p className="text-gray-400 text-sm">
+                {moment(data.createdAt).fromNow()}
+              </p>
+            </div>
+            <div>
+              <button
+                data-tooltip-id="clipboard"
+                data-tooltip-content="Copy link to clipboard"
+                className="bg-white p-2 w-8 h-8 rounded-lg flex items-center justify-center border hover:border-primary-3 transition-all"
                 onClick={() => {
-                  if (
-                    user !== null &&
-                    user.userId.toString() === data.ownerId
-                  ) {
-                    setIsEditing(true);
+                  if (process.env.NEXT_PUBLIC_IS_CAP) {
+                    navigator.clipboard.writeText(
+                      `https://cap.link/${data.id}`
+                    );
+                  } else {
+                    navigator.clipboard.writeText(
+                      `${process.env.NEXT_PUBLIC_URL}/share/${data.id}`
+                    );
                   }
+                  toast.success("Link copied to clipboard!");
                 }}
               >
-                {title}
-              </h1>
-            )}
-            <p className="text-gray-400 text-sm">
-              {moment(data.createdAt).fromNow()}
-            </p>
+                <LinkIcon className="w-5 h-5" />
+              </button>
+            </div>
           </div>
-          <div>
-            <button
-              className="bg-white p-2 w-8 h-8 rounded-lg flex items-center justify-center border hover:border-primary-3 transition-all"
-              onClick={() => {
-                if (process.env.NEXT_PUBLIC_IS_CAP) {
-                  navigator.clipboard.writeText(`https://cap.link/${data.id}`);
-                } else {
-                  navigator.clipboard.writeText(
-                    `${process.env.NEXT_PUBLIC_URL}/share/${data.id}`
-                  );
-                }
-                toast.success("Link copied to clipboard!");
-              }}
-            >
-              <LinkIcon className="w-5 h-5" />
-            </button>
-          </div>
+          {user !== null && (
+            <div className="hidden md:flex">
+              <Button
+                onClick={() => {
+                  push(`${process.env.NEXT_PUBLIC_URL}/dashboard`);
+                }}
+              >
+                Go to Dashboard
+              </Button>
+            </div>
+          )}
         </div>
-        {user !== null && (
-          <div className="hidden md:flex">
-            <Button
-              onClick={() => {
-                push(`${process.env.NEXT_PUBLIC_URL}/dashboard`);
-              }}
-            >
-              Go to Dashboard
-            </Button>
-          </div>
-        )}
       </div>
-    </div>
+    </>
   );
 };

@@ -4,6 +4,7 @@ import { videos } from "@cap/database/schema";
 import moment from "moment";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { useRouter } from "next/navigation";
+import toast from "react-hot-toast";
 
 export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
   const { push } = useRouter();
@@ -49,9 +50,9 @@ export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
               return (
                 <div
                   key={index}
-                  className="rounded-xl border border-filler overflow-hidden group"
+                  className="rounded-xl border border-filler overflow-hidden"
                 >
-                  <a href={`/share/${cap.id}`}>
+                  <a className="group" href={`/share/${cap.id}`}>
                     <div>
                       <VideoThumbnail
                         userId={cap.ownerId}
@@ -59,13 +60,35 @@ export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
                         alt={`${cap.name} Thumbnail`}
                       />
                     </div>
-                    <div className="p-4">
-                      <p className="font-medium">{cap.name}</p>
-                      <p className="text-sm text-gray-400">
-                        {moment(cap.createdAt).fromNow()}
-                      </p>
-                    </div>
                   </a>
+                  <div className="p-4">
+                    <p className="font-medium">{cap.name}</p>
+                    <p className="text-sm text-gray-400">
+                      {moment(cap.createdAt).fromNow()}
+                    </p>
+                    <div className="mt-3">
+                      <input
+                        className="text-sm cursor-pointer bg-white p-2 w-full rounded-lg flex items-center justify-center border hover:border-primary-3 transition-all"
+                        onClick={(event) => {
+                          if (process.env.NEXT_PUBLIC_IS_CAP) {
+                            navigator.clipboard.writeText(
+                              `https://cap.link/${cap.id}`
+                            );
+                          } else {
+                            navigator.clipboard.writeText(
+                              `${process.env.NEXT_PUBLIC_URL}/share/${cap.id}`
+                            );
+                          }
+                          toast.success("Link copied to clipboard!");
+                        }}
+                        value={
+                          process.env.NEXT_PUBLIC_IS_CAP
+                            ? `https://cap.link/${cap.id}`
+                            : `${process.env.NEXT_PUBLIC_URL}/share/${cap.id}`
+                        }
+                      ></input>
+                    </div>
+                  </div>
                 </div>
               );
             })}

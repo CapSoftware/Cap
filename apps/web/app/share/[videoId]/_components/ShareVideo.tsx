@@ -285,7 +285,7 @@ export const ShareVideo = ({
           onMouseLeave={() => setSeeking(false)}
           onTouchEnd={handleSeekMouseUp}
         >
-          {comments !== null && (
+          {!isLoading && comments !== null && (
             <div className="w-full -mt-5">
               {comments.map((comment) => {
                 if (comment.timestamp === null) return null;
