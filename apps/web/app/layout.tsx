@@ -1,8 +1,22 @@
-"use client";
 import "@/app/globals.css";
 import { Toaster } from "react-hot-toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Cap — Beautiful, shareable screen recordings. Open source.",
+  description:
+    "Cap is an open source and privacy focused alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.",
+  openGraph: {
+    title: "Cap — Beautiful, shareable screen recordings. Open source.",
+    description:
+      "Cap is an open source and privacy focused alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.",
+    type: "website",
+    url: "https://cap.so",
+    images: ["https://cap.so/og.png"],
+  },
+};
 
 export default async function RootLayout({
   children,
@@ -12,16 +26,6 @@ export default async function RootLayout({
   return (
     <html lang="en">
       <head>
-        <meta
-          property="og:title"
-          content="Cap — Beautiful, shareable screen recordings. Open source."
-        />
-        <meta
-          property="og:description"
-          content="Cap is an open source and privacy focused alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds."
-        />
-        <meta property="og:image:width" content="1200" />
-        <meta property="og:image:height" content="630" />
         <link
           rel="apple-touch-icon"
           sizes="180x180"
@@ -43,9 +47,6 @@ export default async function RootLayout({
         <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5" />
         <meta name="msapplication-TileColor" content="#da532c" />
         <meta name="theme-color" content="#ffffff" />
-        <title>
-          Cap — Beautiful, shareable screen recordings. Open source.
-        </title>
       </head>
       <body>
         <Toaster />
