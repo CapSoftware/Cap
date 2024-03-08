@@ -1,9 +1,17 @@
-import { videos } from "@cap/database/schema";
+import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { VideoPlayer } from "./VideoPlayer";
 import { useState, useEffect, useRef } from "react";
-import { Play, Pause, Maximize, VolumeX, Volume2 } from "lucide-react";
+import {
+  Play,
+  Pause,
+  Maximize,
+  VolumeX,
+  Volume2,
+  MessageSquare,
+} from "lucide-react";
 import { LogoSpinner } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
+import { Tooltip } from "react-tooltip";
 
 const formatTime = (time: number) => {
   const minutes = Math.floor(time / 60);
@@ -16,10 +24,15 @@ const formatTime = (time: number) => {
 export const ShareVideo = ({
   data,
   user,
+  comments,
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
+  comments: (typeof commentsSchema.$inferSelect)[];
 }) => {
+  console.log("comments:");
+  console.log(comments);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -157,9 +170,7 @@ export const ShareVideo = ({
     setSeeking(true);
   };
 
-  // Changes specifically in handleSeekMouseMove, handleSeekMouseUp to use applyTimeToVideos directly
   const handleSeekMouseUp = (event: any) => {
-    // Similar change as handleSeekMouseMove, no need for isPlaying check here
     if (!seeking) return;
     setSeeking(false);
     const seekBar = event.currentTarget;
@@ -174,7 +185,7 @@ export const ShareVideo = ({
     if (!seeking) return;
     const seekBar = event.currentTarget;
     const seekTo = calculateNewTime(event, seekBar);
-    applyTimeToVideos(seekTo); // This will just update the current time in state but not the video currentTime because that should happen on mouse up to avoid too many updates.
+    applyTimeToVideos(seekTo);
   };
 
   const handleMuteClick = () => {
@@ -274,6 +285,45 @@ export const ShareVideo = ({
           onMouseLeave={() => setSeeking(false)}
           onTouchEnd={handleSeekMouseUp}
         >
+          {comments !== null && (
+            <div className="w-full -mt-5">
+              {comments.map((comment) => {
+                if (comment.timestamp === null) return null;
+
+                return (
+                  <>
+                    <Tooltip id={comment.id} />
+                    <div
+                      key={comment.id}
+                      className="absolute z-10 text-[16px]"
+                      style={{
+                        left: `${(comment.timestamp / longestDuration) * 100}%`,
+                      }}
+                      data-tooltip-id={comment.id}
+                      data-tooltip-content={`${
+                        comment.type === "text"
+                          ? "User: " + comment.content
+                          : comment.authorId === "anonymous"
+                          ? "Anonymous"
+                          : "User"
+                      }`}
+                    >
+                      <span>
+                        {comment.type === "text" ? (
+                          <MessageSquare
+                            fill="#646464"
+                            className="w-auto h-[22px] text-white"
+                          />
+                        ) : (
+                          comment.content
+                        )}
+                      </span>
+                    </div>
+                  </>
+                );
+              })}
+            </div>
+          )}
           <div className="absolute top-1.5 w-full h-1 bg-white bg-opacity-50 rounded-full z-0" />
           <div
             className="absolute top-1.5 h-1 bg-white rounded-full cursor-pointer transition-all duration-300 z-0"

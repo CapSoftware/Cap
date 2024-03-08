@@ -10,8 +10,7 @@ import {
   boolean,
   uniqueIndex,
   varchar,
-  bigint,
-  decimal,
+  float,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
 import { nanoIdLength } from "./helpers";
@@ -177,6 +176,43 @@ export const sharedVideos = mysqlTable(
     ),
   })
 );
+
+export const comments = mysqlTable(
+  "comments",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    type: varchar("type", { length: 6, enum: ["emoji", "text"] }).notNull(),
+    content: text("content").notNull(),
+    timestamp: float("timestamp"),
+    authorId: nanoId("authorId").notNull(),
+    videoId: nanoId("videoId").notNull(),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    parentCommentId: nanoId("parentCommentId"),
+  },
+  (table) => ({
+    videoIdIndex: index("video_id_idx").on(table.videoId),
+    authorIdIndex: index("author_id_idx").on(table.authorId),
+    parentCommentIdIndex: index("parent_comment_id_idx").on(
+      table.parentCommentId
+    ),
+  })
+);
+
+export const commentsRelations = relations(comments, ({ one }) => ({
+  author: one(users, {
+    fields: [comments.authorId],
+    references: [users.id],
+  }),
+  video: one(videos, {
+    fields: [comments.videoId],
+    references: [videos.id],
+  }),
+  parentComment: one(comments, {
+    fields: [comments.parentCommentId],
+    references: [comments.id],
+  }),
+}));
 
 // Define Relationships
 export const usersRelations = relations(users, ({ many }) => ({

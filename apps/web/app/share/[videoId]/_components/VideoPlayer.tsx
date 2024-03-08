@@ -90,6 +90,7 @@ export const VideoPlayer = memo(
       return (
         <>
           <video
+            id="video-player"
             ref={videoRef}
             className="absolute top-0 left-0 rounded-lg w-full h-full object-contain"
             preload="metadata"
@@ -102,6 +103,8 @@ export const VideoPlayer = memo(
               ref={audioRef}
               style={{ display: "none" }}
               preload="metadata"
+              controls={false}
+              playsInline
             />
           )}
         </>

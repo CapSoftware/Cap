@@ -2,7 +2,7 @@
 import { Share } from "./Share";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
-import { videos } from "@cap/database/schema";
+import { videos, comments } from "@cap/database/schema";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 
 type Props = {
@@ -29,5 +29,10 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  return <Share data={video} user={user} />;
+  const commentsQuery = await db
+    .select()
+    .from(comments)
+    .where(eq(comments.videoId, videoId));
+
+  return <Share data={video} user={user} comments={commentsQuery} />;
 }
