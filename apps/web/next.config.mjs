@@ -40,7 +40,7 @@ const nextConfig = {
       },
     ],
   },
-  async rewrites() {
+  async redirects() {
     return [
       {
         source: "/:path*",
@@ -51,7 +51,12 @@ const nextConfig = {
           },
         ],
         destination: "https://cap.so/share/:path*",
+        permanent: true,
       },
+    ];
+  },
+  async rewrites() {
+    return [
       {
         source: "/r/:path*",
         destination: "https://dub.cap.link/:path*",
