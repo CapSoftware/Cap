@@ -4,10 +4,42 @@ import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { videos, comments } from "@cap/database/schema";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
+import type { Metadata, ResolvingMetadata } from "next";
 
 type Props = {
   params: { [key: string]: string | string[] | undefined };
 };
+
+export async function generateMetadata(
+  { params }: Props,
+  parent: ResolvingMetadata
+): Promise<Metadata> {
+  const videoId = params.videoId as string;
+  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const video = query[0];
+
+  if (video.public === false) {
+    return {
+      title: "Cap: This video is private",
+      description: "This video is private and cannot be shared.",
+      openGraph: {
+        images: [
+          `${process.env.NEXT_PUBLIC_URL}/api/video/og?videoId=${videoId}`,
+        ],
+      },
+    };
+  }
+
+  return {
+    title: "Cap: " + video.name,
+    description: "Watch this video on Cap",
+    openGraph: {
+      images: [
+        `${process.env.NEXT_PUBLIC_URL}/api/video/og?videoId=${videoId}`,
+      ],
+    },
+  };
+}
 
 export default async function ShareVideoPage(props: Props) {
   const params = props.params;

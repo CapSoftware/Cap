@@ -30,9 +30,6 @@ export const ShareVideo = ({
   user: typeof userSelectProps | null;
   comments: (typeof commentsSchema.$inferSelect)[];
 }) => {
-  console.log("comments:");
-  console.log(comments);
-
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -291,35 +288,33 @@ export const ShareVideo = ({
                 if (comment.timestamp === null) return null;
 
                 return (
-                  <>
+                  <div
+                    key={comment.id}
+                    className="absolute z-10 text-[16px]"
+                    style={{
+                      left: `${(comment.timestamp / longestDuration) * 100}%`,
+                    }}
+                    data-tooltip-id={comment.id}
+                    data-tooltip-content={`${
+                      comment.type === "text"
+                        ? "User: " + comment.content
+                        : comment.authorId === "anonymous"
+                        ? "Anonymous"
+                        : "User"
+                    }`}
+                  >
                     <Tooltip id={comment.id} />
-                    <div
-                      key={comment.id}
-                      className="absolute z-10 text-[16px]"
-                      style={{
-                        left: `${(comment.timestamp / longestDuration) * 100}%`,
-                      }}
-                      data-tooltip-id={comment.id}
-                      data-tooltip-content={`${
-                        comment.type === "text"
-                          ? "User: " + comment.content
-                          : comment.authorId === "anonymous"
-                          ? "Anonymous"
-                          : "User"
-                      }`}
-                    >
-                      <span>
-                        {comment.type === "text" ? (
-                          <MessageSquare
-                            fill="#646464"
-                            className="w-auto h-[22px] text-white"
-                          />
-                        ) : (
-                          comment.content
-                        )}
-                      </span>
-                    </div>
-                  </>
+                    <span>
+                      {comment.type === "text" ? (
+                        <MessageSquare
+                          fill="#646464"
+                          className="w-auto h-[22px] text-white"
+                        />
+                      ) : (
+                        comment.content
+                      )}
+                    </span>
+                  </div>
                 );
               })}
             </div>
