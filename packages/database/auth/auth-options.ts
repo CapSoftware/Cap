@@ -54,9 +54,6 @@ export const authOptions: NextAuthOptions = {
 
       return session;
     },
-    async redirect({ url, baseUrl }) {
-      return baseUrl;
-    },
     async jwt({ token, user }) {
       const [dbUser] = await db
         .select()

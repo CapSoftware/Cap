@@ -1,11 +1,21 @@
+import { Logo, LogoBadge, LogoSpinner } from "@cap/ui";
 import Image from "next/image";
 import { useEffect, useState } from "react";
+import { classNames } from "../utils/helpers";
 
-// Define your props interface
 interface VideoThumbnailProps {
   userId: string;
   videoId: string;
   alt: string;
+}
+
+function generateRandomGrayScaleColor() {
+  const minGrayScaleValue = 190;
+  const maxGrayScaleValue = 235;
+  const grayScaleValue = Math.floor(
+    Math.random() * (maxGrayScaleValue - minGrayScaleValue) + minGrayScaleValue
+  );
+  return `rgb(${grayScaleValue}, ${grayScaleValue}, ${grayScaleValue})`;
 }
 
 export const VideoThumbnail = ({
@@ -15,8 +25,8 @@ export const VideoThumbnail = ({
 }: VideoThumbnailProps) => {
   const [imageUrls, setImageUrls] = useState({ screen: "" });
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
 
-  // Fetch the pre-signed URLs on component mount
   useEffect(() => {
     const fetchPreSignedUrls = async () => {
       try {
@@ -32,18 +42,29 @@ export const VideoThumbnail = ({
       } catch (error) {
         console.error("Error fetching pre-signed URLs:", error);
       }
-      setLoading(false);
     };
 
     fetchPreSignedUrls();
   }, [userId, videoId]);
 
+  const randomGradient = `linear-gradient(to right, ${generateRandomGrayScaleColor()}, ${generateRandomGrayScaleColor()})`;
+
   return (
     <div
-      className={`aspect-video relative overflow-hidden rounded-lg ${
-        loading ? "bg-gray-200" : "bg-black"
-      }`}
+      className={`aspect-video relative overflow-hidden rounded-tr-lg rounded-tl-lg bg-black`}
     >
+      <div className="absolute top-0 left-0 flex items-center justify-center w-full h-full z-10">
+        {failed ? (
+          <div
+            className="w-full h-full"
+            style={{ backgroundImage: randomGradient }}
+          ></div>
+        ) : (
+          loading === true && (
+            <LogoSpinner className="w-10 h-auto animate-spin" />
+          )
+        )}
+      </div>
       {imageUrls.screen && (
         <Image
           src={imageUrls.screen}
@@ -51,7 +72,11 @@ export const VideoThumbnail = ({
           layout="fill"
           objectFit="cover"
           className="group-hover:scale-[1.02] transition-all w-full h-full"
-          onLoadingComplete={() => setLoading(false)}
+          onLoad={() => setLoading(false)}
+          onError={() => {
+            setFailed(true);
+            setLoading(false);
+          }}
         />
       )}
       <div className="bg-black opacity-0 z-10 absolute top-0 left-0 w-full h-full group-hover:opacity-50 transition-all"></div>

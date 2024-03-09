@@ -13,7 +13,6 @@ use tauri_plugin_oauth::start;
 
 mod recording;
 mod upload;
-mod devices;
 mod utils;
 mod media;
 
@@ -34,12 +33,6 @@ fn main() {
     std::panic::set_hook(Box::new(|info| {
         eprintln!("Thread panicked: {:?}", info);
     }));
-
-    if which::which("ffmpeg").is_err() {
-        if let Err(e) = handle_ffmpeg_installation() {
-            eprintln!("Failed to handle FFmpeg installation: {}", e);
-        }
-    }
 
     fn handle_ffmpeg_installation() -> FfmpegResult<()> {
         if ffmpeg_is_installed() {
@@ -68,6 +61,8 @@ fn main() {
         println!("Done! 🏁");
         Ok(())
     }
+
+    handle_ffmpeg_installation().expect("Failed to install FFmpeg");
 
     #[command]
     async fn start_server(window: Window) -> Result<u16, String> {

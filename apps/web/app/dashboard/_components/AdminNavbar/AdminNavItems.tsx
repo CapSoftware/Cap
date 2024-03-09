@@ -116,7 +116,7 @@ export const AdminNavItems = () => {
               href={item.href}
               className={classNames(
                 pathname == item.href
-                  ? "bg-gradient-to-l from-tertiary-3 to-tertiary ring-4 ring-tertiary-2"
+                  ? "bg-gray-200"
                   : "opacity-75 hover:opacity-100",
                 navItemClass
               )}

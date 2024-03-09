@@ -1,13 +1,46 @@
 "use client";
 import { Button } from "@cap/ui";
-import { videos } from "@cap/database/schema";
 import moment from "moment";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
+import { EyeIcon, LinkIcon, MessageSquareIcon, SmileIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 
-export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
+type videoData = {
+  id: string;
+  ownerId: string;
+  name: string;
+  createdAt: Date;
+  totalComments: number;
+  totalReactions: number;
+}[];
+
+export const Caps = ({ data }: { data: videoData }) => {
   const { push } = useRouter();
+  const [analytics, setAnalytics] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      const analyticsData: Record<string, number> = {};
+
+      for (const video of data) {
+        const response = await fetch(
+          `/api/video/analytics?videoId=${video.id}`
+        );
+        const data = await response.json();
+
+        if (!data.count) {
+          analyticsData[video.id] = 0;
+        } else {
+          analyticsData[video.id] = data.count;
+        }
+      }
+      setAnalytics(analyticsData);
+    };
+
+    fetchAnalytics();
+  }, [data]);
 
   return (
     <div className="py-12">
@@ -42,58 +75,77 @@ export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
       ) : (
         <>
           <div className="mb-8">
-            <h1 className="text-2xl font-semibold mb-1">My Caps</h1>
-            <p>These are all of your videos created with Cap.</p>
+            <h1 className="text-3xl font-semibold mb-1">My Caps</h1>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
             {data.map((cap, index) => {
+              const videoAnalytics = analytics[cap.id];
+
               return (
                 <div
                   key={index}
-                  className="rounded-xl border border-filler overflow-hidden"
+                  className="rounded-xl border border-filler overflow-hidden relative"
                 >
+                  <button
+                    type="button"
+                    className="cursor-pointer border border-gray-300 absolute top-2 right-2 z-20 bg-white hover:bg-gray-300 w-6 h-6 m-0 p-0 rounded-full flex items-center justify-center transition-all"
+                    onClick={() => {
+                      if (
+                        process.env.NEXT_PUBLIC_IS_CAP &&
+                        process.env.NEXT_ENV === "production"
+                      ) {
+                        navigator.clipboard.writeText(
+                          `https://cap.link/${cap.id}`
+                        );
+                      } else {
+                        navigator.clipboard.writeText(
+                          `${process.env.NEXT_PUBLIC_URL}/s/${cap.id}`
+                        );
+                      }
+                      toast.success("Link copied to clipboard!");
+                    }}
+                  >
+                    <LinkIcon className="w-3 h-3" />
+                  </button>
                   <a
-                    className="group"
+                    className="group block"
                     href={
-                      process.env.NEXT_PUBLIC_IS_CAP
+                      process.env.NEXT_PUBLIC_IS_CAP &&
+                      process.env.NEXT_ENV === "production"
                         ? `https://cap.link/${cap.id}`
                         : `${process.env.NEXT_PUBLIC_URL}/s/${cap.id}`
                     }
                   >
-                    <div>
-                      <VideoThumbnail
-                        userId={cap.ownerId}
-                        videoId={cap.id}
-                        alt={`${cap.name} Thumbnail`}
-                      />
-                    </div>
+                    <VideoThumbnail
+                      userId={cap.ownerId}
+                      videoId={cap.id}
+                      alt={`${cap.name} Thumbnail`}
+                    />
                   </a>
                   <div className="p-4">
                     <p className="font-medium">{cap.name}</p>
                     <p className="text-sm text-gray-400">
                       {moment(cap.createdAt).fromNow()}
                     </p>
-                    <div className="mt-3">
-                      <input
-                        className="text-sm cursor-pointer bg-white p-2 w-full rounded-lg flex items-center justify-center border hover:border-primary-3 transition-all"
-                        onClick={(event) => {
-                          if (process.env.NEXT_PUBLIC_IS_CAP) {
-                            navigator.clipboard.writeText(
-                              `https://cap.link/${cap.id}`
-                            );
-                          } else {
-                            navigator.clipboard.writeText(
-                              `${process.env.NEXT_PUBLIC_URL}/s/${cap.id}`
-                            );
-                          }
-                          toast.success("Link copied to clipboard!");
-                        }}
-                        value={
-                          process.env.NEXT_PUBLIC_IS_CAP
-                            ? `https://cap.link/${cap.id}`
-                            : `${process.env.NEXT_PUBLIC_URL}/s/${cap.id}`
-                        }
-                      ></input>
+                    <div className="flex items-center space-x-3 mt-2 text-sm text-gray-600">
+                      <div className="flex items-center">
+                        <EyeIcon className="w-4 h-4 mr-1" />
+                        <span className="text-gray-600">
+                          {videoAnalytics ?? "-"}
+                        </span>
+                      </div>
+                      <div className="flex items-center">
+                        <MessageSquareIcon className="w-4 h-4 mr-1" />
+                        <span className="text-gray-600">
+                          {cap.totalComments}
+                        </span>
+                      </div>
+                      <div className="flex items-center">
+                        <SmileIcon className="w-4 h-4 mr-1" />
+                        <span className="text-gray-600">
+                          {cap.totalReactions}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -74,13 +74,37 @@ export async function GET(req: NextRequest) {
   }
 
   const id = nanoId();
+  const date = new Date();
+  const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
+    month: "long",
+  })} ${date.getFullYear()}`;
 
   await db.insert(videos).values({
     id: id,
+    name: `My Cap Recording - ${formattedDate}`,
     ownerId: user.userId,
     awsRegion: awsRegion,
     awsBucket: awsBucket,
   });
+
+  if (process.env.NEXT_PUBLIC_IS_CAP && process.env.NODE_ENV === "production") {
+    const dubOptions = {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.DUB_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url: process.env.NEXT_PUBLIC_URL + "/s/" + id,
+        key: id,
+      }),
+    };
+
+    await fetch("https://api.dub.co/links?projectSlug=cap", dubOptions)
+      .then((response) => response.json())
+      .then((response) => console.log(response))
+      .catch((err) => console.error(err));
+  }
 
   return new Response(
     JSON.stringify({

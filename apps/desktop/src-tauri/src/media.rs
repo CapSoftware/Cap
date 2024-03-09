@@ -5,7 +5,6 @@ use byteorder::{ByteOrder, LittleEndian};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::io::{ErrorKind::WouldBlock, Error};
 use std::time::{Instant, Duration};
-use std::fs::File;
 use std::path::Path;
 use image::{ImageBuffer, Rgba};
 
@@ -56,6 +55,8 @@ impl MediaRecorder {
 
     pub async fn start_media_recording(&mut self, options: RecordingOptions, audio_file_path: &str, video_file_path: &str, screenshot_file_path: &str, custom_device: Option<&str>) -> Result<(), String> {
         self.options = Some(options.clone());
+
+        println!("Custom device: {:?}", custom_device);
         
         let host = cpal::default_host();
         let devices = host.devices().expect("Failed to get devices");
@@ -126,6 +127,9 @@ impl MediaRecorder {
         println!("Sample format: {}", sample_format);
         
         let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
+
+        println!("FFmpeg binary path: {}", ffmpeg_binary_path_str);
+        
         let audio_file_path_owned = audio_file_path.to_owned();
         let video_file_path_owned = video_file_path.to_owned();
         let sample_rate_str = sample_rate.to_string();
@@ -421,7 +425,7 @@ impl MediaRecorder {
             "-r", "30",
             "-thread_queue_size", "4096",
             "-i", "pipe:0",
-            "-vf", "fps=30",
+            "-vf", "fps=30,scale=in_range=full:out_range=limited,eq=saturation=1.15",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-pix_fmt", "yuv420p",
@@ -454,23 +458,28 @@ impl MediaRecorder {
             let (child, stdin) = self.start_audio_ffmpeg_processes(&ffmpeg_binary_path_str, &ffmpeg_audio_command).await.map_err(|e| e.to_string())?;
             audio_child = Some(child);
             audio_stdin = Some(stdin);
+            println!("Audio process started");
         }
 
         let (video_child, video_stdin) = self.start_video_ffmpeg_processes(&ffmpeg_binary_path_str, &ffmpeg_video_command).await.map_err(|e| e.to_string())?;
+        println!("Video process started");
         
         if let Some(ffmpeg_audio_stdin) = &self.ffmpeg_audio_stdin {
             let mut audio_stdin_lock = ffmpeg_audio_stdin.lock().await;
             *audio_stdin_lock = audio_stdin;
             drop(audio_stdin_lock);
+            println!("Audio stdin set");
         }
 
         if let Some(ffmpeg_video_stdin) = &self.ffmpeg_video_stdin {
             let mut video_stdin_lock = ffmpeg_video_stdin.lock().await;
             *video_stdin_lock = Some(video_stdin);
             drop(video_stdin_lock);
+            println!("Video stdin set");
         }
 
         if custom_device != Some("None") {
+            println!("Starting audio channel senders...");
             tokio::spawn(async move {
                 while let Some(bytes) = &audio_channel_receiver.lock().await.as_mut().unwrap().recv().await {
                     if let Some(audio_stdin_arc) = &ffmpeg_audio_stdin{
@@ -484,6 +493,7 @@ impl MediaRecorder {
             });
         }
 
+        println!("Starting video channel senders...");
         tokio::spawn(async move {
             while let Some(bytes) = &video_channel_receiver.lock().await.as_mut().unwrap().recv().await {
                 if let Some(video_stdin_arc) = &ffmpeg_video_stdin {
@@ -567,24 +577,36 @@ impl MediaRecorder {
         &self,
         ffmpeg_binary_path: &str,
         audio_ffmpeg_command: &[String],
-    ) -> Result<((Child, ChildStdin)), Error> {
-        let mut audio_process = start_recording_process(ffmpeg_binary_path, audio_ffmpeg_command).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    ) -> Result<(Child, ChildStdin), Error> {
+        let mut audio_process = start_recording_process(ffmpeg_binary_path, audio_ffmpeg_command).await.map_err(|e| {
+            eprintln!("Failed to start audio recording process: {}", e);
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        })?;
 
-        let audio_stdin = audio_process.stdin.take().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Failed to take audio stdin"))?;
+        let audio_stdin = audio_process.stdin.take().ok_or_else(|| {
+            eprintln!("Failed to take audio stdin");
+            std::io::Error::new(std::io::ErrorKind::Other, "Failed to take audio stdin")
+        })?;
 
-        Ok(((audio_process, audio_stdin)))
+        Ok((audio_process, audio_stdin))
     }
 
     async fn start_video_ffmpeg_processes(
         &self,
         ffmpeg_binary_path: &str,
         video_ffmpeg_command: &[String],
-    ) -> Result<((Child, ChildStdin)), Error> {
-        let mut video_process = start_recording_process(ffmpeg_binary_path, video_ffmpeg_command).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    ) -> Result<(Child, ChildStdin), Error> {
+        let mut video_process = start_recording_process(ffmpeg_binary_path, video_ffmpeg_command).await.map_err(|e| {
+            eprintln!("Failed to start video recording process: {}", e);
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        })?;
 
-        let video_stdin = video_process.stdin.take().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Failed to take video stdin"))?;
+        let video_stdin = video_process.stdin.take().ok_or_else(|| {
+            eprintln!("Failed to take video stdin");
+            std::io::Error::new(std::io::ErrorKind::Other, "Failed to take video stdin")
+        })?;
 
-        Ok(((video_process, video_stdin)))
+        Ok((video_process, video_stdin))
     }
 
 }
