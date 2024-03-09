@@ -61,7 +61,7 @@ export const VideoThumbnail = ({
           ></div>
         ) : (
           loading === true && (
-            <LogoSpinner className="w-10 h-auto animate-spin" />
+            <LogoSpinner className="w-5 md:w-8 h-auto animate-spin" />
           )
         )}
       </div>

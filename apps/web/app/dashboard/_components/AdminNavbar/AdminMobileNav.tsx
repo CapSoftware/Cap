@@ -54,7 +54,7 @@ export const AdminMobileNav = () => {
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="sr-only">Close sidebar</span>
-                    <X className="h-6 w-6 text-white" aria-hidden="true" />
+                    <X className="h-6 w-6 text-black" aria-hidden="true" />
                   </button>
                 </div>
               </Transition.Child>
@@ -78,12 +78,12 @@ export const AdminMobileNav = () => {
           onClick={() => setSidebarOpen(true)}
         >
           <span className="sr-only">Open sidebar</span>
-          <Menu className="h-6 w-6" aria-hidden="true" />
+          <Menu className="h-6 w-6 text-black" aria-hidden="true" />
         </button>
         <div className="flex justify-center lg:justify-end w-full px-6">
           <div className="flex-shrink-0 flex lg:hidden items-center px-4">
-            <Link href="/inbox">
-              <Logo className="h-7 w-full" />
+            <Link className="block" href="/inbox">
+              <Logo className="w-16 h-auto block" />
             </Link>
           </div>
         </div>
