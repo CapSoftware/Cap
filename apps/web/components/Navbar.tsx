@@ -10,7 +10,7 @@ export const Navbar = () => {
   if (
     pathname === "/login" ||
     pathname.includes("/dashboard") ||
-    pathname.includes("/share") ||
+    pathname.includes("/s/") ||
     (typeof window !== "undefined" && window.location.href.includes("cap.link"))
   )
     return null;

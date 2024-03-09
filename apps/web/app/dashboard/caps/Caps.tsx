@@ -52,7 +52,14 @@ export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
                   key={index}
                   className="rounded-xl border border-filler overflow-hidden"
                 >
-                  <a className="group" href={`/share/${cap.id}`}>
+                  <a
+                    className="group"
+                    href={
+                      process.env.NEXT_PUBLIC_IS_CAP
+                        ? `https://cap.link/${cap.id}`
+                        : `${process.env.NEXT_PUBLIC_URL}/s/${cap.id}`
+                    }
+                  >
                     <div>
                       <VideoThumbnail
                         userId={cap.ownerId}
@@ -76,7 +83,7 @@ export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
                             );
                           } else {
                             navigator.clipboard.writeText(
-                              `${process.env.NEXT_PUBLIC_URL}/share/${cap.id}`
+                              `${process.env.NEXT_PUBLIC_URL}/s/${cap.id}`
                             );
                           }
                           toast.success("Link copied to clipboard!");
@@ -84,7 +91,7 @@ export const Caps = ({ data }: { data: (typeof videos.$inferSelect)[] }) => {
                         value={
                           process.env.NEXT_PUBLIC_IS_CAP
                             ? `https://cap.link/${cap.id}`
-                            : `${process.env.NEXT_PUBLIC_URL}/share/${cap.id}`
+                            : `${process.env.NEXT_PUBLIC_URL}/s/${cap.id}`
                         }
                       ></input>
                     </div>

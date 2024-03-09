@@ -97,7 +97,7 @@ export const ShareHeader = ({
                     );
                   } else {
                     navigator.clipboard.writeText(
-                      `${process.env.NEXT_PUBLIC_URL}/share/${data.id}`
+                      `${process.env.NEXT_PUBLIC_URL}/s/${data.id}`
                     );
                   }
                   toast.success("Link copied to clipboard!");

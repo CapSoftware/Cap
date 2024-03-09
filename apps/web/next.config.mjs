@@ -40,21 +40,6 @@ const nextConfig = {
       },
     ],
   },
-  async redirects() {
-    return [
-      {
-        source: "/:path*",
-        has: [
-          {
-            type: "host",
-            value: "cap.link",
-          },
-        ],
-        destination: "https://cap.so/share/:path*",
-        permanent: true,
-      },
-    ];
-  },
   async rewrites() {
     return [
       {
