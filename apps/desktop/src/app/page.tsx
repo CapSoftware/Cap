@@ -28,12 +28,16 @@ export default function CameraPage() {
         localStorage.setItem("cap_test_build_version", appVersion);
 
         if (localStorage.getItem("permissions")) {
+          await invoke("reset_screen_permissions");
           const permissions = JSON.parse(
             localStorage.getItem("permissions") || "{}"
           );
           permissions.screen = false;
           permissions.confirmed = false;
           localStorage.setItem("permissions", JSON.stringify(permissions));
+          toast.error(
+            "New version downloaded - screen permissions have been reset"
+          );
         }
       } else if (storedVersion !== appVersion) {
         console.log("New version downloaded");
