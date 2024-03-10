@@ -99,6 +99,17 @@ fn main() {
             .expect("failed to open system preferences");
     }
 
+    #[tauri::command]
+    fn reset_screen_permissions() {
+        #[cfg(target_os = "macos")]
+        std::process::Command::new("tccutil")
+            .arg("reset")
+            .arg("ScreenCapture")
+            .arg("so.cap.desktop")
+            .spawn()
+            .expect("failed to reset screen permissions");
+    }
+
     let _guard = sentry::init(("https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200", sentry::ClientOptions {
       release: sentry::release_name!(),
       ..Default::default()
@@ -145,7 +156,8 @@ fn main() {
             open_screen_capture_preferences,
             open_mic_preferences,
             open_camera_preferences,
-            has_screen_capture_access
+            has_screen_capture_access,
+            reset_screen_permissions
         ])
         .plugin(tauri_plugin_context_menu::init())
         .run(tauri::generate_context!())

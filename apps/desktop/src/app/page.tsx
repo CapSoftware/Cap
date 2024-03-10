@@ -8,12 +8,42 @@ import { Permissions } from "@/components/windows/Permissions";
 import { LogoSpinner } from "@cap/ui";
 import { getPermissions, savePermissions } from "@/utils/helpers";
 import { initializeCameraWindow } from "@/utils/recording/utils";
+import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/tauri";
+import toast from "react-hot-toast";
 
 export default function CameraPage() {
   const [isSignedIn, setIsSignedIn] = useState(false);
   const [cameraWindowOpen, setCameraWindowOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [permissions, setPermissions] = useState(getPermissions());
+
+  useEffect(() => {
+    const checkVersion = async () => {
+      const storedVersion = localStorage.getItem("cap_test_build_version");
+      const appVersion = await getVersion();
+
+      if (!storedVersion) {
+        console.log("No version stored");
+        localStorage.setItem("cap_test_build_version", appVersion);
+      } else if (storedVersion !== appVersion) {
+        console.log("New version downloaded");
+        localStorage.setItem("cap_test_build_version", appVersion);
+        await invoke("reset_screen_permissions");
+        const permissions = JSON.parse(
+          localStorage.getItem("permissions") || "{}"
+        );
+        permissions.screen = false;
+        permissions.confirmed = false;
+        localStorage.setItem("permissions", JSON.stringify(permissions));
+        toast.error(
+          "New version downloaded - screen permissions have been reset"
+        );
+      }
+    };
+
+    checkVersion();
+  }, []);
 
   useEffect(() => {
     const checkPermissions = setInterval(() => {
