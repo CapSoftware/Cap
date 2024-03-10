@@ -87,7 +87,10 @@ export async function GET(req: NextRequest) {
     awsBucket: awsBucket,
   });
 
-  if (process.env.NEXT_PUBLIC_IS_CAP && process.env.NODE_ENV === "production") {
+  if (
+    process.env.NEXT_PUBLIC_IS_CAP &&
+    process.env.NEXT_PUBLIC_ENVIRONMENT === "production"
+  ) {
     const dubOptions = {
       method: "POST",
       headers: {

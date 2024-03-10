@@ -204,7 +204,7 @@ export const Recorder = () => {
       console.log("Opening window...");
 
       const url =
-        process.env.NODE_ENV === "development"
+        process.env.NEXT_PUBLIC_ENVIRONMENT === "development"
           ? `${process.env.NEXT_PUBLIC_URL}/s/${await getLatestVideoId()}`
           : `https://cap.link/${await getLatestVideoId()}`;
 
