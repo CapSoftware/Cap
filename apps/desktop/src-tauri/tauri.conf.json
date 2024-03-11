@@ -68,7 +68,7 @@
       ]
     },
     "security": {
-      "csp": "none"
+      "csp": null
     },
     "macOSPrivateApi": true,
     "windows": [
