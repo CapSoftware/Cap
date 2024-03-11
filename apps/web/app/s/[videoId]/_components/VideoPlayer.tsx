@@ -27,14 +27,10 @@ export const VideoPlayer = memo(
         media: HTMLMediaElement,
         hlsInstance: React.MutableRefObject<Hls | null>
       ) => {
-        if (Hls.isSupported()) {
-          const hls = new Hls();
-          hlsInstance.current = hls;
-          hls.loadSource(src);
-          hls.attachMedia(media);
-        } else if (media.canPlayType("application/vnd.apple.mpegurl")) {
-          media.src = src;
-        }
+        const hls = new Hls();
+        hlsInstance.current = hls;
+        hls.loadSource(src);
+        hls.attachMedia(media);
       };
 
       useEffect(() => {
@@ -76,14 +72,27 @@ export const VideoPlayer = memo(
           audio.currentTime = video.currentTime;
         };
 
+        const volumeChangeListener = () => {
+          audio.muted = video.muted;
+        };
+
+        const endedListener = () => {
+          audio.pause();
+          audio.currentTime = 0;
+        };
+
         video.addEventListener("play", playListener);
         video.addEventListener("pause", pauseListener);
         video.addEventListener("seeked", seekListener);
+        video.addEventListener("volumechange", volumeChangeListener);
+        video.addEventListener("ended", endedListener);
 
         return () => {
           video.removeEventListener("play", playListener);
           video.removeEventListener("pause", pauseListener);
           video.removeEventListener("seeked", seekListener);
+          video.removeEventListener("volumechange", volumeChangeListener);
+          video.removeEventListener("ended", endedListener);
         };
       }, [audioSrc]);
 

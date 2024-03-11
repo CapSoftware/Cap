@@ -47,11 +47,11 @@ export const HomePage = () => {
         <div className="wrapper wrapper-sm mx-auto">
           <div className="mb-auto -mt-20 text-center md:px-4 pt-32 pb-52 md:pt-52 md:pb-64 space-y-8">
             <h1 className="fade-in-down text-3xl sm:text-5xl lg:text-7xl relative z-10 text-black">
-              Your screen recordings deserve to be beautiful.
+              Effortless, instant screen sharing.
             </h1>
             <p className="fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto text-black mb-8">
-              Cap is an open source and privacy-focused alternative to Loom.
-              Lightweight, powerful, and stunning. Record and share in seconds.
+              Cap is the powerful open source alternative to Loom. Lightweight,
+              powerful, and stunning. Record and share in seconds.
             </p>
             {waitlistSuccess === true ? (
               <div className="fade-in-up max-w-lg mx-auto styled-links">
@@ -137,8 +137,8 @@ export const HomePage = () => {
                     <span className="text-white">Star on GitHub</span>
                   </a>
                 </div>
-                <p className="text-gray-600 text-sm">
-                  Coming soon to macOS, Windows and Linux.
+                <p className="text-gray-500 text-sm">
+                  Early access testing is currently underway.
                 </p>
               </div>
             )}

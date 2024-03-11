@@ -84,13 +84,13 @@ module.exports = function (app, options) {
               opacity: "0.7",
             },
             "100%": {
-              transform: "translateY(-150px) scale(2)",
+              transform: "translateY(-150px) scale(2.5)",
               opacity: "0",
             },
           },
         },
         animation: {
-          flyEmoji: "flyEmoji 1s forwards",
+          flyEmoji: "flyEmoji 1.5s forwards",
         },
       },
     },

@@ -13,6 +13,12 @@ import { LogoSpinner } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
 import { Tooltip } from "react-tooltip";
 
+declare global {
+  interface Window {
+    MSStream: any;
+  }
+}
+
 const formatTime = (time: number) => {
   const minutes = Math.floor(time / 60);
   const seconds = Math.floor(time % 60);
@@ -194,7 +200,10 @@ export const ShareVideo = ({
 
   const handleFullscreenClick = () => {
     const player = document.getElementById("player");
-    if (!document.fullscreenElement) {
+    const isIOS =
+      /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+    if (!document.fullscreenElement && !isIOS) {
       player
         ?.requestFullscreen()
         .catch((err) =>
@@ -202,6 +211,9 @@ export const ShareVideo = ({
             `Error attempting to enable full-screen mode: ${err.message} (${err.name})`
           )
         );
+    } else if (isIOS && videoRef.current) {
+      const videoUrl = videoRef.current.src;
+      window.open(videoUrl, "_blank");
     } else {
       document.exitFullscreen();
     }
@@ -283,14 +295,14 @@ export const ShareVideo = ({
           onTouchEnd={handleSeekMouseUp}
         >
           {!isLoading && comments !== null && (
-            <div className="w-full -mt-5">
+            <div className="w-full -mt-7 md:-mt-6">
               {comments.map((comment) => {
                 if (comment.timestamp === null) return null;
 
                 return (
                   <div
                     key={comment.id}
-                    className="absolute z-10 text-[16px]"
+                    className="absolute z-10 text-[16px] hover:scale-125 transition-all"
                     style={{
                       left: `${(comment.timestamp / longestDuration) * 100}%`,
                     }}
@@ -319,13 +331,13 @@ export const ShareVideo = ({
               })}
             </div>
           )}
-          <div className="absolute top-1.5 w-full h-1 bg-white bg-opacity-50 rounded-full z-0" />
+          <div className="absolute top-1.5 w-full h-1.5 bg-white bg-opacity-50 rounded-full z-10" />
           <div
-            className="absolute top-1.5 h-1 bg-white rounded-full cursor-pointer transition-all duration-300 z-0"
+            className="absolute top-1.5 h-1.5 bg-white rounded-full cursor-pointer transition-all duration-300 z-10"
             style={{ width: `${watchedPercentage}%` }}
           />
           <div
-            className="drag-button absolute top-1.5 z-10 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full border border-white cursor-pointer focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-80 focus:outline-none transition-all duration-300"
+            className="drag-button absolute top-1.5 z-20 -mt-1.5 -ml-2 w-4 h-4 bg-white rounded-full border border-white cursor-pointer focus:ring-2 focus:ring-indigo-600 focus:ring-opacity-80 focus:outline-none transition-all duration-300"
             tabIndex={0}
             style={{ left: `${watchedPercentage}%` }}
           />
