@@ -14,14 +14,17 @@
 		Windows ·
 		Linux
     <br />
-    <i>~ Links will be added once a release is available. ~</i>
+    <i>~ Cap is currently in early access testing. Public download links will be added soon. ~</i>
   </p>
 </p>
 <br/>
 
-> NOTE: Cap is under active development, and this repository will be updated regularly with changes and new releases.
+> NOTE: Cap is under active development, and is currently in early access testing. This repository is updated regularly with changes and new releases.
 
-Cap is an open source and privacy focused alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.
+Cap is an open source alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.
+
+![cap-emoji-banner](https://github.com/CapSoftware/cap/assets/33632126/85425396-ad31-463b-b209-7c4bdf7e2e4f)
+
 
 # Roadmap
 
@@ -29,8 +32,21 @@ View what's currently in progress, and what's planned for the future: [Cap Roadm
 
 # Monorepo App Architecture
 
-React, Next.js, TypeScript, Tauri, Drizzle (ORM), MySQL, TailwindCSS.
+We use a combination of Rust, React (Next.js), TypeScript, Tauri, Drizzle (ORM), MySQL, TailwindCSS throughout this Turborepo powered monorepo.
+
+### Apps:
+
+- `desktop`: A [Tauri](https://tauri.app) (Rust) app, using [Next.js](https://nextjs.org) on the frontend.
+- `web`: A [Next.js](https://nextjs.org) web app.
+
+### Packages:
+
+- `ui`: A [React](https://reactjs.org) Shared component library.
+- `utils`: A [React](https://reactjs.org) Shared utility library.
+- `tsconfig`: Shared `tsconfig` configurations used throughout the monorepo.
+- `database`: A [React](https://reactjs.org) and [Drizzle ORM](https://orm.drizzle.team/) Shared database library.
+- `config`: `eslint` configurations (includes `eslint-config-next`, `eslint-config-prettier` other configs used throughout the monorepo).
 
 # Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for more information. This is a work in progress, and will be updated regularly.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for more information. This guide is a work in progress, and is updated regularly as the app matures.
