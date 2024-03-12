@@ -14,7 +14,7 @@
 		Windows ·
 		Linux
     <br />
-    <i>~ Cap is currently in early access testing. Public download links will be added soon. ~</i>
+    <i>~ Cap is currently in early access testing. Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> to help test and get early access. Public download links will be added soon. ~</i>
   </p>
 </p>
 <br/>
