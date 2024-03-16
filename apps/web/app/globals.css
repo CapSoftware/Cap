@@ -290,3 +290,7 @@ ul {
 slot:not(.dashboard-layout slot) {
   display: block;
 }
+
+#scrolling-section slot {
+  display: block;
+}

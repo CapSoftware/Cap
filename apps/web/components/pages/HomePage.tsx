@@ -1,9 +1,11 @@
+// million-ignore
+
 "use client";
 
 import { useState, useRef } from "react";
-import { LogoBadge } from "@cap/ui";
 import { Parallax } from "react-scroll-parallax";
 import toast from "react-hot-toast";
+import Image from "next/image";
 
 export const HomePage = () => {
   const [showEmail, setShowEmail] = useState<boolean>(false);
@@ -45,7 +47,7 @@ export const HomePage = () => {
     <>
       <div className="w-full custom-bg">
         <div className="wrapper wrapper-sm mx-auto">
-          <div className="mb-auto -mt-20 text-center md:px-4 pt-32 pb-52 md:pt-52 md:pb-64 space-y-8">
+          <div className="mb-auto -mt-20 text-center md:px-4 pt-32 pb-52 md:pt-44 md:pb-64 space-y-8">
             <h1 className="fade-in-down text-3xl sm:text-5xl lg:text-7xl relative z-10 text-black">
               Effortless, instant screen sharing.
             </h1>
@@ -138,7 +140,13 @@ export const HomePage = () => {
                   </a>
                 </div>
                 <p className="text-gray-500 text-sm">
-                  Early access testing is currently underway.
+                  Early access testing is currently underway in our{" "}
+                  <a
+                    href="https://discord.gg/y8gdQ3WRN3"
+                    className="font-semibold text-gray-500 hover:underline"
+                  >
+                    Discord community
+                  </a>
                 </p>
               </div>
             )}
@@ -146,24 +154,19 @@ export const HomePage = () => {
         </div>
       </div>
       <div id="scrolling-section" className="pb-48 fade-in-up animate-delay-2">
-        <div className="w-full h-full relative flex items-center -mt-20">
-          <div className="w-full flex items-center justify-center">
-            <Parallax
-              className="cursor-pointer"
-              scale={[2, 1]}
-              opacity={[0.25, 1]}
-              onClick={() =>
-                toast(
-                  "This was going to be something cool... it might be later 👀"
-                )
-              }
-            >
-              <div>
-                <LogoBadge className="w-[175px] lg:w-[300px] h-auto max-w-full mx-auto z-10" />
-              </div>
-            </Parallax>
-          </div>
-        </div>
+        <Parallax
+          className="cursor-pointer"
+          scale={[2.2, 1.25]}
+          onClick={() =>
+            toast("This was going to be something cool... it might be later 👀")
+          }
+        >
+          <img
+            src="/landing-banner.jpg"
+            className="w-full max-w-[600px] block mx-auto h-auto rounded-xl"
+            alt="Landing Page Screenshot Banner"
+          />
+        </Parallax>
       </div>
     </>
   );
