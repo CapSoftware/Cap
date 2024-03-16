@@ -50,8 +50,8 @@ export const HomePage = () => {
               Effortless, instant screen sharing.
             </h1>
             <p className="fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto text-black mb-8">
-              Cap is the powerful open source alternative to Loom. Lightweight,
-              powerful, and stunning. Record and share in seconds.
+              Cap is the open source alternative to Loom. Lightweight, powerful,
+              and stunning. Record and share in seconds.
             </p>
             {waitlistSuccess === true ? (
               <div className="fade-in-up max-w-lg mx-auto styled-links">
