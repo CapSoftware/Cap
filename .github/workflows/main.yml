@@ -5,7 +5,7 @@ on:
       - release
 
 jobs:
-  publish-tauri:
+  cap-desktop-release:
     permissions:
       contents: write
     strategy:
@@ -40,7 +40,11 @@ jobs:
           version: latest
 
       - name: Install dependencies
-        run: pnpm install
+        run: cd apps/desktop && pnpm install
+
+      - name: Create .env file
+        run: |
+          echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" > apps/desktop/.env
 
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
