@@ -64,5 +64,6 @@ jobs:
           tagName: cap-v__VERSION__
           releaseName: "Cap v__VERSION__"
           releaseBody: "The latest version of Cap."
-          releaseDraft: true
+          releaseDraft: false
+          releasePublish: true
           prerelease: false
