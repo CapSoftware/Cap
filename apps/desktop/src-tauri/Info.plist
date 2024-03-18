@@ -21,7 +21,7 @@
     <key>com.apple.security.device.usb</key>
     <true/>
     <key>com.apple.security.device.camera</key>
-    <string>This app requires access to the camera for showing camera preview.</string>
+    <true/>
     <key>com.apple.security.device.microphone</key>
     <true/>
     <key>com.apple.security.device.audio-input</key>
