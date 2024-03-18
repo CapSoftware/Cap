@@ -42,9 +42,14 @@ jobs:
       - name: Install dependencies
         run: cd apps/desktop && pnpm install
 
+      - name: Get app version
+        id: get_version
+        run: echo "appVersion=$(jq -r '.version' apps/desktop/package.json)" >> $GITHUB_OUTPUT
+
       - name: Create .env file
         run: |
           echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" > apps/desktop/.env
+          echo "appVersion=${{ steps.get_version.outputs.appVersion }}" >> apps/desktop/.env
 
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
