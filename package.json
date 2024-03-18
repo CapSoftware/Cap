@@ -5,7 +5,7 @@
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",
-    "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build"
+    "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --target universal-apple-darwin"
   },
   "devDependencies": {
     "@turbo/gen": "^1.9.7",
