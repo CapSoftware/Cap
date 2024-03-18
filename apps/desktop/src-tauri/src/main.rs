@@ -30,6 +30,8 @@ use ffmpeg_sidecar::{
 };
 
 fn main() {    
+    let _ = fix_path_env::fix();
+    
     std::panic::set_hook(Box::new(|info| {
         eprintln!("Thread panicked: {:?}", info);
     }));
