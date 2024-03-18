@@ -5,6 +5,7 @@ use ffmpeg_sidecar::{
 };
 use capture::{Capturer, Display};
 use std::time::{Duration, Instant};
+use std::panic;
 
 #[tauri::command]
 pub fn has_screen_capture_access() -> bool {
@@ -12,30 +13,36 @@ pub fn has_screen_capture_access() -> bool {
         Ok(display) => display,
         Err(_) => return false,
     };
-    
-    let mut capturer = match Capturer::new(display) {
-        Ok(capturer) => capturer,
-        Err(_) => return false,
-    };
 
-    let start = Instant::now();
-
-    loop {
-        if start.elapsed() > Duration::from_secs(2) {
-            return false;
-        }
-
-        match capturer.frame() {
-            Ok(_frame) => {
-                return true;
-            },
-            Err(_) => {
-                continue;
-            }
+    let result = panic::catch_unwind(|| {
+        let mut capturer = match Capturer::new(display) {
+            Ok(capturer) => capturer,
+            Err(_) => return false,
         };
+
+        let start = Instant::now();
+
+        loop {
+            if start.elapsed() > Duration::from_secs(2) {
+                return false;
+            }
+
+            match capturer.frame() {
+                Ok(_frame) => {
+                    return true;
+                },
+                Err(_) => {
+                    continue;
+                }
+            };
+        }
+    });
+
+    match result {
+        Ok(val) => val,
+        Err(_) => false,
     }
 }
-
 
 pub fn run_command(command: &str, args: Vec<&str>) -> Result<(String, String), String> {
     let output = Command::new(command)
