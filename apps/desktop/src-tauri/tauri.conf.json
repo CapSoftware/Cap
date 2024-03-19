@@ -68,8 +68,6 @@
       ],
       "macOS": {
         "minimumSystemVersion": "10.15",
-        "signingIdentity": "Cap",
-        "providerShortName": "Cap",
         "entitlements": "Info.plist"
       }
     },
