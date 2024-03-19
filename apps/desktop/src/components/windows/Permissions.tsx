@@ -29,46 +29,42 @@ export const Permissions = () => {
   };
 
   const checkCameraAccess = async () => {
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-        });
-        await savePermissions("camera", true);
-        setPermissions((prev) => ({
-          ...prev,
-          camera: true,
-        }));
-        stream.getTracks().forEach((track) => track.stop());
-      } catch (error) {
-        console.log("Camera access denied");
-      }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      // Assuming access is granted if the above line doesn't throw an error
+      await savePermissions("camera", true);
+      setPermissions((prev) => ({
+        ...prev,
+        camera: true,
+      }));
+      // Stop using the camera after checking access
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (error) {
+      console.log("Camera access denied");
     }
   };
 
   const checkMicrophoneAccess = async () => {
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-        });
-        await savePermissions("microphone", true);
-        setPermissions((prev) => ({
-          ...prev,
-          microphone: true,
-        }));
-        stream.getTracks().forEach((track) => track.stop());
-      } catch (error) {
-        console.log("Microphone access denied");
-      }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Assuming access is granted if the above line doesn't throw an error
+      await savePermissions("microphone", true);
+      setPermissions((prev) => ({
+        ...prev,
+        microphone: true,
+      }));
+      // Stop using the microphone after checking access
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (error) {
+      console.log("Microphone access denied");
     }
   };
 
   useEffect(() => {
     const checkPermissions = async () => {
-      // if (!permissions.screen) {
-      //   await checkScreenCapture();
-      // }
+      if (!permissions.screen) {
+        checkScreenCapture();
+      }
       if (!permissions.camera) {
         await checkCameraAccess();
       }
@@ -77,7 +73,9 @@ export const Permissions = () => {
       }
     };
 
-    checkPermissions();
+    const checkPermissionInterval = setInterval(checkPermissions, 1000);
+
+    return () => clearInterval(checkPermissionInterval);
   }, [permissions]);
 
   const handlePermissionOpened = (permission: string) => {

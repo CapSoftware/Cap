@@ -10,7 +10,7 @@ const dynamicImports = {
 
 export const openSignIn = async (port: string) => {
   if (typeof window !== "undefined" && typeof navigator !== "undefined") {
-    const { open } = await dynamicImports.shell(); // Correctly accessing the shell module
+    const { open } = await dynamicImports.shell();
     await open(
       `${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?port=${port}`
     );
