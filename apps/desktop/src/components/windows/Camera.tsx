@@ -86,7 +86,7 @@ export const Camera = () => {
   return (
     <div
       data-tauri-drag-region
-      className="group w-full h-full bg-gray-200 rounded-full m-0 p-0 relative overflow-hidden flex items-center justify-center border-none outline-none focus:outline-none"
+      className="group w-full h-full bg-gray-200 rounded-full m-0 p-0 relative overflow-hidden flex items-center justify-center border-none outline-none focus:outline-none rounded-full"
     >
       {isLoading && (
         <div className="w-full h-full absolute top-0 left-0 bg-gray-200 z-10 flex items-center justify-center">

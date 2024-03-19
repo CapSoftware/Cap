@@ -293,7 +293,7 @@ impl MediaRecorder {
                             let frame_clone = frame.to_vec();
                             std::thread::spawn(move || {
                                 let mut frame_data = Vec::with_capacity(capture_size);
-                                let stride = frame_clone[..capture_size].len() / adjusted_height;
+                                let stride = w_cloned * 4;
                                 let rt = tokio::runtime::Runtime::new().unwrap();
 
                                 for row in 0..h { 
@@ -338,7 +338,7 @@ impl MediaRecorder {
 
                     match capturer.frame() {
                         Ok(frame) => {
-                            let stride = frame[..capture_size].len() / adjusted_height;
+                            let stride = w * 4;
                             for row in 0..adjusted_height {
                                 let start = row * stride;
                                 let end = start + stride;
