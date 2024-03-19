@@ -100,6 +100,7 @@ export async function GET(req: NextRequest) {
       body: JSON.stringify({
         url: process.env.NEXT_PUBLIC_URL + "/s/" + id,
         key: id,
+        domain: "cap.link",
       }),
     };
 
