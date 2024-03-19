@@ -12,7 +12,7 @@
     "@cap/ui": "workspace:*",
     "@cap/utils": "workspace:*",
     "@sentry/nextjs": "^7.105.0",
-    "@tauri-apps/api": "^1.5.0",
+    "@tauri-apps/api": "^1.5.3",
     "@tensorflow-models/body-pix": "^2.2.1",
     "@tensorflow/tfjs": "^4.17.0",
     "autoprefixer": "^10.4.16",
@@ -32,7 +32,7 @@
     "tauri-plugin-positioner-api": "^0.2.7"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^1.5.0",
+    "@tauri-apps/cli": "^1.5.11",
     "@types/react": "^18.2.15",
     "@types/react-dom": "latest",
     "typescript": "^5.3.2"
