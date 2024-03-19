@@ -67,6 +67,11 @@ impl MediaRecorder {
         let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
         let (video_tx, video_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
 
+        println!("Display width: {}", w);
+        println!("Display height: {}", h);
+        println!("Adjusted height: {}", adjusted_height);
+        println!("Capture size: {}", capture_size);
+
         let audio_start_time = Arc::new(Mutex::new(None));
         let video_start_time = Arc::new(Mutex::new(None));
 
@@ -294,6 +299,7 @@ impl MediaRecorder {
                             std::thread::spawn(move || {
                                 let mut frame_data = Vec::with_capacity(capture_size);
                                 let stride = w_cloned * 4;
+                                println!("Stride: {}", stride);
                                 let rt = tokio::runtime::Runtime::new().unwrap();
 
                                 for row in 0..h { 
