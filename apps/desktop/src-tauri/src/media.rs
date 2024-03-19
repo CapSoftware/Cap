@@ -299,6 +299,7 @@ impl MediaRecorder {
                             std::thread::spawn(move || {
                                 let mut frame_data = Vec::with_capacity(capture_size);
                                 let stride = w_cloned * 4;
+                                println!("Frame length: {}", frame_clone.len());
                                 println!("Stride: {}", stride);
                                 let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -309,6 +310,8 @@ impl MediaRecorder {
                                     for chunk in row_data.chunks_mut(4) {
                                         chunk.swap(0, 2);
                                     }
+                                    //print the row data length
+                                    println!("Row data length: {}", row_data.len());
                                     frame_data.extend_from_slice(&row_data);
                                 }
 
