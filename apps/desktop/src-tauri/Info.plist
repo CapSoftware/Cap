@@ -2,12 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
-    <key>NSCameraUsageDescription</key>
-    <string>Request camera access for WebRTC</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Request microphone access for WebRTC</string>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>Request screen capture access</string>
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
@@ -32,6 +26,12 @@
     <true/>
     <key>com.apple.security.inherit</key>
     <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Request camera access for WebRTC</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Request microphone access for WebRTC</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Request screen capture access</string>
     <key>CFBundleURLTypes</key>
     <array>
       <dict>

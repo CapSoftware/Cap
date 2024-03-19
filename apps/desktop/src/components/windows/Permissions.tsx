@@ -66,9 +66,9 @@ export const Permissions = () => {
 
   useEffect(() => {
     const checkPermissions = async () => {
-      if (!permissions.screen) {
-        await checkScreenCapture();
-      }
+      // if (!permissions.screen) {
+      //   await checkScreenCapture();
+      // }
       if (!permissions.camera) {
         await checkCameraAccess();
       }
