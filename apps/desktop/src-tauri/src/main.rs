@@ -123,8 +123,18 @@ fn main() {
     let monitor: MonitorHandle = event_loop.primary_monitor().expect("No primary monitor found");
     let video_modes: Vec<VideoMode> = monitor.video_modes().collect();
 
+    //print monitor
+    println!("Monitor: {:?}", monitor.name());
+    println!("Monitor size: {:?}", monitor.size());
+    println!("Monitor position: {:?}", monitor.position());
+    println!("Monitor scale factor: {:?}", monitor.scale_factor());
+
     for mode in &video_modes {
+        println!("----------");
+        println!("Refresh rate: {:?}", mode.refresh_rate_millihertz());
+        println!("bit_depth: {:?}", mode.bit_depth());
         println!("Video mode: {:?}", mode.size());
+        println!("----------");
     }
 
     let max_mode = video_modes.iter().max_by_key(|mode| mode.size().width * mode.size().height);
