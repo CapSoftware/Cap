@@ -123,6 +123,10 @@ fn main() {
     let monitor: MonitorHandle = event_loop.primary_monitor().expect("No primary monitor found");
     let video_modes: Vec<VideoMode> = monitor.video_modes().collect();
 
+    for mode in &video_modes {
+        println!("Video mode: {:?}", mode.size());
+    }
+
     let max_mode = video_modes.iter().max_by_key(|mode| mode.size().width * mode.size().height);
 
     let (max_width, max_height) = if let Some(max_mode) = max_mode {
