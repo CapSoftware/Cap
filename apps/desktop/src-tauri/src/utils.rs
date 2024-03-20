@@ -1,4 +1,3 @@
-use tokio::process::{ChildStderr};
 use std::process::{Command};
 use ffmpeg_sidecar::{
     paths::sidecar_dir,
@@ -14,8 +13,11 @@ pub fn has_screen_capture_access() -> bool {
         Err(_) => return false,
     };
 
+    let width = display.width();
+    let height = display.height();
+
     let result = panic::catch_unwind(|| {
-        let mut capturer = match Capturer::new(display) {
+        let mut capturer = match Capturer::new(display, width, height) {
             Ok(capturer) => capturer,
             Err(_) => return false,
         };

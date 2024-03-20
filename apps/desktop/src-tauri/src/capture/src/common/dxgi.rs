@@ -11,9 +11,7 @@ pub struct Capturer {
 unsafe impl Send for Capturer {}
 
 impl Capturer {
-    pub fn new(display: Display) -> io::Result<Capturer> {
-        let width = display.width();
-        let height = display.height();
+    pub fn new(display: Display, width: usize, height: usize) -> io::Result<Capturer> {
         let inner = dxgi::Capturer::new(&display.0)?;
         Ok(Capturer { inner, width, height })
     }

@@ -37,7 +37,6 @@ export interface MediaDeviceContextData {
   setIsRecording: React.Dispatch<React.SetStateAction<boolean>>;
   startingRecording: boolean;
   setStartingRecording: React.Dispatch<React.SetStateAction<boolean>>;
-  updateTrigger: number;
 }
 
 export const MediaDeviceContext = createContext<
@@ -57,13 +56,7 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   const [devices, setDevices] = useState<Devices[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [startingRecording, setStartingRecording] = useState(false);
-  const sharedStream = useRef<MediaStream | null>(null);
-  const [updateTrigger, setUpdateTrigger] = useState(0);
-
-  const updateSharedStream = useCallback((newStream: MediaStream | null) => {
-    sharedStream.current = newStream;
-    setUpdateTrigger((prev) => prev + 1);
-  }, []);
+  const getDevicesCalled = useRef(false);
 
   const getDevices = useCallback(async () => {
     await enumerateAndStoreDevices();
@@ -107,7 +100,10 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   }, [selectedVideoDevice, selectedAudioDevice]);
 
   useEffect(() => {
-    getDevices();
+    if (!getDevicesCalled.current) {
+      getDevices();
+      getDevicesCalled.current = true;
+    }
   }, []);
 
   useEffect(() => {
@@ -176,10 +172,6 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         setIsRecording,
         startingRecording,
         setStartingRecording,
-        // sharedStream: sharedStream.current,
-        // startSharedStream,
-        // stopSharedStream,
-        updateTrigger,
       }}
     >
       {children}

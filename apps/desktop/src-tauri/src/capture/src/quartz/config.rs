@@ -66,7 +66,7 @@ impl Default for Config {
         Config {
             cursor: true,
             letterbox: true,
-            throttle: 0.0166,
+            throttle: 0.001,
             queue_length: 1
         }
     }

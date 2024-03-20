@@ -39,6 +39,8 @@ capture = { path = "./src/capture" }
 image = "0.24.9"
 sentry = "0.32.2"
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
+winit = "0.29.15"
+jpeg-encoder = "0.6.0"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem

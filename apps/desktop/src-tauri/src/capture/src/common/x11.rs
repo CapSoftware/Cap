@@ -7,7 +7,7 @@ pub struct Capturer(x11::Capturer);
 unsafe impl Send for Capturer {}
 
 impl Capturer {
-    pub fn new(display: Display) -> io::Result<Capturer> {
+    pub fn new(display: Display, width: usize, height: usize) -> io::Result<Capturer> {
         x11::Capturer::new(display.0).map(Capturer)
     }
 

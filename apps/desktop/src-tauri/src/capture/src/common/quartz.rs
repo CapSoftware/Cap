@@ -11,14 +11,14 @@ pub struct Capturer {
 unsafe impl Send for Capturer {}
 
 impl Capturer {
-    pub fn new(display: Display) -> io::Result<Capturer> {
+    pub fn new(display: Display, width: usize, height: usize) -> io::Result<Capturer> {
         let frame = Arc::new(Mutex::new(None));
 
         let f = frame.clone();
         let inner = quartz::Capturer::new(
             display.0,
-            display.width(),
-            display.height(),
+            width,
+            height,
             quartz::PixelFormat::Argb8888,
             Default::default(),
             move |inner| {

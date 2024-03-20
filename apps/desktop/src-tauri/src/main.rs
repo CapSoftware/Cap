@@ -29,6 +29,8 @@ use ffmpeg_sidecar::{
     version::ffmpeg_version,
 };
 
+use winit::monitor::{MonitorHandle, VideoMode};
+
 fn main() {    
     let _ = fix_path_env::fix();
     
@@ -117,6 +119,20 @@ fn main() {
       ..Default::default()
     }));
 
+    let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
+    let monitor: MonitorHandle = event_loop.primary_monitor().expect("No primary monitor found");
+    let video_modes: Vec<VideoMode> = monitor.video_modes().collect();
+
+    let max_mode = video_modes.iter().max_by_key(|mode| mode.size().width * mode.size().height);
+
+    let (max_width, max_height) = if let Some(max_mode) = max_mode {
+        println!("Maximum resolution: {:?}", max_mode.size());
+        (max_mode.size().width, max_mode.size().height)
+    } else {
+        println!("Failed to determine maximum resolution.");
+        (0, 0)
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_positioner::init())
@@ -143,6 +159,8 @@ fn main() {
                 video_uploading_finished: Arc::new(AtomicBool::new(false)),
                 audio_uploading_finished: Arc::new(AtomicBool::new(false)),
                 data_dir: Some(data_directory),
+                max_screen_width: max_width as usize,
+                max_screen_height: max_height as usize,
             };
 
             app.manage(Arc::new(Mutex::new(recording_state)));

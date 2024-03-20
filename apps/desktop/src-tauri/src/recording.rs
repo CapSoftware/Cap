@@ -21,7 +21,9 @@ pub struct RecordingState {
   pub shutdown_flag: Arc<AtomicBool>,
   pub video_uploading_finished: Arc<AtomicBool>,
   pub audio_uploading_finished: Arc<AtomicBool>,
-  pub data_dir: Option<PathBuf>
+  pub data_dir: Option<PathBuf>,
+  pub max_screen_width: usize,
+  pub max_screen_height: usize,
 }
 
 unsafe impl Send for RecordingState {}
@@ -69,7 +71,7 @@ pub async fn start_dual_recording(
     Some(options.audio_name.clone())
   };
   
-  let media_recording_preparation = prepare_media_recording(&options, &audio_chunks_dir, &video_chunks_dir, &screenshot_dir, audio_name);
+  let media_recording_preparation = prepare_media_recording(&options, &audio_chunks_dir, &video_chunks_dir, &screenshot_dir, audio_name, state_guard.max_screen_width, state_guard.max_screen_height);
   let media_recording_result = media_recording_preparation.await.map_err(|e| e.to_string())?;
 
   state_guard.media_process = Some(media_recording_result);
@@ -216,11 +218,13 @@ async fn prepare_media_recording(
   screenshot_dir: &Path,
   video_chunks_dir: &Path,
   audio_name: Option<String>,
+  max_screen_width: usize,
+  max_screen_height: usize,
 ) -> Result<MediaRecorder, String> {
   let mut media_recorder = MediaRecorder::new();
   let audio_file_path = audio_chunks_dir.to_str().unwrap();
   let video_file_path = video_chunks_dir.to_str().unwrap();
   let screenshot_dir_path = screenshot_dir.to_str().unwrap();
-  media_recorder.start_media_recording(options.clone(), audio_file_path, screenshot_dir_path, video_file_path, audio_name.as_ref().map(String::as_str)).await?;
+  media_recorder.start_media_recording(options.clone(), audio_file_path, screenshot_dir_path, video_file_path, audio_name.as_ref().map(String::as_str), max_screen_width, max_screen_height).await?;
   Ok(media_recorder)
 }

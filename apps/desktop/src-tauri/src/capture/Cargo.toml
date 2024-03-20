@@ -4,7 +4,7 @@ description = "Bindings for cross-platform screen capture."
 version = "0.0.1"
 
 [dependencies]
-block = "0.1"
-cfg-if = "0.1"
-libc = "0.2"
-winapi = "0.2"
+block = "0.1.6"
+cfg-if = "1.0.0"
+libc = "0.2.153"
+winapi = "0.3.9"
