@@ -304,6 +304,7 @@ impl MediaRecorder {
                             screenshot_captured = true;
                             let screenshot_file_path_owned_cloned = screenshot_file_path_owned.clone(); 
                             let w_cloned = adjusted_width.clone();
+                            let h_cloned = adjusted_height.clone();
                             
                             let frame_clone = frame.to_vec();
                             std::thread::spawn(move || {
@@ -320,14 +321,13 @@ impl MediaRecorder {
                                     for chunk in row_data.chunks_mut(4) {
                                         chunk.swap(0, 2);
                                     }
-                                    println!("Row data length: {}", row_data.len());
                                     frame_data.extend_from_slice(&row_data);
                                 }
 
                                 let path = Path::new(&screenshot_file_path_owned_cloned);
                                 let image: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
                                     w_cloned.try_into().unwrap(),
-                                    h.try_into().unwrap(),
+                                    h_cloned.try_into().unwrap(),
                                     frame_data
                                 ).expect("Failed to create image buffer");
 

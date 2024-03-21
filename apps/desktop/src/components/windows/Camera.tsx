@@ -154,7 +154,7 @@ export const Camera = () => {
         autoPlay
         playsInline
         muted
-        className="absolute top-0 left-0 w-full h-full object-cover pointer-events-none"
+        className="absolute top-0 left-0 w-full h-full object-cover pointer-events-none rounded-full"
       />
     </div>
   );
