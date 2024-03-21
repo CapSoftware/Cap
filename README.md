@@ -4,7 +4,7 @@
   </p>
 	<h1 align="center"><b>Cap</b></h1>
 	<p align="center">
-		Beautiful, shareable screen recordings. Open source and cross-platform.
+		Effortless, instant screen sharing. Open source and cross-platform.
     <br />
     <a href="https://cap.so"><strong>Cap.so »</strong></a>
     <br />
