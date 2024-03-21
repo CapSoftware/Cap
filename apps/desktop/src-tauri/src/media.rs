@@ -66,9 +66,6 @@ impl MediaRecorder {
         let mut h = max_screen_height;
 
         if max_screen_width > 4000 {
-            w = max_screen_width / 3;
-            h = max_screen_height / 3;
-        } else if max_screen_width > 2000 {
             w = max_screen_width / 2;
             h = max_screen_height / 2;
         }
