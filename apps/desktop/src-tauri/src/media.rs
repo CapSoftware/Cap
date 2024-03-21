@@ -73,13 +73,15 @@ impl MediaRecorder {
             h = max_screen_height / 2;
         }
         
-        let adjusted_height = h & !1;
-        let capture_size = w * adjusted_height * 4;
+        let adjusted_width = w & !3;
+        let adjusted_height = h & !3;
+        let capture_size = adjusted_width * adjusted_height * 4;
         let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
         let (video_tx, video_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
 
         println!("Display width: {}", w);
         println!("Display height: {}", h);
+        println!("Adjusted width: {}", adjusted_width);
         println!("Adjusted height: {}", adjusted_height);
         println!("Capture size: {}", capture_size);
 
@@ -304,7 +306,7 @@ impl MediaRecorder {
                         if let Ok(frame) = capturer.frame() {
                             screenshot_captured = true;
                             let screenshot_file_path_owned_cloned = screenshot_file_path_owned.clone(); 
-                            let w_cloned = w.clone();
+                            let w_cloned = adjusted_width.clone();
                             
                             let frame_clone = frame.to_vec();
                             std::thread::spawn(move || {
@@ -314,7 +316,7 @@ impl MediaRecorder {
                                 println!("Stride: {}", stride);
                                 let rt = tokio::runtime::Runtime::new().unwrap();
 
-                                for row in 0..h { 
+                                for row in 0..adjusted_height { 
                                     let start: usize = row as usize * stride as usize;
                                     let end: usize = start + stride as usize;
                                     let mut row_data = frame_clone[start..end].to_vec();
@@ -361,7 +363,7 @@ impl MediaRecorder {
 
                     match capturer.frame() {
                         Ok(frame) => {
-                            let stride = w * 4;
+                            let stride = adjusted_width * 4;
                             for row in 0..adjusted_height {
                                 let start: usize = row as usize * stride as usize;
                                 let end: usize = start + stride as usize;
