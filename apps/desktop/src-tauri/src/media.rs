@@ -66,8 +66,8 @@ impl MediaRecorder {
         let mut w = max_screen_width;
         let mut h = max_screen_height;
         
-        let adjusted_width = w & !3;
-        let adjusted_height = h & !3;
+        let adjusted_width = w & !1;
+        let adjusted_height = h & !1;
         let capture_size = adjusted_width * adjusted_height * 4;
         let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
         let (video_tx, video_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
@@ -438,7 +438,7 @@ impl MediaRecorder {
 
         let mut ffmpeg_video_command: Vec<String> = vec![
             "-f", "rawvideo",
-            "-pix_fmt", "bgra",
+            "-pix_fmt", "nv12",
             "-s", &format!("{}x{}", w, adjusted_height),
             "-r", "30",
             "-thread_queue_size", "4096",

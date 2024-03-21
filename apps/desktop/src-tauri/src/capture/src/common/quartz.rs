@@ -17,7 +17,7 @@ impl Capturer {
             display.0,
             width,
             height,
-            quartz::PixelFormat::Argb8888,
+            quartz::PixelFormat::YCbCr420Video,
             Default::default(),
             move |inner| {
                 if let Ok(mut f) = f.lock() {
@@ -38,26 +38,13 @@ impl Capturer {
     }
 
     pub fn frame(&mut self) -> io::Result<Frame> {
-        match self.frame.try_lock() {
-            Ok(mut handle) => {
-                let mut frame = None;
-                mem::swap(&mut frame, &mut handle);
-
-                match frame {
-                    Some(frame) =>
-                        Ok(Frame(frame, PhantomData)),
-
-                    None =>
-                        Err(io::ErrorKind::WouldBlock.into())
-                }
-            }
-
-            Err(TryLockError::WouldBlock) =>
-                Err(io::ErrorKind::WouldBlock.into()),
-
-            Err(TryLockError::Poisoned(..)) =>
-                Err(io::ErrorKind::Other.into())
-        }
+        let mut handle = self.frame.try_lock().map_err(|e| match e {
+            TryLockError::WouldBlock => io::ErrorKind::WouldBlock,
+            TryLockError::Poisoned(_) => io::ErrorKind::Other,
+        })?;
+    
+        handle.take().map(|frame| Frame(frame, PhantomData))
+            .ok_or_else(|| io::ErrorKind::WouldBlock.into())
     }
 }
 
