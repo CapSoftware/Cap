@@ -356,29 +356,37 @@ impl MediaRecorder {
 
                     match capturer.frame() {
                         Ok(frame) => {
-                            let stride = adjusted_width * 4;
-                            for row in 0..adjusted_height {
-                                let start: usize = row as usize * stride as usize;
-                                let end: usize = start + stride as usize;
-                                frame_data.extend_from_slice(&frame[start..end]);
-                            }
-                            if let Some(sender) = &video_channel_sender {
-                                if sender.try_send(frame_data).is_err() {
-                                    eprintln!("Channel send error. Dropping data.");
+                            let y_plane_size = adjusted_width * adjusted_height;
+                            let uv_plane_size = y_plane_size / 4;
+                            let total_size = y_plane_size + uv_plane_size * 2;
+
+                            if frame.len() >= total_size {
+                                frame_data.extend_from_slice(&frame[..y_plane_size]);
+                                for i in 0..uv_plane_size {
+                                    frame_data.push(frame[y_plane_size + i]);
+                                    frame_data.push(frame[y_plane_size + uv_plane_size + i]); 
                                 }
-                            }
 
-                            let mut first_frame_time_guard = video_start_time_clone.try_lock();
-
-                            if let Ok(ref mut start_time_option) = first_frame_time_guard {
-                                if start_time_option.is_none() {
-                                    **start_time_option = Some(Instant::now()); 
-
-                                    println!("Video start time captured");
+                                if let Some(sender) = &video_channel_sender {
+                                    if sender.try_send(frame_data).is_err() {
+                                        eprintln!("Channel send error. Dropping data.");
+                                    }
                                 }
-                            }
 
-                            frame_count += 1;
+                                let mut first_frame_time_guard = video_start_time_clone.try_lock();
+
+                                if let Ok(ref mut start_time_option) = first_frame_time_guard {
+                                    if start_time_option.is_none() {
+                                        **start_time_option = Some(Instant::now()); 
+
+                                        println!("Video start time captured");
+                                    }
+                                }
+
+                                frame_count += 1;
+                            } else {
+                                eprintln!("Unexpected frame size: {}", frame.len());
+                            }
                         },
                         Err(error) if error.kind() == WouldBlock => {
                             std::thread::sleep(Duration::from_millis(1));
