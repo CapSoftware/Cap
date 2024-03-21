@@ -33,11 +33,17 @@ impl Display {
     }
 
     pub fn width(self) -> usize {
-        unsafe { CGDisplayPixelsWide(self.0) }
+        unsafe {
+            let display_mode = CGDisplayCopyDisplayMode(self.0);
+            CGDisplayModeGetPixelWidth(display_mode)
+        }
     }
 
     pub fn height(self) -> usize {
-        unsafe { CGDisplayPixelsHigh(self.0) }
+        unsafe {
+            let display_mode = CGDisplayCopyDisplayMode(self.0);
+            CGDisplayModeGetPixelHeight(display_mode)
+        }
     }
 
     pub fn is_builtin(self) -> bool {

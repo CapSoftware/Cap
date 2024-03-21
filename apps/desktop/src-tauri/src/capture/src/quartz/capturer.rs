@@ -9,7 +9,6 @@ use std::ptr;
 pub struct Capturer {
     stream: CGDisplayStreamRef,
     queue: DispatchQueue,
-
     width: usize,
     height: usize,
     format: PixelFormat,

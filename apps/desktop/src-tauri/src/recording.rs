@@ -81,22 +81,22 @@ pub async fn start_dual_recording(
   state_guard.video_uploading_finished = Arc::new(AtomicBool::new(false));
   state_guard.audio_uploading_finished = Arc::new(AtomicBool::new(false));
 
-  let screen_upload = start_upload_loop(video_chunks_dir.clone(), options.clone(), "video".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
-  let audio_upload = start_upload_loop(audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone(), state_guard.audio_uploading_finished.clone());
+//   let screen_upload = start_upload_loop(video_chunks_dir.clone(), options.clone(), "video".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
+//   let audio_upload = start_upload_loop(audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone(), state_guard.audio_uploading_finished.clone());
 
   drop(state_guard);
 
   println!("Starting upload loops...");
 
 
-  match tokio::try_join!(screen_upload, audio_upload) {
-      Ok(_) => {
-          println!("Both upload loops completed successfully.");
-      },
-      Err(e) => {
-          eprintln!("An error occurred: {}", e);
-      },
-  }
+//   match tokio::try_join!(screen_upload, audio_upload) {
+//       Ok(_) => {
+//           println!("Both upload loops completed successfully.");
+//       },
+//       Err(e) => {
+//           eprintln!("An error occurred: {}", e);
+//       },
+//   }
 
   Ok(())
 }

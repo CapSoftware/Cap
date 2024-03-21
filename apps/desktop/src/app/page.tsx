@@ -17,6 +17,7 @@ export default function CameraPage() {
   const [cameraWindowOpen, setCameraWindowOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [permissions, setPermissions] = useState(getPermissions());
+  const [permissionsLoaded, setPermissionsLoaded] = useState(false);
 
   useEffect(() => {
     const checkVersion = async () => {
@@ -67,6 +68,7 @@ export default function CameraPage() {
       ) {
         setPermissions(updatedPermissions);
       }
+      setPermissionsLoaded(true);
     }, 1000);
 
     return () => clearInterval(checkPermissions);
@@ -89,13 +91,13 @@ export default function CameraPage() {
   }, []);
 
   useEffect(() => {
-    if (isSignedIn && !cameraWindowOpen) {
+    if (isSignedIn && !cameraWindowOpen && permissions.confirmed === true) {
       initializeCameraWindow();
       setCameraWindowOpen(true);
     }
-  }, [isSignedIn, cameraWindowOpen]);
+  }, [isSignedIn, cameraWindowOpen, permissions.confirmed]);
 
-  if (loading) {
+  if (loading && !permissionsLoaded) {
     return (
       <div className="w-full h-full flex items-center justify-center">
         <LogoSpinner className="w-10 h-auto animate-spin" />
@@ -108,7 +110,7 @@ export default function CameraPage() {
       {isSignedIn ? (
         <>
           <WindowActions />
-          {!permissions || permissions.confirmed === false ? (
+          {(!permissions || permissions.confirmed === false)? (
             <Permissions />
           ) : (
             <Recorder />

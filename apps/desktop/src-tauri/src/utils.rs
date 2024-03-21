@@ -5,6 +5,8 @@ use ffmpeg_sidecar::{
 use capture::{Capturer, Display};
 use std::time::{Duration, Instant};
 use std::panic;
+use std::thread;
+use std::io::ErrorKind::WouldBlock;
 
 #[tauri::command]
 pub fn has_screen_capture_access() -> bool {
@@ -15,30 +17,53 @@ pub fn has_screen_capture_access() -> bool {
 
     let width = display.width();
     let height = display.height();
+    let one_second = Duration::new(1, 0);
+    let one_frame = one_second / 60;
+
+    println!("width: {}", width);
+    println!("height: {}", height);
 
     let result = panic::catch_unwind(|| {
         let mut capturer = match Capturer::new(display, width, height) {
-            Ok(capturer) => capturer,
-            Err(_) => return false,
+            Ok(capturer) => {
+                println!("Capturer created");
+                capturer
+            },
+            Err(e) => {
+                println!("Capturer not created: {}", e);
+                return false; 
+            }
         };
+
+        println!("Capturer created");
 
         let start = Instant::now();
 
         loop {
             if start.elapsed() > Duration::from_secs(2) {
+                println!("Loop exited");
                 return false;
             }
 
             match capturer.frame() {
                 Ok(_frame) => {
+                    println!("Frame captured");
                     return true;
                 },
-                Err(_) => {
-                    continue;
+                Err(error) => {
+                    if error.kind() == WouldBlock {
+                        thread::sleep(one_frame);
+                        continue;
+                    } else {
+                        println!("Error: {}", error);
+                        return false;
+                    }
                 }
             };
         }
     });
+
+    println!("Result: {:?}", result);
 
     match result {
         Ok(val) => val,

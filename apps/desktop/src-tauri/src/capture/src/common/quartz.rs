@@ -8,8 +8,6 @@ pub struct Capturer {
     frame: Arc<Mutex<Option<quartz::Frame>>>
 }
 
-unsafe impl Send for Capturer {}
-
 impl Capturer {
     pub fn new(display: Display, width: usize, height: usize) -> io::Result<Capturer> {
         let frame = Arc::new(Mutex::new(None));
@@ -39,7 +37,7 @@ impl Capturer {
         self.inner.height()
     }
 
-    pub fn frame<'a>(&'a mut self) -> io::Result<Frame<'a>> {
+    pub fn frame(&mut self) -> io::Result<Frame> {
         match self.frame.try_lock() {
             Ok(mut handle) => {
                 let mut frame = None;

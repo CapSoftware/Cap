@@ -39,7 +39,7 @@ export const authOptions: NextAuthOptions = {
         httpOnly: true,
         sameSite: "none",
         path: "/",
-        secure: true,
+        secure: false,
       },
     },
   },

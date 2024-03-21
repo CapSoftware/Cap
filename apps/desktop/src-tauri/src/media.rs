@@ -61,14 +61,10 @@ impl MediaRecorder {
         
         let host = cpal::default_host();
         let devices = host.devices().expect("Failed to get devices");
+        let display = Display::primary().expect("Failed to find primary display");
 
         let mut w = max_screen_width;
         let mut h = max_screen_height;
-
-        if max_screen_width > 4000 {
-            w = max_screen_width / 2;
-            h = max_screen_height / 2;
-        }
         
         let adjusted_width = w & !3;
         let adjusted_height = h & !3;

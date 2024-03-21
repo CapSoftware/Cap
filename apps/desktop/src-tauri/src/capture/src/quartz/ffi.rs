@@ -26,6 +26,9 @@ pub struct CFDictionaryValueCallBacks {
     version: i32
 }
 
+pub enum CGDisplayMode {}
+pub type CGDisplayModeRef = *mut CGDisplayMode;
+
 macro_rules! pixel_format {
     ($a:expr, $b:expr, $c:expr, $d:expr) => {
           ($a as i32) << 24
@@ -157,6 +160,14 @@ extern {
     ) -> CGError;
 
     pub fn CGMainDisplayID() -> u32;
+    pub fn CGDisplayCopyDisplayMode(display: u32) -> CGDisplayModeRef;
+    // pub fn CGDisplayModeGetHeight(mode: CGDisplayModeRef) -> libc::size_t;
+    // pub fn CGDisplayModeGetWidth(mode: CGDisplayModeRef) -> libc::size_t;
+    pub fn CGDisplayModeGetPixelHeight(mode: CGDisplayModeRef) -> libc::size_t;
+    pub fn CGDisplayModeGetPixelWidth(mode: CGDisplayModeRef) -> libc::size_t;
+    // pub fn CGDisplayModeGetRefreshRate(mode: CGDisplayModeRef) -> libc::c_double;
+    // pub fn CGDisplayModeGetIOFlags(mode: CGDisplayModeRef) -> u32;
+    // pub fn CGDisplayModeCopyPixelEncoding(mode: CGDisplayModeRef) -> CFStringRef;
     pub fn CGDisplayPixelsWide(display: u32) -> usize;
     pub fn CGDisplayPixelsHigh(display: u32) -> usize;
 
