@@ -22,6 +22,11 @@ There are many ways to contribute to Cap. You can:
 - [Suggest a feature (via Discord)](https://discord.com/invite/y8gdQ3WRN3)
 - Submit a PR
 
+### Development Requirements ###
+- Node Version 20+
+- Cargo 1.77.0+ (previous versions may work)
+- pnpm 8.10.5+
+
 ### How do I get started with development on my local machine?
 
 This is a very top level guide right now, but if you want to develop for both the web app and desktop app, you will need to make sure the below steps are followed. Alternatively, if you are only looking to run the desktop app locally, you can follow the `How do I run the desktop app locally without needing to use auth?` steps.
