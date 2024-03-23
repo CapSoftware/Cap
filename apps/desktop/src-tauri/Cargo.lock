@@ -648,6 +648,7 @@ version = "0.0.1"
 dependencies = [
  "block",
  "cfg-if",
+ "core-foundation",
  "libc",
  "winapi",
 ]

@@ -46,6 +46,24 @@ impl Display {
         }
     }
 
+    pub fn stride(self) -> usize {
+        unsafe {
+            CGDisplayBytesPerRow(self.0) as usize
+        }
+    }
+
+    pub fn bits_per_pixel(self) -> usize {
+        unsafe { CGDisplayBitsPerPixel(self.0) as usize }
+    }
+
+    pub fn bits_per_sample(self) -> usize {
+        unsafe { CGDisplayBitsPerSample(self.0) as usize }
+    }
+
+    pub fn samples_per_pixel(self) -> usize {
+        unsafe { CGDisplaySamplesPerPixel(self.0) as usize }
+    }
+
     pub fn is_builtin(self) -> bool {
         unsafe { CGDisplayIsBuiltin(self.0) != 0 }
     }
@@ -62,3 +80,4 @@ impl Display {
         unsafe { CGDisplayIsOnline(self.0) != 0 }
     }
 }
+

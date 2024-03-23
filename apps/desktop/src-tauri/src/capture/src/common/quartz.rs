@@ -17,7 +17,7 @@ impl Capturer {
             display.0,
             width,
             height,
-            quartz::PixelFormat::YCbCr420Video,
+            quartz::PixelFormat::Argb8888,
             Default::default(),
             move |inner| {
                 if let Ok(mut f) = f.lock() {
@@ -84,4 +84,21 @@ impl Display {
     pub fn height(&self) -> usize {
         self.0.height()
     }
+
+    pub fn stride(&self) -> usize {
+        self.0.stride()
+    }
+
+    pub fn bits_per_pixel(&self) -> usize {
+        self.0.bits_per_pixel()
+    }
+
+    pub fn bits_per_sample(&self) -> usize {
+        self.0.bits_per_sample()
+    }
+
+    pub fn samples_per_pixel(&self) -> usize {
+        self.0.samples_per_pixel()
+    }
 }
+

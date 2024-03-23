@@ -36,7 +36,7 @@ impl Capturer {
 
         let queue = unsafe {
             dispatch_queue_create(
-                b"quadrupleslap.scrap\0".as_ptr() as *const i8,
+                b"cap.capture\0".as_ptr() as *const i8,
                 ptr::null_mut()
             )
         };

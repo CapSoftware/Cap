@@ -62,7 +62,6 @@ impl MediaRecorder {
         let host = cpal::default_host();
         let devices = host.devices().expect("Failed to get devices");
         let display = Display::primary().expect("Failed to find primary display");
-
         let mut w = max_screen_width;
         let mut h = max_screen_height;
         
@@ -71,12 +70,14 @@ impl MediaRecorder {
         let capture_size = adjusted_width * adjusted_height * 4;
         let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
         let (video_tx, video_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
-
+        let calculated_stride = (adjusted_width * 4) as usize;
+        
         println!("Display width: {}", w);
         println!("Display height: {}", h);
         println!("Adjusted width: {}", adjusted_width);
         println!("Adjusted height: {}", adjusted_height);
         println!("Capture size: {}", capture_size);
+        println!("Calculated stride: {}", calculated_stride);
 
         let audio_start_time = Arc::new(Mutex::new(None));
         let video_start_time = Arc::new(Mutex::new(None));
@@ -305,14 +306,12 @@ impl MediaRecorder {
                             let frame_clone = frame.to_vec();
                             std::thread::spawn(move || {
                                 let mut frame_data = Vec::with_capacity(capture_size.try_into().unwrap());
-                                let stride = w_cloned * 4;
                                 println!("Frame length: {}", frame_clone.len());
-                                println!("Stride: {}", stride);
                                 let rt = tokio::runtime::Runtime::new().unwrap();
 
                                 for row in 0..adjusted_height { 
-                                    let start: usize = row as usize * stride as usize;
-                                    let end: usize = start + stride as usize;
+                                    let start: usize = row as usize * calculated_stride as usize;
+                                    let end: usize = start + calculated_stride as usize;
                                     let mut row_data = frame_clone[start..end].to_vec();
                                     for chunk in row_data.chunks_mut(4) {
                                         chunk.swap(0, 2);
@@ -356,37 +355,28 @@ impl MediaRecorder {
 
                     match capturer.frame() {
                         Ok(frame) => {
-                            let y_plane_size = adjusted_width * adjusted_height;
-                            let uv_plane_size = y_plane_size / 4;
-                            let total_size = y_plane_size + uv_plane_size * 2;
-
-                            if frame.len() >= total_size {
-                                frame_data.extend_from_slice(&frame[..y_plane_size]);
-                                for i in 0..uv_plane_size {
-                                    frame_data.push(frame[y_plane_size + i]);
-                                    frame_data.push(frame[y_plane_size + uv_plane_size + i]); 
-                                }
-
-                                if let Some(sender) = &video_channel_sender {
-                                    if sender.try_send(frame_data).is_err() {
-                                        eprintln!("Channel send error. Dropping data.");
-                                    }
-                                }
-
-                                let mut first_frame_time_guard = video_start_time_clone.try_lock();
-
-                                if let Ok(ref mut start_time_option) = first_frame_time_guard {
-                                    if start_time_option.is_none() {
-                                        **start_time_option = Some(Instant::now()); 
-
-                                        println!("Video start time captured");
-                                    }
-                                }
-
-                                frame_count += 1;
-                            } else {
-                                eprintln!("Unexpected frame size: {}", frame.len());
+                            for row in 0..adjusted_height {
+                                let start: usize = row as usize * calculated_stride as usize;
+                                let end: usize = start + calculated_stride as usize;
+                                frame_data.extend_from_slice(&frame[start..end]);
                             }
+                            if let Some(sender) = &video_channel_sender {
+                                if sender.try_send(frame_data).is_err() {
+                                    eprintln!("Channel send error. Dropping data.");
+                                }
+                            }
+
+                            let mut first_frame_time_guard = video_start_time_clone.try_lock();
+
+                            if let Ok(ref mut start_time_option) = first_frame_time_guard {
+                                if start_time_option.is_none() {
+                                    **start_time_option = Some(Instant::now()); 
+
+                                    println!("Video start time captured");
+                                }
+                            }
+
+                            frame_count += 1;
                         },
                         Err(error) if error.kind() == WouldBlock => {
                             std::thread::sleep(Duration::from_millis(1));
@@ -446,8 +436,8 @@ impl MediaRecorder {
 
         let mut ffmpeg_video_command: Vec<String> = vec![
             "-f", "rawvideo",
-            "-pix_fmt", "nv12",
-            "-s", &format!("{}x{}", w, adjusted_height),
+            "-pix_fmt", "bgra",
+            "-s", &format!("{}x{}", adjusted_width, adjusted_height),
             "-r", "30",
             "-thread_queue_size", "4096",
             "-i", "pipe:0",

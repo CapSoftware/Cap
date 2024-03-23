@@ -161,6 +161,7 @@ extern {
 
     pub fn CGMainDisplayID() -> u32;
     pub fn CGDisplayCopyDisplayMode(display: u32) -> CGDisplayModeRef;
+    
     // pub fn CGDisplayModeGetHeight(mode: CGDisplayModeRef) -> libc::size_t;
     // pub fn CGDisplayModeGetWidth(mode: CGDisplayModeRef) -> libc::size_t;
     pub fn CGDisplayModeGetPixelHeight(mode: CGDisplayModeRef) -> libc::size_t;
@@ -170,6 +171,10 @@ extern {
     // pub fn CGDisplayModeCopyPixelEncoding(mode: CGDisplayModeRef) -> CFStringRef;
     pub fn CGDisplayPixelsWide(display: u32) -> usize;
     pub fn CGDisplayPixelsHigh(display: u32) -> usize;
+    pub fn CGDisplayBytesPerRow(display: u32) -> usize;
+    pub fn CGDisplayBitsPerPixel(display: u32) -> usize;
+    pub fn CGDisplayBitsPerSample(display: u32) -> usize;
+    pub fn CGDisplaySamplesPerPixel(display: u32) -> usize;
 
     pub fn CGGetOnlineDisplayList(
         max_displays: u32,
@@ -198,6 +203,8 @@ extern {
         options: u32,
         seed: *mut u32
     ) -> i32;
+    pub fn IOSurfaceGetBaseAddressOfPlane(buffer: IOSurfaceRef, index: usize) -> *mut c_void;
+    pub fn IOSurfaceGetBytesPerRowOfPlane(buffer: IOSurfaceRef, index: usize) -> usize;
 
     // Dispatch
 
