@@ -9,6 +9,8 @@
     <a href="https://cap.so"><strong>Cap.so »</strong></a>
     <br />
     <br />
+[![Open Bounties](https://img.shields.io/endpoint?url=https%3A%2F%2Fconsole.algora.io%2Fapi%2Fshields%2FCapSoftware%2Fbounties%3Fstatus%3Dopen)](https://console.algora.io/org/CapSoftware/bounties?status=open)
+    <br />
     <b>Download for </b>
 		macOS ·
 		Windows ·
