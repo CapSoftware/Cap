@@ -1,5 +1,7 @@
 # Cap Contributor Guide: Work In Progress
 
+**TLDR:** The quickest way to contribute to the Cap desktop app, without any external dependencies required, is the `How do I run the desktop app locally without needing to use auth?` section of this guide.
+
 ## Introduction
 
 ### What is Cap?
