@@ -97,6 +97,15 @@ export default function CameraPage() {
     }
   }, [isSignedIn, cameraWindowOpen, permissions.confirmed]);
 
+  if(process.env.NEXT_PUBLIC_LOCAL_MODE === "true"){
+    return(
+      <>
+        <WindowActions />
+        <Recorder />
+      </>
+    )
+  }
+
   if (loading && !permissionsLoaded) {
     return (
       <div className="w-full h-full flex items-center justify-center">

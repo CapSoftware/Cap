@@ -65,12 +65,13 @@ impl MediaRecorder {
         let mut w = max_screen_width;
         let mut h = max_screen_height;
         
-        let adjusted_width = w & !1;
-        let adjusted_height = h & !1;
+        let adjusted_width = w & !2;
+        let adjusted_height = h & !2;
         let capture_size = adjusted_width * adjusted_height * 4;
         let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
         let (video_tx, video_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
-        let calculated_stride = (adjusted_width * 4) as usize;
+        let bytes_per_pixel = display.bits_per_pixel() / 8;
+        let calculated_stride = (bytes_per_pixel * adjusted_width) as usize;
         
         println!("Display width: {}", w);
         println!("Display height: {}", h);
@@ -280,6 +281,11 @@ impl MediaRecorder {
         std::thread::spawn(move || {
             println!("Starting video recording capture thread...");
 
+            let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
+                "true" => true,
+                _ => false,
+            };
+
             let mut capturer = Capturer::new(Display::primary().expect("Failed to find primary display"), w.try_into().unwrap(), h.try_into().unwrap()).expect("Failed to start capture");
 
             let fps = FRAME_RATE;
@@ -296,61 +302,64 @@ impl MediaRecorder {
 
                 if now >= time_next {
 
-                    if now - start_time >= capture_frame_at && !screenshot_captured {
-                        if let Ok(frame) = capturer.frame() {
-                            screenshot_captured = true;
-                            let screenshot_file_path_owned_cloned = screenshot_file_path_owned.clone(); 
-                            let w_cloned = adjusted_width.clone();
-                            let h_cloned = adjusted_height.clone();
-                            
-                            let frame_clone = frame.to_vec();
-                            std::thread::spawn(move || {
-                                let mut frame_data = Vec::with_capacity(capture_size.try_into().unwrap());
-                                println!("Frame length: {}", frame_clone.len());
-                                let rt = tokio::runtime::Runtime::new().unwrap();
-
-                                for row in 0..adjusted_height { 
-                                    let start: usize = row as usize * calculated_stride as usize;
-                                    let end: usize = start + calculated_stride as usize;
-                                    let mut row_data = frame_clone[start..end].to_vec();
-                                    for chunk in row_data.chunks_mut(4) {
-                                        chunk.swap(0, 2);
-                                    }
-                                    frame_data.extend_from_slice(&row_data);
-                                }
-
-                                let path = Path::new(&screenshot_file_path_owned_cloned);
-                                let image: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
-                                    w_cloned.try_into().unwrap(),
-                                    h_cloned.try_into().unwrap(),
-                                    frame_data
-                                ).expect("Failed to create image buffer");
-
-                                let mut output_file = std::fs::File::create(&path).expect("Failed to create output file");
-                                let mut encoder = JpegEncoder::new_with_quality(&mut output_file, 20);
-
-                                if let Err(e) = encoder.encode_image(&image) {
-                                    eprintln!("Failed to save screenshot: {}", e);
-                                } else {
-                                    let screenshot_file_path_owned_cloned_copy = screenshot_file_path_owned_cloned.clone();
-                                    rt.block_on(async {
-                                        let upload_task = tokio::spawn(upload_file(Some(options_clone), screenshot_file_path_owned_cloned_copy.clone(), "screenshot".to_string()));
-                                        match upload_task.await {
-                                            Ok(result) => {
-                                                match result {
-                                                    Ok(_) => println!("Screenshot captured and saved to {:?}", path),
-                                                    Err(e) => eprintln!("Failed to upload file: {}", e),
-                                                }
-                                            },
-                                            Err(e) => eprintln!("Failed to join task: {}", e),
+                    if !is_local_mode {
+                        if now - start_time >= capture_frame_at && !screenshot_captured {
+                            if let Ok(frame) = capturer.frame() {
+                                screenshot_captured = true;
+                                let screenshot_file_path_owned_cloned = screenshot_file_path_owned.clone(); 
+                                let w_cloned = adjusted_width.clone();
+                                let h_cloned = adjusted_height.clone();
+                                
+                                let frame_clone = frame.to_vec();
+                                std::thread::spawn(move || {
+                                    let mut frame_data = Vec::with_capacity(capture_size.try_into().unwrap());
+                                    println!("Frame length: {}", frame_clone.len());
+                                    let rt = tokio::runtime::Runtime::new().unwrap();
+    
+                                    for row in 0..adjusted_height { 
+                                        let start: usize = row as usize * calculated_stride as usize;
+                                        let end: usize = start + calculated_stride as usize;
+                                        let mut row_data = frame_clone[start..end].to_vec();
+                                        for chunk in row_data.chunks_mut(4) {
+                                            chunk.swap(0, 2);
                                         }
-                                    });
-                                    println!("Screenshot captured and saved to {:?}", path);
-                                }
-                            });
+                                        frame_data.extend_from_slice(&row_data);
+                                    }
+    
+                                    let path = Path::new(&screenshot_file_path_owned_cloned);
+                                    let image: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
+                                        w_cloned.try_into().unwrap(),
+                                        h_cloned.try_into().unwrap(),
+                                        frame_data
+                                    ).expect("Failed to create image buffer");
+    
+                                    let mut output_file = std::fs::File::create(&path).expect("Failed to create output file");
+                                    let mut encoder = JpegEncoder::new_with_quality(&mut output_file, 20);
+    
+                                    if let Err(e) = encoder.encode_image(&image) {
+                                        eprintln!("Failed to save screenshot: {}", e);
+                                    } else {
+                                        let screenshot_file_path_owned_cloned_copy = screenshot_file_path_owned_cloned.clone();
+                                        rt.block_on(async {
+                                            let upload_task = tokio::spawn(upload_file(Some(options_clone), screenshot_file_path_owned_cloned_copy.clone(), "screenshot".to_string()));
+                                            match upload_task.await {
+                                                Ok(result) => {
+                                                    match result {
+                                                        Ok(_) => println!("Screenshot captured and saved to {:?}", path),
+                                                        Err(e) => eprintln!("Failed to upload file: {}", e),
+                                                    }
+                                                },
+                                                Err(e) => eprintln!("Failed to join task: {}", e),
+                                            }
+                                        });
+                                        println!("Screenshot captured and saved to {:?}", path);
+                                    }
+                                });
+                            }
                         }
                     }
 
+                    
                     let mut frame_data = Vec::with_capacity(capture_size.try_into().unwrap());
 
                     match capturer.frame() {

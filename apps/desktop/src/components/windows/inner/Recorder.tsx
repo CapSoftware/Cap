@@ -15,6 +15,8 @@ import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
+import { appDataDir, join } from "@tauri-apps/api/path";
+import { open } from "@tauri-apps/api/shell";
 
 declare global {
   interface Window {
@@ -170,8 +172,17 @@ export const Recorder = () => {
   const handleStartAllRecordings = async () => {
     try {
       setStartingRecording(true);
-      const videoData = await prepareVideoData();
-      console.log("Video data:", videoData);
+      const videoData =
+        process.env.NEXT_PUBLIC_LOCAL_MODE &&
+        process.env.NEXT_PUBLIC_LOCAL_MODE === "true"
+          ? {
+              id: "test",
+              user_id: "test",
+              aws_region: "test",
+              aws_bucket: "test",
+            }
+          : await prepareVideoData();
+      console.log("Video data :", videoData);
       if (videoData) {
         await startDualRecording(videoData);
       } else {
@@ -208,7 +219,12 @@ export const Recorder = () => {
           ? `${process.env.NEXT_PUBLIC_URL}/s/${await getLatestVideoId()}`
           : `https://cap.link/${await getLatestVideoId()}`;
 
-      await openLinkInBrowser(url);
+      if (
+        !process.env.NEXT_PUBLIC_LOCAL_MODE ||
+        process.env.NEXT_PUBLIC_LOCAL_MODE !== "true"
+      ) {
+        await openLinkInBrowser(url);
+      }
 
       setIsRecording(false);
       setHasStartedRecording(false);

@@ -46,7 +46,7 @@ impl Display {
         }
     }
 
-    pub fn stride(self) -> usize {
+    pub fn bytes_per_row(self) -> usize {
         unsafe {
             CGDisplayBytesPerRow(self.0) as usize
         }

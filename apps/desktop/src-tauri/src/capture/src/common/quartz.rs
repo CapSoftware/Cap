@@ -85,8 +85,8 @@ impl Display {
         self.0.height()
     }
 
-    pub fn stride(&self) -> usize {
-        self.0.stride()
+    pub fn bytes_per_row(&self) -> usize {
+        self.0.bytes_per_row()
     }
 
     pub fn bits_per_pixel(&self) -> usize {

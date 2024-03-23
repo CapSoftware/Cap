@@ -81,22 +81,30 @@ pub async fn start_dual_recording(
   state_guard.video_uploading_finished = Arc::new(AtomicBool::new(false));
   state_guard.audio_uploading_finished = Arc::new(AtomicBool::new(false));
 
-//   let screen_upload = start_upload_loop(video_chunks_dir.clone(), options.clone(), "video".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
-//   let audio_upload = start_upload_loop(audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone(), state_guard.audio_uploading_finished.clone());
+  let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
+      "true" => true,
+      _ => false,
+  };
 
-  drop(state_guard);
+  if !is_local_mode {
+      let screen_upload = start_upload_loop(video_chunks_dir.clone(), options.clone(), "video".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
+      let audio_upload = start_upload_loop(audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone(), state_guard.audio_uploading_finished.clone());
 
-  println!("Starting upload loops...");
+      drop(state_guard);
 
+      println!("Starting upload loops...");
 
-//   match tokio::try_join!(screen_upload, audio_upload) {
-//       Ok(_) => {
-//           println!("Both upload loops completed successfully.");
-//       },
-//       Err(e) => {
-//           eprintln!("An error occurred: {}", e);
-//       },
-//   }
+      match tokio::try_join!(screen_upload, audio_upload) {
+          Ok(_) => {
+              println!("Both upload loops completed successfully.");
+          },
+          Err(e) => {
+              eprintln!("An error occurred: {}", e);
+          },
+      }
+  } else {
+      println!("Skipping upload loops due to NEXT_PUBLIC_LOCAL_MODE being set to 'true'.");
+  }
 
   Ok(())
 }
@@ -114,10 +122,17 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
         media_process.stop_media_recording().await.expect("Failed to stop media recording");
     }
 
-    while !guard.video_uploading_finished.load(Ordering::SeqCst) 
-        || !guard.audio_uploading_finished.load(Ordering::SeqCst) {
-        println!("Waiting for uploads to finish...");
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
+        "true" => true,
+        _ => false,
+    };
+
+    if !is_local_mode {
+        while !guard.video_uploading_finished.load(Ordering::SeqCst) 
+            || !guard.audio_uploading_finished.load(Ordering::SeqCst) {
+            println!("Waiting for uploads to finish...");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
     
     println!("All recordings and uploads stopped.");
