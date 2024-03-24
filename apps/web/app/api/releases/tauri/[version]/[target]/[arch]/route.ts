@@ -19,6 +19,10 @@ export async function GET(
   }
 ) {
   try {
+    if (params.arch === "x86_64") {
+      params.arch = "x64";
+    }
+
     const { data: release } = await octokit.repos.getLatestRelease({
       owner: "capsoftware",
       repo: "cap",
