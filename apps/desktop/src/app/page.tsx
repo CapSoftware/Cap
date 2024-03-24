@@ -32,6 +32,7 @@ export default function CameraPage() {
           await invoke("reset_screen_permissions");
           await invoke("reset_camera_permissions");
           await invoke("reset_microphone_permissions");
+          console.log("Permissions reset");
           const permissions = JSON.parse(
             localStorage.getItem("permissions") || "{}"
           );

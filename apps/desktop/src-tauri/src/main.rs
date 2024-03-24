@@ -126,6 +126,7 @@ fn main() {
             .expect("failed to reset microphone permissions");
     }
 
+    #[tauri::command]
     fn reset_camera_permissions() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("tccutil")
@@ -199,7 +200,9 @@ fn main() {
             open_mic_preferences,
             open_camera_preferences,
             has_screen_capture_access,
-            reset_screen_permissions
+            reset_screen_permissions,
+            reset_microphone_permissions,
+            reset_camera_permissions,
         ])
         .plugin(tauri_plugin_context_menu::init())
         .run(tauri::generate_context!())
