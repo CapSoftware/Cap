@@ -51,6 +51,7 @@ jobs:
           echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" > apps/desktop/.env
           echo "appVersion=${{ steps.get_version.outputs.appVersion }}" >> apps/desktop/.env
           echo "NEXT_PUBLIC_ENVIRONMENT=production" >> apps/desktop/.env
+          echo "NEXT_PUBLIC_LOCAL_MODE=false" >> apps/desktop/.env
 
       - name: Output .env file
         run: cat apps/desktop/.env
