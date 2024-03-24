@@ -24,6 +24,10 @@ impl Frame {
 
         Frame { surface, inner }
     }
+
+    pub unsafe fn bytes_per_row(&self) -> usize {
+        IOSurfaceGetBytesPerRow(self.surface)
+    }
 }
 
 impl ops::Deref for Frame {
