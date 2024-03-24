@@ -19,10 +19,21 @@ export async function GET(
   }
 ) {
   try {
-    const { data: release } = await octokit.repos.getLatestRelease({
-      owner: "capsoftware",
-      repo: "cap",
-    });
+    let release;
+    if (params.version === "latest") {
+      const { data } = await octokit.repos.getLatestRelease({
+        owner: "capsoftware",
+        repo: "cap",
+      });
+      release = data;
+    } else {
+      const { data } = await octokit.repos.getReleaseByTag({
+        owner: "capsoftware",
+        repo: "cap",
+        tag: `cap-v${params.version}`,
+      });
+      release = data;
+    }
 
     const version = release.tag_name.replace("cap-v", "");
     const notes = release.body;
@@ -31,22 +42,11 @@ export async function GET(
       : null;
 
     const asset = release.assets.find((asset) => {
-      const isVersionMatch = asset.name.includes(version);
       const isArchMatch = asset.name.includes(params.arch);
-      let isTargetMatch = false;
+      const isTargetMatch =
+        asset.name.endsWith(".tar.gz") && !asset.name.endsWith(".tar.gz.sig");
 
-      switch (params.target) {
-        case "mac":
-          isTargetMatch = asset.name.endsWith(".dmg");
-          break;
-        case "linux":
-          isTargetMatch = asset.name.endsWith(".tar.gz");
-          break;
-        case "windows":
-          isTargetMatch = asset.name.endsWith(".exe");
-      }
-
-      return isVersionMatch && isArchMatch && isTargetMatch;
+      return isArchMatch && isTargetMatch;
     });
 
     if (!asset) {
