@@ -28,7 +28,6 @@ export async function GET(
       ? new Date(release.published_at).toISOString()
       : null;
 
-    // Filter the assets based on version, target, and arch
     const asset = release.assets.find((asset) => {
       const isVersionMatch = asset.name.includes(version);
       const isArchMatch = asset.name.includes(params.arch);
@@ -48,14 +47,38 @@ export async function GET(
       return isVersionMatch && isArchMatch && isTargetMatch;
     });
 
-    const url = asset ? asset.browser_download_url : null;
+    if (!asset) {
+      return new Response(null, {
+        status: 204,
+      });
+    }
 
-    return new Response(JSON.stringify({ version, notes, pub_date, url }), {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    const rawAssetName = asset.name.split(".").slice(0, -1).join(".");
+
+    const url = asset.browser_download_url;
+    const signatureAsset = release.assets.find(
+      ({ name }: any) => name === `${rawAssetName}.sig`
+    );
+
+    if (!signatureAsset) {
+      return new Response(null, {
+        status: 204,
+      });
+    }
+
+    const signature = await fetch(signatureAsset.browser_download_url).then(
+      (r) => r.text()
+    );
+
+    return new Response(
+      JSON.stringify({ version, notes, pub_date, url, signature }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
   } catch (error) {
     console.error("Error fetching latest release:", error);
     return new Response(JSON.stringify({ error: "Missing required fields" }), {
