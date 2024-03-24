@@ -19,21 +19,10 @@ export async function GET(
   }
 ) {
   try {
-    let release;
-    if (params.version === "latest") {
-      const { data } = await octokit.repos.getLatestRelease({
-        owner: "capsoftware",
-        repo: "cap",
-      });
-      release = data;
-    } else {
-      const { data } = await octokit.repos.getReleaseByTag({
-        owner: "capsoftware",
-        repo: "cap",
-        tag: `cap-v${params.version}`,
-      });
-      release = data;
-    }
+    const { data: release } = await octokit.repos.getLatestRelease({
+      owner: "capsoftware",
+      repo: "cap",
+    });
 
     const version = release.tag_name.replace("cap-v", "");
     const notes = release.body;
