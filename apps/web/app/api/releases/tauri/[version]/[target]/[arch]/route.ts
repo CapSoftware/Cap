@@ -4,6 +4,8 @@ const octokit = new Octokit();
 
 export const runtime = "edge";
 
+export const revalidate = 0;
+
 export async function GET(
   req: Request,
   {
@@ -53,13 +55,13 @@ export async function GET(
       });
     }
 
-    const rawAssetName = asset.name.split(".").slice(0, -1).join(".");
-
     const url = asset.browser_download_url;
-    const signatureAsset = release.assets.find(
-      ({ name }: any) => name === `${rawAssetName}.sig`
-    );
 
+    console.log(release.assets);
+
+    const signatureAsset = release.assets.find(
+      ({ name }: any) => name.includes(params.arch) && name.endsWith(".sig")
+    );
     if (!signatureAsset) {
       return new Response(null, {
         status: 204,
