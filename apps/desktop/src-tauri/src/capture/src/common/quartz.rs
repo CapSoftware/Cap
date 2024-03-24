@@ -59,6 +59,8 @@ impl Frame <'_> {
         // aligned to squeeze the best performance out of the underlying hardware; in other words,
         // each row/scanline has to be cleanly divisible by a hardware-specific byte length so that
         // the buffer can be read in chunks without running into overlapping rows in a single chunk.
+        // This behaviour is only referred to fairly obliquely in documentation - for instance on
+        // [this page](https://developer.apple.com/library/archive/qa/qa1829/_index.html).
         //
         // This means that certain Mac configurations can end up with pixel buffers that contain
         // more bytes per row than would be expected from just the row width and the image format.
