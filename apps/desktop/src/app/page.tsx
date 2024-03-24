@@ -20,6 +20,35 @@ export default function CameraPage() {
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
 
   useEffect(() => {
+    const checkVersion = async () => {
+      const storedVersion = localStorage.getItem("cap_test_build_version");
+      const appVersion = await getVersion();
+
+      if (!storedVersion) {
+        console.log("No version stored");
+        localStorage.setItem("cap_test_build_version", appVersion);
+
+        if (localStorage.getItem("permissions")) {
+          await invoke("reset_screen_permissions");
+          await invoke("reset_camera_permissions");
+          await invoke("reset_microphone_permissions");
+          const permissions = JSON.parse(
+            localStorage.getItem("permissions") || "{}"
+          );
+          permissions.screen = false;
+          permissions.camera = false;
+          permissions.microphone = false;
+          permissions.confirmed = false;
+          localStorage.setItem("permissions", JSON.stringify(permissions));
+          toast.error("Early version detected - permissions have been reset.");
+        }
+      }
+    };
+
+    checkVersion();
+  }, []);
+
+  useEffect(() => {
     const checkPermissions = setInterval(() => {
       const updatedPermissions = getPermissions();
       if (

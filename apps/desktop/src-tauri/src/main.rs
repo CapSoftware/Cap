@@ -115,6 +115,27 @@ fn main() {
             .expect("failed to reset screen permissions");
     }
 
+    #[tauri::command]
+    fn reset_microphone_permissions() {
+        #[cfg(target_os = "macos")]
+        std::process::Command::new("tccutil")
+            .arg("reset")
+            .arg("Microphone")
+            .arg("so.cap.desktop")
+            .spawn()
+            .expect("failed to reset microphone permissions");
+    }
+
+    fn reset_camera_permissions() {
+        #[cfg(target_os = "macos")]
+        std::process::Command::new("tccutil")
+            .arg("reset")
+            .arg("Camera")
+            .arg("so.cap.desktop")
+            .spawn()
+            .expect("failed to reset camera permissions");
+    }
+
     let _guard = sentry::init(("https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200", sentry::ClientOptions {
       release: sentry::release_name!(),
       ..Default::default()

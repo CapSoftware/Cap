@@ -18,7 +18,6 @@ export const Permissions = () => {
 
   const checkScreenCapture = async () => {
     const hasAccess = await invoke("has_screen_capture_access");
-    console.log("hasAccess", hasAccess);
     if (hasAccess) {
       await savePermissions("screen", true);
       setPermissions((prev) => ({
@@ -31,15 +30,28 @@ export const Permissions = () => {
   const checkCameraAccess = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      // Assuming access is granted if the above line doesn't throw an error
       await savePermissions("camera", true);
       setPermissions((prev) => ({
         ...prev,
         camera: true,
       }));
-      // Stop using the camera after checking access
       stream.getTracks().forEach((track) => track.stop());
     } catch (error) {
+      navigator.permissions
+        .query({ name: "camera" as PermissionName })
+        .then((permissionStatus) => {
+          if (permissionStatus.state === "denied") {
+            console.log("Camera access denied");
+          } else {
+            permissionStatus.onchange = () => {
+              if (permissionStatus.state === "denied") {
+                console.log("Camera access denied");
+              } else {
+                checkCameraAccess();
+              }
+            };
+          }
+        });
       console.log("Camera access denied");
     }
   };
@@ -53,9 +65,23 @@ export const Permissions = () => {
         ...prev,
         microphone: true,
       }));
-      // Stop using the microphone after checking access
       stream.getTracks().forEach((track) => track.stop());
     } catch (error) {
+      navigator.permissions
+        .query({ name: "microphone" as PermissionName })
+        .then((permissionStatus) => {
+          if (permissionStatus.state === "denied") {
+            console.log("Microphone access denied");
+          } else {
+            permissionStatus.onchange = () => {
+              if (permissionStatus.state === "denied") {
+                console.log("Microphone access denied");
+              } else {
+                checkMicrophoneAccess();
+              }
+            };
+          }
+        });
       console.log("Microphone access denied");
     }
   };
