@@ -38,6 +38,13 @@ impl Capturer {
 
 pub struct Frame<'a>(&'a [u8]);
 
+impl Frame <'_> {
+    pub fn stride_override(&self) -> Option<usize> {
+        // No need for an override on DirectX Graphics
+        None
+    }
+}
+
 impl<'a> ops::Deref for Frame<'a> {
     type Target = [u8];
     fn deref(&self) -> &[u8] {
