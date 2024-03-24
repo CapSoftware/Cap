@@ -20,46 +20,6 @@ export default function CameraPage() {
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
 
   useEffect(() => {
-    const checkVersion = async () => {
-      const storedVersion = localStorage.getItem("cap_test_build_version");
-      const appVersion = await getVersion();
-
-      if (!storedVersion) {
-        console.log("No version stored");
-        localStorage.setItem("cap_test_build_version", appVersion);
-
-        if (localStorage.getItem("permissions")) {
-          await invoke("reset_screen_permissions");
-          const permissions = JSON.parse(
-            localStorage.getItem("permissions") || "{}"
-          );
-          permissions.screen = false;
-          permissions.confirmed = false;
-          localStorage.setItem("permissions", JSON.stringify(permissions));
-          toast.error(
-            "New version downloaded - screen permissions have been reset"
-          );
-        }
-      } else if (storedVersion !== appVersion) {
-        console.log("New version downloaded");
-        localStorage.setItem("cap_test_build_version", appVersion);
-        await invoke("reset_screen_permissions");
-        const permissions = JSON.parse(
-          localStorage.getItem("permissions") || "{}"
-        );
-        permissions.screen = false;
-        permissions.confirmed = false;
-        localStorage.setItem("permissions", JSON.stringify(permissions));
-        toast.error(
-          "New version downloaded - screen permissions have been reset"
-        );
-      }
-    };
-
-    checkVersion();
-  }, []);
-
-  useEffect(() => {
     const checkPermissions = setInterval(() => {
       const updatedPermissions = getPermissions();
       if (
@@ -97,13 +57,13 @@ export default function CameraPage() {
     }
   }, [isSignedIn, cameraWindowOpen, permissions.confirmed]);
 
-  if(process.env.NEXT_PUBLIC_LOCAL_MODE === "true"){
-    return(
+  if (process.env.NEXT_PUBLIC_LOCAL_MODE === "true") {
+    return (
       <>
         <WindowActions />
         <Recorder />
       </>
-    )
+    );
   }
 
   if (loading && !permissionsLoaded) {
@@ -119,7 +79,7 @@ export default function CameraPage() {
       {isSignedIn ? (
         <>
           <WindowActions />
-          {(!permissions || permissions.confirmed === false)? (
+          {!permissions || permissions.confirmed === false ? (
             <Permissions />
           ) : (
             <Recorder />
