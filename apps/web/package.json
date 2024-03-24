@@ -19,6 +19,7 @@
     "@ffmpeg/util": "^0.12.1",
     "@headlessui/react": "^1.7.17",
     "@hookform/resolvers": "^3.3.2",
+    "@octokit/rest": "^20.0.2",
     "@react-email/components": "^0.0.13",
     "@react-email/render": "0.0.11",
     "aws-sdk": "^2.1530.0",

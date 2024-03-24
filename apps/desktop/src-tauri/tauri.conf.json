@@ -53,7 +53,6 @@
         "scope": ["http://*", "https://*", "wss://*"]
       }
     },
-
     "bundle": {
       "active": true,
       "targets": "all",
@@ -74,7 +73,17 @@
       "csp": null
     },
     "macOSPrivateApi": true,
-
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://cap.so/api/releases/tauri/{{version}}/{{target}}/{{arch}}"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFRDMyMDE5MDZEMDk4RTEKUldUaG1OQUdHU0RUbm44YWgxNVlkRjBMZU8yOHB5N0kyY01NZDJTeXNOb09Zdlc2Um81UVFKcTAK",
+      "windows": {
+        "installMode": "passive"
+      }
+    },
     "windows": [
       {
         "title": "Cap",
