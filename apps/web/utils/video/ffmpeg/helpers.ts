@@ -77,9 +77,7 @@ export async function generateM3U8Playlist(
   urls: { url: string; duration: string }[]
 ) {
   const baseM3U8Content = `#EXTM3U
-#EXT-X-INDEPENDENT-SEGMENTS
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXT-X-TARGETDURATION:7
+#EXT-X-TARGETDURATION:3
 #EXT-X-VERSION:4
 #EXT-X-MEDIA-SEQUENCE:0
 `;
@@ -92,4 +90,19 @@ export async function generateM3U8Playlist(
   m3u8Content += "#EXT-X-ENDLIST";
 
   return m3u8Content;
+}
+
+export async function generateMasterPlaylist(
+  videoPlaylistUrl: string,
+  audioPlaylistUrl: string
+) {
+  const masterPlaylist = `#EXTM3U
+#EXT-X-VERSION:4
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en",URI="${audioPlaylistUrl}"
+#EXT-X-STREAM-INF:AUDIO="audio"
+${videoPlaylistUrl}
+`;
+
+  return masterPlaylist;
 }

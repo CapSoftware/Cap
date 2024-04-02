@@ -5,6 +5,7 @@ use ffmpeg_sidecar::{
 use capture::{Capturer, Display};
 use std::time::{Duration, Instant};
 use std::panic;
+use std::path::Path;
 use std::thread;
 use std::io::ErrorKind::WouldBlock;
 
@@ -94,7 +95,12 @@ pub fn ffmpeg_path_as_str() -> Result<String, String> {
     };
     
     let path = sidecar_dir().map_err(|e| e.to_string())?.join(binary_name);
-    path.to_str()
-        .map(|s| s.to_owned()) // Converts the &str to a String
-        .ok_or_else(|| "Failed to convert FFmpeg binary path to string".to_string())
+    
+    if Path::new(&path).exists() {
+        path.to_str()
+            .map(|s| s.to_owned())
+            .ok_or_else(|| "Failed to convert FFmpeg binary path to string".to_string())
+    } else {
+        Ok("ffmpeg".to_string())
+    }
 }

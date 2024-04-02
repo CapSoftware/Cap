@@ -10,7 +10,10 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { generateM3U8Playlist } from "@/utils/video/ffmpeg/helpers";
+import {
+  generateM3U8Playlist,
+  generateMasterPlaylist,
+} from "@/utils/video/ffmpeg/helpers";
 
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
@@ -100,16 +103,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const s3Client = new S3Client({
-    region: process.env.CAP_AWS_REGION || "",
-    credentials: {
-      accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-      secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
-    },
-  });
-
   const bucket = process.env.CAP_AWS_BUCKET || "";
-  const screenPrefix = `${userId}/${videoId}/screen/`;
   const videoPrefix = `${userId}/${videoId}/video/`;
   const audioPrefix = `${userId}/${videoId}/audio/`;
 
@@ -117,14 +111,14 @@ export async function GET(request: NextRequest) {
     // Handle screen, video, and now audio types
     let objectsCommand, prefix;
     switch (videoType) {
-      case "screen":
-        prefix = screenPrefix;
-        break;
       case "video":
         prefix = videoPrefix;
         break;
       case "audio":
         prefix = audioPrefix;
+        break;
+      case "master":
+        prefix = null;
         break;
       default:
         return new Response(
@@ -141,6 +135,43 @@ export async function GET(request: NextRequest) {
           }
         );
     }
+
+    if (prefix === null) {
+      const generatedPlaylist = await generateMasterPlaylist(
+        process.env.NEXT_PUBLIC_URL +
+          "/api/playlist?userId=" +
+          userId +
+          "&videoId=" +
+          videoId +
+          "&videoType=video",
+        process.env.NEXT_PUBLIC_URL +
+          "/api/playlist?userId=" +
+          userId +
+          "&videoId=" +
+          videoId +
+          "&videoType=audio"
+      );
+
+      return new Response(generatedPlaylist, {
+        status: 200,
+        headers: {
+          "content-type": "application/x-mpegURL",
+          "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+            ? origin
+            : "null",
+          "Access-Control-Allow-Credentials": "true",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+        },
+      });
+    }
+
+    const s3Client = new S3Client({
+      region: process.env.CAP_AWS_REGION || "",
+      credentials: {
+        accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
+        secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
+      },
+    });
 
     objectsCommand = new ListObjectsV2Command({
       Bucket: bucket,
