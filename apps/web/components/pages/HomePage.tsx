@@ -5,7 +5,7 @@
 import { useState, useRef } from "react";
 import { Parallax } from "react-scroll-parallax";
 import toast from "react-hot-toast";
-import Image from "next/image";
+import { ParallaxProvider } from "react-scroll-parallax";
 
 export const HomePage = () => {
   const [showEmail, setShowEmail] = useState<boolean>(false);
@@ -44,7 +44,7 @@ export const HomePage = () => {
   };
 
   return (
-    <>
+    <ParallaxProvider>
       <div className="w-full custom-bg">
         <div className="wrapper wrapper-sm mx-auto">
           <div className="mb-auto -mt-20 text-center md:px-4 pt-32 pb-52 md:pt-44 md:pb-64 space-y-8">
@@ -168,6 +168,6 @@ export const HomePage = () => {
           />
         </Parallax>
       </div>
-    </>
+    </ParallaxProvider>
   );
 };

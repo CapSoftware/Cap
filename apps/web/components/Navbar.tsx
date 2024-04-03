@@ -2,8 +2,10 @@
 
 import { usePathname } from "next/navigation";
 import { Logo } from "@cap/ui";
+import { Button } from "@cap/ui";
+import Link from "next/link";
 
-export const Navbar = () => {
+export const Navbar = ({ auth }: { auth: boolean }) => {
   const pathname = usePathname();
   const isHomePage = pathname === "/";
 
@@ -64,6 +66,11 @@ export const Navbar = () => {
             </svg>
           </a>
         </li>
+        {auth === true && (
+          <li>
+            <Button href="/dashboard">Dashboard</Button>
+          </li>
+        )}
       </ul>
     </nav>
   );

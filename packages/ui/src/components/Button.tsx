@@ -35,18 +35,28 @@ export interface ButtonProps
     VariantProps<typeof buttonVariants> {
   asChild?: boolean;
   spinner?: boolean;
+  href?: string;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   (
-    { className, variant, size, asChild = false, spinner = false, ...props },
+    {
+      className,
+      variant,
+      size,
+      asChild = false,
+      spinner = false,
+      href,
+      ...props
+    },
     ref
   ) => {
-    const Comp = asChild ? Slot : "button";
+    const Comp = href ? "a" : asChild ? Slot : ("button" as any);
     return (
       <Comp
         className={classNames(buttonVariants({ variant, size, className }))}
-        ref={ref}
+        ref={ref as any}
+        href={href || undefined}
         {...props}
       >
         {props.children}

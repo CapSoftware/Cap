@@ -3,6 +3,7 @@ import { Toaster } from "react-hot-toast";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import type { Metadata } from "next";
+import { getCurrentUser } from "@cap/database/auth/session";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful, shareable screen recordings. Open source.",
@@ -23,6 +24,8 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const user = await getCurrentUser();
+
   return (
     <html lang="en">
       <head>
@@ -51,7 +54,7 @@ export default async function RootLayout({
       <body>
         <Toaster />
         <main className="w-full overflow-hidden">
-          <Navbar />
+          <Navbar auth={user ? true : false} />
           {children}
           <Footer />
         </main>

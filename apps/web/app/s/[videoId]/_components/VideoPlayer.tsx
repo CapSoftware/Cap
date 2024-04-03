@@ -23,14 +23,35 @@ export const VideoPlayer = memo(
       media: HTMLMediaElement,
       hlsInstance: React.MutableRefObject<Hls | null>
     ) => {
-      const hls = new Hls({ progressive: true });
-      hls.on(Hls.Events.ERROR, (event, data) => {
-        console.error("HLS error:", data);
-      });
+      if (Hls.isSupported()) {
+        const hls = new Hls({ progressive: true });
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          console.error("HLS error:", data);
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                hls.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hls.recoverMediaError();
+                break;
+              default:
+                initializeFallback(src, media);
+                break;
+            }
+          }
+        });
 
-      hlsInstance.current = hls;
-      hls.loadSource(src);
-      hls.attachMedia(media);
+        hlsInstance.current = hls;
+        hls.loadSource(src);
+        hls.attachMedia(media);
+      } else {
+        initializeFallback(src, media);
+      }
+    };
+
+    const initializeFallback = (src: string, media: HTMLMediaElement) => {
+      media.src = src;
     };
 
     useEffect(() => {
@@ -50,6 +71,7 @@ export const VideoPlayer = memo(
         preload="metadata"
         playsInline
         controls={false}
+        muted
       />
     );
   })

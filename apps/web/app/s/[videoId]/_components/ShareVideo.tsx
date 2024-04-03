@@ -96,20 +96,20 @@ export const ShareVideo = ({
   }, []);
 
   const handlePlayPauseClick = async () => {
-    setIsPlaying(!isPlaying);
-
     const videoElement = videoRef.current;
 
     if (!videoElement) return;
 
     if (isPlaying) {
       videoElement.pause();
+      setIsPlaying(false);
     } else {
       try {
         await videoElement.play();
+        setIsPlaying(true);
+        videoElement.muted = false;
       } catch (error) {
         console.error("Error with playing:", error);
-        setIsPlaying(false); // Revert the isPlaying state on error
       }
     }
   };
