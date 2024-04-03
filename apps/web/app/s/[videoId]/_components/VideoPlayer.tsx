@@ -18,12 +18,15 @@ export const VideoPlayer = memo(
 
     useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
+    const isIOS = () =>
+      /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
     const initializeHls = (
       src: string,
       media: HTMLMediaElement,
       hlsInstance: React.MutableRefObject<Hls | null>
     ) => {
-      if (Hls.isSupported()) {
+      if (Hls.isSupported() && !isIOS()) {
         const hls = new Hls({ progressive: true });
         hls.on(Hls.Events.ERROR, (event, data) => {
           console.error("HLS error:", data);
@@ -36,7 +39,6 @@ export const VideoPlayer = memo(
                 hls.recoverMediaError();
                 break;
               default:
-                initializeFallback(src, media);
                 break;
             }
           }
@@ -46,17 +48,18 @@ export const VideoPlayer = memo(
         hls.loadSource(src);
         hls.attachMedia(media);
       } else {
-        initializeFallback(src, media);
+        media.src = src;
       }
-    };
-
-    const initializeFallback = (src: string, media: HTMLMediaElement) => {
-      media.src = src;
     };
 
     useEffect(() => {
       if (!videoRef.current) return;
-      initializeHls(videoSrc, videoRef.current, videoHlsInstance);
+
+      if (isIOS()) {
+        videoRef.current.src = videoSrc;
+      } else {
+        initializeHls(videoSrc, videoRef.current, videoHlsInstance);
+      }
 
       return () => {
         videoHlsInstance.current?.destroy();
