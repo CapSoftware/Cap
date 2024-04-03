@@ -155,7 +155,7 @@ export async function GET(request: NextRequest) {
       return new Response(generatedPlaylist, {
         status: 200,
         headers: {
-          "content-type": "application/x-mpegURL",
+          "content-type": "application/vnd.apple.mpegurl",
           "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
             ? origin
             : "null",
@@ -207,7 +207,7 @@ export async function GET(request: NextRequest) {
     return new Response(generatedPlaylist, {
       status: 200,
       headers: {
-        "content-type": "application/x-mpegURL",
+        "content-type": "application/vnd.apple.mpegurl",
         "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
           ? origin
           : "null",

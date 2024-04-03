@@ -26,40 +26,32 @@ export const VideoPlayer = memo(
       media: HTMLMediaElement,
       hlsInstance: React.MutableRefObject<Hls | null>
     ) => {
-      if (Hls.isSupported() && !isIOS()) {
-        const hls = new Hls({ progressive: true });
-        hls.on(Hls.Events.ERROR, (event, data) => {
-          console.error("HLS error:", data);
-          if (data.fatal) {
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                hls.startLoad();
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                hls.recoverMediaError();
-                break;
-              default:
-                break;
-            }
+      const hls = new Hls();
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        console.error("HLS error:", data);
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              hls.recoverMediaError();
+              break;
+            default:
+              break;
           }
-        });
+        }
+      });
 
-        hlsInstance.current = hls;
-        hls.loadSource(src);
-        hls.attachMedia(media);
-      } else {
-        media.src = src;
-      }
+      hlsInstance.current = hls;
+      hls.loadSource(src);
+      hls.attachMedia(media);
     };
 
     useEffect(() => {
       if (!videoRef.current) return;
 
-      if (isIOS()) {
-        videoRef.current.src = videoSrc;
-      } else {
-        initializeHls(videoSrc, videoRef.current, videoHlsInstance);
-      }
+      initializeHls(videoSrc, videoRef.current, videoHlsInstance);
 
       return () => {
         videoHlsInstance.current?.destroy();
@@ -75,7 +67,9 @@ export const VideoPlayer = memo(
         playsInline
         controls={false}
         muted
-      />
+      >
+        <source src={videoSrc} type="application/x-mpegURL" />
+      </video>
     );
   })
 );
