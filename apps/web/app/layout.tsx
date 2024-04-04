@@ -6,13 +6,15 @@ import type { Metadata } from "next";
 import { getCurrentUser } from "@cap/database/auth/session";
 
 export const metadata: Metadata = {
-  title: "Cap — Beautiful, shareable screen recordings. Open source.",
+  title:
+    "Cap — Effortless, instant screen sharing. Open source and cross-platform.",
   description:
-    "Cap is an open source and privacy focused alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.",
+    "Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
   openGraph: {
-    title: "Cap — Beautiful, shareable screen recordings. Open source.",
+    title:
+      "Cap — Effortless, instant screen sharing. Open source and cross-platform.",
     description:
-      "Cap is an open source and privacy focused alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.",
+      "Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
     type: "website",
     url: "https://cap.so",
     images: ["https://cap.so/og.png"],

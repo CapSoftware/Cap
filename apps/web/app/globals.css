@@ -160,8 +160,21 @@ button {
   @apply transition-all;
 }
 
+nav ul {
+  @apply list-none;
+}
+
 nav a {
   @apply text-sm md:text-base;
+}
+
+nav.mobile a {
+  @apply flex w-full;
+}
+
+nav.mobile a:not(.button),
+nav.mobile a:not(.button) * {
+  @apply text-[1.3rem] text-gray-700;
 }
 
 label {
@@ -173,6 +186,15 @@ label {
     50.01% 50.01% at 53.53% 49.99%,
     var(--tertiary-2) 4.65%,
     var(--tertiary) 68.48%,
+    #ffffff 100%
+  );
+}
+
+.muted-custom-bg {
+  background: radial-gradient(
+    50.01% 50.01% at 53.53% 49.99%,
+    var(--tertiary-3) 4.65%,
+    var(--tertiary-3) 68.48%,
     #ffffff 100%
   );
 }

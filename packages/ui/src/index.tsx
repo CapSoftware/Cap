@@ -16,6 +16,7 @@ export * from "./components/Cmdk";
 export * from "./components/Dialog";
 export * from "./components/Popover";
 export * from "./components/Card";
+export * from "./components/NavigationMenu";
 
 // Forms & Inputs
 export * from "./components/input/Form";

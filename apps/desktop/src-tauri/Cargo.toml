@@ -1,7 +1,7 @@
 [package]
 name = "cap"
 version = "0.0.0"
-description = "Beautiful, shareable screen recordings. Open-source and privacy-friendly."
+description = "Effortless, instant screen sharing. Open source and cross-platform."
 authors = ["you"]
 license = ""
 repository = ""
