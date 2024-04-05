@@ -15,6 +15,8 @@ import {
   generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
 
+export const revalidate = 3599;
+
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
   "https://cap.link",
@@ -198,7 +200,13 @@ export async function GET(request: NextRequest) {
           })
         );
 
-        return { url: url, duration: metadata?.Metadata?.duration ?? "" };
+        return {
+          url: url.replace(
+            "https://capso.s3.us-east-1.amazonaws.com",
+            "https://v.cap.so"
+          ),
+          duration: metadata?.Metadata?.duration ?? "",
+        };
       })
     );
 
