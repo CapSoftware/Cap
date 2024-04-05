@@ -200,7 +200,13 @@ export async function GET(request: NextRequest) {
           })
         );
 
-        return { url: url, duration: metadata?.Metadata?.duration ?? "" };
+        return {
+          url: url.replace(
+            "https://capso.s3.us-east-1.amazonaws.com",
+            "https://v.cap.so"
+          ),
+          duration: metadata?.Metadata?.duration ?? "",
+        };
       })
     );
 
