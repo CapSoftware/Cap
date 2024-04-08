@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { EyeIcon, LinkIcon, MessageSquareIcon, SmileIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 
 type videoData = {
   id: string;
@@ -19,6 +20,7 @@ type videoData = {
 export const Caps = ({ data }: { data: videoData }) => {
   const { push } = useRouter();
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
+  const { user } = useSharedContext();
 
   useEffect(() => {
     const fetchAnalytics = async () => {
@@ -55,16 +57,14 @@ export const Caps = ({ data }: { data: videoData }) => {
           </div>
           <div className="text-center">
             <h1 className="text-2xl font-semibold mb-3">
-              <span className="block">Hey, </span>
+              <span className="block text-gray-500">Hey, {user?.name}!</span>
               <span className="block">Record your first Cap.</span>
             </h1>
             <p className="text-xl max-w-md">
               Craft your narrative with a Cap—get projects done quicker.
             </p>
             <Button
-              onClick={() => {
-                push("/download");
-              }}
+              href="/download"
               size="default"
               className="mt-8 relative"
               variant="default"

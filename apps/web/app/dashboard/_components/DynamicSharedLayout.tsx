@@ -2,6 +2,7 @@
 import { createContext, useContext } from "react";
 import AdminDesktopNav from "@/app/dashboard/_components/AdminNavbar/AdminDesktopNav";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
+import { users } from "@cap/database/schema";
 
 type SharedContext = {
   spaceData: null;

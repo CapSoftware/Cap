@@ -22,6 +22,7 @@
     "@octokit/rest": "^20.0.2",
     "@react-email/components": "^0.0.13",
     "@react-email/render": "0.0.11",
+    "@stripe/stripe-js": "^3.3.0",
     "aws-sdk": "^2.1530.0",
     "clsx": "^2.0.0",
     "cookies-next": "^4.1.0",
@@ -46,6 +47,7 @@
     "react-tooltip": "^5.26.3",
     "resend": "1.1.0",
     "server-only": "^0.0.1",
+    "stripe": "^14.24.0",
     "tailwind-merge": "^2.1.0",
     "zod": "^3.22.4"
   },

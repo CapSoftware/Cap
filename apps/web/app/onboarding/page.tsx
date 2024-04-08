@@ -12,7 +12,7 @@ export default async function OnboardingPage() {
   }
 
   return (
-    <div className="muted-custom-bg-2 wrapper w-full h-screen flex items-center justify-center">
+    <div className="muted-custom-bg-2 w-full h-screen flex items-center justify-center">
       <div className="w-full max-w-lg relative overflow-hidden sm:rounded-2xl p-4 space-y-4">
         <a href="/">
           <LogoBadge className="h-14 mx-auto w-auto fade-in-down" />

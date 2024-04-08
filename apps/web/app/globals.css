@@ -203,7 +203,7 @@ label {
 .muted-custom-bg-2 {
   background: radial-gradient(
     50.01% 50.01% at 53.53% 49.99%,
-    var(--tertiary) 4.65%,
+    var(--tertiary-2) 4.65%,
     var(--tertiary) 68.48%,
     #ffffff 100%
   );

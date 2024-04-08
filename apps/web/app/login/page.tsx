@@ -12,7 +12,7 @@ export default async function LoginPage() {
   }
 
   return (
-    <div className="muted-custom-bg wrapper w-full h-screen flex items-center justify-center">
+    <div className="muted-custom-bg w-full h-screen flex items-center justify-center">
       <div className="w-full max-w-lg relative overflow-hidden sm:rounded-2xl p-4 space-y-4">
         <a href="/">
           <LogoBadge className="h-12 w-auto fade-in-down" />

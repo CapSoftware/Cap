@@ -13,6 +13,7 @@ import {
   Label,
 } from "@cap/ui";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import toast from "react-hot-toast";
 
 export const Onboarding = ({
@@ -21,6 +22,7 @@ export const Onboarding = ({
   user: typeof users.$inferSelect | null;
 }) => {
   const router = useRouter();
+  const [firstNameInput, setFirstNameInput] = useState("");
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -57,7 +59,14 @@ export const Onboarding = ({
           <div className="space-y-3">
             <div>
               <Label htmlFor="firstName">First name *</Label>
-              <Input type="text" id="firstName" name="firstName" required />
+              <Input
+                type="text"
+                id="firstName"
+                name="firstName"
+                required
+                value={firstNameInput}
+                onChange={(e) => setFirstNameInput(e.target.value)}
+              />
             </div>
             <div>
               <Label htmlFor="lastName">Last name</Label>
@@ -66,7 +75,12 @@ export const Onboarding = ({
           </div>
         </CardContent>
         <CardFooter className="border-t px-6 py-4">
-          <Button className="mx-auto" type="submit" size="lg">
+          <Button
+            disabled={!firstNameInput}
+            className="mx-auto"
+            type="submit"
+            size="lg"
+          >
             Complete
           </Button>
         </CardFooter>
