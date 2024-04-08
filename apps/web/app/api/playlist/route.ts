@@ -86,7 +86,7 @@ export async function GET(request: NextRequest) {
   if (video.public === false) {
     const user = await getCurrentUser();
 
-    if (!user || user.userId !== video.ownerId) {
+    if (!user || user.id !== video.ownerId) {
       return new Response(
         JSON.stringify({ error: true, message: "Video is not public" }),
         {

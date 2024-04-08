@@ -50,7 +50,7 @@ export function LoginForm() {
               toast.error("Error sending email - try again?");
             });
         }}
-        className="flex flex-col space-y-3"
+        className="flex flex-col space-y-3 fade-in-down animate-delay-2"
       >
         <div>
           <input

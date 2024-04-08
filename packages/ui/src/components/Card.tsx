@@ -1,20 +1,20 @@
-import { forwardRef } from 'react';
-import { classNames } from '@cap/utils';
+import { forwardRef } from "react";
+import { classNames } from "@cap/utils";
 
 const Card = forwardRef<
   HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement>
->(({ className, ...props }, ref) => (
+  React.HTMLAttributes<HTMLDivElement> & { noStyle?: boolean }
+>(({ className, noStyle, ...props }, ref) => (
   <div
     ref={ref}
     className={classNames(
-      'rounded-lg border bg-card text-card-foreground shadow-sm',
+      !noStyle && "rounded-lg border bg-card text-card-foreground shadow-sm",
       className
     )}
     {...props}
   />
 ));
-Card.displayName = 'Card';
+Card.displayName = "Card";
 
 const CardHeader = forwardRef<
   HTMLDivElement,
@@ -22,11 +22,11 @@ const CardHeader = forwardRef<
 >(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={classNames('flex flex-col space-y-1.5 p-6', className)}
+    className={classNames("flex flex-col space-y-1.5 p-6", className)}
     {...props}
   />
 ));
-CardHeader.displayName = 'CardHeader';
+CardHeader.displayName = "CardHeader";
 
 const CardTitle = forwardRef<
   HTMLParagraphElement,
@@ -35,13 +35,13 @@ const CardTitle = forwardRef<
   <h3
     ref={ref}
     className={classNames(
-      'text-lg font-semibold leading-none tracking-tight',
+      "text-lg font-semibold leading-none tracking-tight",
       className
     )}
     {...props}
   />
 ));
-CardTitle.displayName = 'CardTitle';
+CardTitle.displayName = "CardTitle";
 
 const CardDescription = forwardRef<
   HTMLParagraphElement,
@@ -49,19 +49,19 @@ const CardDescription = forwardRef<
 >(({ className, ...props }, ref) => (
   <p
     ref={ref}
-    className={classNames('text-sm text-muted-foreground', className)}
+    className={classNames("text-sm text-gray-500 ", className)}
     {...props}
   />
 ));
-CardDescription.displayName = 'CardDescription';
+CardDescription.displayName = "CardDescription";
 
 const CardContent = forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
 >(({ className, ...props }, ref) => (
-  <div ref={ref} className={classNames('p-6 pt-0', className)} {...props} />
+  <div ref={ref} className={classNames("p-6 pt-0", className)} {...props} />
 ));
-CardContent.displayName = 'CardContent';
+CardContent.displayName = "CardContent";
 
 const CardFooter = forwardRef<
   HTMLDivElement,
@@ -69,11 +69,11 @@ const CardFooter = forwardRef<
 >(({ className, ...props }, ref) => (
   <div
     ref={ref}
-    className={classNames(' flex items-center p-6 pt-0', className)}
+    className={classNames(" flex items-center p-6 pt-0", className)}
     {...props}
   />
 ));
-CardFooter.displayName = 'CardFooter';
+CardFooter.displayName = "CardFooter";
 
 export {
   Card,

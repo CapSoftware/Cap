@@ -151,7 +151,8 @@ h5 {
 a,
 p,
 span,
-input {
+input,
+label {
   @apply tracking-tight text-black;
 }
 
@@ -184,8 +185,8 @@ label {
 .custom-bg {
   background: radial-gradient(
     50.01% 50.01% at 53.53% 49.99%,
-    var(--tertiary-2) 4.65%,
-    var(--tertiary) 68.48%,
+    var(--tertiary-3) 5.65%,
+    var(--tertiary) 78.48%,
     #ffffff 100%
   );
 }
@@ -195,6 +196,15 @@ label {
     50.01% 50.01% at 53.53% 49.99%,
     var(--tertiary-3) 4.65%,
     var(--tertiary-3) 68.48%,
+    #ffffff 100%
+  );
+}
+
+.muted-custom-bg-2 {
+  background: radial-gradient(
+    50.01% 50.01% at 53.53% 49.99%,
+    var(--tertiary) 4.65%,
+    var(--tertiary) 68.48%,
     #ffffff 100%
   );
 }

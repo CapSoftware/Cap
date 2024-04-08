@@ -39,7 +39,7 @@ export const authOptions: NextAuthOptions = {
         httpOnly: true,
         sameSite: "none",
         path: "/",
-        secure: process.env.NODE_ENV === "development" ? false : true,
+        secure: true,
       },
     },
   },
@@ -71,6 +71,7 @@ export const authOptions: NextAuthOptions = {
       return {
         id: dbUser.id,
         name: dbUser.name,
+        lastName: dbUser.lastName,
         email: dbUser.email,
         picture: dbUser.image,
       };

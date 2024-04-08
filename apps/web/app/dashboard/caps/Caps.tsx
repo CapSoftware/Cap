@@ -55,7 +55,8 @@ export const Caps = ({ data }: { data: videoData }) => {
           </div>
           <div className="text-center">
             <h1 className="text-2xl font-semibold mb-3">
-              Record your first Cap.
+              <span className="block">Hey, </span>
+              <span className="block">Record your first Cap.</span>
             </h1>
             <p className="text-xl max-w-md">
               Craft your narrative with a Cap—get projects done quicker.

@@ -1,0 +1,76 @@
+"use client";
+
+import { users } from "@cap/database/schema";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  Button,
+  Input,
+  Label,
+} from "@cap/ui";
+import { useRouter } from "next/navigation";
+import toast from "react-hot-toast";
+
+export const Onboarding = ({
+  user,
+}: {
+  user: typeof users.$inferSelect | null;
+}) => {
+  const router = useRouter();
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    const formData = new FormData(e.currentTarget);
+    const firstName = formData.get("firstName") as string;
+    const lastName = formData.get("lastName") as string;
+
+    try {
+      const response = await fetch("/api/settings/user/name", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ firstName, lastName }),
+      });
+
+      if (response.ok) {
+        toast.success("Name updated successfully");
+        router.refresh();
+      } else {
+        toast.error("Failed to update name");
+      }
+    } catch (error) {
+      console.error("Error updating name:", error);
+      toast.error("An error occurred while updating name");
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <Card noStyle>
+        <CardContent>
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="firstName">First name *</Label>
+              <Input type="text" id="firstName" name="firstName" required />
+            </div>
+            <div>
+              <Label htmlFor="lastName">Last name</Label>
+              <Input type="text" id="lastName" name="lastName" />
+            </div>
+          </div>
+        </CardContent>
+        <CardFooter className="border-t px-6 py-4">
+          <Button className="mx-auto" type="submit" size="lg">
+            Complete
+          </Button>
+        </CardFooter>
+      </Card>
+    </form>
+  );
+};

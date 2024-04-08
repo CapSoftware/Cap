@@ -115,7 +115,7 @@ export const AdminNavItems = () => {
               key={item.name}
               href={item.href}
               className={classNames(
-                pathname == item.href
+                pathname.includes(item.href)
                   ? "bg-gray-200"
                   : "opacity-75 hover:opacity-100",
                 navItemClass

@@ -3,12 +3,17 @@ import { db } from "@cap/database";
 import { comments, videos } from "@cap/database/schema";
 import { desc, eq, sql } from "drizzle-orm";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { redirect } from "next/navigation";
 
 export const revalidate = 0;
 
 export default async function CapsPage() {
   const user = await getCurrentUser();
-  const userId = user?.userId as string;
+  const userId = user?.id as string;
+
+  if (user !== null && (user.name === null || user.name.length === 0)) {
+    return redirect("/onboarding");
+  }
 
   const videoData = await db
     .select({

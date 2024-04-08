@@ -26,6 +26,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
     pathname === "/login" ||
     pathname.includes("/dashboard") ||
     pathname.includes("/s/") ||
+    pathname.includes("/onboarding") ||
     (typeof window !== "undefined" && window.location.href.includes("cap.link"))
   )
     return null;

@@ -15,11 +15,13 @@ export default async function LoginPage() {
     <div className="muted-custom-bg wrapper w-full h-screen flex items-center justify-center">
       <div className="w-full max-w-lg relative overflow-hidden sm:rounded-2xl p-4 space-y-4">
         <a href="/">
-          <LogoBadge className="h-12 w-auto" />
+          <LogoBadge className="h-12 w-auto fade-in-down" />
         </a>
         <div className="text-left flex flex-col items-start justify-center space-y-3">
-          <h1 className="text-3xl font-semibold">Sign in to Cap.</h1>
-          <p className="text-2xl text-gray-500">
+          <h1 className="text-3xl font-semibold fade-in-down animate-delay-1">
+            Sign in to Cap.
+          </h1>
+          <p className="text-2xl text-gray-500 fade-in-down animate-delay-1">
             Effortless, instant screen sharing. Open source and cross-platform.
           </p>
         </div>

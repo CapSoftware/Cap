@@ -26,6 +26,7 @@ export const users = mysqlTable(
   {
     id: nanoId("id").notNull().primaryKey().unique(),
     name: varchar("name", { length: 255 }),
+    lastName: varchar("lastName", { length: 255 }),
     email: varchar("email", { length: 255 }).unique().notNull(),
     emailVerified: timestamp("emailVerified"),
     image: varchar("image", { length: 255 }),
@@ -42,6 +43,7 @@ export const users = mysqlTable(
     activeSpaceId: nanoId("activeSpaceId"),
     created_at: timestamp("created_at").notNull().defaultNow(),
     updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
+    onboarding_completed_at: timestamp("onboarding_completed_at"),
   },
   (table) => ({
     emailIndex: uniqueIndex("email_idx").on(table.email),
