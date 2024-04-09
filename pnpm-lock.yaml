@@ -222,9 +222,6 @@ importers:
       server-only:
         specifier: ^0.0.1
         version: 0.0.1
-      stripe:
-        specifier: ^14.24.0
-        version: 14.24.0
       tailwind-merge:
         specifier: ^2.1.0
         version: 2.2.0
@@ -486,6 +483,9 @@ importers:
       clsx:
         specifier: ^2.0.0
         version: 2.1.0
+      stripe:
+        specifier: ^14.24.0
+        version: 14.24.0
       tailwind-merge:
         specifier: ^2.1.0
         version: 2.2.0

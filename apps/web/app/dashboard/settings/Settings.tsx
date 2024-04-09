@@ -22,6 +22,7 @@ export const Settings = ({
 }) => {
   const firstName = user ? user?.name : "";
   const lastName = user ? user?.lastName : "";
+  const email = user ? user?.email : "";
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -82,6 +83,23 @@ export const Settings = ({
                 name="lastName"
               />
             </div>
+          </div>
+        </CardContent>
+        <CardHeader>
+          <CardTitle>Contact email address</CardTitle>
+          <CardDescription>
+            This is the email address you used to sign up to Cap with.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div>
+            <Input
+              type="email"
+              value={email as string}
+              id="contactEmail"
+              name="contactEmail"
+              disabled
+            />
           </div>
         </CardContent>
         <CardFooter className="border-t px-6 py-4">

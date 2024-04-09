@@ -47,7 +47,6 @@
     "react-tooltip": "^5.26.3",
     "resend": "1.1.0",
     "server-only": "^0.0.1",
-    "stripe": "^14.24.0",
     "tailwind-merge": "^2.1.0",
     "zod": "^3.22.4"
   },

@@ -43,10 +43,23 @@ export const AdminNavItems = () => {
   // const { spaceData, activeSpace } = useSharedContext();
 
   const manageNavigation = [
-    { name: "My Caps", href: `/dashboard/caps`, icon: Clapperboard },
+    {
+      name: "My Caps",
+      href: `/dashboard/caps`,
+      icon: Clapperboard,
+      subNav: [],
+    },
     // { name: "Notifications", href: `/dashboard/notifications`, icon: Bell },
     // { name: "History", href: `/dashboard/history`, icon: History },
-    { name: "Settings", href: `/dashboard/settings`, icon: Settings },
+    {
+      name: "Settings",
+      href: `/dashboard/settings`,
+      icon: Settings,
+      subNav: [
+        { name: "My account", href: `/dashboard/settings` },
+        { name: "Billing", href: `/dashboard/settings/billing` },
+      ],
+    },
   ];
 
   const navItemClass =
@@ -109,24 +122,47 @@ export const AdminNavItems = () => {
       >
         <div className="space-y-1">
           {manageNavigation.map((item) => (
-            <Link
-              passHref
-              prefetch={false}
-              key={item.name}
-              href={item.href}
-              className={classNames(
-                pathname.includes(item.href)
-                  ? "bg-gray-200"
-                  : "opacity-75 hover:opacity-100",
-                navItemClass
+            <div>
+              <Link
+                passHref
+                prefetch={false}
+                key={item.name}
+                href={item.href}
+                className={classNames(
+                  pathname.includes(item.href)
+                    ? "bg-gray-200 font-medium"
+                    : "opacity-75 hover:opacity-100",
+                  navItemClass
+                )}
+              >
+                <item.icon
+                  className="flex-shrink-0 w-6 h-6 stroke-[1.8px]"
+                  aria-hidden="true"
+                />
+                <span className="text-base ml-2.5">{item.name}</span>
+              </Link>
+              {pathname.includes(item.href) && item.subNav.length > 0 && (
+                <div className="mt-1 space-y-1 flex-grow w-full">
+                  {item.subNav.map((subItem) => (
+                    <Link
+                      passHref
+                      prefetch={false}
+                      key={subItem.name}
+                      href={subItem.href}
+                      className={classNames(
+                        pathname === subItem.href
+                          ? "font-medium"
+                          : "opacity-75 hover:opacity-100",
+                        navItemClass
+                      )}
+                    >
+                      <div className="w-6 h-6"></div>
+                      <span className="text-base ml-2.5">{subItem.name}</span>
+                    </Link>
+                  ))}
+                </div>
               )}
-            >
-              <item.icon
-                className="flex-shrink-0 w-6 h-6 stroke-[1.8px]"
-                aria-hidden="true"
-              />
-              <span className="text-base ml-2.5">{item.name}</span>
-            </Link>
+            </div>
           ))}
         </div>
         <div className="mt-auto">

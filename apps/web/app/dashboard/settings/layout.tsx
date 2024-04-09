@@ -34,7 +34,7 @@ export default async function DashboardLayout({
                   href={item.href}
                   className={`${
                     item.href === pathname
-                      ? "text-black border-black primary"
+                      ? "text-black border-black primary font-medium"
                       : "text-gray-900 opacity-50 hover:opacity-100 border-transparent"
                   } pb-2 border-b-2`}
                 >
