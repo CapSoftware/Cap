@@ -23,16 +23,19 @@ export const Onboarding = ({
 }) => {
   const router = useRouter();
   const [firstNameInput, setFirstNameInput] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+
+    setLoading(true);
 
     const formData = new FormData(e.currentTarget);
     const firstName = formData.get("firstName") as string;
     const lastName = formData.get("lastName") as string;
 
     try {
-      const response = await fetch("/api/settings/user/name", {
+      const response = await fetch("/api/settings/onboarding", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -46,9 +49,12 @@ export const Onboarding = ({
       } else {
         toast.error("Failed to update name");
       }
+
+      setLoading(false);
     } catch (error) {
       console.error("Error updating name:", error);
       toast.error("An error occurred while updating name");
+      setLoading(false);
     }
   };
 
@@ -80,6 +86,7 @@ export const Onboarding = ({
             className="mx-auto"
             type="submit"
             size="lg"
+            spinner={loading}
           >
             Complete
           </Button>

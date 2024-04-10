@@ -11,7 +11,13 @@ export default async function CapsPage() {
   const user = await getCurrentUser();
   const userId = user?.id as string;
 
-  if (user !== null && (user.name === null || user.name.length === 0)) {
+  if (
+    user !== null &&
+    (user.name === null ||
+      user.name.length === 0 ||
+      user.activeSpaceId === null ||
+      user.activeSpaceId.length === 0)
+  ) {
     return redirect("/onboarding");
   }
 

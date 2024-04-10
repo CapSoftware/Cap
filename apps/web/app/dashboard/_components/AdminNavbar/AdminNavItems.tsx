@@ -1,24 +1,26 @@
 "use client";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  // Plus,
+  Plus,
   Settings,
   LogOut,
-  // ChevronDown,
+  ChevronDown,
   Clapperboard,
   Bell,
   History,
+  Video,
 } from "lucide-react";
 import Link from "next/link";
 import { classNames } from "@cap/utils";
-// import {
-//   Command,
-//   CommandEmpty,
-//   CommandGroup,
-//   CommandInput,
-//   CommandItem,
-// } from "@cap/ui";
-// import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  DialogTrigger,
+} from "@cap/ui";
+import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
 import { useState } from "react";
 import {
   Dialog,
@@ -26,21 +28,17 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  // DialogTrigger,
 } from "@cap/ui";
 import { NewSpace } from "@/components/forms/NewSpace";
 import { signOut } from "next-auth/react";
-// import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-// import { handleActiveSpace } from "@/utils/database/supabase/helpers";
-// import { supabase } from "@/utils/database/supabase/client";
-
-//TODO: Auth
+import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import { Button } from "@cap/ui";
 
 export const AdminNavItems = () => {
   const pathname = usePathname();
   const router = useRouter();
-  // const [open, setOpen] = useState(false);
-  // const { spaceData, activeSpace } = useSharedContext();
+  const [open, setOpen] = useState(false);
+  const { spaceData, activeSpace } = useSharedContext();
 
   const manageNavigation = [
     {
@@ -67,7 +65,7 @@ export const AdminNavItems = () => {
 
   return (
     <Dialog>
-      {/* <div className="embossed mt-8 mb-4 w-full max-w-full">
+      <div className="embossed mt-8 mb-4 w-full max-w-full">
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <div
@@ -93,14 +91,15 @@ export const AdminNavItems = () => {
               <CommandInput placeholder="Search spaces..." />
               <CommandEmpty>No spaces found.</CommandEmpty>
               <CommandGroup>
-                {spaceData?.map((space) => (
+                {spaceData !== null &&
+                  spaceData?.map((space) => (
                     <CommandItem
                       key={space.name}
-                      onSelect={async () => {
-                        await handleActiveSpace(space.id);
-                        router.refresh();
-                        setOpen(false);
-                      }}
+                      // onSelect={async () => {
+                      //   await handleActiveSpace(space.id);
+                      //   router.refresh();
+                      //   setOpen(false);
+                      // }}
                     >
                       {space.name}
                     </CommandItem>
@@ -115,11 +114,15 @@ export const AdminNavItems = () => {
             </Command>
           </PopoverContent>
         </Popover>
-      </div> */}
+      </div>
       <nav
-        className="w-full mt-8 flex flex-col justify-between h-full"
+        className="w-full flex flex-col justify-between h-full"
         aria-label="Sidebar"
       >
+        <Button href="/dashboard/caps/new" className="w-full mb-4">
+          <Video className="flex-shrink-0 w-6 h-6" aria-hidden="true" />
+          <span className="ml-2.5 text-white">Record a Cap</span>
+        </Button>
         <div className="space-y-1">
           {manageNavigation.map((item) => (
             <div>

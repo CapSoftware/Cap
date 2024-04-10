@@ -4,7 +4,13 @@ import moment from "moment";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
-import { EyeIcon, LinkIcon, MessageSquareIcon, SmileIcon } from "lucide-react";
+import {
+  EyeIcon,
+  LinkIcon,
+  MessageSquareIcon,
+  SmileIcon,
+  Video,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 
@@ -64,12 +70,13 @@ export const Caps = ({ data }: { data: videoData }) => {
               Craft your narrative with a Cap—get projects done quicker.
             </p>
             <Button
-              href="/download"
+              href="/dashboard/record"
               size="default"
               className="mt-8 relative"
               variant="default"
             >
-              Download Cap
+              <Video className="flex-shrink-0 w-6 h-6" aria-hidden="true" />
+              <span className="ml-2.5 text-white">Record a Cap</span>
             </Button>
           </div>
         </div>
