@@ -205,15 +205,15 @@ fn main() {
 
             app.manage(Arc::new(Mutex::new(recording_state)));
 
-            let handle = app.tray_handle().clone();
+            let tray_handle = app.tray_handle().clone();
             app.listen_global("toggle-recording", move|event| {
                 let payload_error_msg = format!("Error while deserializing recording state from event payload: {:?}", event.payload());
                 let recording_state: Value = serde_json::from_str(event.payload().expect(payload_error_msg.as_str())).unwrap();
 
                 if recording_state.as_bool().expect(payload_error_msg.as_str()) {
-                    handle.set_icon(tauri::Icon::Raw(include_bytes!("../icons/tray-stop-icon.png").to_vec())).unwrap();
+                    tray_handle.set_icon(tauri::Icon::Raw(include_bytes!("../icons/tray-stop-icon.png").to_vec())).unwrap();
                 } else {
-                    handle.set_icon(tauri::Icon::Raw(include_bytes!("../icons/tray-default-icon.png").to_vec())).unwrap();
+                    tray_handle.set_icon(tauri::Icon::Raw(include_bytes!("../icons/tray-default-icon.png").to_vec())).unwrap();
                 }
             });
 

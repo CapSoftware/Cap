@@ -197,8 +197,7 @@ export const Recorder = () => {
       },
     }).catch((error) => {
       console.error("Error invoking start_screen_recording:", error);
-    });
-    emit("toggle-recording", true);
+    }).then(() => emit("toggle-recording", true));
   };
 
   const handleStartAllRecordings = async () => {
@@ -261,6 +260,7 @@ export const Recorder = () => {
       setIsRecording(false);
       setHasStartedRecording(false);
       setStoppingRecording(false);
+      setCanStopRecording(false);
       emit("toggle-recording", false);
     } catch (error) {
       console.error("Error stopping recording:", error);
