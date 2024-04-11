@@ -17,7 +17,7 @@ import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/api/shell";
-import { window } from "@tauri-apps/api";
+import * as Tauri from "@tauri-apps/api";
 
 declare global {
   interface Window {
@@ -146,7 +146,7 @@ export const Recorder = () => {
           handleStopAllRecordings();
         }
 
-        const currentWindow = window.getCurrent();
+        const currentWindow = Tauri.window.getCurrent();
         if (!currentWindow.isVisible) {
           currentWindow.show();
         }
@@ -180,6 +180,9 @@ export const Recorder = () => {
     if (window.fathom !== undefined) {
       window.fathom.trackEvent("start_recording");
     }
+    Tauri.window.getAll().forEach((window) => {
+      window.hide();
+    });
     await invoke("start_dual_recording", {
       options: {
         user_id: videoData.user_id,

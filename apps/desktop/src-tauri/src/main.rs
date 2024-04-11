@@ -163,7 +163,7 @@ fn main() {
     };
 
     let tray_menu = SystemTrayMenu::new()
-        .add_item(CustomMenuItem::new("toggle-window", "Show Cap"))
+        .add_item(CustomMenuItem::new("show-window", "Show Cap"))
         .add_native_item(tauri::SystemTrayMenuItem::Separator)
         .add_item(
             CustomMenuItem::new("quit".to_string(), "Quit")
@@ -237,8 +237,10 @@ fn main() {
         .system_tray(tray)
         .on_system_tray_event(move |app, event| match event {
             SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
-                "toggle-window" => {
-                    
+                "show-window" => {
+                    let window = app.get_window("main").expect("Error while trying to get the main window.");
+                    window.show().unwrap();
+                    window.set_focus().unwrap();
                 }
                 "quit" => {
                     app.exit(0);
