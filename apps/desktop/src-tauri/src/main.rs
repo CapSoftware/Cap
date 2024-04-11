@@ -1,11 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::any::Any;
+use std::borrow::Borrow;
+use std::os::macos::raw::stat;
 use std::sync::{Arc};
 use std::path::PathBuf;
+use ffmpeg_sidecar::event;
+use serde::Deserialize;
+use serde_json::Value;
 use tokio::sync::Mutex;
 use std::sync::atomic::{AtomicBool};
 use std::env;
-use tauri::{command, Manager, Window};
+use tauri::{command, CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, Window};
 use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 use window_shadows::set_shadow;
 use tauri_plugin_positioner::{WindowExt, Position};
@@ -156,6 +162,17 @@ fn main() {
         (0, 0)
     };
 
+    let tray_menu = SystemTrayMenu::new()
+        .add_item(CustomMenuItem::new("toggle-window", "Show Cap"))
+        .add_native_item(tauri::SystemTrayMenuItem::Separator)
+        .add_item(
+            CustomMenuItem::new("quit".to_string(), "Quit")
+                .native_image(tauri::NativeImage::StopProgress)
+        );
+
+    let tray = SystemTray::new().with_menu(tray_menu).with_menu_on_left_click(false);
+
+
     tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_positioner::init())
@@ -188,6 +205,18 @@ fn main() {
 
             app.manage(Arc::new(Mutex::new(recording_state)));
 
+            let handle = app.tray_handle().clone();
+            app.listen_global("toggle-recording", move|event| {
+                let payload_error_msg = format!("Error while deserializing recording state from event payload: {:?}", event.payload());
+                let recording_state: Value = serde_json::from_str(event.payload().expect(payload_error_msg.as_str())).unwrap();
+
+                if recording_state.as_bool().expect(payload_error_msg.as_str()) {
+                    handle.set_icon(tauri::Icon::Raw(include_bytes!("../icons/tray-stop-icon.png").to_vec())).unwrap();
+                } else {
+                    handle.set_icon(tauri::Icon::Raw(include_bytes!("../icons/tray-default-icon.png").to_vec())).unwrap();
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -205,6 +234,22 @@ fn main() {
             reset_camera_permissions,
         ])
         .plugin(tauri_plugin_context_menu::init())
+        .system_tray(tray)
+        .on_system_tray_event(move |app, event| match event {
+            SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
+                "toggle-window" => {
+                    
+                }
+                "quit" => {
+                    app.exit(0);
+                }
+                _ => {}
+            },
+            SystemTrayEvent::LeftClick { position: _, size: _, .. } => {
+                app.emit_all("tray-on-left-click", {}).unwrap();
+            },
+            _ => {}
+        })
         .run(tauri::generate_context!())
         .expect("Error while running tauri application");
 }

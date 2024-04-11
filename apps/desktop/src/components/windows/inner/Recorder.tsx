@@ -9,7 +9,7 @@ import { Window } from "@/components/icons/Window";
 import { ActionButton } from "@/components/recording/ActionButton";
 import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/tauri";
 import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
@@ -17,6 +17,7 @@ import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/api/shell";
+import { window } from "@tauri-apps/api";
 
 declare global {
   interface Window {
@@ -137,6 +138,31 @@ export const Recorder = () => {
     return data;
   };
 
+  useEffect(() => {
+    let unlistenFn: UnlistenFn | null = null;
+    const registerListener = async () => {
+      unlistenFn = await listen("tray-on-left-click", (_) => {
+        if (isRecording) {
+          handleStopAllRecordings();
+        }
+
+        const currentWindow = window.getCurrent();
+        if (!currentWindow.isVisible) {
+          currentWindow.show();
+        }
+        currentWindow.setFocus();
+      });
+    };
+
+    registerListener();
+
+    return () => {
+      if (unlistenFn) {
+        unlistenFn();
+      }
+    };
+  }, [isRecording, canStopRecording]);
+
   const startDualRecording = async (videoData: {
     id: string;
     user_id: string;
@@ -167,6 +193,7 @@ export const Recorder = () => {
     }).catch((error) => {
       console.error("Error invoking start_screen_recording:", error);
     });
+    emit("toggle-recording", true);
   };
 
   const handleStartAllRecordings = async () => {
@@ -229,6 +256,7 @@ export const Recorder = () => {
       setIsRecording(false);
       setHasStartedRecording(false);
       setStoppingRecording(false);
+      emit("toggle-recording", false);
     } catch (error) {
       console.error("Error stopping recording:", error);
     }
