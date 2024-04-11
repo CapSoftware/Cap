@@ -181,7 +181,9 @@ export const Recorder = () => {
       window.fathom.trackEvent("start_recording");
     }
     Tauri.window.getAll().forEach((window) => {
-      window.hide();
+      if (window.label !== "camera") {
+        window.hide();
+      }
     });
     await invoke("start_dual_recording", {
       options: {
