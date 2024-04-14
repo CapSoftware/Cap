@@ -1,17 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::any::Any;
-use std::borrow::Borrow;
-use std::os::macos::raw::stat;
 use std::sync::{Arc};
 use std::path::PathBuf;
-use ffmpeg_sidecar::event;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use std::sync::atomic::{AtomicBool};
-use std::env;
-use tauri::{command, CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, Window};
+use std::{vec};
+use tauri::{command, CustomMenuItem, Manager, Menu, MenuItem, Submenu, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTrayMenuItem, SystemTraySubmenu, Window};
 use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 use window_shadows::set_shadow;
 use tauri_plugin_positioner::{WindowExt, Position};
@@ -162,16 +158,19 @@ fn main() {
         (0, 0)
     };
 
-    let tray_menu = SystemTrayMenu::new()
-        .add_item(CustomMenuItem::new("show-window", "Show Cap"))
-        .add_native_item(tauri::SystemTrayMenuItem::Separator)
-        .add_item(
-            CustomMenuItem::new("quit".to_string(), "Quit")
-                .native_image(tauri::NativeImage::StopProgress)
-        );
+    fn create_tray_menu(submenus: Option<Vec<SystemTraySubmenu>>) -> Option<SystemTrayMenu> {
+        let mut tray_menu = SystemTrayMenu::new().add_item(CustomMenuItem::new("show-window", "Show Cap"));
 
-    let tray = SystemTray::new().with_menu(tray_menu).with_menu_on_left_click(false);
+        if let Some(items) = submenus {
+            for submenu in items {
+                tray_menu = tray_menu.add_submenu(submenu);
+            }
+        }
 
+        Option::Some(tray_menu.add_native_item(tauri::SystemTrayMenuItem::Separator).add_item(CustomMenuItem::new("quit".to_string(), "Quit")))
+    }
+
+    let tray = SystemTray::new().with_menu(create_tray_menu(None).expect("Failed to create tray menu")).with_menu_on_left_click(false).with_title("Cap");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
@@ -207,14 +206,44 @@ fn main() {
 
             let tray_handle = app.tray_handle().clone();
             app.listen_global("toggle-recording", move|event| {
-                let payload_error_msg = format!("Error while deserializing recording state from event payload: {:?}", event.payload());
-                let recording_state: Value = serde_json::from_str(event.payload().expect(payload_error_msg.as_str())).unwrap();
+                let is_recording: bool = serde_json::from_str(event.payload().expect("Error while openning event payload")).expect("Error while deserializing recording state from event payload");
 
-                if recording_state.as_bool().expect(payload_error_msg.as_str()) {
+                if is_recording {
                     tray_handle.set_icon(tauri::Icon::Raw(include_bytes!("../icons/tray-stop-icon.png").to_vec())).unwrap();
                 } else {
                     tray_handle.set_icon(tauri::Icon::Raw(include_bytes!("../icons/tray-default-icon.png").to_vec())).unwrap();
                 }
+            });
+            
+            let tray_handle = app.tray_handle().clone();
+            app.listen_global("input-devices-set", move|event| {
+                #[derive(Debug, Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Device {
+                    device_id: String,
+                    group_id: String,
+                    kind: String,
+                    label: String
+                }
+
+                let devices: Vec<Device> = serde_json::from_str(event.payload().expect("Error wile openning event payload")).expect("Error while deserializing media devices from event payload");
+
+                let mut tray_vid_items = SystemTrayMenu::new();
+                let mut tray_mic_items = SystemTrayMenu::new();
+
+                for device in devices {
+                    if device.kind == "videoinput" {
+                        tray_vid_items = tray_vid_items.add_item(CustomMenuItem::new(format!("in_vid_{}", device.device_id), device.label));
+                    } else {
+                        tray_mic_items = tray_mic_items.add_item(CustomMenuItem::new(format!("in_mic_{}", device.device_id), device.label));
+                    }
+                }
+
+                let new_menu = create_tray_menu(Some(
+                    vec![SystemTraySubmenu::new("Camera", tray_vid_items), SystemTraySubmenu::new("Microphone", tray_mic_items)])
+                ).unwrap();
+
+                tray_handle.set_menu(new_menu).expect("Error while updating the tray menu items");
             });
 
             Ok(())
@@ -245,10 +274,12 @@ fn main() {
                 "quit" => {
                     app.exit(0);
                 }
-                _ => {}
+                other => {
+                    println!("Menu Item Clicked: {other}");
+                }
             },
             SystemTrayEvent::LeftClick { position: _, size: _, .. } => {
-                app.emit_all("tray-on-left-click", {}).unwrap();
+                app.emit_all("tray-on-left-click", Some(())).unwrap();
             },
             _ => {}
         })

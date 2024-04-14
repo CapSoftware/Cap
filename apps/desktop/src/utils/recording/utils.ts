@@ -1,5 +1,6 @@
 "use client";
 
+import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/tauri";
 
 export const enumerateAndStoreDevices = async () => {
@@ -21,6 +22,8 @@ export const enumerateAndStoreDevices = async () => {
 
     window.localStorage.setItem("audioDevices", JSON.stringify(audioDevices));
     window.localStorage.setItem("videoDevices", JSON.stringify(videoDevices));
+
+    emit("input-devices-set", [...audioDevices, ...videoDevices]);
   }
 };
 
