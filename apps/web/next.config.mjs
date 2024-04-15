@@ -56,7 +56,13 @@ const nextConfig = {
 const millionConfig = {
   auto: {
     rsc: true,
-    skip: ["Parallax", "Toolbar", "react-scroll-parallax"],
+    skip: [
+      "Parallax",
+      "Toolbar",
+      "react-scroll-parallax",
+      "Record",
+      "ActionButton",
+    ],
   },
 };
 

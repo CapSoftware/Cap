@@ -6,7 +6,6 @@ import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
 import { Screen } from "@/components/icons/Screen";
 import { Window } from "@/components/icons/Window";
-import { ActionButton } from "@/components/recording/ActionButton";
 import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
 import { emit } from "@tauri-apps/api/event";
@@ -17,6 +16,7 @@ import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/api/shell";
+import { ActionButton } from "@/components/windows/inner/ActionButton";
 
 declare global {
   interface Window {
