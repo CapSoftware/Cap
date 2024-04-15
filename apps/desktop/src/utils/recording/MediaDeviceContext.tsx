@@ -8,7 +8,7 @@ import {
   useCallback,
   useRef,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import {
   getLocalDevices,
   enumerateAndStoreDevices,
@@ -106,41 +106,48 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     }
   }, []);
 
-  useEffect(() => {
-    let unlistenFn: any;
+  const changeDevice = (type: "video" | "audio", device: Devices) => {
+    console.log(`Change-device recieved, previous selected: audio: ${selectedAudioDevice?.index}  vid: ${selectedVideoDevice?.index}`);
 
-    const setupListener = async () => {
+    if (type && device) {
+      if (window.fathom !== undefined) {
+        window.fathom.trackEvent(`${type}_device_change`);
+      }
+      if (type === "video") {
+        import("@tauri-apps/api/window").then(({ WebviewWindow }) => {
+          if (WebviewWindow.getByLabel("camera")) {
+            WebviewWindow.getByLabel("camera").close();
+          } else {
+            initializeCameraWindow();
+          }
+        });
+        if (selectedVideoDevice?.index !== device.index) {
+          setSelectedVideoDevice(device);
+        }
+      }
+
+      if (type === "audio") {
+        if (selectedAudioDevice?.index !== device.index) {
+          setSelectedAudioDevice(device);
+        }
+      }
+    }
+  }
+
+  useEffect(() => {
+    let unlistenChangeDevice: any;
+    let unlistenTraySetDevice: any;
+
+    const setupChangeDeviceListener = async () => {
       try {
-        unlistenFn = await listen(
+        unlistenChangeDevice = await listen(
           "change-device",
           ({
             payload,
           }: {
             payload: { type: "video" | "audio"; device: Devices };
           }) => {
-            if (payload && payload.device) {
-              if (window.fathom !== undefined) {
-                window.fathom.trackEvent(`${payload.type}_device_change`);
-              }
-              if (payload.type === "video") {
-                import("@tauri-apps/api/window").then(({ WebviewWindow }) => {
-                  if (WebviewWindow.getByLabel("camera")) {
-                    WebviewWindow.getByLabel("camera").close();
-                  } else {
-                    initializeCameraWindow();
-                  }
-                });
-                if (selectedVideoDevice?.index !== payload.device.index) {
-                  setSelectedVideoDevice(payload.device);
-                }
-              }
-
-              if (payload.type === "audio") {
-                if (selectedAudioDevice?.index !== payload.device.index) {
-                  setSelectedAudioDevice(payload.device);
-                }
-              }
-            }
+            changeDevice(payload.type, payload.device); 
           }
         );
       } catch (error) {
@@ -148,11 +155,49 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
       }
     };
 
-    setupListener();
+    const createNonDevice = (kind: "videoinput" | "audioinput") => {
+      return { 
+        index: -1,
+        label: "None",
+        kind: kind,
+        deviceId: "none",
+      } as Devices;
+    }
+
+    const setupTraySetDeviceListener = async () => {
+      unlistenTraySetDevice = await listen<{type: string, id: string}>("tray_set_device", (event) => {
+        const id = event.payload.id;
+        const option = event.payload.type as "videoinput" | "audioinput";
+        const newDevice = id === "none" ? createNonDevice(option) :
+          devices.find((device) => option === device.kind && event.payload.id === device.deviceId);
+
+        console.log(`Trying to set ${newDevice?.label} from ${newDevice?.kind === "videoinput" ? selectedVideoDevice?.label : selectedAudioDevice?.label}`)
+
+        changeDevice(event.payload.type === "videoinput" ? "video" : "audio", newDevice);
+      });
+    };
+
+    setupChangeDeviceListener();
+    setupTraySetDeviceListener();
+
+    if (devices.length !== 0) {
+      emit("media-devices-set", {
+        mediaDevices: [
+          createNonDevice("videoinput"),
+          createNonDevice("audioinput"),
+          ...(devices as Omit<Devices, 'index'>[])
+        ],
+        selectedVideo: selectedVideoDevice?.label === "None" ? createNonDevice("videoinput") : selectedVideoDevice,
+        selectedAudio: selectedAudioDevice?.label === "None" ? createNonDevice("audioinput") :  selectedAudioDevice,
+      });
+    }
 
     return () => {
-      if (unlistenFn) {
-        unlistenFn();
+      if (unlistenChangeDevice) {
+        unlistenChangeDevice();
+      }
+      if (unlistenTraySetDevice) {
+        unlistenTraySetDevice();
       }
     };
   }, [selectedVideoDevice, selectedAudioDevice]);

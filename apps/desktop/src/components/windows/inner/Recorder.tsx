@@ -75,8 +75,8 @@ export const Recorder = () => {
           await emit("change-device", {
             type: option,
             device: {
-              label: "None",
               index: -1,
+              label: "None",
               kind: option === "video" ? "videoinput" : "audioinput",
             },
           });
@@ -140,7 +140,8 @@ export const Recorder = () => {
 
   useEffect(() => {
     let unlistenFn: UnlistenFn | null = null;
-    const registerListener = async () => {
+    
+    const setupListener = async () => {
       unlistenFn = await listen("tray-on-left-click", (_) => {
         if (isRecording) {
           handleStopAllRecordings();
@@ -154,7 +155,7 @@ export const Recorder = () => {
       });
     };
 
-    registerListener();
+    setupListener();
 
     return () => {
       if (unlistenFn) {

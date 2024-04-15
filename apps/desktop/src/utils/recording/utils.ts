@@ -22,8 +22,6 @@ export const enumerateAndStoreDevices = async () => {
 
     window.localStorage.setItem("audioDevices", JSON.stringify(audioDevices));
     window.localStorage.setItem("videoDevices", JSON.stringify(videoDevices));
-
-    emit("input-devices-set", [...audioDevices, ...videoDevices]);
   }
 };
 

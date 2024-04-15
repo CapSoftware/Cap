@@ -1,13 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::LinkedList;
 use std::sync::{Arc};
 use std::path::PathBuf;
-use serde::Deserialize;
-use serde_json::Value;
+use cpal::Devices;
+use regex::Regex;
 use tokio::sync::Mutex;
 use std::sync::atomic::{AtomicBool};
 use std::{vec};
-use tauri::{command, CustomMenuItem, Manager, Menu, MenuItem, Submenu, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTrayMenuItem, SystemTraySubmenu, Window};
+use tauri::{command, CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu, Window};
 use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 use window_shadows::set_shadow;
 use tauri_plugin_positioner::{WindowExt, Position};
@@ -158,19 +159,42 @@ fn main() {
         (0, 0)
     };
 
-    fn create_tray_menu(submenus: Option<Vec<SystemTraySubmenu>>) -> Option<SystemTrayMenu> {
-        let mut tray_menu = SystemTrayMenu::new().add_item(CustomMenuItem::new("show-window", "Show Cap"));
+    #[derive(serde::Deserialize, PartialEq)]
+    enum DeviceKind {
+        #[serde(alias="videoinput")]
+        Video,
+        #[serde(alias="audioinput")]
+        Audio
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MediaDevice {
+        // index: i8,
+        #[serde(rename(deserialize="deviceId"))]
+        id: String,
+        kind: DeviceKind,
+        label: String
+    }
+
+    // let mut media_devices: LinkedList<MediaDevice> = LinkedList::new();
+
+    fn create_tray_menu(submenus: Option<Vec<SystemTraySubmenu>>) -> SystemTrayMenu {
+        let mut tray_menu = SystemTrayMenu::new();
 
         if let Some(items) = submenus {
             for submenu in items {
                 tray_menu = tray_menu.add_submenu(submenu);
             }
+            tray_menu = tray_menu.add_native_item(tauri::SystemTrayMenuItem::Separator);
         }
 
-        Option::Some(tray_menu.add_native_item(tauri::SystemTrayMenuItem::Separator).add_item(CustomMenuItem::new("quit".to_string(), "Quit")))
+        tray_menu
+            .add_item(CustomMenuItem::new("show-window".to_string(), "Show Cap"))
+            .add_item(CustomMenuItem::new("quit".to_string(), "Quit").accelerator("CmdOrControl+Q"))
     }
 
-    let tray = SystemTray::new().with_menu(create_tray_menu(None).expect("Failed to create tray menu")).with_menu_on_left_click(false).with_title("Cap");
+    let tray = SystemTray::new().with_menu(create_tray_menu(None)).with_menu_on_left_click(false).with_title("Cap");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
@@ -204,44 +228,53 @@ fn main() {
 
             app.manage(Arc::new(Mutex::new(recording_state)));
 
-            let tray_handle = app.tray_handle().clone();
+            let tray_handle = app.tray_handle();
             app.listen_global("toggle-recording", move|event| {
                 let is_recording: bool = serde_json::from_str(event.payload().expect("Error while openning event payload")).expect("Error while deserializing recording state from event payload");
 
-                if is_recording {
-                    tray_handle.set_icon(tauri::Icon::Raw(include_bytes!("../icons/tray-stop-icon.png").to_vec())).unwrap();
+                let icon_bytes = if is_recording {
+                    include_bytes!("../icons/tray-stop-icon.png").to_vec()
                 } else {
-                    tray_handle.set_icon(tauri::Icon::Raw(include_bytes!("../icons/tray-default-icon.png").to_vec())).unwrap();
-                }
+                    include_bytes!("../icons/tray-default-icon.png").to_vec()
+                };
+
+                tray_handle.set_icon(tauri::Icon::Raw(icon_bytes)).expect("Error while setting tray icon");
             });
             
-            let tray_handle = app.tray_handle().clone();
-            app.listen_global("input-devices-set", move|event| {
-                #[derive(Debug, Deserialize)]
+            let tray_handle = app.tray_handle();
+            app.listen_global("media-devices-set", move|event| {
+                #[derive(serde::Deserialize)]
                 #[serde(rename_all = "camelCase")]
-                struct Device {
-                    device_id: String,
-                    group_id: String,
-                    kind: String,
-                    label: String
+                struct Payload {
+                    media_devices: Vec<MediaDevice>,
+                    selected_video: MediaDevice,
+                    selected_audio: MediaDevice
                 }
+                let payload: Payload = serde_json::from_str(event.payload().expect("Error wile openning event payload")).expect("Error while deserializing media devices from event payload");
 
-                let devices: Vec<Device> = serde_json::from_str(event.payload().expect("Error wile openning event payload")).expect("Error while deserializing media devices from event payload");
+                fn create_submenu_items(devices: &Vec<MediaDevice>, selected_device: &MediaDevice, kind: DeviceKind) -> SystemTrayMenu {
+                    devices
+                        .iter()
+                        .filter(|device| device.kind == kind)
+                        .fold(SystemTrayMenu::new(), |mut tray_items, device| {
+                            let item_id_prefix = if kind == DeviceKind::Video { "video" } else { "audio" };
+                            let mut menu_item = CustomMenuItem::new(format!("in_{}_{}", item_id_prefix, device.id), &device.label);
+                            
+                            if selected_device.label == device.label {
+                                menu_item = menu_item.selected();
+                            }
 
-                let mut tray_vid_items = SystemTrayMenu::new();
-                let mut tray_mic_items = SystemTrayMenu::new();
-
-                for device in devices {
-                    if device.kind == "videoinput" {
-                        tray_vid_items = tray_vid_items.add_item(CustomMenuItem::new(format!("in_vid_{}", device.device_id), device.label));
-                    } else {
-                        tray_mic_items = tray_mic_items.add_item(CustomMenuItem::new(format!("in_mic_{}", device.device_id), device.label));
-                    }
+                            tray_items = tray_items.add_item(menu_item);
+                            tray_items
+                        })
                 }
 
                 let new_menu = create_tray_menu(Some(
-                    vec![SystemTraySubmenu::new("Camera", tray_vid_items), SystemTraySubmenu::new("Microphone", tray_mic_items)])
-                ).unwrap();
+                    vec![
+                        SystemTraySubmenu::new("Camera", create_submenu_items(&payload.media_devices, &payload.selected_video, DeviceKind::Video)),
+                        SystemTraySubmenu::new("Microphone", create_submenu_items(&payload.media_devices, &payload.selected_audio, DeviceKind::Audio))
+                    ]
+                ));
 
                 tray_handle.set_menu(new_menu).expect("Error while updating the tray menu items");
             });
@@ -268,18 +301,35 @@ fn main() {
             SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
                 "show-window" => {
                     let window = app.get_window("main").expect("Error while trying to get the main window.");
-                    window.show().unwrap();
-                    window.set_focus().unwrap();
+                    window.show().expect("Error while trying to show main window");
+                    window.set_focus().expect("Error while trying to set focus on main window");
                 }
                 "quit" => {
                     app.exit(0);
                 }
-                other => {
-                    println!("Menu Item Clicked: {other}");
+                item_id => {
+                    let pattern = Regex::new(r"^in_(video|audio)_").unwrap();
+
+                    if pattern.is_match(item_id) {
+                        let device_id = pattern.replace_all(item_id, "").into_owned();
+                        let kind = if item_id.contains("video") {
+                            "videoinput"
+                        } else {
+                            "audioinput"
+                        };
+                        #[derive(Clone, serde::Serialize)]
+                        struct Payload {
+                            #[serde(rename(serialize="type"))]
+                            device_type: String,
+                            id: String
+                        }
+
+                        app.emit_all("tray_set_device", Payload { device_type: kind.to_string(), id: device_id }).expect("Failed to emit tray set media device event to windows");
+                    }
                 }
             },
             SystemTrayEvent::LeftClick { position: _, size: _, .. } => {
-                app.emit_all("tray-on-left-click", Some(())).unwrap();
+                app.emit_all("tray-on-left-click", Some(())).expect("Failed to emit tray left click event to windows");
             },
             _ => {}
         })
