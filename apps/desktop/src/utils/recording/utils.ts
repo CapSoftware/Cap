@@ -13,10 +13,9 @@ export const enumerateAndStoreDevices = async () => {
     const videoDevices = video.filter((device) => device.kind === "videoinput");
     const audioDevices = audio.map((device) => {
       return {
-        deviceId: device,
-        groupId: "",
-        kind: "audioinput",
+        id: device,
         label: device,
+        kind: "audioinput",
       };
     });
 

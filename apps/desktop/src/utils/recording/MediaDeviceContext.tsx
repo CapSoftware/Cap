@@ -15,23 +15,24 @@ import {
   initializeCameraWindow,
 } from "./utils";
 
-export interface Devices {
+export type DeviceKind = "videoinput" | "audioinput";
+export interface Device {
   index: number;
+  id: string;
   label: string;
-  kind: "videoinput" | "audioinput";
-  deviceId: string;
+  kind: DeviceKind;
 }
 
 export interface MediaDeviceContextData {
-  selectedVideoDevice: Devices | null;
-  setSelectedVideoDevice: React.Dispatch<React.SetStateAction<Devices | null>>;
-  selectedAudioDevice: Devices | null;
-  setSelectedAudioDevice: React.Dispatch<React.SetStateAction<Devices | null>>;
+  selectedVideoDevice: Device | null;
+  setSelectedVideoDevice: React.Dispatch<React.SetStateAction<Device | null>>;
+  selectedAudioDevice: Device | null;
+  setSelectedAudioDevice: React.Dispatch<React.SetStateAction<Device | null>>;
   selectedDisplayType: "screen" | "window" | "area";
   setSelectedDisplayType: React.Dispatch<
     React.SetStateAction<"screen" | "window" | "area">
   >;
-  devices: Devices[];
+  devices: Device[];
   getDevices: () => Promise<void>;
   isRecording: boolean;
   setIsRecording: React.Dispatch<React.SetStateAction<boolean>>;
@@ -47,13 +48,13 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   children,
 }) => {
   const [selectedVideoDevice, setSelectedVideoDevice] =
-    useState<Devices | null>(null);
+    useState<Device | null>(null);
   const [selectedAudioDevice, setSelectedAudioDevice] =
-    useState<Devices | null>(null);
+    useState<Device | null>(null);
   const [selectedDisplayType, setSelectedDisplayType] = useState<
     "screen" | "window" | "area"
   >("screen");
-  const [devices, setDevices] = useState<Devices[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [startingRecording, setStartingRecording] = useState(false);
   const getDevicesCalled = useRef(false);
@@ -69,14 +70,14 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
           index: index,
           label: device.label,
           kind: "videoinput",
-          deviceId: device.deviceId,
-        })) as Devices[]),
+          id: device.deviceId,
+        })) as Device[]),
         ...(audioDevices.map((device: MediaDeviceInfo, index: number) => ({
           index: index,
           label: device.label,
           kind: "audioinput",
-          deviceId: device.deviceId,
-        })) as Devices[]),
+          id: device.deviceId ? device.deviceId : device.label,
+        })) as Device[]),
       ];
 
       setDevices(formattedDevices);
@@ -106,98 +107,77 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     }
   }, []);
 
-  const changeDevice = (type: "video" | "audio", device: Devices) => {
-    console.log(`Change-device recieved, previous selected: audio: ${selectedAudioDevice?.index}  vid: ${selectedVideoDevice?.index}`);
-
-    if (type && device) {
-      if (window.fathom !== undefined) {
-        window.fathom.trackEvent(`${type}_device_change`);
-      }
-      if (type === "video") {
-        import("@tauri-apps/api/window").then(({ WebviewWindow }) => {
-          if (WebviewWindow.getByLabel("camera")) {
-            WebviewWindow.getByLabel("camera").close();
-          } else {
-            initializeCameraWindow();
-          }
-        });
-        if (selectedVideoDevice?.index !== device.index) {
-          setSelectedVideoDevice(device);
+  const updateSelectedDevice = (type: DeviceKind, device: Device | null) => {
+    if (!type) {
+      return;
+    }
+    if (window.fathom !== undefined) {
+      window.fathom.trackEvent(`${type === "videoinput" ? "video" : "audio"}_device_change`);
+    }
+    if (type === "videoinput") {
+      import("@tauri-apps/api/window").then(({ WebviewWindow }) => {
+        if (WebviewWindow.getByLabel("camera")) {
+          WebviewWindow.getByLabel("camera").close();
+        } else if (type === "videoinput" && device) {
+          initializeCameraWindow();
         }
+      });
+      
+      if ((!device && selectedVideoDevice) || (selectedVideoDevice?.index !== device?.index)) {
+        setSelectedVideoDevice(device);
       }
+    }
 
-      if (type === "audio") {
-        if (selectedAudioDevice?.index !== device.index) {
-          setSelectedAudioDevice(device);
-        }
+    if (type === "audioinput") {
+      if ((!device && selectedAudioDevice) || (selectedAudioDevice?.index !== device?.index)) {
+        setSelectedAudioDevice(device);
       }
     }
   }
 
   useEffect(() => {
-    let unlistenChangeDevice: any;
-    let unlistenTraySetDevice: any;
+    let unlistenFnChangeDevice: any;
+    let unlistenFnTraySetDevice: any;
 
-    const setupChangeDeviceListener = async () => {
+    const setupListeners = async () => {
       try {
-        unlistenChangeDevice = await listen(
-          "change-device",
-          ({
-            payload,
-          }: {
-            payload: { type: "video" | "audio"; device: Devices };
-          }) => {
-            changeDevice(payload.type, payload.device); 
-          }
-        );
+        unlistenFnChangeDevice = await listen<{ type: string, device: Device | null }>("change-device", (event) => {
+          updateSelectedDevice(event.payload.type as DeviceKind, event.payload.device);
+        });
       } catch (error) {
-        console.error("Error setting up listener:", error);
+        console.error("Error setting up change-device listener:", error);
+      }
+
+      try {
+        unlistenFnTraySetDevice = await listen<{ type: string, id: string | null }>("tray-set-device-id", (event) => {
+          const id = event.payload.id;
+          const kind = event.payload.type as DeviceKind;
+          const newDevice = id ? devices.find((device) => kind === device.kind && id === device.id) : null;
+          updateSelectedDevice(kind, newDevice);
+        });
+      } catch (error) {
+        console.error("Error setting up tray-set-device-id listener:", error);
       }
     };
 
-    const createNonDevice = (kind: "videoinput" | "audioinput") => {
-      return { 
-        index: -1,
-        label: "None",
-        kind: kind,
-        deviceId: "none",
-      } as Devices;
-    }
-
-    const setupTraySetDeviceListener = async () => {
-      unlistenTraySetDevice = await listen<{type: string, id: string}>("tray_set_device", (event) => {
-        const id = event.payload.id;
-        const option = event.payload.type as "videoinput" | "audioinput";
-        const newDevice = id === "none" ? createNonDevice(option) :
-          devices.find((device) => option === device.kind && event.payload.id === device.deviceId);
-
-        console.log(`Trying to set ${newDevice?.label} from ${newDevice?.kind === "videoinput" ? selectedVideoDevice?.label : selectedAudioDevice?.label}`)
-
-        changeDevice(event.payload.type === "videoinput" ? "video" : "audio", newDevice);
-      });
-    };
-
-    setupChangeDeviceListener();
-    setupTraySetDeviceListener();
+    setupListeners();
 
     if (devices.length !== 0) {
       emit("media-devices-set", {
         mediaDevices: [
-          createNonDevice("videoinput"),
-          createNonDevice("audioinput"),
-          ...(devices as Omit<Devices, 'index'>[])
+          ...(devices as Omit<Device, 'index'>[])
         ],
-        selectedVideo: selectedVideoDevice?.label === "None" ? createNonDevice("videoinput") : selectedVideoDevice,
-        selectedAudio: selectedAudioDevice?.label === "None" ? createNonDevice("audioinput") :  selectedAudioDevice,
+        selectedVideo: selectedVideoDevice,
+        selectedAudio: selectedAudioDevice,
       });
     }
 
     return () => {
-      if (unlistenChangeDevice) {
-        unlistenChangeDevice();
+      if (unlistenFnChangeDevice) {
+        unlistenFnChangeDevice();
       }
-      if (unlistenTraySetDevice) {
-        unlistenTraySetDevice();
+      if (unlistenFnTraySetDevice) {
+        unlistenFnTraySetDevice();
       }
     };
   }, [selectedVideoDevice, selectedAudioDevice]);

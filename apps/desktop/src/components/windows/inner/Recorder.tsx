@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
+import { Device, useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
 import { Screen } from "@/components/icons/Screen";
@@ -43,52 +43,49 @@ export const Recorder = () => {
   const [canStopRecording, setCanStopRecording] = useState(false);
   const [hasStartedRecording, setHasStartedRecording] = useState(false);
 
-  const handleContextClick = async (option: string) => {
+  const handleContextClick = async (option: "video" | "audio") => {
     const { showMenu } = await import("tauri-plugin-context-menu");
+    const deviceKind = option === "video" ? "videoinput" : "audioinput";
+    const isSelected = (device: Device | null) => {
+      if (device === null) {
+        return deviceKind === "videoinput"
+          ? selectedVideoDevice === null
+          : selectedAudioDevice === null;
+      }
+    
+      return deviceKind === "videoinput"
+        ? device.index === selectedVideoDevice?.index
+        : device.index === selectedAudioDevice?.index;
+    }
+    const select = async (device: Device | null) => {
+      // if (isSelected(device)) {
+      //   return
+      // }
+      emit("change-device", { type: deviceKind, device: device }).catch((error) => {
+        console.log("Failed to emit change-device event:", error);
+      });
+    }
 
-    const filteredDevices = devices
-      .filter((device) =>
-        option === "video"
-          ? device.kind === "videoinput"
-          : device.kind === "audioinput"
-      )
-      .map((device) => ({
-        label: device.label,
-        disabled:
-          option === "video"
-            ? device.index === selectedVideoDevice?.index
-            : device.index === selectedAudioDevice?.index,
-        event: async () => {
-          try {
-            await emit("change-device", { type: option, device });
-          } catch (error) {
-            console.error("Failed to emit change-device event:", error);
-          }
-        },
-      }));
+    const devicesOfKind = devices.filter((device) => device.kind === deviceKind);
 
-    filteredDevices.push({
-      label: "None",
-      disabled: false,
-      event: async () => {
-        try {
-          await emit("change-device", {
-            type: option,
-            device: {
-              index: -1,
-              label: "None",
-              kind: option === "video" ? "videoinput" : "audioinput",
-            },
-          });
-        } catch (error) {
-          console.error("Failed to emit change-device event:", error);
-        }
+    const menuItems = [
+      {
+        label: "None",
+        checked: isSelected(null),
+        event: async() => select(null)
       },
-    });
-
+      ...devicesOfKind.map((device) => (
+        {
+          label: device.label,
+          checked: isSelected(device),
+          event: async() => select(device)
+        }
+      ))
+    ]
+  
     await showMenu({
-      items: [...filteredDevices],
-      ...(filteredDevices.length === 0 && {
+      items: [...menuItems],
+      ...(devicesOfKind.length === 0 && {
         items: [
           {
             label: "Nothing found.",
@@ -377,7 +374,7 @@ export const Recorder = () => {
                     width="full"
                     handler={() => handleContextClick("video")}
                     icon={<Video className="w-5 h-5" />}
-                    label={selectedVideoDevice?.label || "Video"}
+                    label={devices.length === 0 ? "Video" : selectedVideoDevice?.label || "None"}
                     active={selectedVideoDevice !== null}
                     recordingOption={true}
                     optionName="Video"
@@ -386,7 +383,7 @@ export const Recorder = () => {
                     width="full"
                     handler={() => handleContextClick("audio")}
                     icon={<Microphone className="w-5 h-5" />}
-                    label={selectedAudioDevice?.label || "Mic"}
+                    label={devices.length === 0 ? "Mic" : selectedAudioDevice?.label || "None"}
                     active={selectedAudioDevice !== null}
                     recordingOption={true}
                     optionName="Audio"

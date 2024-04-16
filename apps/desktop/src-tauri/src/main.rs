@@ -170,14 +170,10 @@ fn main() {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct MediaDevice {
-        // index: i8,
-        #[serde(rename(deserialize="deviceId"))]
         id: String,
         kind: DeviceKind,
         label: String
     }
-
-    // let mut media_devices: LinkedList<MediaDevice> = LinkedList::new();
 
     fn create_tray_menu(submenus: Option<Vec<SystemTraySubmenu>>) -> SystemTrayMenu {
         let mut tray_menu = SystemTrayMenu::new();
@@ -247,25 +243,35 @@ fn main() {
                 #[serde(rename_all = "camelCase")]
                 struct Payload {
                     media_devices: Vec<MediaDevice>,
-                    selected_video: MediaDevice,
-                    selected_audio: MediaDevice
+                    selected_video: Option<MediaDevice>,
+                    selected_audio: Option<MediaDevice>
                 }
                 let payload: Payload = serde_json::from_str(event.payload().expect("Error wile openning event payload")).expect("Error while deserializing media devices from event payload");
 
-                fn create_submenu_items(devices: &Vec<MediaDevice>, selected_device: &MediaDevice, kind: DeviceKind) -> SystemTrayMenu {
+                fn create_submenu_items(devices: &Vec<MediaDevice>, selected_device: &Option<MediaDevice>, kind: DeviceKind) -> SystemTrayMenu {
+                    let id_prefix = if kind == DeviceKind::Video {
+                        "video"
+                    } else {
+                        "audio" 
+                    };
+                    let mut none_item = CustomMenuItem::new(format!("in_{}_none", id_prefix), "None");
+                    if selected_device.is_none() {
+                        none_item = none_item.selected();
+                    }
+                    let initial = SystemTrayMenu::new().add_item(none_item);
                     devices
                         .iter()
                         .filter(|device| device.kind == kind)
-                        .fold(SystemTrayMenu::new(), |mut tray_items, device| {
-                            let item_id_prefix = if kind == DeviceKind::Video { "video" } else { "audio" };
-                            let mut menu_item = CustomMenuItem::new(format!("in_{}_{}", item_id_prefix, device.id), &device.label);
-                            
-                            if selected_device.label == device.label {
-                                menu_item = menu_item.selected();
+                        .fold(initial, |tray_items, device| {
+                            let mut menu_item = CustomMenuItem::new(format!("in_{}_{}", id_prefix, device.id), &device.label);
+                        
+                            if let Some(selected) = selected_device {
+                                if selected.label == device.label {
+                                    menu_item = menu_item.selected();
+                                }
                             }
-
-                            tray_items = tray_items.add_item(menu_item);
-                            tray_items
+                            
+                            tray_items.add_item(menu_item)
                         })
                 }
 
@@ -308,23 +314,26 @@ fn main() {
                     app.exit(0);
                 }
                 item_id => {
-                    let pattern = Regex::new(r"^in_(video|audio)_").unwrap();
+                    if !item_id.starts_with("in") {
+                        return;
+                    }
+                    let pattern = Regex::new(r"^in_(video|audio)_").expect("Failed to create regex for checking tray item events");
 
                     if pattern.is_match(item_id) {
-                        let device_id = pattern.replace_all(item_id, "").into_owned();
-                        let kind = if item_id.contains("video") {
-                            "videoinput"
-                        } else {
-                            "audioinput"
-                        };
                         #[derive(Clone, serde::Serialize)]
-                        struct Payload {
+                        struct SetDevicePayload {
                             #[serde(rename(serialize="type"))]
                             device_type: String,
-                            id: String
+                            id: Option<String>
                         }
 
-                        app.emit_all("tray_set_device", Payload { device_type: kind.to_string(), id: device_id }).expect("Failed to emit tray set media device event to windows");
+                        let device_id = pattern.replace_all(item_id, "").into_owned();
+                        let kind = if item_id.contains("video") { "videoinput" } else { "audioinput" };
+
+                        app.emit_all("tray-set-device-id", SetDevicePayload {
+                            device_type: kind.to_string(), 
+                            id: if device_id == "none" { None } else { Some(device_id) }
+                        }).expect("Failed to emit tray set media device event to windows");
                     }
                 }
             },
