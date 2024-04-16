@@ -38,18 +38,6 @@ const nextConfig = {
         port: "",
         pathname: "**",
       },
-      {
-        protocol: "https",
-        hostname: "*.cloudfront.net",
-        port: "",
-        pathname: "**",
-      },
-      {
-        protocol: "https",
-        hostname: "*v.cap.so",
-        port: "",
-        pathname: "**",
-      },
     ],
   },
   async rewrites() {

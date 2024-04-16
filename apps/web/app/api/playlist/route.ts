@@ -15,8 +15,6 @@ import {
   generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
 
-export const revalidate = 3599;
-
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
   "https://cap.link",
