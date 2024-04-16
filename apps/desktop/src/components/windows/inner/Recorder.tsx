@@ -183,6 +183,8 @@ export const Recorder = () => {
         window.hide();
       }
     });
+
+    emit("toggle-recording", true);
     await invoke("start_dual_recording", {
       options: {
         user_id: videoData.user_id,
@@ -195,7 +197,7 @@ export const Recorder = () => {
       },
     }).catch((error) => {
       console.error("Error invoking start_screen_recording:", error);
-    }).then(() => emit("toggle-recording", true));
+    });
   };
 
   const handleStartAllRecordings = async () => {
