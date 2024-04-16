@@ -1,5 +1,6 @@
 "use client";
 
+import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/tauri";
 
 export const enumerateAndStoreDevices = async () => {
@@ -12,10 +13,9 @@ export const enumerateAndStoreDevices = async () => {
     const videoDevices = video.filter((device) => device.kind === "videoinput");
     const audioDevices = audio.map((device) => {
       return {
-        deviceId: device,
-        groupId: "",
-        kind: "audioinput",
+        id: device,
         label: device,
+        kind: "audioinput",
       };
     });
 
