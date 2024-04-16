@@ -380,7 +380,7 @@ export const Record = ({
   }, [audioDevices, videoDevices]);
 
   return (
-    <div className="w-full h-screen bg-white flex">
+    <div className="w-full h-screen bg-white flex flex-row-reverse">
       <div className="min-w-[500px] h-full flex items-center justify-center">
         <div className="w-full max-w-[290px] px-4 py-14 border-2 rounded-[15px] flex flex-col items-center justify-center bg-gradient-to-b from-white to-gray-200">
           <div className="flex items-center justify-between mb-4">
@@ -485,10 +485,10 @@ export const Record = ({
         </div>
       </div>
 
-      <div className="border-l-2 h-full flex-grow">
-        <div className="w-full h-full top-0 left-0 h-full flex flex-col items-center justify-center p-4">
-          <div className="w-full text-left mb-3">
-            <span className="bg-white shadow-lg py-2 px-4 rounded-xl font-medium text-sm border">
+      <div className="h-full flex-grow">
+        <div className="w-full h-full top-0 left-0 h-full flex flex-col items-center justify-center p-8">
+          <div className="w-full text-left mb-4">
+            <span className="bg-white shadow-lg py-2 px-4 rounded-xl font-medium text-lg border-2">
               Recording preview
             </span>
           </div>
