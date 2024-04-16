@@ -2322,6 +2322,15 @@ dependencies = [
 
 [[package]]
 name = "infer"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f178e61cdbfe084aa75a2f4f7a25a5bb09701a47ae1753608f194b15783c937a"
+dependencies = [
+ "cfb",
+]
+
+[[package]]
+name = "infer"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f551f8c3a39f68f986517db0d1759de85881894fdc7db798bd2a9df9cb04b7fc"
@@ -4738,6 +4747,7 @@ dependencies = [
  "http",
  "ignore",
  "indexmap 1.9.3",
+ "infer 0.9.0",
  "minisign-verify",
  "nix 0.26.4",
  "notify-rust",
@@ -4747,6 +4757,7 @@ dependencies = [
  "os_info",
  "os_pipe",
  "percent-encoding",
+ "png",
  "rand 0.8.5",
  "raw-window-handle 0.5.2",
  "regex",
@@ -4950,7 +4961,7 @@ dependencies = [
  "glob",
  "heck 0.4.1",
  "html5ever",
- "infer",
+ "infer 0.13.0",
  "json-patch",
  "kuchikiki",
  "log",

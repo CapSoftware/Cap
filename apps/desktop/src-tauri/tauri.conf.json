@@ -99,6 +99,10 @@
         "alwaysOnTop": false,
         "center": true
       }
-    ]
+    ],
+    "systemTray": {
+      "iconPath": "icons/tray-default-icon.png",
+      "iconAsTemplate": true
+    }
   }
 }
