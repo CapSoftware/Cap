@@ -6,7 +6,7 @@ import { Recorder } from "@/components/windows/inner/Recorder";
 import { WindowActions } from "@/components/WindowActions";
 import { Permissions } from "@/components/windows/Permissions";
 import { LogoSpinner } from "@cap/ui";
-import { getPermissions, savePermissions } from "@/utils/helpers";
+import { getPermissions } from "@/utils/helpers";
 import { initializeCameraWindow } from "@/utils/recording/utils";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/tauri";
@@ -18,6 +18,8 @@ export default function CameraPage() {
   const [loading, setLoading] = useState(true);
   const [permissions, setPermissions] = useState(getPermissions());
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
+
+  if (typeof window === "undefined") return null;
 
   useEffect(() => {
     const checkVersion = async () => {
