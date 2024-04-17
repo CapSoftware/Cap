@@ -12,11 +12,6 @@ export async function GET(request: NextRequest) {
     const startTime = url.searchParams.get("startTime");
     const logType = url.searchParams.get("logType");
 
-    console.log("...Updating video or audio start time...");
-    console.log("videoId", videoId);
-    console.log("startTime", startTime);
-    console.log("logType", logType);
-
     if (!videoId || !startTime || !logType) {
       return new Response(
         JSON.stringify({ error: "Missing required fields" }),

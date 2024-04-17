@@ -74,7 +74,12 @@ export const concatenateSegments = async (
 };
 
 export async function generateM3U8Playlist(
-  urls: { url: string; duration: string }[]
+  urls: {
+    url: string;
+    duration: string;
+    resolution?: string;
+    bandwidth?: string;
+  }[]
 ) {
   const baseM3U8Content = `#EXTM3U
 #EXT-X-TARGETDURATION:3
@@ -83,8 +88,9 @@ export async function generateM3U8Playlist(
 `;
 
   let m3u8Content = baseM3U8Content;
-  urls.forEach((url) => {
-    m3u8Content += `#EXTINF:${url.duration},\n${url.url}\n`;
+  urls.forEach((segment) => {
+    const { url, duration } = segment;
+    m3u8Content += `#EXTINF:${duration},\n${url}\n`;
   });
 
   m3u8Content += "#EXT-X-ENDLIST";
@@ -93,6 +99,9 @@ export async function generateM3U8Playlist(
 }
 
 export async function generateMasterPlaylist(
+  resolution: string,
+  videoCodec: string,
+  audioCodec: string,
   videoPlaylistUrl: string,
   audioPlaylistUrl: string
 ) {
@@ -100,7 +109,7 @@ export async function generateMasterPlaylist(
 #EXT-X-VERSION:4
 #EXT-X-INDEPENDENT-SEGMENTS
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en",URI="${audioPlaylistUrl}"
-#EXT-X-STREAM-INF:AUDIO="audio"
+#EXT-X-STREAM-INF:RESOLUTION=${resolution},CODECS="avc1.42001e,mp4a.40.2",AUDIO="audio"
 ${videoPlaylistUrl}
 `;
 

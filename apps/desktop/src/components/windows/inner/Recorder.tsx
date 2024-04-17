@@ -6,7 +6,7 @@ import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
 import { Screen } from "@/components/icons/Screen";
 import { Window } from "@/components/icons/Window";
-import { ActionButton } from "@/components/recording/ActionButton";
+import { ActionButton } from "@/components/windows/inner/ActionButton";
 import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
