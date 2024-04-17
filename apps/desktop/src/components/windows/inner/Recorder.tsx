@@ -183,7 +183,7 @@ export const Recorder = () => {
     tauriWindow.then(({ getAll }) => {
       getAll().forEach((window) => {
         if (window.label !== "camera") {
-          window.hide();
+          window.minimize();
         }
       });
     });
@@ -235,6 +235,13 @@ export const Recorder = () => {
     }
     setStoppingRecording(true);
 
+    tauriWindow.then(({ WebviewWindow }) => {
+      const main = WebviewWindow.getByLabel("main");
+      if (main) {
+        main.unminimize();
+      }
+    });
+
     try {
       console.log("Stopping recordings...");
 
@@ -252,6 +259,9 @@ export const Recorder = () => {
         process.env.NEXT_PUBLIC_ENVIRONMENT === "development"
           ? `${process.env.NEXT_PUBLIC_URL}/s/${await getLatestVideoId()}`
           : `https://cap.link/${await getLatestVideoId()}`;
+
+      const audio = new Audio("/recording-end.mp3");
+      await audio.play();
 
       if (
         !process.env.NEXT_PUBLIC_LOCAL_MODE ||
