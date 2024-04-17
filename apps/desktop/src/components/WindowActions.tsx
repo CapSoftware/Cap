@@ -1,6 +1,7 @@
+"use client";
+
 import { exit } from "@tauri-apps/api/process";
 import { Home } from "@/components/icons/Home";
-// import { Settings } from "@/components/icons/Settings";
 import { openLinkInBrowser } from "@/utils/helpers";
 
 export const WindowActions = () => {

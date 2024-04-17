@@ -1,6 +1,5 @@
 "use client";
 
-import { emit } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/tauri";
 
 export const enumerateAndStoreDevices = async () => {
@@ -51,6 +50,7 @@ export const getSelectedVideoProperties = async () => {
 };
 
 export const initializeCameraWindow = async () => {
+  if (typeof window === "undefined") return;
   import("@tauri-apps/api/window").then(({ currentMonitor, WebviewWindow }) => {
     currentMonitor().then((monitor) => {
       const windowWidth = 230;
