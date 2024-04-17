@@ -15,9 +15,6 @@ import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
-import { appDataDir, join } from "@tauri-apps/api/path";
-import { open } from "@tauri-apps/api/shell";
-import * as Tauri from "@tauri-apps/api";
 
 declare global {
   interface Window {
@@ -42,6 +39,7 @@ export const Recorder = () => {
   const [recordingTime, setRecordingTime] = useState("00:00");
   const [canStopRecording, setCanStopRecording] = useState(false);
   const [hasStartedRecording, setHasStartedRecording] = useState(false);
+  const tauriWindow = import("@tauri-apps/api/window");
 
   const handleContextClick = async (option: "video" | "audio") => {
     const { showMenu } = await import("tauri-plugin-context-menu");
@@ -52,37 +50,39 @@ export const Recorder = () => {
           ? selectedVideoDevice === null
           : selectedAudioDevice === null;
       }
-    
+
       return deviceKind === "videoinput"
         ? device.index === selectedVideoDevice?.index
         : device.index === selectedAudioDevice?.index;
-    }
+    };
     const select = async (device: Device | null) => {
       // if (isSelected(device)) {
       //   return
       // }
-      emit("change-device", { type: deviceKind, device: device }).catch((error) => {
-        console.log("Failed to emit change-device event:", error);
-      });
-    }
+      emit("change-device", { type: deviceKind, device: device }).catch(
+        (error) => {
+          console.log("Failed to emit change-device event:", error);
+        }
+      );
+    };
 
-    const devicesOfKind = devices.filter((device) => device.kind === deviceKind);
+    const devicesOfKind = devices.filter(
+      (device) => device.kind === deviceKind
+    );
 
     const menuItems = [
       {
         label: "None",
         checked: isSelected(null),
-        event: async() => select(null)
+        event: async () => select(null),
       },
-      ...devicesOfKind.map((device) => (
-        {
-          label: device.label,
-          checked: isSelected(device),
-          event: async() => select(device)
-        }
-      ))
-    ]
-  
+      ...devicesOfKind.map((device) => ({
+        label: device.label,
+        checked: isSelected(device),
+        event: async () => select(device),
+      })),
+    ];
+
     await showMenu({
       items: [...menuItems],
       ...(devicesOfKind.length === 0 && {
@@ -137,18 +137,21 @@ export const Recorder = () => {
 
   useEffect(() => {
     let unlistenFn: UnlistenFn | null = null;
-    
+
     const setupListener = async () => {
       unlistenFn = await listen("tray-on-left-click", (_) => {
         if (isRecording) {
           handleStopAllRecordings();
         }
 
-        const currentWindow = Tauri.window.getCurrent();
-        if (!currentWindow.isVisible) {
-          currentWindow.show();
-        }
-        currentWindow.setFocus();
+        tauriWindow.then(({ getCurrent }) => {
+          const currentWindow = getCurrent();
+
+          if (!currentWindow.isVisible) {
+            currentWindow.show();
+          }
+          currentWindow.setFocus();
+        });
       });
     };
 
@@ -178,10 +181,12 @@ export const Recorder = () => {
     if (window.fathom !== undefined) {
       window.fathom.trackEvent("start_recording");
     }
-    Tauri.window.getAll().forEach((window) => {
-      if (window.label !== "camera") {
-        window.hide();
-      }
+    tauriWindow.then(({ getAll }) => {
+      getAll().forEach((window) => {
+        if (window.label !== "camera") {
+          window.minimize();
+        }
+      });
     });
 
     emit("toggle-recording", true);
@@ -232,6 +237,13 @@ export const Recorder = () => {
     }
     setStoppingRecording(true);
 
+    tauriWindow.then(({ WebviewWindow }) => {
+      const main = WebviewWindow.getByLabel("main");
+      if (main) {
+        main.unminimize();
+      }
+    });
+
     try {
       console.log("Stopping recordings...");
 
@@ -249,6 +261,9 @@ export const Recorder = () => {
         process.env.NEXT_PUBLIC_ENVIRONMENT === "development"
           ? `${process.env.NEXT_PUBLIC_URL}/s/${await getLatestVideoId()}`
           : `https://cap.link/${await getLatestVideoId()}`;
+
+      const audio = new Audio("/recording-end.mp3");
+      await audio.play();
 
       if (
         !process.env.NEXT_PUBLIC_LOCAL_MODE ||
@@ -376,7 +391,11 @@ export const Recorder = () => {
                     width="full"
                     handler={() => handleContextClick("video")}
                     icon={<Video className="w-5 h-5" />}
-                    label={devices.length === 0 ? "Video" : selectedVideoDevice?.label || "None"}
+                    label={
+                      devices.length === 0
+                        ? "Video"
+                        : selectedVideoDevice?.label || "None"
+                    }
                     active={selectedVideoDevice !== null}
                     recordingOption={true}
                     optionName="Video"
@@ -385,7 +404,11 @@ export const Recorder = () => {
                     width="full"
                     handler={() => handleContextClick("audio")}
                     icon={<Microphone className="w-5 h-5" />}
-                    label={devices.length === 0 ? "Mic" : selectedAudioDevice?.label || "None"}
+                    label={
+                      devices.length === 0
+                        ? "Mic"
+                        : selectedAudioDevice?.label || "None"
+                    }
                     active={selectedAudioDevice !== null}
                     recordingOption={true}
                     optionName="Audio"
