@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useEffect, useRef, useState } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { CloseX } from "@/components/icons/CloseX";
@@ -15,9 +17,11 @@ export const Camera = () => {
     const video = videoRef.current;
     const constraints = {
       video: {
-        deviceId: selectedVideoDevice.deviceId,
+        deviceId: selectedVideoDevice.id,
       },
     };
+
+    if (typeof navigator === "undefined") return;
 
     navigator.mediaDevices
       .getUserMedia(constraints)
@@ -41,6 +45,8 @@ export const Camera = () => {
   }, [selectedVideoDevice]);
 
   const setWindowSize = async (type: "sm" | "lg") => {
+    if (typeof window === "undefined") return;
+
     tauriWindowImport.then(
       ({ currentMonitor, appWindow, LogicalSize, LogicalPosition }) => {
         currentMonitor().then((monitor) => {
@@ -70,7 +76,9 @@ export const Camera = () => {
   };
 
   const closeWindow = () => {
-    import("@tauri-apps/api/window").then(async ({ appWindow }) => {
+    if (typeof window === "undefined") return;
+
+    tauriWindowImport.then(async ({ appWindow }) => {
       await emit("change-device", {
         type: "video",
         device: {

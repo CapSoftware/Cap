@@ -12,10 +12,9 @@ export const enumerateAndStoreDevices = async () => {
     const videoDevices = video.filter((device) => device.kind === "videoinput");
     const audioDevices = audio.map((device) => {
       return {
-        deviceId: device,
-        groupId: "",
-        kind: "audioinput",
+        id: device,
         label: device,
+        kind: "audioinput",
       };
     });
 
@@ -51,6 +50,7 @@ export const getSelectedVideoProperties = async () => {
 };
 
 export const initializeCameraWindow = async () => {
+  if (typeof window === "undefined") return;
   import("@tauri-apps/api/window").then(({ currentMonitor, WebviewWindow }) => {
     currentMonitor().then((monitor) => {
       const windowWidth = 230;

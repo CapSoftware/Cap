@@ -8,30 +8,31 @@ import {
   useCallback,
   useRef,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import {
   getLocalDevices,
   enumerateAndStoreDevices,
   initializeCameraWindow,
 } from "./utils";
 
-export interface Devices {
+export type DeviceKind = "videoinput" | "audioinput";
+export interface Device {
   index: number;
+  id: string;
   label: string;
-  kind: "videoinput" | "audioinput";
-  deviceId: string;
+  kind: DeviceKind;
 }
 
 export interface MediaDeviceContextData {
-  selectedVideoDevice: Devices | null;
-  setSelectedVideoDevice: React.Dispatch<React.SetStateAction<Devices | null>>;
-  selectedAudioDevice: Devices | null;
-  setSelectedAudioDevice: React.Dispatch<React.SetStateAction<Devices | null>>;
+  selectedVideoDevice: Device | null;
+  setSelectedVideoDevice: React.Dispatch<React.SetStateAction<Device | null>>;
+  selectedAudioDevice: Device | null;
+  setSelectedAudioDevice: React.Dispatch<React.SetStateAction<Device | null>>;
   selectedDisplayType: "screen" | "window" | "area";
   setSelectedDisplayType: React.Dispatch<
     React.SetStateAction<"screen" | "window" | "area">
   >;
-  devices: Devices[];
+  devices: Device[];
   getDevices: () => Promise<void>;
   isRecording: boolean;
   setIsRecording: React.Dispatch<React.SetStateAction<boolean>>;
@@ -46,17 +47,20 @@ export const MediaDeviceContext = createContext<
 export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   children,
 }) => {
-  const [selectedVideoDevice, setSelectedVideoDevice] =
-    useState<Devices | null>(null);
-  const [selectedAudioDevice, setSelectedAudioDevice] =
-    useState<Devices | null>(null);
+  const [selectedVideoDevice, setSelectedVideoDevice] = useState<Device | null>(
+    null
+  );
+  const [selectedAudioDevice, setSelectedAudioDevice] = useState<Device | null>(
+    null
+  );
   const [selectedDisplayType, setSelectedDisplayType] = useState<
     "screen" | "window" | "area"
   >("screen");
-  const [devices, setDevices] = useState<Devices[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [startingRecording, setStartingRecording] = useState(false);
   const getDevicesCalled = useRef(false);
+  const tauriWindowImport = import("@tauri-apps/api/window");
 
   const getDevices = useCallback(async () => {
     await enumerateAndStoreDevices();
@@ -69,14 +73,14 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
           index: index,
           label: device.label,
           kind: "videoinput",
-          deviceId: device.deviceId,
-        })) as Devices[]),
+          id: device.deviceId,
+        })) as Device[]),
         ...(audioDevices.map((device: MediaDeviceInfo, index: number) => ({
           index: index,
           label: device.label,
           kind: "audioinput",
-          deviceId: device.deviceId,
-        })) as Devices[]),
+          id: device.deviceId ? device.deviceId : device.label,
+        })) as Device[]),
       ];
 
       setDevices(formattedDevices);
@@ -106,53 +110,97 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     }
   }, []);
 
+  const updateSelectedDevice = (type: DeviceKind, device: Device | null) => {
+    if (!type) {
+      return;
+    }
+
+    if (typeof window === "undefined") return;
+
+    if (window.fathom !== undefined) {
+      window.fathom.trackEvent(
+        `${type === "videoinput" ? "video" : "audio"}_device_change`
+      );
+    }
+    if (type === "videoinput") {
+      tauriWindowImport.then(({ WebviewWindow }) => {
+        if (WebviewWindow.getByLabel("camera")) {
+          WebviewWindow.getByLabel("camera").close();
+        } else if (type === "videoinput" && device) {
+          initializeCameraWindow();
+        }
+      });
+
+      if (
+        (!device && selectedVideoDevice) ||
+        selectedVideoDevice?.index !== device?.index
+      ) {
+        setSelectedVideoDevice(device);
+      }
+    }
+
+    if (type === "audioinput") {
+      if (
+        (!device && selectedAudioDevice) ||
+        selectedAudioDevice?.index !== device?.index
+      ) {
+        setSelectedAudioDevice(device);
+      }
+    }
+  };
+
   useEffect(() => {
-    let unlistenFn: any;
+    let unlistenFnChangeDevice: any;
+    let unlistenFnTraySetDevice: any;
 
-    const setupListener = async () => {
+    const setupListeners = async () => {
       try {
-        unlistenFn = await listen(
-          "change-device",
-          ({
-            payload,
-          }: {
-            payload: { type: "video" | "audio"; device: Devices };
-          }) => {
-            if (payload && payload.device) {
-              if (window.fathom !== undefined) {
-                window.fathom.trackEvent(`${payload.type}_device_change`);
-              }
-              if (payload.type === "video") {
-                import("@tauri-apps/api/window").then(({ WebviewWindow }) => {
-                  if (WebviewWindow.getByLabel("camera")) {
-                    WebviewWindow.getByLabel("camera").close();
-                  } else {
-                    initializeCameraWindow();
-                  }
-                });
-                if (selectedVideoDevice?.index !== payload.device.index) {
-                  setSelectedVideoDevice(payload.device);
-                }
-              }
-
-              if (payload.type === "audio") {
-                if (selectedAudioDevice?.index !== payload.device.index) {
-                  setSelectedAudioDevice(payload.device);
-                }
-              }
-            }
-          }
-        );
+        unlistenFnChangeDevice = await listen<{
+          type: string;
+          device: Device | null;
+        }>("change-device", (event) => {
+          updateSelectedDevice(
+            event.payload.type as DeviceKind,
+            event.payload.device
+          );
+        });
       } catch (error) {
-        console.error("Error setting up listener:", error);
+        console.error("Error setting up change-device listener:", error);
+      }
+
+      try {
+        unlistenFnTraySetDevice = await listen<{
+          type: string;
+          id: string | null;
+        }>("tray-set-device-id", (event) => {
+          const id = event.payload.id;
+          const kind = event.payload.type as DeviceKind;
+          const newDevice = id
+            ? devices.find((device) => kind === device.kind && id === device.id)
+            : null;
+          updateSelectedDevice(kind, newDevice);
+        });
+      } catch (error) {
+        console.error("Error setting up tray-set-device-id listener:", error);
       }
     };
 
-    setupListener();
+    setupListeners();
+
+    if (devices.length !== 0) {
+      emit("media-devices-set", {
+        mediaDevices: [...(devices as Omit<Device, "index">[])],
+        selectedVideo: selectedVideoDevice,
+        selectedAudio: selectedAudioDevice,
+      });
+    }
 
     return () => {
-      if (unlistenFn) {
-        unlistenFn();
+      if (unlistenFnChangeDevice) {
+        unlistenFnChangeDevice();
+      }
+      if (unlistenFnTraySetDevice) {
+        unlistenFnTraySetDevice();
       }
     };
   }, [selectedVideoDevice, selectedAudioDevice]);

@@ -1,22 +1,20 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
+import { Device, useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
 import { Screen } from "@/components/icons/Screen";
 import { Window } from "@/components/icons/Window";
+import { ActionButton } from "@/components/recording/ActionButton";
 import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/tauri";
 import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
-import { appDataDir, join } from "@tauri-apps/api/path";
-import { open } from "@tauri-apps/api/shell";
-import { ActionButton } from "@/components/windows/inner/ActionButton";
 
 declare global {
   interface Window {
@@ -41,53 +39,53 @@ export const Recorder = () => {
   const [recordingTime, setRecordingTime] = useState("00:00");
   const [canStopRecording, setCanStopRecording] = useState(false);
   const [hasStartedRecording, setHasStartedRecording] = useState(false);
+  const tauriWindow = import("@tauri-apps/api/window");
 
-  const handleContextClick = async (option: string) => {
+  const handleContextClick = async (option: "video" | "audio") => {
     const { showMenu } = await import("tauri-plugin-context-menu");
+    const deviceKind = option === "video" ? "videoinput" : "audioinput";
+    const isSelected = (device: Device | null) => {
+      if (device === null) {
+        return deviceKind === "videoinput"
+          ? selectedVideoDevice === null
+          : selectedAudioDevice === null;
+      }
 
-    const filteredDevices = devices
-      .filter((device) =>
-        option === "video"
-          ? device.kind === "videoinput"
-          : device.kind === "audioinput"
-      )
-      .map((device) => ({
-        label: device.label,
-        disabled:
-          option === "video"
-            ? device.index === selectedVideoDevice?.index
-            : device.index === selectedAudioDevice?.index,
-        event: async () => {
-          try {
-            await emit("change-device", { type: option, device });
-          } catch (error) {
-            console.error("Failed to emit change-device event:", error);
-          }
-        },
-      }));
-
-    filteredDevices.push({
-      label: "None",
-      disabled: false,
-      event: async () => {
-        try {
-          await emit("change-device", {
-            type: option,
-            device: {
-              label: "None",
-              index: -1,
-              kind: option === "video" ? "videoinput" : "audioinput",
-            },
-          });
-        } catch (error) {
-          console.error("Failed to emit change-device event:", error);
+      return deviceKind === "videoinput"
+        ? device.index === selectedVideoDevice?.index
+        : device.index === selectedAudioDevice?.index;
+    };
+    const select = async (device: Device | null) => {
+      // if (isSelected(device)) {
+      //   return
+      // }
+      emit("change-device", { type: deviceKind, device: device }).catch(
+        (error) => {
+          console.log("Failed to emit change-device event:", error);
         }
+      );
+    };
+
+    const devicesOfKind = devices.filter(
+      (device) => device.kind === deviceKind
+    );
+
+    const menuItems = [
+      {
+        label: "None",
+        checked: isSelected(null),
+        event: async () => select(null),
       },
-    });
+      ...devicesOfKind.map((device) => ({
+        label: device.label,
+        checked: isSelected(device),
+        event: async () => select(device),
+      })),
+    ];
 
     await showMenu({
-      items: [...filteredDevices],
-      ...(filteredDevices.length === 0 && {
+      items: [...menuItems],
+      ...(devicesOfKind.length === 0 && {
         items: [
           {
             label: "Nothing found.",
@@ -137,6 +135,34 @@ export const Recorder = () => {
     return data;
   };
 
+  useEffect(() => {
+    let unlistenFn: UnlistenFn | null = null;
+
+    const setupListener = async () => {
+      unlistenFn = await listen("tray-on-left-click", (_) => {
+        if (isRecording) {
+          handleStopAllRecordings();
+        }
+
+        tauriWindow.then(({ getCurrent }) => {
+          const currentWindow = getCurrent();
+          if (!currentWindow.isVisible) {
+            currentWindow.show();
+          }
+          currentWindow.setFocus();
+        });
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlistenFn) {
+        unlistenFn();
+      }
+    };
+  }, [isRecording, canStopRecording]);
+
   const startDualRecording = async (videoData: {
     id: string;
     user_id: string;
@@ -154,6 +180,14 @@ export const Recorder = () => {
     if (window.fathom !== undefined) {
       window.fathom.trackEvent("start_recording");
     }
+    tauriWindow.then(({ getAll }) => {
+      getAll().forEach((window) => {
+        if (window.label !== "camera") {
+          window.hide();
+        }
+      });
+    });
+    emit("toggle-recording", true);
     await invoke("start_dual_recording", {
       options: {
         user_id: videoData.user_id,
@@ -229,6 +263,8 @@ export const Recorder = () => {
       setIsRecording(false);
       setHasStartedRecording(false);
       setStoppingRecording(false);
+      setCanStopRecording(false);
+      emit("toggle-recording", false);
     } catch (error) {
       console.error("Error stopping recording:", error);
     }
@@ -343,7 +379,11 @@ export const Recorder = () => {
                     width="full"
                     handler={() => handleContextClick("video")}
                     icon={<Video className="w-5 h-5" />}
-                    label={selectedVideoDevice?.label || "Video"}
+                    label={
+                      devices.length === 0
+                        ? "Video"
+                        : selectedVideoDevice?.label || "None"
+                    }
                     active={selectedVideoDevice !== null}
                     recordingOption={true}
                     optionName="Video"
@@ -352,7 +392,11 @@ export const Recorder = () => {
                     width="full"
                     handler={() => handleContextClick("audio")}
                     icon={<Microphone className="w-5 h-5" />}
-                    label={selectedAudioDevice?.label || "Mic"}
+                    label={
+                      devices.length === 0
+                        ? "Mic"
+                        : selectedAudioDevice?.label || "None"
+                    }
                     active={selectedAudioDevice !== null}
                     recordingOption={true}
                     optionName="Audio"

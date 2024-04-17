@@ -1,3 +1,5 @@
+"use client";
+
 import { Button, LogoBadge } from "@cap/ui";
 import { useEffect, useState } from "react";
 import { savePermissions, getPermissions } from "@/utils/helpers";

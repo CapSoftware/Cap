@@ -1,6 +1,6 @@
 {
   "build": {
-    "beforeDevCommand": "next dev -p 3001",
+    "beforeDevCommand": "next dev -p 3001 --turbo",
     "beforeBuildCommand": "next build",
     "devPath": "http://localhost:3001",
     "distDir": "../out",
@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Cap",
-    "version": "0.1.8"
+    "version": "0.2.1"
   },
   "tauri": {
     "allowlist": {
@@ -99,6 +99,10 @@
         "alwaysOnTop": false,
         "center": true
       }
-    ]
+    ],
+    "systemTray": {
+      "iconPath": "icons/tray-default-icon.png",
+      "iconAsTemplate": true
+    }
   }
 }
