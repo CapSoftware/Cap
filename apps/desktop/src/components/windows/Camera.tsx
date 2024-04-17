@@ -15,7 +15,7 @@ export const Camera = () => {
     const video = videoRef.current;
     const constraints = {
       video: {
-        deviceId: selectedVideoDevice.deviceId,
+        deviceId: selectedVideoDevice.id,
       },
     };
 
