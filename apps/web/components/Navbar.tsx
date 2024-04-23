@@ -15,7 +15,6 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 import { Menu, X } from "lucide-react";
-import { classNames } from "../../../packages/utils/src/helpers";
 
 export const Navbar = ({ auth }: { auth: boolean }) => {
   const pathname = usePathname();
@@ -99,7 +98,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                 <NavigationMenuTrigger>Help</NavigationMenuTrigger>
                 <NavigationMenuContent>
                   <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-[.75fr_1fr]">
-                    <ListItem href="/faqs" title="FAQs">
+                    <ListItem href="/faq" title="FAQs">
                       Frequently asked questions about Cap.
                     </ListItem>
                     <ListItem href="mailto:hello@cap.so" title="Email support">
@@ -134,9 +133,9 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
       {showMobileMenu && (
         <div className="fixed top-0 left-0 w-full h-full px-5 bg-white z-[100000] overflow-auto">
           <div className="bg-gradient-to-b from-white to-[rgba(255,255,255,0.3)] pt-5 pb-12 sticky top-0 flex items-center justify-between">
-            <a href="/">
+            <Link href="/">
               <Logo className="w-20 sm:w-24 h-auto" />
-            </a>
+            </Link>
             <button onClick={() => setShowMobileMenu(!showMobileMenu)}>
               <X className="w-[28px] h-[28px]" />
             </button>

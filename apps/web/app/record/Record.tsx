@@ -1,8 +1,25 @@
 "use client";
 
+//
+// WARNING!!
+// WARNING!!
+// WARNING!!
+// WARNING!!
+//
+// This code is currently quite horrific.
+// It is a work in progress and will be refactored.
+// Pls do not judge me.
+// Shipping > perfection.
+//
+//
+//
+//
+//
+//
+
 import { useState, useEffect, useRef } from "react";
 import { users } from "@cap/database/schema";
-import { Mic, Video, Monitor } from "lucide-react";
+import { Mic, Video, Monitor, ArrowLeft } from "lucide-react";
 import { Rnd } from "react-rnd";
 import {
   Button,
@@ -11,9 +28,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  LogoSpinner,
 } from "@cap/ui";
 import { ActionButton } from "./_components/ActionButton";
 import toast from "react-hot-toast";
+import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { fetchFile } from "@ffmpeg/util";
 
 // million-ignore
 export const Record = ({
@@ -21,6 +41,8 @@ export const Record = ({
 }: {
   user: typeof users.$inferSelect | null;
 }) => {
+  const ffmpegRef = useRef(new FFmpeg());
+  const [isLoading, setIsLoading] = useState(true);
   const [startingRecording, setStartingRecording] = useState(false);
   const [stoppingRecording, setStoppingRecording] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -36,23 +58,87 @@ export const Record = ({
     useState("Microphone");
   const [selectedVideoDeviceLabel, setSelectedVideoDeviceLabel] =
     useState("Webcam");
-
-  const [showAudioOptions, setShowAudioOptions] = useState(false);
-  const [showVideoOptions, setShowVideoOptions] = useState(false);
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
-  const [combinedStream, setCombinedStream] = useState<MediaStream | null>(
+  const videoSegmentsRef = useRef<Blob[]>([]);
+  const [videoRecorder, setVideoRecorder] = useState<MediaRecorder | null>(
     null
   );
-  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(
-    null
-  );
-  const [recordedBlobs, setRecordedBlobs] = useState<Blob[]>([]);
+  const totalSegments = useRef(0);
+
   const screenPreviewRef = useRef<HTMLVideoElement>(null);
   const webcamPreviewRef = useRef<HTMLVideoElement>(null);
+  const [aspectRatio, setAspectRatio] = useState(1.7777777778);
+  const [webcamStyleSettings, setWebcamStyleSettings] = useState({
+    x: 16,
+    y: 16,
+    width: 180,
+    height: 180,
+  });
+  const [screenStyleSettings, setScreenStyleSettings] = useState({
+    x: 0,
+    y: 0,
+    width: "100%" as any,
+    height: "100%" as any,
+  });
 
-  const buttonStyles =
-    "w-full h-full flex flex-col items-center justify-center text-center space-y-1 py-2 pl-5 pr-7 group-hover:bg-gray-300 rounded-xl";
+  const [isCenteredHorizontally, setIsCenteredHorizontally] = useState(false);
+  const [isCenteredVertically, setIsCenteredVertically] = useState(false);
+
+  const defaultRndHandeStyles = {
+    topLeft: {
+      width: "16px",
+      height: "16px",
+      borderRadius: "50%",
+      backgroundColor: "white",
+      border: "2px solid #ddd",
+      zIndex: 999,
+      boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+    },
+    topRight: {
+      width: "16px",
+      height: "16px",
+      borderRadius: "50%",
+      backgroundColor: "white",
+      border: "2px solid #ddd",
+      zIndex: 999,
+      boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+    },
+    bottomLeft: {
+      width: "16px",
+      height: "16px",
+      borderRadius: "50%",
+      backgroundColor: "white",
+      border: "2px solid #ddd",
+      zIndex: 999,
+      boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+    },
+    bottomRight: {
+      width: "16px",
+      height: "16px",
+      borderRadius: "50%",
+      backgroundColor: "white",
+      border: "2px solid #ddd",
+      zIndex: 999,
+      boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
+    },
+  };
+
+  useEffect(() => {
+    const loadFFmpeg = async () => {
+      setIsLoading(true);
+      const ffmpeg = ffmpegRef.current;
+
+      console.log("Loading FFmpeg");
+
+      await ffmpeg.load();
+      setIsLoading(false);
+
+      console.log("FFmpeg loaded");
+    };
+
+    loadFFmpeg();
+  }, []);
 
   const getDevices = async () => {
     try {
@@ -76,7 +162,7 @@ export const Record = ({
     try {
       const displayMediaOptions = {
         video: {
-          displaySurface: "browser",
+          displaySurface: "window",
         },
         audio: false,
         surfaceSwitching: "exclude",
@@ -87,21 +173,77 @@ export const Record = ({
       const stream = await navigator.mediaDevices.getDisplayMedia(
         displayMediaOptions
       );
-      setScreenStream(stream);
+      const videoElement = document.createElement("video");
+      videoElement.srcObject = stream;
+
+      return new Promise((resolve) => {
+        videoElement.onloadedmetadata = () => {
+          const { videoWidth, videoHeight } = videoElement;
+          const aspectRatio = videoWidth / videoHeight;
+          setAspectRatio(aspectRatio);
+          setScreenStream(stream);
+          console.log("videoWidth", videoWidth);
+          console.log("videoHeight", videoHeight);
+          console.log("aspectRatio", aspectRatio);
+          setScreenStyleSettings({
+            x: 0,
+            y: 0,
+            width: "100%",
+            height: "100%",
+          });
+          startVideoCapture(selectedVideoDevice, "small");
+          resolve({ width: videoWidth, height: videoHeight });
+        };
+      });
     } catch (error) {
       console.error("Error capturing screen:", error);
     }
   };
 
-  const startVideoCapture = async (deviceId?: string) => {
+  const startVideoCapture = async (
+    deviceId?: string,
+    placement?: "small" | "large"
+  ) => {
     try {
       const constraints: MediaStreamConstraints = {
         video: deviceId ? { deviceId } : true,
         audio: selectedAudioDevice ? { deviceId: selectedAudioDevice } : false,
       };
 
+      console.log("Video constraints:", constraints);
+
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       setVideoStream(stream);
+
+      const videoContainer = document.querySelector(
+        ".video-container"
+      ) as HTMLElement;
+
+      if (videoContainer === null) {
+        console.error("Video container dimensions not found");
+        return;
+      }
+
+      const videoContainerWidth = videoContainer.clientWidth;
+      const videoContainerHeight = videoContainer.clientHeight;
+
+      if (placement === "large") {
+        setWebcamStyleSettings({
+          x: (videoContainerWidth - videoContainerWidth / 2) / 2,
+          y: (videoContainerHeight - videoContainerWidth / 2) / 2,
+          width: videoContainerWidth / 2,
+          height: videoContainerWidth / 2,
+        });
+      } else if (placement === "small") {
+        const webcamWidth = 180;
+
+        setWebcamStyleSettings({
+          x: 16,
+          y: videoContainer.clientHeight - 16 - webcamWidth,
+          width: webcamWidth,
+          height: webcamWidth,
+        });
+      }
     } catch (error) {
       console.error("Error capturing video:", error);
     }
@@ -122,6 +264,34 @@ export const Record = ({
   };
 
   const startRecording = async () => {
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create`,
+      {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      }
+    );
+
+    if (res.status === 401) {
+      console.error("Unauthorized");
+      toast.error("Unauthorized - please sign in again.");
+      return;
+    }
+
+    const videoCreateData = await res.json();
+
+    if (
+      !videoCreateData.id ||
+      !videoCreateData.user_id ||
+      !videoCreateData.aws_region ||
+      !videoCreateData.aws_bucket
+    ) {
+      console.error("No data received");
+      toast.error("No data received - please try again later.");
+      return;
+    }
+
     if (screenStream && videoStream) {
       setStartingRecording(true);
 
@@ -129,69 +299,103 @@ export const Record = ({
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
 
-      const screenSize = screenStream.getVideoTracks()[0].getSettings();
-      canvas.width = screenSize.width ?? 1280;
-      canvas.height = screenSize.height ?? 720;
+      // Get the video container element
+      const videoContainer = document.querySelector(
+        ".video-container"
+      ) as HTMLElement;
+
+      // Set the minimum width to 1000 pixels
+      const minWidth = 1000;
+
+      // Calculate the aspect ratio of the video container
+      const aspectRatio =
+        videoContainer.clientWidth / videoContainer.clientHeight;
+
+      // Set the canvas width to the minimum width or the video container width, whichever is larger
+      canvas.width = Math.max(minWidth, videoContainer.clientWidth);
+
+      // Calculate the canvas height based on the width and aspect ratio
+      canvas.height = canvas.width / aspectRatio;
 
       let animationFrameId: number;
 
       const drawCanvas = () => {
         if (ctx) {
-          ctx.drawImage(
-            document.getElementById("screenPreview") as HTMLVideoElement,
-            0,
-            0,
-            canvas.width,
-            canvas.height
-          );
+          // Clear the canvas
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          // Get the current position and size of the screen preview
+          const screenPreview = document.getElementById(
+            "screenPreview"
+          ) as HTMLVideoElement;
+          const screenRect = screenPreview.getBoundingClientRect();
+          const containerRect = document
+            .querySelector(".video-container")
+            ?.getBoundingClientRect();
+
+          if (containerRect) {
+            const screenX = screenRect.left - containerRect.left;
+            const screenY = screenRect.top - containerRect.top;
+            const screenWidth = screenRect.width;
+            const screenHeight = screenRect.height;
+
+            // Draw the screen preview on the canvas based on its position and size
+            ctx.drawImage(
+              screenPreview,
+              screenX,
+              screenY,
+              screenWidth,
+              screenHeight
+            );
+          }
 
           // Get the current position and size of the webcam preview
           const webcamPreview = document.getElementById(
             "webcamPreview"
           ) as HTMLVideoElement;
           const webcamRect = webcamPreview.getBoundingClientRect();
-          const containerRect = document
-            .querySelector(".aspect-w-16.aspect-h-9")
-            ?.getBoundingClientRect();
 
           if (containerRect) {
-            const scaleX = canvas.width / containerRect.width;
-            const scaleY = canvas.height / containerRect.height;
+            const camX = webcamRect.left - containerRect.left;
+            const camY = webcamRect.top - containerRect.top;
+            const camWidth = webcamRect.width;
+            const camHeight = webcamRect.height;
 
-            const camWidth = webcamRect.width * scaleX;
-            const camHeight = webcamRect.height * scaleY;
-            const camX = (webcamRect.left - containerRect.left) * scaleX;
-            const camY = (webcamRect.top - containerRect.top) * scaleY;
+            // Calculate the aspect ratio of the webcam video
+            const videoAspectRatio =
+              webcamPreview.videoWidth / webcamPreview.videoHeight;
 
-            // Calculate the aspect ratio of the original webcam video
-            const videoWidth = webcamPreview.videoWidth;
-            const videoHeight = webcamPreview.videoHeight;
-            const aspectRatio = videoWidth / videoHeight;
-
-            // Adjust the webcam preview size to maintain the aspect ratio
-            let newWidth = camWidth;
-            let newHeight = camWidth / aspectRatio;
-            if (newHeight > camHeight) {
-              newWidth = camHeight * aspectRatio;
-              newHeight = camHeight;
+            // Calculate the new dimensions to maintain the aspect ratio
+            let newCamWidth = camWidth;
+            let newCamHeight = camHeight;
+            if (camWidth / camHeight > videoAspectRatio) {
+              newCamWidth = camHeight * videoAspectRatio;
+            } else {
+              newCamHeight = camWidth / videoAspectRatio;
             }
 
-            // Calculate the position to center the adjusted webcam preview
-            const centerX = camX + (camWidth - newWidth) / 2;
-            const centerY = camY + (camHeight - newHeight) / 2;
+            // Calculate the offset to center the webcam video
+            const offsetX = (camWidth - newCamWidth) / 2;
+            const offsetY = (camHeight - newCamHeight) / 2;
 
             // Set the position and size of the circular webcam preview on the canvas
             ctx.save();
             ctx.beginPath();
             ctx.arc(
-              centerX + newWidth / 2,
-              centerY + newHeight / 2,
-              Math.min(newWidth, newHeight) / 2,
+              camX + camWidth / 2,
+              camY + camHeight / 2,
+              Math.min(newCamWidth, newCamHeight) / 2,
               0,
               2 * Math.PI
             );
             ctx.clip();
-            ctx.drawImage(webcamPreview, centerX, centerY, newWidth, newHeight);
+            ctx.drawImage(
+              webcamPreview,
+              camX + offsetX,
+              camY + offsetY,
+              newCamWidth,
+              newCamHeight
+            );
             ctx.restore();
           }
 
@@ -200,8 +404,13 @@ export const Record = ({
       };
 
       drawCanvas();
-
       const canvasStream = canvas.captureStream(30);
+      if (canvasStream.getVideoTracks().length === 0) {
+        console.error("Canvas stream has no video tracks");
+        setStartingRecording(false);
+        return;
+      }
+
       canvasStream
         .getVideoTracks()
         .forEach((track) => combinedStream.addTrack(track));
@@ -210,60 +419,294 @@ export const Record = ({
         .getAudioTracks()
         .forEach((track) => combinedStream.addTrack(track));
 
-      setCombinedStream(combinedStream);
-
-      const options = { mimeType: "video/webm; codecs=vp9,opus" };
-      const mediaRecorder = new MediaRecorder(combinedStream, options);
-      const recordedChunks: Blob[] = [];
-
-      mediaRecorder.ondataavailable = function (event) {
-        if (event.data.size > 0) recordedChunks.push(event.data);
+      const videoRecorderOptions = {
+        mimeType: 'video/webm; codecs="h264"',
       };
 
-      mediaRecorder.onstop = () => {
-        cancelAnimationFrame(animationFrameId);
-        const recordedBlob = new Blob(recordedChunks, { type: "video/webm" });
-        console.log("Recorded Blob:", recordedBlob);
-        setRecordedBlobs([recordedBlob]);
+      if (!MediaRecorder.isTypeSupported(videoRecorderOptions.mimeType)) {
+        console.error("Video MIME type not supported");
+        setStartingRecording(false);
+        return;
+      }
+
+      const videoRecorder = new MediaRecorder(
+        combinedStream,
+        videoRecorderOptions
+      );
+
+      const videoBitsPerSecond = videoRecorder.videoBitsPerSecond;
+
+      const videoTracks = canvasStream.getVideoTracks();
+      const frameRate = videoTracks[0].getSettings().frameRate || 30;
+
+      const resolution = `${canvas.width}x${canvas.height}`;
+
+      videoRecorder.ondataavailable = async (event) => {
+        if (event.data.size > 0) {
+          videoSegmentsRef.current.push(event.data);
+          console.log("Video segment pushed:", event.data);
+
+          await muxSegment({
+            videoId: videoCreateData.id,
+            bandwidth: videoBitsPerSecond,
+            framerate: frameRate,
+            resolution,
+          });
+        }
       };
 
-      mediaRecorder.start();
+      videoRecorder.start(3000);
+
+      setVideoRecorder(videoRecorder);
+
       setIsRecording(true);
       setStartingRecording(false);
-      setMediaRecorder(mediaRecorder);
     } else {
       toast.error("No source selected for recording");
     }
   };
 
+  const muxSegment = async ({
+    videoId,
+    bandwidth,
+    framerate,
+    resolution,
+  }: {
+    videoId: string;
+    bandwidth: number;
+    framerate: number;
+    resolution: string;
+  }) => {
+    if (ffmpegRef.current && videoSegmentsRef.current.length > 0) {
+      console.log("Muxing segment");
+
+      const videoSegment = videoSegmentsRef.current.shift();
+
+      if (videoSegment) {
+        const videoFile = await fetchFile(URL.createObjectURL(videoSegment));
+
+        ffmpegRef.current.writeFile("video_segment.webm", videoFile);
+
+        await ffmpegRef.current.exec([
+          "-i",
+          "video_segment.webm",
+          "-c:v",
+          "copy",
+          "-f",
+          "mpegts",
+          "video_segment.ts",
+        ]);
+
+        await ffmpegRef.current.exec([
+          "-i",
+          "video_segment.webm",
+          "-vn",
+          "-c:a",
+          "aac",
+          "-b:a",
+          "128k",
+          "audio_segment.aac",
+        ]);
+
+        const videoData = await ffmpegRef.current.readFile("video_segment.ts");
+        const audioData = await ffmpegRef.current.readFile("audio_segment.aac");
+
+        const segmentIndex = String(totalSegments.current).padStart(3, "0");
+        const videoSegmentFilename = `video/video_recording_${segmentIndex}.ts`;
+        const audioSegmentFilename = `audio/audio_recording_${segmentIndex}.aac`;
+
+        console.log("Uploading segment:", videoSegmentFilename);
+        console.log("Uploading segment:", audioSegmentFilename);
+
+        await uploadSegment({
+          file: videoData,
+          filename: videoSegmentFilename,
+          videoId: videoId,
+          duration: 3,
+          resolution,
+          bandwidth,
+          videoCodec: "vp9",
+        });
+
+        await uploadSegment({
+          file: audioData,
+          filename: audioSegmentFilename,
+          videoId: videoId,
+          duration: 3,
+          audioCodec: "aac",
+        });
+
+        totalSegments.current++;
+      }
+    }
+  };
+
+  const uploadSegment = async ({
+    file,
+    filename,
+    videoId,
+    duration = 3,
+    resolution,
+    bandwidth,
+    videoCodec,
+    audioCodec,
+  }: {
+    file: Uint8Array | string;
+    filename: string;
+    videoId: string;
+    duration?: number;
+    resolution?: string;
+    bandwidth?: number;
+    videoCodec?: string;
+    audioCodec?: string;
+  }) => {
+    const formData = new FormData();
+    formData.append("filename", filename);
+    formData.append("videoId", videoId);
+    formData.append("blobData", new Blob([file], { type: "video/mp2t" }));
+    formData.append("duration", String(duration));
+    formData.append("resolution", resolution || "");
+    formData.append("bandwidth", String(bandwidth || 0));
+    formData.append("videoCodec", videoCodec || "");
+    formData.append("audioCodec", audioCodec || "");
+
+    await fetch(`${process.env.NEXT_PUBLIC_URL}/api/upload/new`, {
+      method: "POST",
+      body: formData,
+    });
+  };
+
   const stopRecording = () => {
     setStoppingRecording(true);
 
-    if (mediaRecorder && mediaRecorder.state === "recording") {
-      mediaRecorder.stop();
-      setIsRecording(false);
-      setStoppingRecording(false);
+    if (videoRecorder) {
+      videoRecorder.stop();
+    }
+
+    setIsRecording(false);
+    setStoppingRecording(false);
+  };
+
+  const handleRndDragStop = (
+    e: any,
+    d: any,
+    previewType: "webcam" | "screen"
+  ) => {
+    const videoContainer = document.querySelector(".video-container");
+    const preview = document.getElementById(
+      previewType === "webcam" ? "webcamPreview" : "screenPreview"
+    );
+
+    if (videoContainer && preview) {
+      const containerRect = videoContainer.getBoundingClientRect();
+      const previewRect = preview.getBoundingClientRect();
+
+      const containerCenterX = containerRect.left + containerRect.width / 2;
+      const containerCenterY = containerRect.top + containerRect.height / 2;
+
+      const previewCenterX = previewRect.left + previewRect.width / 2;
+      const previewCenterY = previewRect.top + previewRect.height / 2;
+
+      const thresholdX = 15;
+      const thresholdY = 15;
+
+      const videoContainerWidth = videoContainer.clientWidth;
+      const videoContainerHeight = videoContainer.clientHeight;
+
+      if (Math.abs(previewCenterX - containerCenterX) <= thresholdX) {
+        if (previewType === "webcam") {
+          setWebcamStyleSettings((prevSettings) => ({
+            ...prevSettings,
+            x: (videoContainerWidth - prevSettings.width) / 2,
+          }));
+        } else if (previewType === "screen") {
+          setScreenStyleSettings((prevSettings) => ({
+            ...prevSettings,
+            x: (videoContainerWidth - prevSettings.width) / 2,
+          }));
+        }
+      } else {
+        if (previewType === "webcam") {
+          setWebcamStyleSettings((prevSettings) => ({
+            ...prevSettings,
+            x: d.x,
+          }));
+        } else if (previewType === "screen") {
+          setScreenStyleSettings((prevSettings) => ({
+            ...prevSettings,
+            x: d.x,
+          }));
+        }
+      }
+
+      if (Math.abs(previewCenterY - containerCenterY) <= thresholdY) {
+        if (previewType === "webcam") {
+          setWebcamStyleSettings((prevSettings) => ({
+            ...prevSettings,
+            y: (videoContainerHeight - prevSettings.height) / 2,
+          }));
+        } else if (previewType === "screen") {
+          setScreenStyleSettings((prevSettings) => ({
+            ...prevSettings,
+            y: (videoContainerHeight - prevSettings.height) / 2,
+          }));
+        }
+
+        setIsCenteredVertically(true);
+      } else {
+        if (previewType === "webcam") {
+          setWebcamStyleSettings((prevSettings) => ({
+            ...prevSettings,
+            y: d.y,
+          }));
+        } else if (previewType === "screen") {
+          setScreenStyleSettings((prevSettings) => ({
+            ...prevSettings,
+            y: d.y,
+          }));
+        }
+
+        setIsCenteredVertically(false);
+      }
+    }
+  };
+
+  const handleRndDrag = (e: any, d: any, previewType: "webcam" | "screen") => {
+    const videoContainer = document.querySelector(".video-container");
+    const preview = document.getElementById(
+      previewType === "webcam" ? "webcamPreview" : "screenPreview"
+    );
+
+    if (videoContainer && preview) {
+      const containerRect = videoContainer.getBoundingClientRect();
+      const previewRect = preview.getBoundingClientRect();
+
+      const containerCenterX = containerRect.left + containerRect.width / 2;
+      const containerCenterY = containerRect.top + containerRect.height / 2;
+
+      const previewCenterX = previewRect.left + previewRect.width / 2;
+      const previewCenterY = previewRect.top + previewRect.height / 2;
+
+      const thresholdX = 15;
+      const thresholdY = 15;
+
+      if (Math.abs(previewCenterY - containerCenterY) <= thresholdY) {
+        setIsCenteredVertically(true);
+      } else {
+        setIsCenteredVertically(false);
+      }
+
+      if (Math.abs(previewCenterX - containerCenterX) <= thresholdX) {
+        setIsCenteredHorizontally(true);
+      } else {
+        setIsCenteredHorizontally(false);
+      }
     }
   };
 
   useEffect(() => {
     getDevices();
   }, []);
-
-  useEffect(() => {
-    if (recordedBlobs.length > 0) {
-      const recordedVideo = new Blob(recordedBlobs, { type: "video/webm" });
-      const videoUrl = URL.createObjectURL(recordedVideo);
-      const link = document.createElement("a");
-      link.href = videoUrl;
-      link.download = "recorded_video.webm";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(videoUrl);
-      setRecordedBlobs([]);
-    }
-  }, [recordedBlobs]);
 
   useEffect(() => {
     const storedAudioDevice = localStorage.getItem("selectedAudioDevice");
@@ -275,7 +718,7 @@ export const Record = ({
     }
     if (storedVideoDevice) {
       setSelectedVideoDevice(storedVideoDevice);
-      startVideoCapture(storedVideoDevice);
+      startVideoCapture(storedVideoDevice, "large");
     }
     if (storedScreenStream === "true") {
       startScreenCapture();
@@ -372,26 +815,184 @@ export const Record = ({
       if (selectedVideoDeviceObj) {
         setSelectedVideoDeviceLabel(selectedVideoDeviceObj.label);
       }
-      startVideoCapture(storedVideoDevice);
+      startVideoCapture(
+        storedVideoDevice,
+        screenStream === null ? "large" : "small"
+      );
     }
     if (storedScreenStream === "true") {
       startScreenCapture();
     }
   }, [audioDevices, videoDevices]);
 
+  if (isLoading) {
+    return (
+      <div className="w-full h-screen flex items-center justify-center">
+        <LogoSpinner className="w-10 h-auto animate-spin" />
+      </div>
+    );
+  }
+
+  const screenHeight = window.innerHeight;
+  const topBar = document.querySelector(".top-bar");
+  const bottomBar = document.querySelector(".bottom-bar");
+  const topBarHeight = topBar ? topBar.clientHeight : 0;
+  const bottomBarHeight = bottomBar ? bottomBar.clientHeight : 0;
+  const screenWidth = window.innerWidth;
+  const maxWidth =
+    document.querySelector(".wrapper")?.clientWidth || screenWidth;
+  const calculatedHeight = maxWidth / aspectRatio;
+  const availableHeight = Math.min(
+    calculatedHeight,
+    (screenHeight - topBarHeight - bottomBarHeight) * 0.8
+  );
+
   return (
-    <div className="w-full h-screen bg-white flex flex-row-reverse">
-      <div className="min-w-[500px] h-full flex items-center justify-center">
-        <div className="w-full max-w-[290px] px-4 py-14 border-2 rounded-[15px] flex flex-col items-center justify-center bg-gradient-to-b from-white to-gray-200">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <Logo showVersion className="w-24 h-auto" />
+    <div className="w-full h-full min-h-screen h mx-auto flex items-center justify-center">
+      <div className={`max-w-[1280px] wrapper p-8 space-y-6`}>
+        <div className="top-bar flex justify-between">
+          <a href="/" className="flex items-center">
+            <ArrowLeft className="w-6 h-6 text-gray-600" />
+          </a>
+          <Button
+            {...(isRecording && { variant: "destructive" })}
+            onClick={() => {
+              if (isRecording) {
+                stopRecording();
+              } else {
+                startRecording();
+              }
+            }}
+            spinner={startingRecording || stoppingRecording}
+          >
+            {startingRecording
+              ? "Starting..."
+              : isRecording
+              ? stoppingRecording
+                ? currentStoppingMessage
+                : `Stop - ${recordingTime}`
+              : "Start Recording"}
+          </Button>
+        </div>
+        <div className="h-full flex-grow">
+          <div className="w-full h-full top-0 left-0 h-full flex flex-col items-center justify-center">
+            <div
+              style={{
+                aspectRatio: aspectRatio,
+                height: availableHeight,
+                maxWidth: "100%",
+              }}
+              className={`video-container bg-black relative w-auto mx-auto border-2 border-gray-200 rounded-xl overflow-hidden shadow-xl`}
+            >
+              {isCenteredHorizontally && (
+                <div
+                  className="crosshair absolute top-0 left-1/2 transform -translate-x-1/2 w-0.5 h-full bg-red-500"
+                  style={{ zIndex: 999 }}
+                ></div>
+              )}
+              {isCenteredVertically && (
+                <div
+                  className="crosshair absolute top-1/2 left-0 transform -translate-y-1/2 w-full h-0.5 bg-red-500"
+                  style={{ zIndex: 999 }}
+                ></div>
+              )}
+              {screenStream && (
+                <Rnd
+                  position={{
+                    x: screenStyleSettings.x,
+                    y: screenStyleSettings.y,
+                  }}
+                  size={{
+                    width: screenStyleSettings.width,
+                    height: screenStyleSettings.height,
+                  }}
+                  bounds="parent"
+                  className="absolute rnd group"
+                  resizeHandleStyles={defaultRndHandeStyles}
+                  resizeHandleClasses={{
+                    bottomRight: "resize-handle",
+                    bottomLeft: "resize-handle",
+                    bottom: "resize-handle",
+                    right: "resize-handle",
+                    left: "resize-handle",
+                    top: "resize-handle",
+                    topLeft: "resize-handle",
+                    topRight: "resize-handle",
+                  }}
+                  onDrag={(e, d) => handleRndDrag(e, d, "screen")}
+                  onDragStop={(e, d) => handleRndDragStop(e, d, "screen")}
+                  onResizeStop={(e, direction, ref, delta, position) => {
+                    setScreenStyleSettings({
+                      ...screenStyleSettings,
+                      width: ref.offsetWidth,
+                      height: ref.offsetHeight,
+                    });
+                  }}
+                >
+                  <div className="w-full h-full group-hover:outline outline-2 outline-primary rounded-xl">
+                    <video
+                      id="screenPreview"
+                      ref={screenPreviewRef}
+                      autoPlay
+                      muted
+                      className="w-full h-full"
+                    />
+                  </div>
+                </Rnd>
+              )}
+              {videoStream && (
+                <Rnd
+                  position={{
+                    x: webcamStyleSettings.x,
+                    y: webcamStyleSettings.y,
+                  }}
+                  size={{
+                    width: webcamStyleSettings.width,
+                    height: webcamStyleSettings.height,
+                  }}
+                  default={webcamStyleSettings}
+                  bounds="parent"
+                  className="absolute webcam-rnd rnd group"
+                  lockAspectRatio={true}
+                  resizeHandleStyles={defaultRndHandeStyles}
+                  resizeHandleClasses={{
+                    bottomRight: "resize-handle",
+                    bottomLeft: "resize-handle",
+                    bottom: "resize-handle",
+                    right: "resize-handle",
+                    left: "resize-handle",
+                    top: "resize-handle",
+                    topLeft: "resize-handle",
+                    topRight: "resize-handle",
+                  }}
+                  onDrag={(e, d) => handleRndDrag(e, d, "webcam")}
+                  onDragStop={(e, d) => handleRndDragStop(e, d, "webcam")}
+                  onResizeStop={(e, direction, ref, delta, position) => {
+                    setWebcamStyleSettings({
+                      ...webcamStyleSettings,
+                      width: ref.offsetWidth,
+                      height: ref.offsetHeight,
+                    });
+                  }}
+                >
+                  <div className="w-full h-full rounded-xl overflow-hidden group-hover:outline outline-2 outline-primary">
+                    <video
+                      id="webcamPreview"
+                      ref={webcamPreviewRef}
+                      autoPlay
+                      muted
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                </Rnd>
+              )}
             </div>
           </div>
-          <div className="space-y-4 mb-4 w-full">
-            <div>
-              <label className="text-sm font-medium">Display</label>
-              <div className="flex items-center space-x-1">
+        </div>
+        <div>
+          <div className="bottom-bar space-y-4 mb-4 w-full">
+            <div className="space-x-3 flex items-center">
+              <div className="w-full">
                 <ActionButton
                   handler={() => {
                     screenStream ? stopScreenCapture() : startScreenCapture();
@@ -401,128 +1002,59 @@ export const Record = ({
                   active={true}
                 />
               </div>
-            </div>
-            <div>
-              <label className="text-sm font-medium">Webcam / Video</label>
-              <div className="space-y-2">
-                <DropdownMenu>
-                  <DropdownMenuTrigger className="w-full">
-                    <ActionButton
-                      width="full"
-                      icon={<Video className="w-5 h-5" />}
-                      label={selectedVideoDeviceLabel}
-                      active={true}
-                      recordingOption={true}
-                      optionName="Video"
-                    />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-56">
-                    {videoDevices.map((device) => (
-                      <DropdownMenuItem
-                        key={device.deviceId}
-                        onSelect={() => {
-                          setSelectedVideoDevice(device.deviceId);
-                          setSelectedVideoDeviceLabel(device.label);
-                          startVideoCapture(device.deviceId);
-                        }}
-                      >
-                        {device.label}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <DropdownMenu>
-                  <DropdownMenuTrigger className="w-full">
-                    <ActionButton
-                      width="full"
-                      icon={<Mic className="w-5 h-5" />}
-                      label={selectedAudioDeviceLabel}
-                      active={true}
-                      recordingOption={true}
-                      optionName="Audio"
-                    />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-56">
-                    {audioDevices.map((device) => (
-                      <DropdownMenuItem
-                        key={device.deviceId}
-                        onSelect={() => {
-                          setSelectedAudioDevice(device.deviceId);
-                          setSelectedAudioDeviceLabel(device.label);
-                          startVideoCapture(device.deviceId);
-                        }}
-                      >
-                        {device.label}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </div>
-          </div>
-          <div className="group flex flex-col items-center justify-center w-full">
-            <Button
-              {...(isRecording && { variant: "destructive" })}
-              className="w-full flex mx-auto"
-              onClick={() => {
-                if (isRecording) {
-                  stopRecording();
-                } else {
-                  startRecording();
-                }
-              }}
-              spinner={startingRecording || stoppingRecording}
-            >
-              {startingRecording
-                ? "Starting..."
-                : isRecording
-                ? stoppingRecording
-                  ? currentStoppingMessage
-                  : `Stop - ${recordingTime}`
-                : "Start Recording"}
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="h-full flex-grow">
-        <div className="w-full h-full top-0 left-0 h-full flex flex-col items-center justify-center p-8">
-          <div className="w-full text-left mb-4">
-            <span className="bg-white shadow-lg py-2 px-4 rounded-xl font-medium text-lg border-2">
-              Recording preview
-            </span>
-          </div>
-          <div className="bg-black relative w-full aspect-w-16 aspect-h-9 mx-auto border-2 border-gray-200 rounded-xl overflow-hidden shadow-xl">
-            <video
-              id="screenPreview"
-              ref={screenPreviewRef}
-              autoPlay
-              muted
-              className="w-full h-full object-contain"
-            />
-            {videoStream && (
-              <Rnd
-                default={{
-                  x: 18,
-                  y: 18,
-                  width: 160,
-                  height: 160,
-                }}
-                bounds="parent"
-                className="absolute"
-                lockAspectRatio={true}
-              >
-                <div className="w-full h-full rounded-full overflow-hidden">
-                  <video
-                    id="webcamPreview"
-                    ref={webcamPreviewRef}
-                    autoPlay
-                    muted
-                    className="w-full h-full object-cover rounded-full"
+              <DropdownMenu>
+                <DropdownMenuTrigger className="w-full">
+                  <ActionButton
+                    width="full"
+                    icon={<Video className="w-5 h-5" />}
+                    label={selectedVideoDeviceLabel}
+                    active={true}
+                    recordingOption={true}
+                    optionName="Video"
                   />
-                </div>
-              </Rnd>
-            )}
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-56">
+                  {videoDevices.map((device) => (
+                    <DropdownMenuItem
+                      key={device.deviceId}
+                      onSelect={() => {
+                        setSelectedVideoDevice(device.deviceId);
+                        setSelectedVideoDeviceLabel(device.label);
+                        startVideoCapture(device.deviceId);
+                      }}
+                    >
+                      {device.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <DropdownMenu>
+                <DropdownMenuTrigger className="w-full">
+                  <ActionButton
+                    width="full"
+                    icon={<Mic className="w-5 h-5" />}
+                    label={selectedAudioDeviceLabel}
+                    active={true}
+                    recordingOption={true}
+                    optionName="Audio"
+                  />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-56">
+                  {audioDevices.map((device) => (
+                    <DropdownMenuItem
+                      key={device.deviceId}
+                      onSelect={() => {
+                        setSelectedAudioDevice(device.deviceId);
+                        setSelectedAudioDeviceLabel(device.label);
+                        startVideoCapture(device.deviceId);
+                      }}
+                    >
+                      {device.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
         </div>
       </div>

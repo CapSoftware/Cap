@@ -9,9 +9,11 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const filename = formData.get("filename");
   const videoId = formData.get("videoId");
-  const blobData = formData.get("blobData");
-
-  console.log("filename:", filename);
+  const blobData = formData.get("blobData") as Blob;
+  const duration = formData.get("duration");
+  const resolution = formData.get("resolution");
+  const videoCodec = formData.get("videoCodec");
+  const audioCodec = formData.get("audioCodec");
 
   if (!user || !awsRegion || !awsBucket || !filename || !blobData) {
     console.error("Missing required data in /api/upload/new/route.ts");
@@ -24,15 +26,19 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const fullFilepath = `${user.userId}/${videoId}/${filename}`;
+  const fullFilepath = `${user.id}/${videoId}/${filename}`;
 
-  const upload = await uploadToS3(
-    fullFilepath,
+  const upload = await uploadToS3({
+    filename: fullFilepath,
+    userId: user.id,
     blobData,
-    user.userId,
+    duration: duration as string,
+    resolution: resolution as string,
+    videoCodec: videoCodec as string,
+    audioCodec: audioCodec as string,
     awsBucket,
-    awsRegion
-  );
+    awsRegion,
+  });
 
   if (!upload) {
     console.error("Upload failed");

@@ -348,3 +348,19 @@ slot:not(.dashboard-layout slot) {
   box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000),
     var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
 }
+
+.resize-handle {
+  display: none;
+}
+
+.rnd:hover .resize-handle {
+  display: block;
+}
+
+.crosshair {
+  display: none;
+}
+
+body.react-draggable-transparent-selection .crosshair {
+  display: block;
+}

@@ -94,7 +94,7 @@ export const AdminNavItems = () => {
                 {spaceData !== null &&
                   spaceData?.map((space) => (
                     <CommandItem
-                      key={space.name}
+                      key={space.name + "-space"}
                       // onSelect={async () => {
                       //   await handleActiveSpace(space.id);
                       //   router.refresh();
@@ -129,7 +129,7 @@ export const AdminNavItems = () => {
               <Link
                 passHref
                 prefetch={false}
-                key={item.name}
+                key={item.name + "-main"}
                 href={item.href}
                 className={classNames(
                   pathname.includes(item.href)
@@ -150,7 +150,7 @@ export const AdminNavItems = () => {
                     <Link
                       passHref
                       prefetch={false}
-                      key={subItem.name}
+                      key={subItem.name + "-sub"}
                       href={subItem.href}
                       className={classNames(
                         pathname === subItem.href

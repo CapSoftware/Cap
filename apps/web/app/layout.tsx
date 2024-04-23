@@ -4,6 +4,7 @@ import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
 import type { Metadata } from "next";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { BentoScript } from "@/components/BentoScript";
 
 export const metadata: Metadata = {
   title:
@@ -65,6 +66,7 @@ export default async function RootLayout({
           data-domain="cap.so"
           src="https://plausible.io/js/script.js"
         ></script>
+        <BentoScript user={user} />
       </body>
     </html>
   );
