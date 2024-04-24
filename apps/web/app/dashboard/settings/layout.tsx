@@ -20,7 +20,7 @@ export default async function DashboardLayout({
   );
 
   return (
-    <div className="py-12">
+    <div>
       <header className="border-b border-white/5">
         <h1 className="text-3xl">{currentPage?.title ?? "Settings"}</h1>
         <nav className="mb-4 flex overflow-x-auto py-4">

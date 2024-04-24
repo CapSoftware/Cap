@@ -27,7 +27,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
     className={classNames(
-      "flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent data-[state=open]:bg-accent",
+      "flex cursor-default select-none flex justify-between items-center rounded-sm px-2 py-1.5 text-sm outline-none focus:bg-accent data-[state=open]:bg-accent",
       inset && "pl-8",
       className
     )}
@@ -162,7 +162,7 @@ const DropdownMenuSeparator = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DropdownMenuPrimitive.Separator
     ref={ref}
-    className={classNames("-mx-1 my-1 h-px bg-muted", className)}
+    className={classNames("-mx-1 my-1 h-px bg-gray-200", className)}
     {...props}
   />
 ));

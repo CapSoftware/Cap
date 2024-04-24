@@ -364,3 +364,15 @@ slot:not(.dashboard-layout slot) {
 body.react-draggable-transparent-selection .crosshair {
   display: block;
 }
+
+footer ul {
+  @apply list-none p-0;
+}
+
+footer h3 {
+  @apply text-xl font-semibold;
+}
+
+footer a {
+  @apply text-base text-gray-700 hover:text-black hover:underline;
+}

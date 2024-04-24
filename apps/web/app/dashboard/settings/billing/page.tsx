@@ -1,5 +1,10 @@
 import { Billing } from "./Billing";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Billing Settings — Cap",
+};
 
 export const revalidate = 0;
 

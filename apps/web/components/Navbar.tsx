@@ -110,20 +110,13 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                   </ul>
                 </NavigationMenuContent>
               </NavigationMenuItem>
+
               <NavigationMenuItem>
-                <Link
+                <Button
                   href={auth === false ? "/login" : "/dashboard"}
-                  legacyBehavior
-                  passHref
+                  size="sm"
                 >
-                  <NavigationMenuLink className={navigationMenuTriggerStyle()}>
-                    {auth === false ? "Sign in" : "Dashboard"}
-                  </NavigationMenuLink>
-                </Link>
-              </NavigationMenuItem>
-              <NavigationMenuItem>
-                <Button href="/download" size="sm">
-                  Download
+                  {auth === false ? "Sign in" : "Dashboard"}
                 </Button>
               </NavigationMenuItem>
             </NavigationMenuList>

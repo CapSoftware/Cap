@@ -4,6 +4,11 @@ import { comments, videos } from "@cap/database/schema";
 import { desc, eq, sql, count } from "drizzle-orm";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { redirect } from "next/navigation";
+import { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "My Caps — Cap",
+};
 
 export const revalidate = 0;
 
@@ -16,8 +21,6 @@ export default async function CapsPage({
   const limit = Number(searchParams.limit) || 16;
   const user = await getCurrentUser();
   const userId = user?.id as string;
-
-  console.log("page: ", page);
 
   if (
     user !== null &&
