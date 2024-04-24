@@ -41,12 +41,17 @@ class AsyncTaskQueue {
   private queue: (() => Promise<void>)[] = [];
   private isProcessing = false;
   private resolveEmpty: (() => void) | null = null;
-  private emptyPromise = new Promise<void>(
-    (resolve) => (this.resolveEmpty = resolve)
-  );
+  private emptyPromise: Promise<void> | null = null;
+  private isRecordingStopped = false;
 
   async enqueue(task: () => Promise<void>) {
+    console.log("Task added to queue");
     this.queue.push(task);
+    if (!this.emptyPromise) {
+      this.emptyPromise = new Promise<void>(
+        (resolve) => (this.resolveEmpty = resolve)
+      );
+    }
     if (!this.isProcessing) {
       await this.processQueue();
     }
@@ -55,25 +60,42 @@ class AsyncTaskQueue {
   private async processQueue() {
     this.isProcessing = true;
     while (this.queue.length > 0) {
+      console.log("Processing task");
       const task = this.queue.shift();
       if (task) {
+        this.isProcessing = true;
         await task();
+        console.log("Task completed");
       }
     }
     this.isProcessing = false;
-    if (this.resolveEmpty) {
+    if (this.resolveEmpty && this.isRecordingStopped) {
       this.resolveEmpty();
-      this.emptyPromise = new Promise<void>(
-        (resolve) => (this.resolveEmpty = resolve)
-      );
+      this.resolveEmpty = null;
+      this.emptyPromise = null;
     }
   }
 
   public async waitForEmpty() {
     if (this.queue.length === 0 && !this.isProcessing) {
+      console.log("1: Queue is empty");
       return Promise.resolve();
     }
-    return this.emptyPromise;
+    return new Promise<void>((resolve) => {
+      const checkEmpty = () => {
+        if (this.queue.length === 0 && !this.isProcessing) {
+          console.log("2: Queue is empty");
+          resolve();
+        } else {
+          setTimeout(checkEmpty, 500);
+        }
+      };
+      checkEmpty();
+    });
+  }
+
+  public stopRecording() {
+    this.isRecordingStopped = true;
   }
 }
 
@@ -126,7 +148,7 @@ export const Record = ({
 
   const [isCenteredHorizontally, setIsCenteredHorizontally] = useState(false);
   const [isCenteredVertically, setIsCenteredVertically] = useState(false);
-  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null | string>(null);
 
   const defaultRndHandeStyles = {
     topLeft: {
@@ -185,7 +207,13 @@ export const Record = ({
 
   const getDevices = async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: {
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      });
       const devices = await navigator.mediaDevices.enumerateDevices();
       console.log("Devices:", devices);
       const audioDevices = devices.filter(
@@ -249,7 +277,9 @@ export const Record = ({
   ) => {
     try {
       const constraints: MediaStreamConstraints = {
-        video: deviceId ? { deviceId } : true,
+        video: deviceId
+          ? { deviceId, width: { ideal: 1920 }, height: { ideal: 1080 } }
+          : { width: { ideal: 1920 }, height: { ideal: 1080 } },
         audio: selectedAudioDevice ? { deviceId: selectedAudioDevice } : false,
       };
 
@@ -264,6 +294,7 @@ export const Record = ({
 
       if (videoContainer === null) {
         console.error("Video container dimensions not found");
+        setTimeout(startVideoCapture, 1000);
         return;
       }
 
@@ -307,6 +338,8 @@ export const Record = ({
   };
 
   const startRecording = async () => {
+    setStartingRecording(true);
+
     const res = await fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create`,
       {
@@ -332,6 +365,7 @@ export const Record = ({
     ) {
       console.error("No data received");
       toast.error("No data received - please try again later.");
+      setStartingRecording(false);
       return;
     }
 
@@ -340,10 +374,12 @@ export const Record = ({
     if (!screenStream || !videoStream) {
       console.error("No screen or video stream");
       toast.error("No screen or video stream - please try again.");
+      setStartingRecording(false);
       return;
     }
 
     setStartingRecording(true);
+    recordingIntervalRef.current = null;
 
     const combinedStream = new MediaStream();
     const canvas = document.createElement("canvas");
@@ -516,6 +552,10 @@ export const Record = ({
     let segmentEndTime = 0;
 
     function recordVideoChunk() {
+      if (recordingIntervalRef.current === "stop") {
+        return;
+      }
+
       videoRecorder.start();
 
       recordingIntervalRef.current = setInterval(() => {
@@ -579,23 +619,10 @@ export const Record = ({
     return new Promise(async (resolve, reject) => {
       const segmentIndex = totalSegments.current;
 
-      console.log("Muxing segment index: ", segmentIndex);
-      console.log("---start-1");
-
-      console.log("Start directory:", await ffmpegRef.current.listDir("./"));
-
       const videoSegment = new Blob([data], { type: "video/webm" });
 
-      console.log("2");
-
       if (videoSegment) {
-        console.log("Video segment found");
-
-        console.log("3");
-
         const segmentIndexString = String(segmentIndex).padStart(3, "0");
-
-        console.log("4");
 
         const videoFile = await fetchFile(URL.createObjectURL(videoSegment));
         ffmpegRef.current.writeFile(
@@ -603,15 +630,11 @@ export const Record = ({
           videoFile
         );
 
-        console.log("5");
-
         const segmentPaths = {
           videoInput: `video_segment_${segmentIndexString}.webm`,
           videoOutput: `video_segment_${segmentIndexString}.ts`,
           audioOutput: `audio_segment_${segmentIndexString}.aac`,
         };
-
-        console.log("6");
 
         const videoFFmpegCommand = [
           "-i",
@@ -649,43 +672,62 @@ export const Record = ({
           segmentPaths.audioOutput,
         ];
 
-        console.log("7-8");
         const videoFFmpegExec = await ffmpegRef.current.exec(
           videoFFmpegCommand
         );
-        console.log("FFmpeg video exec:", videoFFmpegExec);
 
         const audioFFmpegExec = await ffmpegRef.current.exec(
           audioFFmpegCommand
         );
-        console.log("FFmpeg audio exec:", audioFFmpegExec);
 
         const videoData = await ffmpegRef.current.readFile(
           segmentPaths.videoOutput
         );
 
-        console.log("9");
-
-        console.log("9-list directory:", await ffmpegRef.current.listDir("./"));
-
         const audioData = await ffmpegRef.current.readFile(
           segmentPaths.audioOutput
         );
-
-        console.log("10");
 
         const segmentFilenames = {
           video: `video/video_recording_${segmentIndexString}.ts`,
           audio: `audio/audio_recording_${segmentIndexString}.aac`,
         };
 
-        console.log("11");
-
         const videoId = await getLatestVideoId();
 
-        console.log("12");
+        if (segmentIndex === 1) {
+          const video = document.createElement("video");
+          video.src = URL.createObjectURL(videoSegment);
+          video.muted = true;
+          await video.play();
 
-        console.log("Duration:", duration);
+          const canvas = document.createElement("canvas");
+
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+
+          const context = canvas.getContext("2d");
+          context?.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+
+          canvas.toBlob(
+            async (screenshotBlob) => {
+              if (screenshotBlob) {
+                const screenshotFile = await fetchFile(
+                  URL.createObjectURL(screenshotBlob)
+                );
+
+                const screenshotFilename = "screenshot/screen-capture.jpg";
+                await uploadSegment({
+                  file: screenshotFile,
+                  filename: screenshotFilename,
+                  videoId,
+                });
+              }
+            },
+            "image/jpeg",
+            0.5
+          );
+        }
 
         try {
           await uploadSegment({
@@ -698,34 +740,23 @@ export const Record = ({
             bandwidth,
           });
 
-          console.log("13");
-
           await uploadSegment({
             file: audioData,
             filename: segmentFilenames.audio,
             videoId,
             duration,
           });
-
-          console.log("14");
         } catch (error) {
           console.error("Upload segment error:", error);
           reject(error);
-          return;
         }
-
-        console.log("15");
-
-        console.log("End directory:", await ffmpegRef.current.listDir("./"));
 
         await ffmpegRef.current.deleteFile(segmentPaths.videoInput);
         await ffmpegRef.current.deleteFile(segmentPaths.videoOutput);
         await ffmpegRef.current.deleteFile(segmentPaths.audioOutput);
 
-        console.log("16---end");
         resolve(void 0);
       } else {
-        console.log("No video segment found");
         resolve(void 0);
       }
 
@@ -774,17 +805,26 @@ export const Record = ({
   const stopRecording = async () => {
     setStoppingRecording(true);
 
+    console.log("---Stopping recording function fired here---");
+
     if (videoRecorder) {
       videoRecorder.stop();
     }
 
     if (recordingIntervalRef.current) {
       clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = "stop";
     }
 
+    muxQueue.stopRecording();
+
+    await new Promise((resolve) => setTimeout(resolve, 3000));
     await muxQueue.waitForEmpty();
 
     const videoId = await getLatestVideoId();
+
+    console.log("---Opening link here---");
+
     const url =
       process.env.NEXT_PUBLIC_ENVIRONMENT === "development"
         ? `${process.env.NEXT_PUBLIC_URL}/s/${videoId}`
@@ -837,6 +877,8 @@ export const Record = ({
             x: (videoContainerWidth - prevSettings.width) / 2,
           }));
         }
+
+        setIsCenteredHorizontally(true);
       } else {
         if (previewType === "webcam") {
           setWebcamStyleSettings((prevSettings) => ({
@@ -849,6 +891,8 @@ export const Record = ({
             x: d.x,
           }));
         }
+
+        setIsCenteredHorizontally(false);
       }
 
       if (Math.abs(previewCenterY - containerCenterY) <= thresholdY) {
@@ -1067,6 +1111,7 @@ export const Record = ({
             <ArrowLeft className="w-6 h-6 text-gray-600" />
           </a>
           <Button
+            className="min-w-[175px]"
             {...(isRecording && { variant: "destructive" })}
             onClick={() => {
               if (isRecording) {
@@ -1135,9 +1180,10 @@ export const Record = ({
                   onDragStop={(e, d) => handleRndDragStop(e, d, "screen")}
                   onResizeStop={(e, direction, ref, delta, position) => {
                     setScreenStyleSettings({
-                      ...screenStyleSettings,
                       width: ref.offsetWidth,
                       height: ref.offsetHeight,
+                      x: position.x,
+                      y: position.y,
                     });
                   }}
                 >
@@ -1181,9 +1227,10 @@ export const Record = ({
                   onDragStop={(e, d) => handleRndDragStop(e, d, "webcam")}
                   onResizeStop={(e, direction, ref, delta, position) => {
                     setWebcamStyleSettings({
-                      ...webcamStyleSettings,
                       width: ref.offsetWidth,
                       height: ref.offsetHeight,
+                      x: position.x,
+                      y: position.y,
                     });
                   }}
                 >
