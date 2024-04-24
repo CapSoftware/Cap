@@ -29,6 +29,14 @@ export const Footer = () => {
             <p className="text-gray-400">
               © Cap Software, Inc. {new Date().getFullYear()}.
             </p>
+            <div className="flex space-x-3">
+              <a className="text-gray-400 text-sm" href="/terms">
+                Terms of Service
+              </a>
+              <a className="text-gray-400 text-sm" href="/privacy">
+                Privacy Policy
+              </a>
+            </div>
           </div>
           <div className="space-y-4 md:col-span-3">
             <h3 className="text-lg font-semibold">Product</h3>
