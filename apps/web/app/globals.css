@@ -376,3 +376,12 @@ footer h3 {
 footer a {
   @apply text-base text-gray-700 hover:text-black hover:underline;
 }
+
+.legal-body p,
+.legal-body li {
+  @apply text-[16px] my-3;
+}
+
+.legal-body h3 {
+  @apply text-2xl font-semibold mt-6;
+}

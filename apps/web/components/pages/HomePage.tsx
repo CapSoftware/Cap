@@ -51,7 +51,7 @@ export const HomePage = () => {
       <div className="w-full custom-bg">
         <div className="wrapper wrapper-sm mx-auto">
           <div className="mb-auto -mt-20 text-center md:px-4 pt-32 pb-52 md:pb-64 space-y-8">
-            <h1 className="fade-in-down text-3xl lg:text-5xl relative z-10 text-black">
+            <h1 className="fade-in-down text-3xl lg:text-6xl relative z-10 text-black">
               Effortless, instant screen sharing.
             </h1>
             <p className="fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto text-black mb-8">
@@ -122,8 +122,7 @@ export const HomePage = () => {
                   </Button>
                 </div>
                 <p className="text-gray-500 text-sm">
-                  Cap is currently available for macOS and Windows in public
-                  beta. Linux coming soon.
+                  No credit card required.
                 </p>
               </div>
             )}

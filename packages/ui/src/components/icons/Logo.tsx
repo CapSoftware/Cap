@@ -1,9 +1,11 @@
 export const Logo = ({
   className,
   showVersion,
+  showBeta,
 }: {
   className: string;
   showVersion?: boolean;
+  showBeta?: boolean;
 }) => {
   return (
     <div className="flex items-center space-x-1">
@@ -84,6 +86,11 @@ export const Logo = ({
       {showVersion && (
         <span className="text-[10px] font-medium text-gray-500">
           v{process.env.appVersion}
+        </span>
+      )}
+      {showBeta && (
+        <span className="text-[10px] font-medium text-gray-500">
+          Beta v{process.env.appVersion}
         </span>
       )}
     </div>

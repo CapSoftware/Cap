@@ -66,7 +66,7 @@ export default function DynamicSharedLayout({
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56">
-                <DropdownMenuItem>
+                <DropdownMenuItem className="hover:bg-gray-200">
                   <Link
                     className="w-full text-primary font-medium"
                     href="/pricing"

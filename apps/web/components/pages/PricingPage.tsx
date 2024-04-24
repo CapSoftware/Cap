@@ -147,9 +147,7 @@ export const PricingPage = () => {
                     </ul>
                   </div>
                   <div>
-                    <h3 className="text-base text-white mb-3">
-                      What's planned:
-                    </h3>
+                    <h3 className="text-base text-white mb-3">Coming soon:</h3>
                     <ul className="list-none p-0 space-y-3 mb-6">
                       {plannedFeatures.map((item, index) => (
                         <li
