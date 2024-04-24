@@ -11,7 +11,7 @@ import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/tauri";
-import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
+import { getLatestVideoId, saveLatestVideoId } from "@cap/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";

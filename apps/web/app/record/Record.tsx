@@ -34,6 +34,48 @@ import { ActionButton } from "./_components/ActionButton";
 import toast from "react-hot-toast";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
+import { getLatestVideoId, saveLatestVideoId } from "@cap/utils";
+import { FileData } from "@ffmpeg/ffmpeg/dist/esm/types";
+
+class AsyncTaskQueue {
+  private queue: (() => Promise<void>)[] = [];
+  private isProcessing = false;
+  private resolveEmpty: (() => void) | null = null;
+  private emptyPromise = new Promise<void>(
+    (resolve) => (this.resolveEmpty = resolve)
+  );
+
+  async enqueue(task: () => Promise<void>) {
+    this.queue.push(task);
+    if (!this.isProcessing) {
+      await this.processQueue();
+    }
+  }
+
+  private async processQueue() {
+    this.isProcessing = true;
+    while (this.queue.length > 0) {
+      const task = this.queue.shift();
+      if (task) {
+        await task();
+      }
+    }
+    this.isProcessing = false;
+    if (this.resolveEmpty) {
+      this.resolveEmpty();
+      this.emptyPromise = new Promise<void>(
+        (resolve) => (this.resolveEmpty = resolve)
+      );
+    }
+  }
+
+  public async waitForEmpty() {
+    if (this.queue.length === 0 && !this.isProcessing) {
+      return Promise.resolve();
+    }
+    return this.emptyPromise;
+  }
+}
 
 // million-ignore
 export const Record = ({
@@ -60,12 +102,12 @@ export const Record = ({
     useState("Webcam");
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
-  const videoSegmentsRef = useRef<Blob[]>([]);
   const [videoRecorder, setVideoRecorder] = useState<MediaRecorder | null>(
     null
   );
   const totalSegments = useRef(0);
-
+  const segmentStartTimeRef = useRef(0);
+  const muxQueue = new AsyncTaskQueue();
   const screenPreviewRef = useRef<HTMLVideoElement>(null);
   const webcamPreviewRef = useRef<HTMLVideoElement>(null);
   const [aspectRatio, setAspectRatio] = useState(1.7777777778);
@@ -84,6 +126,7 @@ export const Record = ({
 
   const [isCenteredHorizontally, setIsCenteredHorizontally] = useState(false);
   const [isCenteredVertically, setIsCenteredVertically] = useState(false);
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const defaultRndHandeStyles = {
     topLeft: {
@@ -292,253 +335,402 @@ export const Record = ({
       return;
     }
 
-    if (screenStream && videoStream) {
-      setStartingRecording(true);
+    saveLatestVideoId(videoCreateData.id);
 
-      const combinedStream = new MediaStream();
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
+    if (!screenStream || !videoStream) {
+      console.error("No screen or video stream");
+      toast.error("No screen or video stream - please try again.");
+      return;
+    }
 
-      // Get the video container element
-      const videoContainer = document.querySelector(
-        ".video-container"
-      ) as HTMLElement;
+    setStartingRecording(true);
 
-      // Set the minimum width to 1000 pixels
-      const minWidth = 1000;
+    const combinedStream = new MediaStream();
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
 
-      // Calculate the aspect ratio of the video container
-      const aspectRatio =
-        videoContainer.clientWidth / videoContainer.clientHeight;
+    // Get the video container element
+    const videoContainer = document.querySelector(
+      ".video-container"
+    ) as HTMLElement;
 
-      // Set the canvas width to the minimum width or the video container width, whichever is larger
-      canvas.width = Math.max(minWidth, videoContainer.clientWidth);
+    // Set the minimum width to 1000 pixels
+    const minWidth = 1000;
 
-      // Calculate the canvas height based on the width and aspect ratio
-      canvas.height = canvas.width / aspectRatio;
+    // Calculate the aspect ratio of the video container
+    const aspectRatio =
+      videoContainer.clientWidth / videoContainer.clientHeight;
 
-      let animationFrameId: number;
+    // Set the canvas width to the minimum width or the video container width, whichever is larger
+    canvas.width = Math.max(minWidth, videoContainer.clientWidth);
 
-      const drawCanvas = () => {
-        if (ctx) {
-          // Clear the canvas
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Calculate the canvas height based on the width and aspect ratio
+    canvas.height = canvas.width / aspectRatio;
 
-          // Get the current position and size of the screen preview
-          const screenPreview = document.getElementById(
-            "screenPreview"
-          ) as HTMLVideoElement;
-          const screenRect = screenPreview.getBoundingClientRect();
-          const containerRect = document
-            .querySelector(".video-container")
-            ?.getBoundingClientRect();
+    let animationFrameId: number;
 
-          if (containerRect) {
-            const screenX = screenRect.left - containerRect.left;
-            const screenY = screenRect.top - containerRect.top;
-            const screenWidth = screenRect.width;
-            const screenHeight = screenRect.height;
+    const drawCanvas = () => {
+      if (ctx) {
+        // Clear the canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Draw the screen preview on the canvas based on its position and size
-            ctx.drawImage(
-              screenPreview,
-              screenX,
-              screenY,
-              screenWidth,
-              screenHeight
-            );
-          }
+        // Get the current position and size of the screen preview
+        const screenPreview = document.getElementById(
+          "screenPreview"
+        ) as HTMLVideoElement;
+        const screenRect = screenPreview.getBoundingClientRect();
+        const containerRect = document
+          .querySelector(".video-container")
+          ?.getBoundingClientRect();
 
-          // Get the current position and size of the webcam preview
-          const webcamPreview = document.getElementById(
-            "webcamPreview"
-          ) as HTMLVideoElement;
-          const webcamRect = webcamPreview.getBoundingClientRect();
+        if (containerRect) {
+          const screenX = screenRect.left - containerRect.left;
+          const screenY = screenRect.top - containerRect.top;
+          const screenWidth = screenRect.width;
+          const screenHeight = screenRect.height;
 
-          if (containerRect) {
-            const camX = webcamRect.left - containerRect.left;
-            const camY = webcamRect.top - containerRect.top;
-            const camWidth = webcamRect.width;
-            const camHeight = webcamRect.height;
-
-            // Calculate the aspect ratio of the webcam video
-            const videoAspectRatio =
-              webcamPreview.videoWidth / webcamPreview.videoHeight;
-
-            // Calculate the new dimensions to maintain the aspect ratio
-            let newCamWidth = camWidth;
-            let newCamHeight = camHeight;
-            if (camWidth / camHeight > videoAspectRatio) {
-              newCamWidth = camHeight * videoAspectRatio;
-            } else {
-              newCamHeight = camWidth / videoAspectRatio;
-            }
-
-            // Calculate the offset to center the webcam video
-            const offsetX = (camWidth - newCamWidth) / 2;
-            const offsetY = (camHeight - newCamHeight) / 2;
-
-            // Set the position and size of the circular webcam preview on the canvas
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(
-              camX + camWidth / 2,
-              camY + camHeight / 2,
-              Math.min(newCamWidth, newCamHeight) / 2,
-              0,
-              2 * Math.PI
-            );
-            ctx.clip();
-            ctx.drawImage(
-              webcamPreview,
-              camX + offsetX,
-              camY + offsetY,
-              newCamWidth,
-              newCamHeight
-            );
-            ctx.restore();
-          }
-
-          animationFrameId = requestAnimationFrame(drawCanvas);
+          // Draw the screen preview on the canvas based on its position and size
+          ctx.drawImage(
+            screenPreview,
+            screenX,
+            screenY,
+            screenWidth,
+            screenHeight
+          );
         }
-      };
 
-      drawCanvas();
-      const canvasStream = canvas.captureStream(30);
-      if (canvasStream.getVideoTracks().length === 0) {
-        console.error("Canvas stream has no video tracks");
-        setStartingRecording(false);
-        return;
+        // Get the current position and size of the webcam preview
+        const webcamPreview = document.getElementById(
+          "webcamPreview"
+        ) as HTMLVideoElement;
+        const webcamRect = webcamPreview.getBoundingClientRect();
+
+        if (containerRect) {
+          const camX = webcamRect.left - containerRect.left;
+          const camY = webcamRect.top - containerRect.top;
+          const camWidth = webcamRect.width;
+          const camHeight = webcamRect.height;
+
+          // Calculate the aspect ratio of the webcam video
+          const videoAspectRatio =
+            webcamPreview.videoWidth / webcamPreview.videoHeight;
+
+          // Calculate the new dimensions to maintain the aspect ratio
+          let newCamWidth = camWidth;
+          let newCamHeight = camHeight;
+          if (camWidth / camHeight > videoAspectRatio) {
+            newCamWidth = camHeight * videoAspectRatio;
+          } else {
+            newCamHeight = camWidth / videoAspectRatio;
+          }
+
+          // Calculate the offset to center the webcam video
+          const offsetX = (camWidth - newCamWidth) / 2;
+          const offsetY = (camHeight - newCamHeight) / 2;
+
+          // Set the position and size of the circular webcam preview on the canvas
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(
+            camX + camWidth / 2,
+            camY + camHeight / 2,
+            Math.min(newCamWidth, newCamHeight) / 2,
+            0,
+            2 * Math.PI
+          );
+          ctx.clip();
+          ctx.drawImage(
+            webcamPreview,
+            camX + offsetX,
+            camY + offsetY,
+            newCamWidth,
+            newCamHeight
+          );
+          ctx.restore();
+        }
+
+        animationFrameId = requestAnimationFrame(drawCanvas);
       }
+    };
 
-      canvasStream
-        .getVideoTracks()
-        .forEach((track) => combinedStream.addTrack(track));
+    drawCanvas();
+    const canvasStream = canvas.captureStream(30);
+    if (canvasStream.getVideoTracks().length === 0) {
+      console.error("Canvas stream has no video tracks");
+      setStartingRecording(false);
+      return;
+    }
 
-      videoStream
-        .getAudioTracks()
-        .forEach((track) => combinedStream.addTrack(track));
+    canvasStream
+      .getVideoTracks()
+      .forEach((track) => combinedStream.addTrack(track));
 
-      const videoRecorderOptions = {
-        mimeType: 'video/webm; codecs="h264"',
-      };
+    videoStream
+      .getAudioTracks()
+      .forEach((track) => combinedStream.addTrack(track));
 
-      if (!MediaRecorder.isTypeSupported(videoRecorderOptions.mimeType)) {
-        console.error("Video MIME type not supported");
-        setStartingRecording(false);
-        return;
+    const mimeTypes = [
+      "video/webm;codecs=h264",
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm",
+    ];
+
+    let selectedMimeType = "";
+    for (const mimeType of mimeTypes) {
+      if (MediaRecorder.isTypeSupported(mimeType)) {
+        selectedMimeType = mimeType;
+        break;
       }
+    }
 
-      const videoRecorder = new MediaRecorder(
-        combinedStream,
-        videoRecorderOptions
-      );
+    if (!selectedMimeType) {
+      toast.error("Sorry, your browser does not support screen recording :(");
+      setStartingRecording(false);
+      return;
+    }
 
-      const videoBitsPerSecond = videoRecorder.videoBitsPerSecond;
+    const videoRecorderOptions = {
+      mimeType: selectedMimeType,
+    };
 
-      const videoTracks = canvasStream.getVideoTracks();
-      const frameRate = videoTracks[0].getSettings().frameRate || 30;
+    if (!MediaRecorder.isTypeSupported(videoRecorderOptions.mimeType)) {
+      console.error("Video MIME type not supported");
+      setStartingRecording(false);
+      return;
+    }
 
-      const resolution = `${canvas.width}x${canvas.height}`;
+    const videoRecorder = new MediaRecorder(
+      combinedStream,
+      videoRecorderOptions
+    );
 
-      videoRecorder.ondataavailable = async (event) => {
-        if (event.data.size > 0) {
-          videoSegmentsRef.current.push(event.data);
-          console.log("Video segment pushed:", event.data);
+    const videoBitsPerSecond = videoRecorder.videoBitsPerSecond;
 
+    const videoTracks = canvasStream.getVideoTracks();
+    const frameRate = videoTracks[0].getSettings().frameRate || 30;
+
+    const resolution = `${canvas.width}x${canvas.height}`;
+
+    let segmentStartTime = 0;
+    let segmentEndTime = 0;
+
+    function recordVideoChunk() {
+      videoRecorder.start();
+
+      recordingIntervalRef.current = setInterval(() => {
+        if (videoRecorder.state === "recording") videoRecorder.stop();
+
+        if (videoRecorder) recordVideoChunk();
+      }, 5000);
+    }
+
+    videoRecorder.onstart = () => {
+      segmentStartTime = Date.now();
+      segmentStartTimeRef.current = segmentStartTime;
+    };
+
+    videoRecorder.ondataavailable = async (event) => {
+      if (event.data.size > 0) {
+        segmentEndTime = Date.now();
+        const duration = (segmentEndTime - segmentStartTime) / 1000;
+
+        console.log("Segment duration:", duration);
+
+        muxQueue.enqueue(async () => {
           await muxSegment({
-            videoId: videoCreateData.id,
+            data: event.data,
             bandwidth: videoBitsPerSecond,
             framerate: frameRate,
-            resolution,
+            resolution: resolution,
+            videoCodec: "h264",
+            audioCodec: "aac",
+            duration: Number(duration.toFixed(3)),
           });
-        }
-      };
+        });
+      }
+    };
 
-      videoRecorder.start(3000);
+    recordVideoChunk();
 
-      setVideoRecorder(videoRecorder);
+    setVideoRecorder(videoRecorder);
 
-      setIsRecording(true);
-      setStartingRecording(false);
-    } else {
-      toast.error("No source selected for recording");
-    }
+    setIsRecording(true);
+    setStartingRecording(false);
   };
 
   const muxSegment = async ({
-    videoId,
+    data,
     bandwidth,
     framerate,
     resolution,
+    videoCodec,
+    audioCodec,
+    duration,
   }: {
-    videoId: string;
+    data: Blob;
     bandwidth: number;
     framerate: number;
     resolution: string;
+    videoCodec?: string;
+    audioCodec?: string;
+    duration?: number;
   }) => {
-    if (ffmpegRef.current && videoSegmentsRef.current.length > 0) {
-      console.log("Muxing segment");
+    return new Promise(async (resolve, reject) => {
+      const segmentIndex = totalSegments.current;
 
-      const videoSegment = videoSegmentsRef.current.shift();
+      console.log("Muxing segment index: ", segmentIndex);
+      console.log("---start-1");
+
+      console.log("Start directory:", await ffmpegRef.current.listDir("./"));
+
+      const videoSegment = new Blob([data], { type: "video/webm" });
+
+      console.log("2");
 
       if (videoSegment) {
+        console.log("Video segment found");
+
+        console.log("3");
+
+        const segmentIndexString = String(segmentIndex).padStart(3, "0");
+
+        console.log("4");
+
         const videoFile = await fetchFile(URL.createObjectURL(videoSegment));
+        ffmpegRef.current.writeFile(
+          `video_segment_${segmentIndexString}.webm`,
+          videoFile
+        );
 
-        ffmpegRef.current.writeFile("video_segment.webm", videoFile);
+        console.log("5");
 
-        await ffmpegRef.current.exec([
+        const segmentPaths = {
+          videoInput: `video_segment_${segmentIndexString}.webm`,
+          videoOutput: `video_segment_${segmentIndexString}.ts`,
+          audioOutput: `audio_segment_${segmentIndexString}.aac`,
+        };
+
+        console.log("6");
+
+        const videoFFmpegCommand = [
           "-i",
-          "video_segment.webm",
+          segmentPaths.videoInput,
+          "-map",
+          "0:v",
           "-c:v",
-          "copy",
+          "libx264",
+          "-profile:v",
+          "main",
+          "-level",
+          "3.1",
+          "-preset",
+          "ultrafast",
+          "-pix_fmt",
+          "yuv420p",
           "-f",
           "mpegts",
-          "video_segment.ts",
-        ]);
+          segmentPaths.videoOutput,
+        ];
 
-        await ffmpegRef.current.exec([
+        const audioFFmpegCommand = [
           "-i",
-          "video_segment.webm",
-          "-vn",
+          segmentPaths.videoInput,
+          "-map",
+          "0:a",
           "-c:a",
           "aac",
           "-b:a",
           "128k",
-          "audio_segment.aac",
-        ]);
+          "-profile:a",
+          "aac_low",
+          "-f",
+          "adts",
+          segmentPaths.audioOutput,
+        ];
 
-        const videoData = await ffmpegRef.current.readFile("video_segment.ts");
-        const audioData = await ffmpegRef.current.readFile("audio_segment.aac");
+        console.log("7-8");
+        const videoFFmpegExec = await ffmpegRef.current.exec(
+          videoFFmpegCommand
+        );
+        console.log("FFmpeg video exec:", videoFFmpegExec);
 
-        const segmentIndex = String(totalSegments.current).padStart(3, "0");
-        const videoSegmentFilename = `video/video_recording_${segmentIndex}.ts`;
-        const audioSegmentFilename = `audio/audio_recording_${segmentIndex}.aac`;
+        const audioFFmpegExec = await ffmpegRef.current.exec(
+          audioFFmpegCommand
+        );
+        console.log("FFmpeg audio exec:", audioFFmpegExec);
 
-        console.log("Uploading segment:", videoSegmentFilename);
-        console.log("Uploading segment:", audioSegmentFilename);
+        const videoData = await ffmpegRef.current.readFile(
+          segmentPaths.videoOutput
+        );
 
-        await uploadSegment({
-          file: videoData,
-          filename: videoSegmentFilename,
-          videoId: videoId,
-          duration: 3,
-          resolution,
-          bandwidth,
-          videoCodec: "vp9",
-        });
+        console.log("9");
 
-        await uploadSegment({
-          file: audioData,
-          filename: audioSegmentFilename,
-          videoId: videoId,
-          duration: 3,
-          audioCodec: "aac",
-        });
+        console.log("9-list directory:", await ffmpegRef.current.listDir("./"));
 
-        totalSegments.current++;
+        const audioData = await ffmpegRef.current.readFile(
+          segmentPaths.audioOutput
+        );
+
+        console.log("10");
+
+        const segmentFilenames = {
+          video: `video/video_recording_${segmentIndexString}.ts`,
+          audio: `audio/audio_recording_${segmentIndexString}.aac`,
+        };
+
+        console.log("11");
+
+        const videoId = await getLatestVideoId();
+
+        console.log("12");
+
+        console.log("Duration:", duration);
+
+        try {
+          await uploadSegment({
+            file: videoData,
+            filename: segmentFilenames.video,
+            videoId,
+            duration,
+            resolution,
+            framerate,
+            bandwidth,
+          });
+
+          console.log("13");
+
+          await uploadSegment({
+            file: audioData,
+            filename: segmentFilenames.audio,
+            videoId,
+            duration,
+          });
+
+          console.log("14");
+        } catch (error) {
+          console.error("Upload segment error:", error);
+          reject(error);
+          return;
+        }
+
+        console.log("15");
+
+        console.log("End directory:", await ffmpegRef.current.listDir("./"));
+
+        await ffmpegRef.current.deleteFile(segmentPaths.videoInput);
+        await ffmpegRef.current.deleteFile(segmentPaths.videoOutput);
+        await ffmpegRef.current.deleteFile(segmentPaths.audioOutput);
+
+        console.log("16---end");
+        resolve(void 0);
+      } else {
+        console.log("No video segment found");
+        resolve(void 0);
       }
-    }
+
+      totalSegments.current++;
+    });
   };
 
   const uploadSegment = async ({
@@ -547,6 +739,7 @@ export const Record = ({
     videoId,
     duration = 3,
     resolution,
+    framerate,
     bandwidth,
     videoCodec,
     audioCodec,
@@ -556,6 +749,7 @@ export const Record = ({
     videoId: string;
     duration?: number;
     resolution?: string;
+    framerate?: number;
     bandwidth?: number;
     videoCodec?: string;
     audioCodec?: string;
@@ -566,6 +760,7 @@ export const Record = ({
     formData.append("blobData", new Blob([file], { type: "video/mp2t" }));
     formData.append("duration", String(duration));
     formData.append("resolution", resolution || "");
+    formData.append("framerate", String(framerate || 30));
     formData.append("bandwidth", String(bandwidth || 0));
     formData.append("videoCodec", videoCodec || "");
     formData.append("audioCodec", audioCodec || "");
@@ -576,12 +771,29 @@ export const Record = ({
     });
   };
 
-  const stopRecording = () => {
+  const stopRecording = async () => {
     setStoppingRecording(true);
 
     if (videoRecorder) {
       videoRecorder.stop();
     }
+
+    if (recordingIntervalRef.current) {
+      clearInterval(recordingIntervalRef.current);
+    }
+
+    await muxQueue.waitForEmpty();
+
+    const videoId = await getLatestVideoId();
+    const url =
+      process.env.NEXT_PUBLIC_ENVIRONMENT === "development"
+        ? `${process.env.NEXT_PUBLIC_URL}/s/${videoId}`
+        : `https://cap.link/${videoId}`;
+
+    const audio = new Audio("/recording-end.mp3");
+    await audio.play();
+
+    window.open(url, "_blank");
 
     setIsRecording(false);
     setStoppingRecording(false);
