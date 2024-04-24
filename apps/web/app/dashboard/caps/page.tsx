@@ -1,15 +1,23 @@
 import { Caps } from "./Caps";
 import { db } from "@cap/database";
 import { comments, videos } from "@cap/database/schema";
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql, count } from "drizzle-orm";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { redirect } from "next/navigation";
 
 export const revalidate = 0;
 
-export default async function CapsPage() {
+export default async function CapsPage({
+  searchParams,
+}: {
+  searchParams: { [key: string]: string | string[] | undefined };
+}) {
+  const page = Number(searchParams.page) || 1;
+  const limit = Number(searchParams.limit) || 16;
   const user = await getCurrentUser();
   const userId = user?.id as string;
+
+  console.log("page: ", page);
 
   if (
     user !== null &&
@@ -20,6 +28,15 @@ export default async function CapsPage() {
   ) {
     return redirect("/onboarding");
   }
+
+  const offset = (page - 1) * limit;
+
+  const totalCountResult = await db
+    .select({ count: count() })
+    .from(videos)
+    .where(eq(videos.ownerId, userId));
+
+  const totalCount = totalCountResult[0]?.count || 0;
 
   const videoData = await db
     .select({
@@ -34,7 +51,9 @@ export default async function CapsPage() {
     .leftJoin(comments, eq(videos.id, comments.videoId))
     .where(eq(videos.ownerId, userId))
     .groupBy(videos.id, videos.ownerId, videos.name, videos.createdAt)
-    .orderBy(desc(videos.createdAt));
+    .orderBy(desc(videos.createdAt))
+    .limit(limit)
+    .offset(offset);
 
-  return <Caps data={videoData} />;
+  return <Caps data={videoData} count={totalCount} />;
 }

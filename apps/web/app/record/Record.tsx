@@ -695,7 +695,7 @@ export const Record = ({
 
         const videoId = await getLatestVideoId();
 
-        if (segmentIndex === 1) {
+        if (segmentIndex === 0) {
           const video = document.createElement("video");
           video.src = URL.createObjectURL(videoSegment);
           video.muted = true;

@@ -2,7 +2,7 @@
 import { Button } from "@cap/ui";
 import moment from "moment";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import toast from "react-hot-toast";
 import {
   EyeIcon,
@@ -13,6 +13,15 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@cap/ui";
 
 type videoData = {
   id: string;
@@ -23,10 +32,25 @@ type videoData = {
   totalReactions: number;
 }[];
 
-export const Caps = ({ data }: { data: videoData }) => {
+export const Caps = ({ data, count }: { data: videoData; count: number }) => {
   const { push } = useRouter();
+  const params = useSearchParams();
+  const page = Number(params.get("page")) || 1;
+  console.log("page: ", page);
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
   const { user } = useSharedContext();
+  const limit = 16;
+  const totalPages = Math.ceil(count / limit);
+
+  const nextPage = () => {
+    push(`/dashboard/caps?page=${page + 1}`);
+  };
+
+  const prevPage = () => {
+    if (page > 1) {
+      push(`/dashboard/caps?page=${page - 1}`);
+    }
+  };
 
   useEffect(() => {
     const fetchAnalytics = async () => {
@@ -162,6 +186,64 @@ export const Caps = ({ data }: { data: videoData }) => {
           </div>
         </>
       )}
+      <div className="pt-8">
+        <Pagination>
+          <PaginationContent>
+            <PaginationItem>
+              <PaginationPrevious
+                href={
+                  process.env.NEXT_PUBLIC_URL +
+                  `/dashboard/caps?page=${page === 1 ? page : page - 1}`
+                }
+              />
+            </PaginationItem>
+            <PaginationItem>
+              <PaginationLink
+                href={process.env.NEXT_PUBLIC_URL + `/dashboard/caps?page=1`}
+                isActive={page === 1}
+              >
+                1
+              </PaginationLink>
+            </PaginationItem>
+            {page !== 1 && (
+              <PaginationItem>
+                <PaginationLink
+                  href={
+                    process.env.NEXT_PUBLIC_URL + `/dashboard/caps?page=${page}`
+                  }
+                  isActive={true}
+                >
+                  {page}
+                </PaginationLink>
+              </PaginationItem>
+            )}
+            {totalPages > page + 1 && (
+              <PaginationItem>
+                <PaginationLink
+                  href={
+                    process.env.NEXT_PUBLIC_URL +
+                    `/dashboard/caps?page=${page + 1}`
+                  }
+                  isActive={page === page + 1}
+                >
+                  {page + 1}
+                </PaginationLink>
+              </PaginationItem>
+            )}
+            {page > 2 && <PaginationEllipsis />}
+            <PaginationItem>
+              <PaginationNext
+                href={
+                  process.env.NEXT_PUBLIC_URL +
+                  `/dashboard/caps?page=${
+                    page === totalPages ? page : page + 1
+                  }`
+                }
+              />
+            </PaginationItem>
+          </PaginationContent>
+        </Pagination>
+      </div>
     </div>
   );
 };

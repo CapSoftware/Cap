@@ -18,6 +18,7 @@ export * from "./components/Popover";
 export * from "./components/Card";
 export * from "./components/NavigationMenu";
 export * from "./components/Dropdown";
+export * from "./components/Pagination";
 
 // Forms & Inputs
 export * from "./components/input/Form";
