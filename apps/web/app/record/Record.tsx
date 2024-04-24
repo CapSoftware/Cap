@@ -1210,7 +1210,7 @@ export const Record = ({
                   }}
                   default={webcamStyleSettings}
                   bounds="parent"
-                  className="absolute webcam-rnd rnd group"
+                  className="absolute webcam-rnd rnd group hover:outline outline-2 outline-primary"
                   lockAspectRatio={true}
                   resizeHandleStyles={defaultRndHandeStyles}
                   resizeHandleClasses={{
@@ -1234,7 +1234,7 @@ export const Record = ({
                     });
                   }}
                 >
-                  <div className="w-full h-full rounded-xl overflow-hidden group-hover:outline outline-2 outline-primary">
+                  <div className="w-full h-full rounded-full overflow-hidden group-hover:outline outline-2 outline-primary">
                     <video
                       id="webcamPreview"
                       ref={webcamPreviewRef}
