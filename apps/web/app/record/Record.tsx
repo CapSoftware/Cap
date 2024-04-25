@@ -114,8 +114,8 @@ export const Record = ({
     useState("Stopping Recording");
   const [recordingTime, setRecordingTime] = useState("00:00");
 
-  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
-  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  const audioDevicesRef = useRef<MediaDeviceInfo[]>([]);
+  const videoDevicesRef = useRef<MediaDeviceInfo[]>([]);
   const [selectedAudioDevice, setSelectedAudioDevice] = useState<string>();
   const [selectedVideoDevice, setSelectedVideoDevice] = useState<string>();
   const [selectedAudioDeviceLabel, setSelectedAudioDeviceLabel] =
@@ -223,8 +223,8 @@ export const Record = ({
       const videoDevices = devices.filter(
         (device) => device.kind === "videoinput"
       );
-      setAudioDevices(audioDevices);
-      setVideoDevices(videoDevices);
+      audioDevicesRef.current = audioDevices;
+      videoDevicesRef.current = videoDevices;
     } catch (error) {
       console.error("Error accessing media devices:", error);
     }
@@ -263,7 +263,9 @@ export const Record = ({
             width: "100%",
             height: "100%",
           });
-          startVideoCapture(selectedVideoDevice, "small");
+          if (selectedVideoDeviceLabel !== "None") {
+            startVideoCapture(selectedVideoDevice, "small");
+          }
           resolve({ width: videoWidth, height: videoHeight });
         };
       });
@@ -284,19 +286,12 @@ export const Record = ({
         audio: selectedAudioDevice ? { deviceId: selectedAudioDevice } : false,
       };
 
-      console.log("Video constraints:", constraints);
-      console.log("Selected audio device:", selectedAudioDevice);
-
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      setSelectedVideoDevice(deviceId);
-      setSelectedVideoDeviceLabel(
-        videoDevices.find((device) => device.deviceId === deviceId)?.label ||
-          "None"
-      );
-      setSelectedAudioDevice(selectedAudioDevice);
-      setSelectedAudioDeviceLabel(
-        audioDevices.find((device) => device.deviceId === selectedAudioDevice)
-          ?.label || "None"
+      console.log("deviceId: ", deviceId);
+      console.log("finding video devices: ", videoDevicesRef.current);
+      console.log(
+        "found: ",
+        videoDevicesRef.current.find((device) => device.deviceId === deviceId)
       );
       setVideoStream(stream);
 
@@ -1089,7 +1084,7 @@ export const Record = ({
 
     if (storedAudioDevice) {
       setSelectedAudioDevice(storedAudioDevice);
-      const selectedAudioDeviceObj = audioDevices.find(
+      const selectedAudioDeviceObj = audioDevicesRef.current.find(
         (device) => device.deviceId === storedAudioDevice
       );
       if (selectedAudioDeviceObj) {
@@ -1098,7 +1093,7 @@ export const Record = ({
     }
     if (storedVideoDevice) {
       setSelectedVideoDevice(storedVideoDevice);
-      const selectedVideoDeviceObj = videoDevices.find(
+      const selectedVideoDeviceObj = videoDevicesRef.current.find(
         (device) => device.deviceId === storedVideoDevice
       );
       if (selectedVideoDeviceObj) {
@@ -1112,7 +1107,7 @@ export const Record = ({
     if (storedScreenStream === "true") {
       startScreenCapture();
     }
-  }, [audioDevices, videoDevices]);
+  }, [audioDevicesRef, videoDevicesRef]);
 
   if (isLoading) {
     return (
@@ -1226,7 +1221,7 @@ export const Record = ({
                   </div>
                 </Rnd>
               )}
-              {videoStream && (
+              {videoStream && selectedVideoDeviceLabel !== "None" && (
                 <Rnd
                   position={{
                     x: webcamStyleSettings.x,
@@ -1305,7 +1300,7 @@ export const Record = ({
                   />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent className="w-56">
-                  {videoDevices.map((device) => (
+                  {videoDevicesRef.current.map((device) => (
                     <DropdownMenuItem
                       key={device.deviceId}
                       onSelect={() => {
@@ -1332,7 +1327,7 @@ export const Record = ({
                   />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent className="w-56">
-                  {audioDevices.map((device) => (
+                  {audioDevicesRef.current.map((device) => (
                     <DropdownMenuItem
                       key={device.deviceId}
                       onSelect={() => {
