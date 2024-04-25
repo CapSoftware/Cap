@@ -19,7 +19,7 @@ export const DownloadPage = () => {
   };
 
   return (
-    <div className="wrapper wrapper-sm py-20">
+    <div className="wrapper wrapper-sm py-32">
       <div className="text-center space-y-6">
         <LogoBadge className="w-20 h-auto mx-auto fade-in-down" />
         <h1 className=" text-3xl md:text-4xl fade-in-down animate-delay-1">
