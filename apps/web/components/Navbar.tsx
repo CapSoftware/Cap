@@ -73,7 +73,10 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                 <NavigationMenuTrigger>Product</NavigationMenuTrigger>
                 <NavigationMenuContent>
                   <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-2">
-                    <ListItem href="/download" title="Download">
+                    <ListItem href="/record" title="Web App Recorder">
+                      Use Cap in your browser, no download required.
+                    </ListItem>
+                    <ListItem href="/download" title="Download macOS App">
                       Download for macOS. Windows and Linux coming soon.
                     </ListItem>
                     <ListItem
