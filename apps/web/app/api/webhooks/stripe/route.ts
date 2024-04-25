@@ -11,7 +11,6 @@ const relevantEvents = new Set([
   "customer.subscription.deleted",
 ]);
 
-// POST /api/callback/stripe – listen to Stripe webhooks
 export const POST = async (req: Request) => {
   const buf = await req.text();
   const sig = req.headers.get("Stripe-Signature") as string;
@@ -29,12 +28,103 @@ export const POST = async (req: Request) => {
   if (relevantEvents.has(event.type)) {
     try {
       if (event.type === "checkout.session.completed") {
+        const customer = await stripe.customers.retrieve(
+          event.data.object.customer as string
+        );
+        let foundUserId;
+        if ("metadata" in customer) {
+          foundUserId = customer.metadata.userId;
+        }
+        if (!foundUserId) {
+          return new Response("No user found", {
+            status: 400,
+          });
+        }
+
+        const user = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, foundUserId));
+
+        if (!user) {
+          return new Response("No user found", {
+            status: 400,
+          });
+        }
+
+        await db
+          .update(users)
+          .set({
+            stripeSubscriptionId: event.data.object.subscription as string,
+            stripeSubscriptionStatus: event.data.object.status,
+          })
+          .where(eq(users.id, foundUserId));
       }
 
       if (event.type === "customer.subscription.updated") {
+        const customer = await stripe.customers.retrieve(
+          event.data.object.customer as string
+        );
+        let foundUserId;
+        if ("metadata" in customer) {
+          foundUserId = customer.metadata.userId;
+        }
+        if (!foundUserId) {
+          return new Response("No user found", {
+            status: 400,
+          });
+        }
+
+        const user = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, foundUserId));
+
+        if (!user) {
+          return new Response("No user found", {
+            status: 400,
+          });
+        }
+
+        await db
+          .update(users)
+          .set({
+            stripeSubscriptionStatus: event.data.object.status,
+          })
+          .where(eq(users.id, foundUserId));
       }
 
       if (event.type === "customer.subscription.deleted") {
+        const customer = await stripe.customers.retrieve(
+          event.data.object.customer as string
+        );
+        let foundUserId;
+        if ("metadata" in customer) {
+          foundUserId = customer.metadata.userId;
+        }
+        if (!foundUserId) {
+          return new Response("No user found", {
+            status: 400,
+          });
+        }
+
+        const user = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, foundUserId));
+
+        if (!user) {
+          return new Response("No user found", {
+            status: 400,
+          });
+        }
+
+        await db
+          .update(users)
+          .set({
+            stripeSubscriptionStatus: event.data.object.status,
+          })
+          .where(eq(users.id, foundUserId));
       }
     } catch (error) {
       return new Response(
@@ -45,7 +135,7 @@ export const POST = async (req: Request) => {
       );
     }
   } else {
-    return new Response(`🤷‍♀️ Unhandled event type: ${event.type}`, {
+    return new Response(`Unrecognised event: ${event.type}`, {
       status: 400,
     });
   }

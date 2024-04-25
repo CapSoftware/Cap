@@ -167,7 +167,7 @@ importers:
         version: 16.3.1
       drizzle-orm:
         specifier: 0.30.9
-        version: 0.30.9(@types/react@18.2.48)(react@18.2.0)
+        version: 0.30.9(@planetscale/database@1.13.0)(@types/react@18.2.48)(mysql2@3.9.7)(react@18.2.0)
       hls.js:
         specifier: ^1.5.3
         version: 1.5.3
@@ -183,6 +183,9 @@ importers:
       moment:
         specifier: ^2.30.1
         version: 2.30.1
+      mysql2:
+        specifier: ^3.9.7
+        version: 3.9.7
       next:
         specifier: 14.1.0
         version: 14.1.0(@babel/core@7.23.7)(react-dom@18.2.0)(react@18.2.0)
@@ -330,11 +333,11 @@ importers:
         specifier: 0.0.11
         version: 0.0.11
       drizzle-orm:
-        specifier: 0.29.3
-        version: 0.29.3(@planetscale/database@1.13.0)(@types/react@18.2.48)(mysql2@3.7.1)(react@18.2.0)
+        specifier: 0.30.9
+        version: 0.30.9(@planetscale/database@1.13.0)(@types/react@18.2.48)(mysql2@3.9.7)(react@18.2.0)
       mysql2:
-        specifier: ^3.7.0
-        version: 3.7.1
+        specifier: ^3.9.7
+        version: 3.9.7
       nanoid:
         specifier: ^5.0.4
         version: 5.0.4
@@ -6137,84 +6140,7 @@ packages:
       - supports-color
     dev: true
 
-  /drizzle-orm@0.29.3(@planetscale/database@1.13.0)(@types/react@18.2.48)(mysql2@3.7.1)(react@18.2.0):
-    resolution: {integrity: sha512-uSE027csliGSGYD0pqtM+SAQATMREb3eSM/U8s6r+Y0RFwTKwftnwwSkqx3oS65UBgqDOM0gMTl5UGNpt6lW0A==}
-    peerDependencies:
-      '@aws-sdk/client-rds-data': '>=3'
-      '@cloudflare/workers-types': '>=3'
-      '@libsql/client': '*'
-      '@neondatabase/serverless': '>=0.1'
-      '@opentelemetry/api': ^1.4.1
-      '@planetscale/database': '>=1'
-      '@types/better-sqlite3': '*'
-      '@types/pg': '*'
-      '@types/react': '>=18'
-      '@types/sql.js': '*'
-      '@vercel/postgres': '*'
-      better-sqlite3: '>=7'
-      bun-types: '*'
-      expo-sqlite: '>=13.2.0'
-      knex: '*'
-      kysely: '*'
-      mysql2: '>=2'
-      pg: '>=8'
-      postgres: '>=3'
-      react: '>=18'
-      sql.js: '>=1'
-      sqlite3: '>=5'
-    peerDependenciesMeta:
-      '@aws-sdk/client-rds-data':
-        optional: true
-      '@cloudflare/workers-types':
-        optional: true
-      '@libsql/client':
-        optional: true
-      '@neondatabase/serverless':
-        optional: true
-      '@opentelemetry/api':
-        optional: true
-      '@planetscale/database':
-        optional: true
-      '@types/better-sqlite3':
-        optional: true
-      '@types/pg':
-        optional: true
-      '@types/react':
-        optional: true
-      '@types/sql.js':
-        optional: true
-      '@vercel/postgres':
-        optional: true
-      better-sqlite3:
-        optional: true
-      bun-types:
-        optional: true
-      expo-sqlite:
-        optional: true
-      knex:
-        optional: true
-      kysely:
-        optional: true
-      mysql2:
-        optional: true
-      pg:
-        optional: true
-      postgres:
-        optional: true
-      react:
-        optional: true
-      sql.js:
-        optional: true
-      sqlite3:
-        optional: true
-    dependencies:
-      '@planetscale/database': 1.13.0
-      '@types/react': 18.2.48
-      mysql2: 3.7.1
-      react: 18.2.0
-    dev: false
-
-  /drizzle-orm@0.30.9(@types/react@18.2.48)(react@18.2.0):
+  /drizzle-orm@0.30.9(@planetscale/database@1.13.0)(@types/react@18.2.48)(mysql2@3.9.7)(react@18.2.0):
     resolution: {integrity: sha512-VOiCFsexErmgqvNCOmbzmqDCZzZsHoz6SkWAjTFxsTr1AllKDbDJ2+GgedLXsXMDgpg/ljDG1zItIFeZtiO2LA==}
     peerDependencies:
       '@aws-sdk/client-rds-data': '>=3'
@@ -6294,7 +6220,9 @@ packages:
       sqlite3:
         optional: true
     dependencies:
+      '@planetscale/database': 1.13.0
       '@types/react': 18.2.48
+      mysql2: 3.9.7
       react: 18.2.0
     dev: false
 
@@ -9158,8 +9086,8 @@ packages:
     resolution: {integrity: sha512-nnbWWOkoWyUsTjKrhgD0dcz22mdkSnpYqbEjIm2nhwhuxlSkpywJmBo8h0ZqJdkp73mb90SssHkN4rsRaBAfAA==}
     dev: true
 
-  /mysql2@3.7.1:
-    resolution: {integrity: sha512-4EEqYu57mnkW5+Bvp5wBebY7PpfyrmvJ3knHcmLkp8FyBu4kqgrF2GxIjsC2tbLNZWqJaL21v/MYH7bU5f03oA==}
+  /mysql2@3.9.7:
+    resolution: {integrity: sha512-KnJT8vYRcNAZv73uf9zpXqNbvBG7DJrs+1nACsjZP1HMJ1TgXEy8wnNilXAn/5i57JizXKtrUtwDB7HxT9DDpw==}
     engines: {node: '>= 8.0'}
     dependencies:
       denque: 2.1.0
