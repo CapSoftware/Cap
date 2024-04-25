@@ -147,20 +147,38 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
             </button>
           </div>
           <div className="pb-12">
-            <nav className="mobile">
+            <nav className="mobile relative">
               <ul className="p-0 space-y-10">
                 <li>
-                  <Link href="/pricing" passHref>
+                  <Link
+                    onClick={() => {
+                      setShowMobileMenu(false);
+                    }}
+                    href="/pricing"
+                    passHref
+                  >
                     Pricing
                   </Link>
                 </li>
                 <li>
-                  <Link href="/download" passHref>
+                  <Link
+                    onClick={() => {
+                      setShowMobileMenu(false);
+                    }}
+                    href="/download"
+                    passHref
+                  >
                     Download
                   </Link>
                 </li>
                 <li>
-                  <Link href="/login" passHref>
+                  <Link
+                    onClick={() => {
+                      setShowMobileMenu(false);
+                    }}
+                    href="/login"
+                    passHref
+                  >
                     Get started
                   </Link>
                 </li>

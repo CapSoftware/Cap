@@ -146,7 +146,7 @@ export const PricingPage = () => {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
           <Card
-            className={`bg-gradient-to-l from-primary to-primary-3 p-8 rounded-xl min-h-[600px] flex-grow border-primary-3 ${
+            className={`bg-gradient-to-l from-primary to-primary-3 p-3 md:p-8 rounded-xl min-h-[600px] flex-grow border-primary-3 ${
               loading === false && "fade-in-up animate-delay-2"
             }`}
           >
@@ -232,7 +232,7 @@ export const PricingPage = () => {
             </div>
           </Card>
           <Card
-            className={`bg-white p-8 rounded-xl min-h-[600px] flex-grow ${
+            className={`bg-white p-3 md:p-8 rounded-xl min-h-[600px] flex-grow ${
               loading === false && "fade-in-down animate-delay-2"
             }`}
           >
