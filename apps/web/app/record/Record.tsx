@@ -510,6 +510,7 @@ export const Record = ({
       "video/webm;codecs=vp9",
       "video/webm;codecs=vp8",
       "video/webm",
+      "video/mp4",
     ];
 
     let selectedMimeType = "";
@@ -580,6 +581,7 @@ export const Record = ({
         muxQueue.enqueue(async () => {
           await muxSegment({
             data: event.data,
+            mimeType: videoRecorderOptions.mimeType,
             bandwidth: videoBitsPerSecond,
             framerate: frameRate,
             resolution: resolution,
@@ -602,6 +604,7 @@ export const Record = ({
   const muxSegment = async ({
     data,
     bandwidth,
+    mimeType,
     framerate,
     resolution,
     videoCodec,
@@ -610,6 +613,7 @@ export const Record = ({
   }: {
     data: Blob;
     bandwidth: number;
+    mimeType: string;
     framerate: number;
     resolution: string;
     videoCodec?: string;
@@ -626,12 +630,16 @@ export const Record = ({
 
         const videoFile = await fetchFile(URL.createObjectURL(videoSegment));
         ffmpegRef.current.writeFile(
-          `video_segment_${segmentIndexString}.webm`,
+          `video_segment_${segmentIndexString}${
+            mimeType.includes("mp4") ? ".mp4" : ".webm"
+          }`,
           videoFile
         );
 
         const segmentPaths = {
-          videoInput: `video_segment_${segmentIndexString}.webm`,
+          videoInput: `video_segment_${segmentIndexString}${
+            mimeType.includes("mp4") ? ".mp4" : ".webm"
+          }`,
           videoOutput: `video_segment_${segmentIndexString}.ts`,
           audioOutput: `audio_segment_${segmentIndexString}.aac`,
         };
