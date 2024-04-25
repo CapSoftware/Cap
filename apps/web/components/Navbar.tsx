@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { Button, ListItem } from "@cap/ui";
 import {
   NavigationMenu,
@@ -18,8 +18,6 @@ import { Menu, X } from "lucide-react";
 
 export const Navbar = ({ auth }: { auth: boolean }) => {
   const pathname = usePathname();
-  const params = useSearchParams();
-  const ref = params.get("ref") || "";
   const isHomePage = pathname === "/";
   const [showMobileMenu, setShowMobileMenu] = useState(false);
 
@@ -35,20 +33,6 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
 
   return (
     <>
-      {ref !== "producthunt" && (
-        <div className="w-full py-3 bg-gradient-to-l from-[#ff4582] to-[#ff6154] text-center">
-          <div className="wrapper">
-            <Link
-              className="w-full h-full text-white font-semibold hover:underline text-sm sm:text-base"
-              href="https://www.producthunt.com/posts/cap-3/"
-              target="_blank"
-            >
-              Cap is on Product Hunt today! We'd love your support. Click here
-              to help us out!
-            </Link>
-          </div>
-        </div>
-      )}
       <div
         className={`${
           isHomePage === true
