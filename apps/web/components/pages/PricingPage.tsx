@@ -79,6 +79,10 @@ export const PricingPage = () => {
       available: true,
     },
     {
+      text: "Unlimited views",
+      available: true,
+    },
+    {
       text: "Advanced analytics",
       available: true,
     },
