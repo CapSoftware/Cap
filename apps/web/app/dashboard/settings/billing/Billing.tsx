@@ -32,7 +32,7 @@ export const Billing = ({
       <CardContent>
         <CardTitle>View and manage your billing details</CardTitle>
         <CardDescription>
-          View and edit your billing details, as well as cancel your
+          View and edit your billing details, as well as manage your
           subscription.
         </CardDescription>
         <CardDescription className="mt-3">
