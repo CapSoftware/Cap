@@ -385,3 +385,7 @@ footer a {
 .legal-body h3 {
   @apply text-2xl font-semibold mt-6;
 }
+
+.prose p {
+  @apply text-lg;
+}

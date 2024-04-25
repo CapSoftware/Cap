@@ -42,7 +42,7 @@ export const Footer = () => {
             <h3 className="text-lg font-semibold">Product</h3>
             <ul className="space-y-2">
               <li>
-                <a href="/changelog">Changelog</a>
+                <a href="/updates">Updates</a>
               </li>
               <li>
                 <a href="/pricing">Pricing</a>
@@ -73,6 +73,11 @@ export const Footer = () => {
               </li>
               <li>
                 <a href="#">Live chat</a>
+              </li>
+              <li>
+                <a href="https://cap.openstatus.dev/" target="_blank">
+                  System status
+                </a>
               </li>
             </ul>
           </div>

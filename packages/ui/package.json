@@ -44,6 +44,7 @@
     "@radix-ui/react-popover": "^1.0.7",
     "@radix-ui/react-slot": "^1.0.2",
     "class-variance-authority": "^0.7.0",
+    "@tailwindcss/typography": "^0.5.9",
     "cmdk": "^0.2.0",
     "lucide-react": "^0.294.0",
     "react-hook-form": "^7.49.2",

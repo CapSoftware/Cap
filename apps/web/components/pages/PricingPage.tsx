@@ -12,9 +12,34 @@ import {
 } from "@cap/ui";
 import { Check, Construction } from "lucide-react";
 import { useState } from "react";
+import { getProPlanId } from "@cap/utils";
 
 export const PricingPage = () => {
   const [loading, setLoading] = useState(false);
+
+  const planCheckout = async () => {
+    setLoading(true);
+
+    const planId = getProPlanId();
+
+    setLoading(true);
+    const response = await fetch(`/api/settings/billing/subscribe`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ priceId: planId }),
+    });
+    const data = await response.json();
+
+    console.log("Response: ", data);
+
+    if (data.url) {
+      window.location.href = data.url;
+    }
+
+    setLoading(false);
+  };
 
   const freeList = [
     {
@@ -34,7 +59,7 @@ export const PricingPage = () => {
       available: true,
     },
     {
-      text: "Community support",
+      text: "Community support via Discord",
       available: true,
     },
   ];
@@ -64,15 +89,19 @@ export const PricingPage = () => {
       available: false,
     },
     {
-      text: "Cap AI",
+      text: "Custom scenes (branded videos, automatic zoom)",
       available: false,
     },
     {
-      text: "Custom branding",
+      text: "Video editing",
       available: false,
     },
     {
-      text: "Password protection",
+      text: "Cap AI (generated description, title, etc)",
+      available: false,
+    },
+    {
+      text: "Password protected videos",
       available: false,
     },
     {
@@ -93,28 +122,44 @@ export const PricingPage = () => {
     <div className="custom-bg wrapper wrapper-sm py-20">
       <div className="space-y-12">
         <div className="text-center">
-          <h1 className="text-4xl md:text-5xl fade-in-down mb-6">
+          <h1
+            className={`text-4xl md:text-5xl ${
+              loading === false && "fade-in-down"
+            } mb-6`}
+          >
             Early Adopter Pricing
           </h1>
-          <p className="text-lg text-gray-600 max-w-md mx-auto  fade-in-down animate-delay-1">
+          <p
+            className={`text-lg text-gray-600 max-w-md mx-auto ${
+              loading === false && "fade-in-down animate-delay-1"
+            }`}
+          >
             Cap is currently in public beta, and we're offering special early
             adopter pricing to our first users. This pricing will be locked in
             for the lifetime of your subscription.
           </p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
-          <Card className="bg-gradient-to-l from-primary to-primary-3 p-8 rounded-xl min-h-[600px] flex-grow border-primary-3 fade-in-up animate-delay-3">
+          <Card
+            className={`bg-gradient-to-l from-primary to-primary-3 p-8 rounded-xl min-h-[600px] flex-grow border-primary-3 ${
+              loading === false && "fade-in-up animate-delay-2"
+            }`}
+          >
             <div className="space-y-4">
               <CardHeader>
                 <CardTitle className="text-3xl text-white">Cap Pro</CardTitle>
                 <CardDescription className="text-lg text-white">
                   For professional use and teams
                 </CardDescription>
+                <h3 className="text-3xl text-white">$9/mo</h3>
               </CardHeader>
               <CardContent>
                 <Button
-                  href="/register"
+                  type="button"
+                  spinner={loading}
+                  onClick={() => planCheckout()}
                   className="w-full bg-secondary-2 hover:bg-secondary-3"
+                  size="lg"
                   variant="outline"
                 >
                   <span className="text-white">Get started with Pro</span>
@@ -181,21 +226,26 @@ export const PricingPage = () => {
               </CardFooter>
             </div>
           </Card>
-          <Card className="bg-white p-8 rounded-xl min-h-[600px] flex-grow fade-in-down animate-delay-2">
+          <Card
+            className={`bg-white p-8 rounded-xl min-h-[600px] flex-grow ${
+              loading === false && "fade-in-down animate-delay-2"
+            }`}
+          >
             <div className="space-y-4">
               <CardHeader>
-                <CardTitle className="text-2xl">Free</CardTitle>
+                <CardTitle className="text-2xl">Cap Lite</CardTitle>
                 <CardDescription className="text-lg">
                   For personal and minimal use
                 </CardDescription>
+                <h3 className="text-3xl">$0</h3>
               </CardHeader>
               <CardContent>
                 <Button
-                  href="/register"
+                  href="/login"
                   className="w-full hover:bg-gray-100"
                   variant="outline"
                 >
-                  Start for free
+                  Get started for free
                 </Button>
               </CardContent>
               <CardFooter>

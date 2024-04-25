@@ -50,7 +50,7 @@ export const HomePage = () => {
     <ParallaxProvider>
       <div className="w-full custom-bg">
         <div className="wrapper wrapper-sm mx-auto">
-          <div className="mb-auto -mt-20 text-center md:px-4 pt-32 pb-52 md:pb-64 space-y-8">
+          <div className="mb-auto -mt-20 text-center md:px-4 pt-40 pb-52 md:pb-64 space-y-8">
             <h1 className="fade-in-down text-3xl lg:text-6xl relative z-10 text-black">
               Effortless, instant screen sharing.
             </h1>
