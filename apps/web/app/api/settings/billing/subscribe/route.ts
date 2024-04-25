@@ -61,6 +61,7 @@ export async function POST(request: NextRequest) {
     mode: "subscription",
     success_url: `${process.env.NEXT_PUBLIC_URL}/dashboard/caps?upgrade=true`,
     cancel_url: `${process.env.NEXT_PUBLIC_URL}/pricing`,
+    allow_promotion_codes: true,
   });
 
   if (checkoutSession.url) {
