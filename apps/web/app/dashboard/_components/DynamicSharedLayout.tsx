@@ -115,7 +115,7 @@ export default function DynamicSharedLayout({
                 <DropdownMenuSeparator />
                 <DropdownMenuItem>
                   <Link className="w-full" href="/logout">
-                    Logout
+                    Sign out
                   </Link>
                 </DropdownMenuItem>
               </DropdownMenuContent>
