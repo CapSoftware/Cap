@@ -14,7 +14,7 @@ export const UpdatePage = ({ postSlug }: { postSlug: string }) => {
   }
 
   return (
-    <article className="py-8 prose dark:prose-invert mx-auto">
+    <article className="py-8 prose mx-auto">
       {post.metadata.image && (
         <div className="relative mb-12 h-[345px] w-full">
           <Image
