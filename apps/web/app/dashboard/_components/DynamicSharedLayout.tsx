@@ -98,8 +98,12 @@ export default function DynamicSharedLayout({
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem>
-                  <Link className="w-full" href="/dashboard/settings">
-                    Live Chat
+                  <Link
+                    className="w-full"
+                    href="https://discord.gg/y8gdQ3WRN3"
+                    target="_blank"
+                  >
+                    Chat support
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem>

@@ -72,7 +72,9 @@ export const Footer = () => {
                 <a href="mailto:hello@cap.so">Email Support</a>
               </li>
               <li>
-                <a href="#">Live chat</a>
+                <a href="https://discord.gg/y8gdQ3WRN3" target="_blank">
+                  Chat support
+                </a>
               </li>
               <li>
                 <a href="https://cap.openstatus.dev/" target="_blank">

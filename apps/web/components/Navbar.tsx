@@ -117,8 +117,8 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                     <ListItem href="mailto:hello@cap.so" title="Email support">
                       Support via email
                     </ListItem>
-                    <ListItem href="#" title="Live chat">
-                      Support via live chat
+                    <ListItem href="#" title="Chat support">
+                      Support via Discord chat
                     </ListItem>
                   </ul>
                 </NavigationMenuContent>

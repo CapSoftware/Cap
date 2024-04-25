@@ -181,6 +181,9 @@ export const AdminNavItems = () => {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Create a new Space</DialogTitle>
+          <DialogDescription>
+            This feature is launching very soon.
+          </DialogDescription>
         </DialogHeader>
         <DialogDescription>
           <NewSpace />
