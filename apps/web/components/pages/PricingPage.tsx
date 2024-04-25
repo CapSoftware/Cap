@@ -13,6 +13,7 @@ import {
 import { Check, Construction } from "lucide-react";
 import { useState } from "react";
 import { getProPlanId } from "@cap/utils";
+import toast from "react-hot-toast";
 
 export const PricingPage = () => {
   const [loading, setLoading] = useState(false);
@@ -32,7 +33,11 @@ export const PricingPage = () => {
     });
     const data = await response.json();
 
-    console.log("Response: ", data);
+    console.log(data);
+
+    if (data.subscription === true) {
+      toast.success("You are already on the Cap Pro plan");
+    }
 
     if (data.url) {
       window.location.href = data.url;

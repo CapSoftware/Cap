@@ -1,4 +1,4 @@
-import { stripe } from "@cap/utils";
+import { isUserOnProPlan, stripe } from "@cap/utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
@@ -26,6 +26,19 @@ export async function POST(request: NextRequest) {
 
     return new Response(JSON.stringify({ error: true }), {
       status: 401,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  }
+
+  if (
+    isUserOnProPlan({
+      subscriptionStatus: user.stripeSubscriptionStatus as string,
+    })
+  ) {
+    return new Response(JSON.stringify({ error: true, subscription: true }), {
+      status: 400,
       headers: {
         "Content-Type": "application/json",
       },

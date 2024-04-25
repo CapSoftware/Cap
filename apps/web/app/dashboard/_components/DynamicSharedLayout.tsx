@@ -14,6 +14,7 @@ import {
 
 import { users, spaces } from "@cap/database/schema";
 import Link from "next/link";
+import { isUserOnProPlan } from "@cap/utils";
 
 type SharedContext = {
   spaceData: (typeof spaces.$inferSelect)[] | null;
@@ -40,7 +41,23 @@ export default function DynamicSharedLayout({
         <AdminDesktopNav />
         <div className="flex-1 overflow-auto focus:outline-none">
           <AdminMobileNav />
-          <div className="py-3 -mb-3 flex justify-end wrapper">
+          <div className="py-3 -mb-3 flex items-center justify-end wrapper space-x-3">
+            <div>
+              {isUserOnProPlan({
+                subscriptionStatus: user?.stripeSubscriptionStatus as string,
+              }) ? (
+                <Link
+                  className="text-primary font-medium"
+                  href="/dashboard/settings/billing"
+                >
+                  Cap Pro
+                </Link>
+              ) : (
+                <Link className="text-primary font-medium" href="/pricing">
+                  Upgrade to Cap Pro
+                </Link>
+              )}
+            </div>
             <DropdownMenu>
               <DropdownMenuTrigger
                 asChild

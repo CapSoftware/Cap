@@ -7,3 +7,20 @@ export const getProPlanId = () => {
     return "";
   }
 };
+
+export const isUserOnProPlan = ({
+  subscriptionStatus,
+}: {
+  subscriptionStatus: string;
+}) => {
+  if (
+    subscriptionStatus === "active" ||
+    subscriptionStatus === "trialing" ||
+    subscriptionStatus === "complete" ||
+    subscriptionStatus === "paid"
+  ) {
+    return true;
+  } else {
+    return false;
+  }
+};
