@@ -149,6 +149,7 @@ export const Record = ({
   const [isCenteredHorizontally, setIsCenteredHorizontally] = useState(false);
   const [isCenteredVertically, setIsCenteredVertically] = useState(false);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null | string>(null);
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
   const defaultRndHandeStyles = {
     topLeft: {
@@ -1114,6 +1115,14 @@ export const Record = ({
   return (
     <div className="w-full h-full min-h-screen h mx-auto flex items-center justify-center">
       <div className={`max-w-[1280px] wrapper p-8 space-y-6`}>
+        <div className="bg-red-500 py-3 rounded-xl">
+          <div className="wrapper">
+            <p className="text-white text-lg font-medium">
+              Currently experiencing some intermitent problems with Safari
+              browser. Fix is in progress.
+            </p>
+          </div>
+        </div>
         <div className="top-bar flex justify-between">
           <a href="/" className="flex items-center">
             <ArrowLeft className="w-6 h-6 text-gray-600" />
