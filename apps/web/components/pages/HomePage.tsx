@@ -6,6 +6,7 @@ import { Parallax } from "react-scroll-parallax";
 import toast from "react-hot-toast";
 import { ParallaxProvider } from "react-scroll-parallax";
 import { Button } from "@cap/ui";
+import Link from "next/link";
 
 export const HomePage = () => {
   return (
@@ -13,6 +14,24 @@ export const HomePage = () => {
       <div className="w-full custom-bg">
         <div className="wrapper wrapper-sm mx-auto">
           <div className="mb-auto -mt-20 text-center md:px-4 pt-40 pb-52 md:pb-64 space-y-8">
+            <Link
+              href="/updates/cap-public-beta-launch"
+              className="mx-auto inline-flex justify-center text-sm font-medium transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 border bg-transparent hover:bg-tertiary h-9 px-4 py-2 rounded-full border-border space-x-2 items-center"
+            >
+              <span>Announcing Cap Public Beta</span>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width={12}
+                height={12}
+                fill="none"
+              >
+                <path
+                  fill="currentColor"
+                  d="M8.783 6.667H.667V5.333h8.116L5.05 1.6 6 .667 11.333 6 6 11.333l-.95-.933 3.733-3.733Z"
+                />
+              </svg>
+            </Link>
+
             <h1 className="fade-in-down text-3xl lg:text-6xl relative z-10 text-black">
               Effortless, instant screen sharing.
             </h1>
