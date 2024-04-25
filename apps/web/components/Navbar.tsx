@@ -39,14 +39,16 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
     <>
       {ref !== "producthunt" && (
         <div className="w-full py-3 bg-gradient-to-l from-[#ff4582] to-[#ff6154] text-center">
-          <Link
-            className="w-full h-full text-white font-semibold hover:underline"
-            href="https://www.producthunt.com/posts/cap-3/"
-            target="_blank"
-          >
-            Cap is on Product Hunt today! We'd love your support. Click here to
-            help us out!
-          </Link>
+          <div className="wrapper">
+            <Link
+              className="w-full h-full text-white font-semibold hover:underline text-sm sm:text-base"
+              href="https://www.producthunt.com/posts/cap-3/"
+              target="_blank"
+            >
+              Cap is on Product Hunt today! We'd love your support. Click here
+              to help us out!
+            </Link>
+          </div>
         </div>
       )}
       <div
@@ -73,9 +75,6 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                 <NavigationMenuTrigger>Product</NavigationMenuTrigger>
                 <NavigationMenuContent>
                   <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-[.75fr_1fr]">
-                    <ListItem href="/changelog" title="Changelog">
-                      The latest updates and changes to Cap.
-                    </ListItem>
                     <ListItem href="/download" title="Download">
                       Download for macOS. Windows and Linux coming soon.
                     </ListItem>
@@ -155,11 +154,6 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                 <li>
                   <Link href="/pricing" passHref>
                     Pricing
-                  </Link>
-                </li>
-                <li>
-                  <Link href="/changelog" passHref>
-                    Updates
                   </Link>
                 </li>
                 <li>
