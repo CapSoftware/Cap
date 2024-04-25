@@ -4,12 +4,12 @@ const faqContent = [
   {
     title: "What is Cap?",
     answer:
-      "Cap is an open source and privacy focused alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.",
+      "Cap is an open source alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.",
   },
   {
     title: "How do I use it?",
     answer:
-      "Cap is currently in development. You can follow along live either via Twitter (X), our growing Discord community, or over on the Cap GitHub repository.",
+      "Simply download the Cap macOS app (or the Cap web app), and start recording. You can record your screen, your camera, or both at once. After your recording finishes, you will receive your shareable Cap link to share with anyone.",
   },
   {
     title: "Who is it for?",
@@ -19,17 +19,12 @@ const faqContent = [
   {
     title: "How much does it cost?",
     answer:
-      "Cap is free to use. We will also offer a paid Pro plan for teams and larger organisations.",
+      "Cap is free to use. However, you can upgrade to Cap Pro for just $9/month and unlock unlimited recordings, unlimited recording length, and much more.",
   },
   {
     title: "What makes you different to Loom?",
     answer:
-      "Apart from being open source and privacy focused, Cap is also a lot more lightweight and faster to use. We also focus strongly on design and user experience.",
-  },
-  {
-    title: "When will the first version launch?",
-    answer:
-      "We're aiming to launch the first version to the public by mid April, if not sooner. However, there'll be regular Alpha builds available to download on our GitHub before then.",
+      "Apart from being open source and privacy focused, Cap is also a lot more lightweight and faster to use. We also focus strongly on design and user experience, and our community is at the heart of everything we do.",
   },
 ];
 
