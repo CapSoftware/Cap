@@ -1,11 +1,9 @@
-import { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { UpdatePage } from "../_components/UpdatePage";
 import Image from "next/image";
-import Link from "next/link";
 import { format, parseISO } from "date-fns";
 import { MDXRemote } from "next-mdx-remote/rsc";
 import { getBlogPosts } from "@/utils/updates";
+import type { Metadata } from "next";
 
 interface PostProps {
   params: {
@@ -13,11 +11,48 @@ interface PostProps {
   };
 }
 
+export async function generateMetadata({
+  params,
+}: PostProps): Promise<Metadata | undefined> {
+  let post = getBlogPosts().find((post) => post.slug === params.slug);
+  if (!post) {
+    return;
+  }
+
+  let {
+    title,
+    publishedAt: publishedTime,
+    summary: description,
+    image,
+  } = post.metadata;
+  let ogImage = `${process.env.NEXT_PUBLIC_URL}${image}`;
+
+  return {
+    title,
+    description,
+    openGraph: {
+      title,
+      description,
+      type: "article",
+      publishedTime,
+      url: `${process.env.NEXT_PUBLIC_URL}/updates/${post.slug}`,
+      images: [
+        {
+          url: ogImage,
+        },
+      ],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: [ogImage],
+    },
+  };
+}
+
 export default async function PostPage({ params }: PostProps) {
   const post = getBlogPosts().find((post) => post.slug === params.slug);
-
-  console.log(post);
-  console.log(params);
 
   if (!post) {
     notFound();

@@ -23,8 +23,6 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
   const isHomePage = pathname === "/";
   const [showMobileMenu, setShowMobileMenu] = useState(false);
 
-  console.log("params: ", ref);
-
   if (
     pathname === "/login" ||
     pathname.includes("/dashboard") ||
