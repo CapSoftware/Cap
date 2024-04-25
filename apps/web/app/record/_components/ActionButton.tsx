@@ -54,7 +54,7 @@ export const ActionButton = ({
                   : "bg-tertiary text-primary "
               } h-5 w-8 font-medium text-xs rounded-full flex items-center justify-center`}
             >
-              <span>{label === "None" ? "Off" : "On"}</span>
+              {label === "None" ? "Off" : "On"}
             </span>
           </div>
         )}
