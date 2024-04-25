@@ -117,7 +117,7 @@ export const HomePage = () => {
             ) : (
               <div className="fade-in-up animate-delay-2">
                 <div className="flex items-center justify-center space-x-2 mb-3">
-                  <Button href="/download" size="lg">
+                  <Button href="/login" size="lg">
                     Get started for free
                   </Button>
                 </div>

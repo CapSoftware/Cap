@@ -116,7 +116,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                   href={auth === false ? "/login" : "/dashboard"}
                   size="sm"
                 >
-                  {auth === false ? "Sign in" : "Dashboard"}
+                  {auth === false ? "Get started for free" : "Dashboard"}
                 </Button>
               </NavigationMenuItem>
             </NavigationMenuList>
@@ -197,7 +197,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                     href={auth === false ? "/login" : "/dashboard"}
                     size="lg"
                   >
-                    {auth === false ? "Sign in" : "Dashboard"}
+                    {auth === false ? "Get started for free" : "Dashboard"}
                   </Button>
                 </li>
               </ul>
