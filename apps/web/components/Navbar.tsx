@@ -72,7 +72,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
               <NavigationMenuItem>
                 <NavigationMenuTrigger>Product</NavigationMenuTrigger>
                 <NavigationMenuContent>
-                  <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-[.75fr_1fr]">
+                  <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-2">
                     <ListItem href="/download" title="Download">
                       Download for macOS. Windows and Linux coming soon.
                     </ListItem>
