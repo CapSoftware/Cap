@@ -119,9 +119,9 @@ export const Record = ({
   const [selectedAudioDevice, setSelectedAudioDevice] = useState<string>();
   const [selectedVideoDevice, setSelectedVideoDevice] = useState<string>();
   const [selectedAudioDeviceLabel, setSelectedAudioDeviceLabel] =
-    useState("Microphone");
+    useState("None");
   const [selectedVideoDeviceLabel, setSelectedVideoDeviceLabel] =
-    useState("Webcam");
+    useState("None");
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
   const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
   const [videoRecorder, setVideoRecorder] = useState<MediaRecorder | null>(
@@ -285,8 +285,19 @@ export const Record = ({
       };
 
       console.log("Video constraints:", constraints);
+      console.log("Selected audio device:", selectedAudioDevice);
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      setSelectedVideoDevice(deviceId);
+      setSelectedVideoDeviceLabel(
+        videoDevices.find((device) => device.deviceId === deviceId)?.label ||
+          "None"
+      );
+      setSelectedAudioDevice(selectedAudioDevice);
+      setSelectedAudioDeviceLabel(
+        audioDevices.find((device) => device.deviceId === selectedAudioDevice)
+          ?.label || "None"
+      );
       setVideoStream(stream);
 
       const videoContainer = document.querySelector(
@@ -341,6 +352,26 @@ export const Record = ({
   const startRecording = async () => {
     setStartingRecording(true);
 
+    if (!screenStream) {
+      toast.error(
+        "No screen capture source selected, plesae select a screen source."
+      );
+      setStartingRecording(false);
+      return;
+    }
+
+    if (!videoStream || !selectedVideoDevice) {
+      toast.error("No video source selected, please select a video option.");
+      setStartingRecording(false);
+      return;
+    }
+
+    if (!selectedAudioDevice) {
+      toast.error("No microphone selected, please select a microphone option.");
+      setStartingRecording(false);
+      return;
+    }
+
     const res = await fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create`,
       {
@@ -371,13 +402,6 @@ export const Record = ({
     }
 
     saveLatestVideoId(videoCreateData.id);
-
-    if (!screenStream || !videoStream) {
-      console.error("No screen or video stream");
-      toast.error("No screen or video stream - please try again.");
-      setStartingRecording(false);
-      return;
-    }
 
     setStartingRecording(true);
     recordingIntervalRef.current = null;
@@ -1098,20 +1122,6 @@ export const Record = ({
     );
   }
 
-  const screenHeight = window.innerHeight;
-  const topBar = document.querySelector(".top-bar");
-  const bottomBar = document.querySelector(".bottom-bar");
-  const topBarHeight = topBar ? topBar.clientHeight : 0;
-  const bottomBarHeight = bottomBar ? bottomBar.clientHeight : 0;
-  const screenWidth = window.innerWidth;
-  const maxWidth =
-    document.querySelector(".wrapper")?.clientWidth || screenWidth;
-  const calculatedHeight = maxWidth / aspectRatio;
-  const availableHeight = Math.min(
-    calculatedHeight,
-    (screenHeight - topBarHeight - bottomBarHeight) * 0.8
-  );
-
   return (
     <div className="w-full h-full min-h-screen h mx-auto flex items-center justify-center">
       <div className={`max-w-[1280px] wrapper p-8 space-y-6`}>
@@ -1155,10 +1165,9 @@ export const Record = ({
             <div
               style={{
                 aspectRatio: aspectRatio,
-                height: availableHeight,
                 maxWidth: "100%",
               }}
-              className={`video-container bg-black relative w-auto mx-auto border-2 border-gray-200 rounded-xl overflow-hidden shadow-xl`}
+              className={`video-container bg-black relative w-full mx-auto border-2 border-gray-200 rounded-xl overflow-hidden shadow-xl`}
             >
               {isCenteredHorizontally && (
                 <div
@@ -1271,6 +1280,9 @@ export const Record = ({
           <div className="bottom-bar space-y-4 mb-4 w-full">
             <div className="space-x-3 flex items-center">
               <div className="w-full">
+                <p className="text-left text-sm font-semibold">
+                  Screen / Window
+                </p>
                 <ActionButton
                   handler={() => {
                     screenStream ? stopScreenCapture() : startScreenCapture();
@@ -1282,6 +1294,7 @@ export const Record = ({
               </div>
               <DropdownMenu>
                 <DropdownMenuTrigger className="w-full">
+                  <p className="text-left text-sm font-semibold">Webcam</p>
                   <ActionButton
                     width="full"
                     icon={<Video className="w-5 h-5" />}
@@ -1308,6 +1321,7 @@ export const Record = ({
               </DropdownMenu>
               <DropdownMenu>
                 <DropdownMenuTrigger className="w-full">
+                  <p className="text-left text-sm font-semibold">Microphone</p>
                   <ActionButton
                     width="full"
                     icon={<Mic className="w-5 h-5" />}
@@ -1324,7 +1338,6 @@ export const Record = ({
                       onSelect={() => {
                         setSelectedAudioDevice(device.deviceId);
                         setSelectedAudioDeviceLabel(device.label);
-                        startVideoCapture(device.deviceId);
                       }}
                     >
                       {device.label}
