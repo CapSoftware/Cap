@@ -89,6 +89,7 @@ export const POST = async (req: Request) => {
         await db
           .update(users)
           .set({
+            stripeSubscriptionId: event.data.object.id,
             stripeSubscriptionStatus: event.data.object.status,
           })
           .where(eq(users.id, foundUserId));
@@ -122,6 +123,7 @@ export const POST = async (req: Request) => {
         await db
           .update(users)
           .set({
+            stripeSubscriptionId: event.data.object.id,
             stripeSubscriptionStatus: event.data.object.status,
           })
           .where(eq(users.id, foundUserId));
