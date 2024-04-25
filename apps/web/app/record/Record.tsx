@@ -276,6 +276,7 @@ export const Record = ({
 
   const startVideoCapture = async (
     deviceId?: string,
+    microphoneId?: string,
     placement?: "small" | "large"
   ) => {
     try {
@@ -283,7 +284,11 @@ export const Record = ({
         video: deviceId
           ? { deviceId, width: { ideal: 1920 }, height: { ideal: 1080 } }
           : { width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: selectedAudioDevice ? { deviceId: selectedAudioDevice } : false,
+        audio: microphoneId
+          ? { deviceId: microphoneId }
+          : selectedAudioDevice
+          ? { deviceId: selectedAudioDevice }
+          : false,
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -1002,7 +1007,7 @@ export const Record = ({
     }
     if (storedVideoDevice) {
       setSelectedVideoDevice(storedVideoDevice);
-      startVideoCapture(storedVideoDevice, "large");
+      startVideoCapture(storedVideoDevice, undefined, "large");
     }
     if (storedScreenStream === "true") {
       startScreenCapture();
@@ -1099,11 +1104,12 @@ export const Record = ({
       if (selectedVideoDeviceObj) {
         setSelectedVideoDeviceLabel(selectedVideoDeviceObj.label);
       }
-      startVideoCapture(
-        storedVideoDevice,
-        screenStream === null ? "large" : "small"
-      );
     }
+    startVideoCapture(
+      storedVideoDevice ?? undefined,
+      storedAudioDevice ?? undefined,
+      screenStream === null ? "large" : "small"
+    );
     if (storedScreenStream === "true") {
       startScreenCapture();
     }
@@ -1306,7 +1312,11 @@ export const Record = ({
                       onSelect={() => {
                         setSelectedVideoDevice(device.deviceId);
                         setSelectedVideoDeviceLabel(device.label);
-                        startVideoCapture(device.deviceId);
+                        startVideoCapture(
+                          device.deviceId,
+                          selectedAudioDevice,
+                          "small"
+                        );
                       }}
                     >
                       {device.label}
@@ -1333,6 +1343,11 @@ export const Record = ({
                       onSelect={() => {
                         setSelectedAudioDevice(device.deviceId);
                         setSelectedAudioDeviceLabel(device.label);
+                        startVideoCapture(
+                          selectedVideoDevice,
+                          device.deviceId,
+                          "small"
+                        );
                       }}
                     >
                       {device.label}
