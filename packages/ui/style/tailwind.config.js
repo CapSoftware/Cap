@@ -15,7 +15,7 @@ module.exports = function (app, options) {
         light: "300",
         normal: "400",
         medium: "500",
-        semibold: "600",
+        semibold: "500",
         bold: "600",
         extrabold: "600",
         "extra-bold": "600",

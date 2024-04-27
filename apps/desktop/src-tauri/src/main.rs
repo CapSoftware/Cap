@@ -187,7 +187,7 @@ fn main() {
 
         tray_menu
             .add_item(CustomMenuItem::new("show-window".to_string(), "Show Cap"))
-            .add_item(CustomMenuItem::new("quit".to_string(), "Quit").accelerator("CmdOrControl+Q"))
+            // .add_item(CustomMenuItem::new("quit".to_string(), "Quit").accelerator("CmdOrControl+Q"))
     }
 
     let tray = SystemTray::new().with_menu(create_tray_menu(None)).with_menu_on_left_click(false).with_title("Cap");
@@ -212,7 +212,6 @@ fn main() {
             let data_directory = handle.path_resolver().app_data_dir().unwrap_or_else(|| PathBuf::new());
             let recording_state = RecordingState {
                 media_process: None,
-                upload_handles: Mutex::new(vec![]),
                 recording_options: None,
                 shutdown_flag: Arc::new(AtomicBool::new(false)),
                 video_uploading_finished: Arc::new(AtomicBool::new(false)),
@@ -225,16 +224,31 @@ fn main() {
             app.manage(Arc::new(Mutex::new(recording_state)));
 
             let tray_handle = app.tray_handle();
-            app.listen_global("toggle-recording", move|event| {
-                let is_recording: bool = serde_json::from_str(event.payload().expect("Error while openning event payload")).expect("Error while deserializing recording state from event payload");
+            app.listen_global("toggle-recording", move |event| {
+                let tray_handle = tray_handle.clone();
+                match event.payload() {
+                    Some(payload) => {
+                        match serde_json::from_str::<bool>(payload) {
+                            Ok(is_recording) => {
+                                let icon_bytes = if is_recording {
+                                    include_bytes!("../icons/tray-stop-icon.png").to_vec()
+                                } else {
+                                    include_bytes!("../icons/tray-default-icon.png").to_vec()
+                                };
 
-                let icon_bytes = if is_recording {
-                    include_bytes!("../icons/tray-stop-icon.png").to_vec()
-                } else {
-                    include_bytes!("../icons/tray-default-icon.png").to_vec()
-                };
-
-                tray_handle.set_icon(tauri::Icon::Raw(icon_bytes)).expect("Error while setting tray icon");
+                                if let Err(e) = tray_handle.set_icon(tauri::Icon::Raw(icon_bytes)) {
+                                    eprintln!("Error while setting tray icon: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Error while deserializing recording state from event payload: {}", e);
+                            }
+                        }
+                    }
+                    None => {
+                        eprintln!("Error while opening event payload");
+                    }
+                }
             });
             
             let tray_handle = app.tray_handle();
@@ -308,11 +322,13 @@ fn main() {
                 "show-window" => {
                     let window = app.get_window("main").expect("Error while trying to get the main window.");
                     window.show().expect("Error while trying to show main window");
-                    window.set_focus().expect("Error while trying to set focus on main window");
+                    if !window.is_focused().unwrap_or(false) {
+                        window.set_focus().expect("Error while trying to set focus on main window");
+                    }
                 }
-                "quit" => {
-                    app.exit(0);
-                }
+                // "quit" => {
+                //     app.exit(0);
+                // }
                 item_id => {
                     if !item_id.starts_with("in") {
                         return;

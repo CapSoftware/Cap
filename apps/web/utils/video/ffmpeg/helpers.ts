@@ -100,16 +100,18 @@ export async function generateM3U8Playlist(
 
 export async function generateMasterPlaylist(
   resolution: string,
-  videoCodec: string,
-  audioCodec: string,
   videoPlaylistUrl: string,
-  audioPlaylistUrl: string
+  audioPlaylistUrl: string,
+  xStreamInfo: string
 ) {
+  const streamInfo = xStreamInfo
+    ? xStreamInfo + ',AUDIO="audio"'
+    : `RESOLUTION=${resolution},AUDIO="audio"`;
   const masterPlaylist = `#EXTM3U
 #EXT-X-VERSION:4
 #EXT-X-INDEPENDENT-SEGMENTS
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en",URI="${audioPlaylistUrl}"
-#EXT-X-STREAM-INF:RESOLUTION=${resolution},CODECS="avc1.42001e,mp4a.40.2",AUDIO="audio"
+#EXT-X-STREAM-INF:${streamInfo}
 ${videoPlaylistUrl}
 `;
 

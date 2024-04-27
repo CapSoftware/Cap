@@ -95,6 +95,7 @@ export const Recorder = () => {
     });
   };
 
+  console.log("selectedAudioDevice: ", selectedAudioDevice);
   // const handleOverlayFinished = () => {
   //   setIsRecording(true);
   //   setStartingRecording(false);
@@ -187,20 +188,25 @@ export const Recorder = () => {
         }
       });
     });
-    emit("toggle-recording", true);
-    await invoke("start_dual_recording", {
-      options: {
-        user_id: videoData.user_id,
-        video_id: videoData.id,
-        audio_name: selectedAudioDevice?.label,
-        aws_region: videoData.aws_region,
-        aws_bucket: videoData.aws_bucket,
-        screen_index: "Capture screen 0",
-        video_index: String(selectedVideoDevice?.index),
-      },
-    }).catch((error) => {
-      console.error("Error invoking start_screen_recording:", error);
-    });
+    await emit("toggle-recording", true);
+    try {
+      await invoke("start_dual_recording", {
+        options: {
+          user_id: videoData.user_id,
+          video_id: videoData.id,
+          audio_name: selectedAudioDevice?.label ?? "None",
+          aws_region: videoData.aws_region,
+          aws_bucket: videoData.aws_bucket,
+          screen_index: "Capture screen 0",
+          video_index: String(selectedVideoDevice?.index),
+        },
+      }).catch((error) => {
+        console.error("Error invoking start_screen_recording:", error);
+      });
+    } catch (error) {
+      console.error("Error starting screen recording:", error);
+      setStartingRecording(false);
+    }
   };
 
   const handleStartAllRecordings = async () => {
@@ -235,17 +241,25 @@ export const Recorder = () => {
     }
     setStoppingRecording(true);
 
-    tauriWindow.then(({ WebviewWindow }) => {
-      const main = WebviewWindow.getByLabel("main");
-      if (main) {
-        main.unminimize();
-      }
-    });
+    // try {
+    //   tauriWindow.then(({ WebviewWindow }) => {
+    //     const main = WebviewWindow.getByLabel("main");
+    //     if (main && main.isMinimized()) {
+    //       main.unminimize();
+    //     }
+    //   });
+    // } catch (error) {
+    //   console.error("Error unminimizing main window:", error);
+    // }
 
     try {
       console.log("Stopping recordings...");
 
-      await invoke("stop_all_recordings");
+      try {
+        await invoke("stop_all_recordings");
+      } catch (error) {
+        console.error("Error stopping recording:", error);
+      }
 
       if (window.fathom !== undefined) {
         window.fathom.trackEvent("stop_recording");
@@ -274,7 +288,7 @@ export const Recorder = () => {
       setHasStartedRecording(false);
       setStoppingRecording(false);
       setCanStopRecording(false);
-      emit("toggle-recording", false);
+      await emit("toggle-recording", false);
     } catch (error) {
       console.error("Error stopping recording:", error);
     }

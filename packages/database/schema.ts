@@ -147,6 +147,7 @@ export const videos = mysqlTable(
     public: boolean("public").notNull().default(true),
     videoStartTime: varchar("videoStartTime", { length: 255 }),
     audioStartTime: varchar("audioStartTime", { length: 255 }),
+    xStreamInfo: text("xStreamInfo"),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },

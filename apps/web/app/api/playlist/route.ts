@@ -181,8 +181,6 @@ export async function GET(request: NextRequest) {
 
       const generatedPlaylist = await generateMasterPlaylist(
         videoMetadata?.Metadata?.resolution ?? "",
-        videoMetadata?.Metadata?.videocodec ?? "",
-        audioMetadata?.Metadata?.audiocodec ?? "",
         process.env.NEXT_PUBLIC_URL +
           "/api/playlist?userId=" +
           userId +
@@ -194,7 +192,8 @@ export async function GET(request: NextRequest) {
           userId +
           "&videoId=" +
           videoId +
-          "&videoType=audio"
+          "&videoType=audio",
+        video.xStreamInfo ?? ""
       );
 
       return new Response(generatedPlaylist, {

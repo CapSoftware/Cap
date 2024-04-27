@@ -1,6 +1,8 @@
 use serde_json::Value as JsonValue;
 use std::path::{Path};
 use std::process::Command;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use reqwest;
 
 use crate::recording::RecordingOptions;
@@ -30,6 +32,7 @@ pub async fn upload_file(
                 println!("Video duration: {} seconds", video_duration_str);
                 println!("Bandwidth: {} kbps", bandwidth_str);
                 println!("Resolution: {}", resolution);
+
                 (video_duration_str, bandwidth_str, resolution, video_codec, "".to_string())
             }
             _ => return Err("Invalid file type".to_string()),
@@ -94,6 +97,8 @@ pub async fn upload_file(
             "audio/aac"
         } else if file_path.to_lowercase().ends_with(".webm") { 
             "audio/webm" 
+        } else if file_path.to_lowercase().ends_with(".mp4") { 
+            "video/mp4"
         } else {
             "video/mp2t"
         };
@@ -133,14 +138,14 @@ pub async fn upload_file(
             }
         }
 
-        // Clean up the uploaded file
-        println!("Removing file after upload: {}", file_path);
-        let remove_result = tokio::fs::remove_file(&file_path).await;
-        match &remove_result {
-            Ok(_) => println!("File removed successfully"),
-            Err(e) => println!("Failed to remove file after upload: {}", e),
-        }
-        remove_result.map_err(|e| format!("Failed to remove file after upload: {}", e))?;
+        // // Clean up the uploaded file
+        // println!("Removing file after upload: {}", file_path);
+        // let remove_result = tokio::fs::remove_file(&file_path).await;
+        // match &remove_result {
+        //     Ok(_) => println!("File removed successfully"),
+        //     Err(e) => println!("Failed to remove file after upload: {}", e),
+        // }
+        // remove_result.map_err(|e| format!("Failed to remove file after upload: {}", e))?;
 
         Ok(file_key)
     } else {
@@ -265,4 +270,66 @@ async fn get_video_metadata(file_path: &str) -> Result<(f64, u64, String, String
     let video_codec = video_codec_str.to_string();
 
     Ok((total_seconds, bandwidth, resolution, video_codec))
+}
+
+pub async fn create_m3u8_master_playlist(
+    video_file_path: &str,
+    audio_file_path: &str,
+    output_path: &str,
+    video_id: &str,
+) -> Result<String, String> {
+    let ffmpeg_binary_path_str = ffmpeg_path_as_str()?;
+
+    let output = Command::new(&ffmpeg_binary_path_str)
+        .args(&[
+            "-i", video_file_path,
+            "-i", audio_file_path,
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-hls_time", "10",
+            "-hls_list_size", "0",
+            "-master_pl_name", "master.m3u8",
+            "-hls_flags", "independent_segments",
+            format!("{}/master.m3u8", output_path).as_str(),
+        ])
+        .output()
+        .map_err(|e| format!("Failed to execute FFmpeg for creating master playlist: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("FFmpeg playlist command failed: {}", stderr));
+    }
+
+    let master_playlist_path = format!("{}/master.m3u8", output_path);
+    let file = File::open(&master_playlist_path)
+        .map_err(|e| format!("Failed to open master playlist file: {}", e))?;
+    let reader = BufReader::new(file);
+
+    let mut stream_inf_line = String::new();
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("Failed to read master playlist file: {}", e))?;
+        if line.starts_with("#EXT-X-STREAM-INF:") {
+            stream_inf_line = line.replace("#EXT-X-STREAM-INF:", "");
+            break;
+        }
+    }
+
+    let server_url_base: &'static str = dotenv_codegen::dotenv!("NEXT_PUBLIC_URL");
+    let api_url = format!("{}/api/desktop/video/metadata/create?videoId={}&xStreamInfo={}", server_url_base, video_id, urlencoding::encode(&stream_inf_line));
+
+    let client = reqwest::Client::new();
+    let response = client.get(&api_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request to update xStreamInfo: {}", e))?;
+
+    if response.status().is_success() {
+        println!("Updated xStreamInfo successfully");
+    } else {
+        let status = response.status();
+        let error_body = response.text().await.unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!("Failed to update xStreamInfo. Status: {}. Body: {}", status, error_body));
+    }
+
+    Ok(stream_inf_line)
 }

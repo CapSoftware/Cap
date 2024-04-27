@@ -41,6 +41,8 @@ sentry = "0.32.2"
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 winit = "0.29.15"
 jpeg-encoder = "0.6.0"
+nix = "0.20.0"
+urlencoding = "2.1.2"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem

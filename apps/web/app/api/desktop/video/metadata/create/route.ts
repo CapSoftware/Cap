@@ -9,10 +9,9 @@ export async function GET(request: NextRequest) {
   try {
     const url = new URL(request.url);
     const videoId = url.searchParams.get("videoId");
-    const startTime = url.searchParams.get("startTime");
-    const logType = url.searchParams.get("logType");
+    const xStreamInfo = url.searchParams.get("xStreamInfo");
 
-    if (!videoId || !startTime || !logType) {
+    if (!videoId || !xStreamInfo) {
       return new Response(
         JSON.stringify({ error: "Missing required fields" }),
         {
@@ -24,21 +23,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    if (logType === "video") {
-      console.log("...Updating video start time...");
-      await db
-        .update(videos)
-        .set({ videoStartTime: startTime.toString() })
-        .where(eq(videos.id, videoId));
-    }
-
-    if (logType === "audio") {
-      console.log("...Updating audio start time...");
-      await db
-        .update(videos)
-        .set({ audioStartTime: startTime.toString() })
-        .where(eq(videos.id, videoId));
-    }
+    await db
+      .update(videos)
+      .set({ xStreamInfo: xStreamInfo })
+      .where(eq(videos.id, videoId));
 
     return new Response(JSON.stringify({ success: true }), {
       status: 200,
@@ -47,7 +35,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("Error updating video or audio start time", error);
+    console.error("Error updating xStreamInfo", error);
     return new Response(JSON.stringify({ error: "Internal server error" }), {
       status: 500,
       headers: {
