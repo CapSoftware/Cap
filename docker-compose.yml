@@ -32,5 +32,5 @@ services:
       - "3900:3900"
     links:
       - ps-mysql
- volumes:
+volumes:
   ps-mysql:
