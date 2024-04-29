@@ -26,9 +26,7 @@ export const VideoPlayer = memo(
       media: HTMLMediaElement,
       hlsInstance: React.MutableRefObject<Hls | null>
     ) => {
-      const hls = new Hls({
-        maxBufferLength: 30,
-      });
+      const hls = new Hls();
       hls.on(Hls.Events.ERROR, (event, data) => {
         console.error("HLS error:", data);
         if (data.fatal) {

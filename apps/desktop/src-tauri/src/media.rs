@@ -14,7 +14,7 @@ use tokio::process::{Command, Child, ChildStdin};
 use tokio::sync::{mpsc, Mutex};
 
 use crate::recording::RecordingOptions;
-use crate::utils::{ffmpeg_path_as_str, create_named_pipe, remove_named_pipe};
+use crate::utils::{ffmpeg_path_as_str};
 use crate::upload::upload_file;
 use capture::{Capturer, Display};
 
@@ -22,8 +22,10 @@ const FRAME_RATE: u64 = 30;
 
 pub struct MediaRecorder {
     pub options: Option<RecordingOptions>,
-    ffmpeg_process: Option<tokio::process::Child>,
-    ffmpeg_stdin: Option<Arc<Mutex<Option<tokio::process::ChildStdin>>>>,
+    ffmpeg_audio_process: Option<tokio::process::Child>,
+    ffmpeg_video_process: Option<tokio::process::Child>,
+    ffmpeg_audio_stdin: Option<Arc<Mutex<Option<tokio::process::ChildStdin>>>>,
+    ffmpeg_video_stdin: Option<Arc<Mutex<Option<tokio::process::ChildStdin>>>>,
     device_name: Option<String>,
     stream: Option<cpal::Stream>,
     audio_channel_sender: Option<mpsc::Sender<Vec<u8>>>,
@@ -38,8 +40,10 @@ impl MediaRecorder {
     pub fn new() -> Self {
         MediaRecorder {
             options: None,
-            ffmpeg_process: None,
-            ffmpeg_stdin: None,
+            ffmpeg_audio_process: None,
+            ffmpeg_video_process: None,
+            ffmpeg_audio_stdin: None,
+            ffmpeg_video_stdin: None,
             device_name: None,
             stream: None,
             audio_channel_sender: None,
@@ -68,11 +72,6 @@ impl MediaRecorder {
         let (video_tx, video_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
         let calculated_stride = (adjusted_width * 4) as usize;
         
-        let audio_pipe = format!("{}/audio_pipe", audio_file_path);
-        let video_pipe = format!("{}/video_pipe", video_file_path);
-        create_named_pipe(&audio_pipe).map_err(|e| e.to_string())?;
-        create_named_pipe(&video_pipe).map_err(|e| e.to_string())?;
-        
         println!("Display width: {}", w);
         println!("Display height: {}", h);
         println!("Adjusted width: {}", adjusted_width);
@@ -87,7 +86,8 @@ impl MediaRecorder {
         self.audio_channel_receiver = Some(audio_rx);
         self.video_channel_sender = Some(video_tx);
         self.video_channel_receiver = Some(video_rx);
-        self.ffmpeg_stdin = Some(Arc::new(Mutex::new(None)));
+        self.ffmpeg_audio_stdin = Some(Arc::new(Mutex::new(None)));
+        self.ffmpeg_video_stdin = Some(Arc::new(Mutex::new(None)));
 
         let audio_channel_sender = self.audio_channel_sender.clone();
         let video_channel_sender = self.video_channel_sender.clone();
@@ -147,7 +147,8 @@ impl MediaRecorder {
         let sample_rate_str = sample_rate.to_string();
         let channels_str = channels.to_string();
         
-        let ffmpeg_stdin = self.ffmpeg_stdin.clone();
+        let ffmpeg_audio_stdin = self.ffmpeg_audio_stdin.clone();
+        let ffmpeg_video_stdin = self.ffmpeg_video_stdin.clone();
 
         let err_fn = move |err| {
             eprintln!("an error occurred on stream: {}", err);
@@ -388,6 +389,7 @@ impl MediaRecorder {
                     time_next += spf;
                 }
 
+                // Sleep until the next frame time
                 let now = Instant::now();
                 if time_next > now {
                     std::thread::sleep(time_next - now);
@@ -402,17 +404,42 @@ impl MediaRecorder {
         println!("Starting audio recording and processing...");
         let audio_output_chunk_pattern = format!("{}/audio_recording_%03d.aac", audio_file_path_owned);
         let audio_segment_list_filename = format!("{}/segment_list.txt", audio_file_path_owned);
-        let video_output_chunk_pattern = format!("{}/video_recording_%03d.mp4", video_file_path_owned);
+        let video_output_chunk_pattern = format!("{}/video_recording_%03d.ts", video_file_path_owned);
         let video_segment_list_filename = format!("{}/segment_list.txt", video_file_path_owned);
+      
+        let mut audio_filters = Vec::new();
 
-        let video_size = format!("{}x{}", adjusted_width, adjusted_height);
-        let video_options = vec![
+        if channels > 2 {
+            audio_filters.push("pan=stereo|FL=FL+0.5*FC|FR=FR+0.5*FC");
+        }
+
+        audio_filters.push("loudnorm");
+
+        let mut ffmpeg_audio_command: Vec<String> = vec![
+            "-f", sample_format,
+            "-ar", &sample_rate_str,
+            "-ac", &channels_str,
+            "-thread_queue_size", "4096",
+            "-i", "pipe:0",
+            "-af", "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-async", "1",
+            "-f", "segment",
+            "-segment_time", "3",
+            "-segment_time_delta", "0.01",
+            "-segment_list", &audio_segment_list_filename,
+            "-reset_timestamps", "1",
+            &audio_output_chunk_pattern,
+        ].into_iter().map(|s| s.to_string()).collect();
+
+        let mut ffmpeg_video_command: Vec<String> = vec![
             "-f", "rawvideo",
             "-pix_fmt", "bgra",
-            "-s", &video_size,
+            "-s", &format!("{}x{}", adjusted_width, adjusted_height),
             "-r", "30",
             "-thread_queue_size", "4096",
-            "-i", &video_pipe,
+            "-i", "pipe:0",
             "-vf", "fps=30,scale=in_range=full:out_range=limited",
             "-c:v", "libx264",
             "-preset", "ultrafast",
@@ -425,87 +452,83 @@ impl MediaRecorder {
             "-segment_time_delta", "0.01",
             "-segment_list", &video_segment_list_filename,
             "-segment_format", "mpegts",
+            "-movflags", "frag_keyframe+empty_moov",
             "-reset_timestamps", "1",
             &video_output_chunk_pattern,
-        ];
-
-        let mut ffmpeg_command: Vec<String> = video_options.into_iter().map(|s| s.to_string()).collect();
+        ].into_iter().map(|s| s.to_string()).collect();
 
         if custom_device != Some("None") {
-            let audio_options = vec![
-                "-f", sample_format,
-                "-ar", &sample_rate_str,
-                "-ac", &channels_str,
-                "-thread_queue_size", "4096",
-                "-i", &audio_pipe,
-                "-af", "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-f", "segment",
-                "-segment_time", "3",
-                "-segment_time_delta", "0.01",
-                "-segment_list", &audio_segment_list_filename,
-                "-reset_timestamps", "1",
-                &audio_output_chunk_pattern,
-            ];
-
-            ffmpeg_command.splice(0..0, audio_options.into_iter().map(|s| s.to_string()));
+            println!("Adjusting FFmpeg commands based on start times...");
+            adjust_ffmpeg_commands_based_on_start_times(
+                Arc::clone(&audio_start_time),
+                Arc::clone(&video_start_time),
+                &mut ffmpeg_audio_command,
+                &mut ffmpeg_video_command,
+            ).await;
         }
 
-        // if custom_device != Some("None") {
-        //     println!("Adjusting FFmpeg commands based on start times...");
-        //     adjust_ffmpeg_commands_based_on_start_times(
-        //         Arc::clone(&audio_start_time),
-        //         Arc::clone(&video_start_time),
-        //         &ffmpeg_command,
-        //         &mut ffmpeg_command,
-        //     ).await;
-        // }
+        println!("Starting FFmpeg audio and video processes...");
+
+        let mut audio_stdin: Option<ChildStdin> = None;
+        let mut audio_child: Option<Child> = None;
+
+        if custom_device != Some("None") {
+            let (child, stdin) = self.start_audio_ffmpeg_processes(&ffmpeg_binary_path_str, &ffmpeg_audio_command).await.map_err(|e| e.to_string())?;
+            audio_child = Some(child);
+            audio_stdin = Some(stdin);
+            println!("Audio process started");
+        }
+
+        let (video_child, video_stdin) = self.start_video_ffmpeg_processes(&ffmpeg_binary_path_str, &ffmpeg_video_command).await.map_err(|e| e.to_string())?;
+        println!("Video process started");
+        
+        if let Some(ffmpeg_audio_stdin) = &self.ffmpeg_audio_stdin {
+            let mut audio_stdin_lock = ffmpeg_audio_stdin.lock().await;
+            *audio_stdin_lock = audio_stdin;
+            drop(audio_stdin_lock);
+            println!("Audio stdin set");
+        }
+
+        if let Some(ffmpeg_video_stdin) = &self.ffmpeg_video_stdin {
+            let mut video_stdin_lock = ffmpeg_video_stdin.lock().await;
+            *video_stdin_lock = Some(video_stdin);
+            drop(video_stdin_lock);
+            println!("Video stdin set");
+        }
 
         if custom_device != Some("None") {
             println!("Starting audio channel senders...");
             tokio::spawn(async move {
-                let mut audio_pipe_writer = tokio::fs::OpenOptions::new()
-                    .write(true)
-                    .open(audio_pipe)
-                    .await
-                    .expect("Failed to open audio pipe for writing");
-
-                while let Some(bytes) = audio_channel_receiver.lock().await.as_mut().unwrap().recv().await {
-                    if let Err(e) = audio_pipe_writer.write_all(&bytes).await {
-                        if e.kind() == std::io::ErrorKind::BrokenPipe {
-                            eprintln!("Audio pipe broken. FFmpeg process might have been terminated.");
-                            break;
-                        } else {
-                            panic!("Failed to write audio data to pipe: {}", e);
+                while let Some(bytes) = &audio_channel_receiver.lock().await.as_mut().unwrap().recv().await {
+                    if let Some(audio_stdin_arc) = &ffmpeg_audio_stdin{
+                        let mut audio_stdin_guard = audio_stdin_arc.lock().await;
+                        if let Some(ref mut stdin) = *audio_stdin_guard {
+                            stdin.write_all(&bytes).await.expect("Failed to write audio data to FFmpeg stdin");
                         }
+                        drop(audio_stdin_guard);
                     }
                 }
             });
         }
 
+        println!("Starting video channel senders...");
         tokio::spawn(async move {
-            let mut video_pipe_writer = tokio::fs::OpenOptions::new()
-                .write(true)
-                .open(video_pipe)
-                .await
-                .expect("Failed to open video pipe for writing");
-
-            while let Some(bytes) = video_channel_receiver.lock().await.as_mut().unwrap().recv().await {
-                if let Err(e) = video_pipe_writer.write_all(&bytes).await {
-                    if e.kind() == std::io::ErrorKind::BrokenPipe {
-                        eprintln!("Video pipe broken. FFmpeg process might have been terminated.");
-                        break;
-                    } else {
-                        panic!("Failed to write video data to pipe: {}", e);
+            while let Some(bytes) = &video_channel_receiver.lock().await.as_mut().unwrap().recv().await {
+                if let Some(video_stdin_arc) = &ffmpeg_video_stdin {
+                    let mut video_stdin_guard = video_stdin_arc.lock().await;
+                    if let Some(ref mut stdin) = *video_stdin_guard {
+                        stdin.write_all(&bytes).await.expect("Failed to write video data to FFmpeg stdin");
                     }
+                    drop(video_stdin_guard);
                 }
             }
         });
+        
+        if custom_device != Some("None") {
+            self.ffmpeg_audio_process = audio_child;
+        }
 
-        let (ffmpeg_process, ffmpeg_stdin) = self.start_ffmpeg_process(&ffmpeg_binary_path_str, &ffmpeg_command).await.map_err(|e| e.to_string())?;
-        self.ffmpeg_process = Some(ffmpeg_process);
-        self.ffmpeg_stdin = Some(Arc::new(Mutex::new(Some(ffmpeg_stdin))));
+        self.ffmpeg_video_process = Some(video_child);
         self.device_name = Some(device.name().expect("Failed to get device name"));
         
         println!("End of the start_audio_recording function");
@@ -525,63 +548,83 @@ impl MediaRecorder {
     }
 
     pub async fn stop_media_recording(&mut self) -> Result<(), String> {
-        if let Some(ref ffmpeg_stdin) = self.ffmpeg_stdin {
-            let mut stdin_guard = ffmpeg_stdin.lock().await;
-            if let Some(stdin) = stdin_guard.as_mut() {
-                if let Err(e) = stdin.write_all(b"q\n").await {
-                    eprintln!("Failed to send graceful shutdown command to FFmpeg: {}", e);
-                } else {
-                    println!("Sent graceful shutdown command to FFmpeg");
-                }
+        if let Some(ref ffmpeg_audio_stdin) = self.ffmpeg_audio_stdin {
+            let mut audio_stdin_guard = ffmpeg_audio_stdin.lock().await;
+            if let Some(mut audio_stdin) = audio_stdin_guard.take() {
+                let _ = audio_stdin.shutdown().await.map_err(|e| e.to_string());
             }
         }
-        self.should_stop.store(true, Ordering::SeqCst);
-        println!("Stopping media recording...");
 
-        if self.device_name.as_deref() != Some("None") {
-            if let Some(sender) = self.audio_channel_sender.take() {
-                drop(sender);
-                println!("Audio recording stopped.");
+        if let Some(ref ffmpeg_video_stdin) = self.ffmpeg_video_stdin {
+            let mut video_stdin_guard = ffmpeg_video_stdin.lock().await;
+            if let Some(mut video_stdin) = video_stdin_guard.take() {
+                let _ = video_stdin.shutdown().await.map_err(|e| e.to_string());
             }
+        }
+
+        self.should_stop.store(true, Ordering::SeqCst);
+
+        if let Some(sender) = self.audio_channel_sender.take() {
+            drop(sender);
         }
 
         if let Some(sender) = self.video_channel_sender.take() {
             drop(sender);
-            println!("Video recording stopped.");
         }
 
-        if self.device_name.as_deref() != Some("None") {
-            if let Some(ref mut stream) = self.stream {
-                stream.pause().map_err(|_| "Failed to pause stream")?;
-                println!("Audio recording paused.");
-            }
+        if let Some(ref mut stream) = self.stream {
+            stream.pause().map_err(|_| "Failed to pause stream")?;
+            println!("Audio recording paused.");
+        } else {
+            return Err("Original recording was not started".to_string());
         }
 
-        if let Some(process) = &mut self.ffmpeg_process {
+        if let Some(process) = &mut self.ffmpeg_audio_process {
             let _ = process.kill().await.map_err(|e| e.to_string());
-            let exit_status = process.wait().await.map_err(|e| e.to_string())?;
-            println!("FFmpeg process exited with status: {}", exit_status);
         }
 
+        if let Some(process) = &mut self.ffmpeg_video_process {
+            let _ = process.kill().await.map_err(|e| e.to_string());
+        }
+
+        println!("Audio recording stopped.");
         Ok(())
     }
 
-    async fn start_ffmpeg_process(
+    async fn start_audio_ffmpeg_processes(
         &self,
         ffmpeg_binary_path: &str,
-        ffmpeg_command: &[String],
+        audio_ffmpeg_command: &[String],
     ) -> Result<(Child, ChildStdin), Error> {
-        let mut process = start_recording_process(ffmpeg_binary_path, ffmpeg_command).await.map_err(|e| {
+        let mut audio_process = start_recording_process(ffmpeg_binary_path, audio_ffmpeg_command).await.map_err(|e| {
             eprintln!("Failed to start audio recording process: {}", e);
             std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
         })?;
 
-        let stdin = process.stdin.take().ok_or_else(|| {
+        let audio_stdin = audio_process.stdin.take().ok_or_else(|| {
             eprintln!("Failed to take audio stdin");
             std::io::Error::new(std::io::ErrorKind::Other, "Failed to take audio stdin")
         })?;
 
-        Ok((process, stdin))
+        Ok((audio_process, audio_stdin))
+    }
+
+    async fn start_video_ffmpeg_processes(
+        &self,
+        ffmpeg_binary_path: &str,
+        video_ffmpeg_command: &[String],
+    ) -> Result<(Child, ChildStdin), Error> {
+        let mut video_process = start_recording_process(ffmpeg_binary_path, video_ffmpeg_command).await.map_err(|e| {
+            eprintln!("Failed to start video recording process: {}", e);
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        })?;
+
+        let video_stdin = video_process.stdin.take().ok_or_else(|| {
+            eprintln!("Failed to take video stdin");
+            std::io::Error::new(std::io::ErrorKind::Other, "Failed to take video stdin")
+        })?;
+
+        Ok((video_process, video_stdin))
     }
 
 }

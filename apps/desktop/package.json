@@ -11,6 +11,7 @@
     "@cap/database": "workspace:*",
     "@cap/ui": "workspace:*",
     "@cap/utils": "workspace:*",
+    "@mux/mux-node": "^8.5.1",
     "@sentry/nextjs": "^7.105.0",
     "@tauri-apps/api": "^1.5.3",
     "@tensorflow-models/body-pix": "^2.2.1",

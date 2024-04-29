@@ -82,7 +82,8 @@ export async function generateM3U8Playlist(
   }[]
 ) {
   const baseM3U8Content = `#EXTM3U
-#EXT-X-TARGETDURATION:3
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-TARGETDURATION:4
 #EXT-X-VERSION:4
 #EXT-X-MEDIA-SEQUENCE:0
 `;

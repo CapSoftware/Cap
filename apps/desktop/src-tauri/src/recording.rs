@@ -4,11 +4,13 @@ use std::io::{self, BufReader, BufRead, ErrorKind};
 use std::fs::File;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use tokio::sync:: {Mutex};
+use tokio::task::JoinHandle;
 use tokio::time::{Duration};
 use serde::{Serialize, Deserialize};
 use tauri::State;
+use futures::future::join_all;
 
-use crate::upload::{upload_file, create_m3u8_master_playlist};
+use crate::upload::{upload_file};
 
 use crate::media::MediaRecorder;
 
@@ -41,79 +43,80 @@ pub struct RecordingOptions {
 
 #[tauri::command]
 pub async fn start_dual_recording(
-    state: State<'_, Arc<Mutex<RecordingState>>>,
-    options: RecordingOptions,
+  state: State<'_, Arc<Mutex<RecordingState>>>,
+  options: RecordingOptions,
 ) -> Result<(), String> {
-    println!("Starting screen recording...");
-    
-    let mut state_guard = state.lock().await;
-    let shutdown_flag = Arc::new(AtomicBool::new(false));
-    let data_dir = state_guard.data_dir.as_ref()
-        .ok_or("Data directory is not set in the recording state".to_string())?.clone();
-    let audio_chunks_dir = data_dir.join("chunks/audio");
-    let video_chunks_dir = data_dir.join("chunks/video");
-    let screenshot_dir = data_dir.join("screenshots");
+  println!("Starting screen recording...");
+  let mut state_guard = state.lock().await;
+  
+  let shutdown_flag = Arc::new(AtomicBool::new(false));
 
-    clean_and_create_dir(&audio_chunks_dir)?;
-    clean_and_create_dir(&video_chunks_dir)?;
-    clean_and_create_dir(&screenshot_dir)?;
+  let data_dir = state_guard.data_dir.as_ref()
+      .ok_or("Data directory is not set in the recording state".to_string())?.clone();
 
-    let audio_option = if options.audio_name.is_empty() || options.audio_name == "None" {
-        None
-    } else {
-        Some(options.audio_name.clone())
-    };
+  println!("data_dir: {:?}", data_dir);
+  
+  let audio_chunks_dir = data_dir.join("chunks/audio");
+  let video_chunks_dir = data_dir.join("chunks/video");
+  let screenshot_dir = data_dir.join("screenshots");
 
-    let media_recorder = prepare_media_recording(
-        &options, &audio_chunks_dir, &video_chunks_dir, &screenshot_dir, 
-        audio_option.clone(), state_guard.max_screen_width, state_guard.max_screen_height).await?;
+  clean_and_create_dir(&audio_chunks_dir)?;
+  clean_and_create_dir(&video_chunks_dir)?;
+  clean_and_create_dir(&screenshot_dir)?;
+  
+  let audio_name = if options.audio_name.is_empty() {
+    None
+  } else {
+    Some(options.audio_name.clone())
+  };
+  
+  let media_recording_preparation = prepare_media_recording(&options, &audio_chunks_dir, &video_chunks_dir, &screenshot_dir, audio_name, state_guard.max_screen_width, state_guard.max_screen_height);
+  let media_recording_result = media_recording_preparation.await.map_err(|e| e.to_string())?;
 
-    state_guard.media_process = Some(media_recorder);
-    state_guard.recording_options = Some(options.clone());
-    state_guard.shutdown_flag = shutdown_flag.clone();
-    state_guard.video_uploading_finished = Arc::new(AtomicBool::new(false));
-    state_guard.audio_uploading_finished = Arc::new(if audio_option.is_some() { AtomicBool::new(false) } else { AtomicBool::new(true) });
+  state_guard.media_process = Some(media_recording_result);
+  state_guard.recording_options = Some(options.clone());
+  state_guard.shutdown_flag = shutdown_flag.clone();
+  state_guard.video_uploading_finished = Arc::new(AtomicBool::new(false));
+  state_guard.audio_uploading_finished = Arc::new(AtomicBool::new(false));
 
-    drop(state_guard); // Dropping here after all necessary state updated
+  let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
+      "true" => true,
+      _ => false,
+  };
 
-    let is_local_mode = dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") == "true";
+  if !is_local_mode {
+      let screen_upload = start_upload_loop(video_chunks_dir.clone(), options.clone(), "video".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
+      let audio_upload = start_upload_loop(audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone(), state_guard.audio_uploading_finished.clone());
 
-    if !is_local_mode {
-        let screen_upload = start_upload_loop(video_chunks_dir.clone(), options.clone(), "video".to_string(), shutdown_flag.clone(), state.lock().await.video_uploading_finished.clone());
-        let audio_upload = start_upload_loop(audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone(), state.lock().await.audio_uploading_finished.clone());
+      drop(state_guard);
 
-        println!("Starting upload loops...");
-        match tokio::try_join!(screen_upload, audio_upload) {
-            Ok(_) => {
-                println!("Both upload loops completed successfully.");
-            },
-            Err(e) => {
-                return Err(format!("An error occurred in upload loops: {}", e));
-            },
-        }
-    } else {
-        println!("Skipping upload loops due to NEXT_PUBLIC_LOCAL_MODE being set to 'true'.");
-    }
+      println!("Starting upload loops...");
 
-    Ok(())
+      match tokio::try_join!(screen_upload, audio_upload) {
+          Ok(_) => {
+              println!("Both upload loops completed successfully.");
+          },
+          Err(e) => {
+              eprintln!("An error occurred: {}", e);
+          },
+      }
+  } else {
+      println!("Skipping upload loops due to NEXT_PUBLIC_LOCAL_MODE being set to 'true'.");
+  }
+
+  Ok(())
 }
 
 #[tauri::command]
 pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -> Result<(), String> {
-    println!("Stopping all recordings...");
-    
-    let shutdown_flag = {
-        let guard = state.lock().await;
-        guard.shutdown_flag.clone()
-    };
-
-    shutdown_flag.store(true, Ordering::SeqCst);
-
     let mut guard = state.lock().await;
-    println!("1: Stopping media recording...");
+    
+    println!("Stopping media recording...");
+    
+    guard.shutdown_flag.store(true, Ordering::SeqCst);
 
     if let Some(mut media_process) = guard.media_process.take() {
-        println!("2: Stopping media recording...");
+        println!("Stopping media recording...");
         media_process.stop_media_recording().await.expect("Failed to stop media recording");
     }
 
@@ -123,21 +126,13 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
     };
 
     if !is_local_mode {
-        println!("Waiting for uploads to finish...");
-
-        let timeout = Duration::from_secs(10);
-        let start_time = std::time::Instant::now();
-
-        while !guard.video_uploading_finished.load(Ordering::SeqCst) || !guard.audio_uploading_finished.load(Ordering::SeqCst) {
-            if start_time.elapsed() > timeout {
-                return Err("Timeout waiting for uploads to finish".to_string());
-            }
+        while !guard.video_uploading_finished.load(Ordering::SeqCst) 
+            || !guard.audio_uploading_finished.load(Ordering::SeqCst) {
+            println!("Waiting for uploads to finish...");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
-
-    drop(guard);
-
+    
     println!("All recordings and uploads stopped.");
 
     Ok(())
@@ -173,8 +168,17 @@ async fn start_upload_loop(
     uploading_finished: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut watched_segments: HashSet<String> = HashSet::new();
+    let mut is_final_loop = false;
 
-    while !shutdown_flag.load(Ordering::SeqCst) || !watched_segments.is_superset(&load_segment_list(&chunks_dir.join("segment_list.txt")).map_err(|e| e.to_string())?) {
+    loop {
+        let mut upload_tasks = vec![];
+        if shutdown_flag.load(Ordering::SeqCst) {
+            if is_final_loop {
+                break;
+            }
+            is_final_loop = true;
+        }
+
         let current_segments = load_segment_list(&chunks_dir.join("segment_list.txt"))
             .map_err(|e| e.to_string())?
             .difference(&watched_segments)
@@ -187,30 +191,33 @@ async fn start_upload_loop(
                 let options_clone = options.clone();
                 let video_type_clone = video_type.clone();
                 let segment_path_clone = segment_path.clone();
-                let handle = tokio::spawn(async move {
+                upload_tasks.push(tokio::spawn(async move {
                     let filepath_str = segment_path_clone.to_str().unwrap_or_default().to_owned();
                     println!("Uploading video for {}: {}", video_type_clone, filepath_str);
                     upload_file(Some(options_clone), filepath_str, video_type_clone).await.map(|_| ())
-                });
+                }));
             }
             watched_segments.insert(segment_filename.clone());
         }
 
+        if !upload_tasks.is_empty() {
+            let _ = join_all(upload_tasks).await;
+        }
+
+        // if video_type == "video" {
+        //     let options_clone = options.clone();
+        //     let video_id = options_clone.video_id.clone();
+        //     let video_file_path = chunks_dir.join(watched_segments.iter().next().unwrap_or(&"".to_string())).to_str().unwrap_or_default().to_owned();
+        //     let audio_file_path = video_file_path.replace("video", "audio").replace(".ts", ".aac");
+        //     let output_path = Path::new(&video_file_path).parent().unwrap().to_str().unwrap();
+
+        //     if let Err(e) = create_m3u8_master_playlist(&video_file_path, &audio_file_path, output_path, &video_id).await {
+        //         eprintln!("Error creating m3u8 master playlist: {}", e);
+        //     }
+        // }
+
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-
-    if video_type == "video" {
-        let options_clone = options.clone();
-        let video_id = options_clone.video_id.clone();
-        let video_file_path = chunks_dir.join(watched_segments.iter().next().unwrap_or(&"".to_string())).to_str().unwrap_or_default().to_owned();
-        let audio_file_path = video_file_path.replace("video", "audio").replace(".mp4", ".aac");
-        let output_path = Path::new(&video_file_path).parent().unwrap().to_str().unwrap();
-
-        if let Err(e) = create_m3u8_master_playlist(&video_file_path, &audio_file_path, output_path, &video_id).await {
-            eprintln!("Error creating m3u8 master playlist: {}", e);
-        }
-    }
-
     uploading_finished.store(true, Ordering::SeqCst);
     Ok(())
 }
@@ -233,8 +240,8 @@ fn load_segment_list(segment_list_path: &Path) -> io::Result<HashSet<String>> {
 async fn prepare_media_recording(
   options: &RecordingOptions,
   audio_chunks_dir: &Path,
-  video_chunks_dir: &Path,
   screenshot_dir: &Path,
+  video_chunks_dir: &Path,
   audio_name: Option<String>,
   max_screen_width: usize,
   max_screen_height: usize,
@@ -243,6 +250,6 @@ async fn prepare_media_recording(
   let audio_file_path = audio_chunks_dir.to_str().unwrap();
   let video_file_path = video_chunks_dir.to_str().unwrap();
   let screenshot_dir_path = screenshot_dir.to_str().unwrap();
-  media_recorder.start_media_recording(options.clone(), audio_file_path, video_file_path, screenshot_dir_path, audio_name.as_ref().map(String::as_str), max_screen_width, max_screen_height).await?;
+  media_recorder.start_media_recording(options.clone(), audio_file_path, screenshot_dir_path, video_file_path, audio_name.as_ref().map(String::as_str), max_screen_width, max_screen_height).await?;
   Ok(media_recorder)
 }
