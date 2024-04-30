@@ -2,29 +2,11 @@ import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import {
-  S3Client,
-  ListObjectsV2Command,
-  GetObjectCommand,
-} from "@aws-sdk/client-s3";
+import { S3Client, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import {
   MediaConvertClient,
   CreateJobCommand,
-  GetJobCommand,
 } from "@aws-sdk/client-mediaconvert";
-import {
-  CloudFrontClient,
-  CreateDistributionCommand,
-} from "@aws-sdk/client-cloudfront";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import Mux from "@mux/mux-node";
-import { AssetCreateParams } from "@mux/mux-node/resources/video/assets";
-
-const mux = new Mux({
-  tokenId: process.env["MUX_TOKEN_ID"],
-  tokenSecret: process.env["MUX_TOKEN_SECRET"],
-});
-
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
   "http://localhost:3001",
