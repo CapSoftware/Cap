@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
   }
 
   const isSubscribed = isUserOnProPlan({
-    subscriptionStatus: user.stripeSubscriptionStatus as string,
+    subscriptionStatus: user.stripeSubscriptionStatus || "",
   });
 
   return new Response(

@@ -43,11 +43,11 @@ export const Recorder = () => {
   const [currentStoppingMessage, setCurrentStoppingMessage] =
     useState("Stopping Recording");
   const [recordingTime, setRecordingTime] = useState("00:00");
+  const [canStopRecording, setCanStopRecording] = useState(false);
   const [hasStartedRecording, setHasStartedRecording] = useState(false);
   const tauriWindow = import("@tauri-apps/api/window");
   const proCheckPromise = isUserPro();
   const [proCheck, setProCheck] = useState<boolean>(false);
-  const [limitReached, setLimitReached] = useState(false);
 
   useEffect(() => {
     proCheckPromise.then((result) => setProCheck(Boolean(result)));
@@ -175,7 +175,7 @@ export const Recorder = () => {
         unlistenFn();
       }
     };
-  }, [isRecording]);
+  }, [isRecording, canStopRecording]);
 
   const startDualRecording = async (videoData: {
     id: string;
@@ -248,6 +248,10 @@ export const Recorder = () => {
   };
 
   const handleStopAllRecordings = async () => {
+    if (!canStopRecording) {
+      toast.error("Recording must be for a minimum of 5 seconds.");
+      return;
+    }
     setStoppingRecording(true);
 
     try {
@@ -296,12 +300,14 @@ export const Recorder = () => {
       setIsRecording(false);
       setHasStartedRecording(false);
       setStoppingRecording(false);
+      setCanStopRecording(false);
       await emit("toggle-recording", false);
     } catch (error) {
       console.error("Error stopping recording:", error);
     }
 
     setIsRecording(false);
+    // setCountdownActive(false);
     setStoppingRecording(false);
   };
 
@@ -331,52 +337,26 @@ export const Recorder = () => {
     if (isRecording && !startingRecording) {
       const startTime = Date.now();
 
+      setTimeout(() => setCanStopRecording(true), 5000);
+
       intervalId = setInterval(() => {
         const seconds = Math.floor((Date.now() - startTime) / 1000);
         const minutes = Math.floor(seconds / 60);
         const formattedSeconds =
           seconds % 60 < 10 ? `0${seconds % 60}` : seconds % 60;
         setRecordingTime(`${minutes}:${formattedSeconds}`);
+
+        if (seconds >= 300) {
+          handleStopAllRecordings();
+        }
       }, 1000);
     }
+
     return () => {
       clearInterval(intervalId);
       setRecordingTime("00:00");
     };
   }, [isRecording, startingRecording]);
-
-  useEffect(() => {
-    if (isRecording && !startingRecording && !proCheck && !limitReached) {
-      const startTime = Date.now();
-      let intervalId: NodeJS.Timeout;
-
-      intervalId = setInterval(() => {
-        const seconds = Math.floor((Date.now() - startTime) / 1000);
-        if (seconds >= 300) {
-          setLimitReached(true);
-          tauriWindow.then(({ getCurrent }) => {
-            const currentWindow = getCurrent();
-            if (currentWindow.isMinimized()) {
-              currentWindow.unminimize();
-              toast.error(
-                "5 minute recording limit reached. Stopping recording in 10 seconds."
-              );
-
-              setTimeout(() => {
-                handleStopAllRecordings();
-                return;
-              }, 10000);
-            }
-          });
-        }
-      }, 1000);
-
-      return () => {
-        clearInterval(intervalId);
-        setLimitReached(false);
-      };
-    }
-  }, [isRecording, startingRecording, proCheck, limitReached]);
 
   return (
     <>
