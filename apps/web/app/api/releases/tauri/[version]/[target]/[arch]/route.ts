@@ -19,9 +19,7 @@ export async function GET(
   }
 ) {
   try {
-    if (params.arch === "x86_64") {
-      params.arch = "x64";
-    }
+    params.arch = "arch";
 
     const { data: release } = await octokit.repos.getLatestRelease({
       owner: "capsoftware",
@@ -35,11 +33,10 @@ export async function GET(
       : null;
 
     const asset = release.assets.find((asset) => {
-      const isArchMatch = asset.name.includes(params.arch);
       const isTargetMatch =
         asset.name.endsWith(".tar.gz") && !asset.name.endsWith(".tar.gz.sig");
 
-      return isArchMatch && isTargetMatch;
+      return isTargetMatch;
     });
 
     if (!asset) {
