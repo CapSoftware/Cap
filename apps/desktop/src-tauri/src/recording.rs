@@ -203,19 +203,7 @@ async fn start_upload_loop(
         if !upload_tasks.is_empty() {
             let _ = join_all(upload_tasks).await;
         }
-
-        // if video_type == "video" {
-        //     let options_clone = options.clone();
-        //     let video_id = options_clone.video_id.clone();
-        //     let video_file_path = chunks_dir.join(watched_segments.iter().next().unwrap_or(&"".to_string())).to_str().unwrap_or_default().to_owned();
-        //     let audio_file_path = video_file_path.replace("video", "audio").replace(".ts", ".aac");
-        //     let output_path = Path::new(&video_file_path).parent().unwrap().to_str().unwrap();
-
-        //     if let Err(e) = create_m3u8_master_playlist(&video_file_path, &audio_file_path, output_path, &video_id).await {
-        //         eprintln!("Error creating m3u8 master playlist: {}", e);
-        //     }
-        // }
-
+        
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     uploading_finished.store(true, Ordering::SeqCst);

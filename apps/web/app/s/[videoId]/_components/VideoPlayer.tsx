@@ -18,9 +18,6 @@ export const VideoPlayer = memo(
 
     useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
-    const isIOS = () =>
-      /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-
     const initializeHls = (
       src: string,
       media: HTMLMediaElement,
@@ -32,7 +29,12 @@ export const VideoPlayer = memo(
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              hls.startLoad();
+              if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
+                setTimeout(() => {
+                  console.log("Retrying...");
+                  hls.loadSource(src);
+                }, 500);
+              }
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
               hls.recoverMediaError();
@@ -42,7 +44,6 @@ export const VideoPlayer = memo(
           }
         }
       });
-
       hlsInstance.current = hls;
       hls.loadSource(src);
       hls.attachMedia(media);

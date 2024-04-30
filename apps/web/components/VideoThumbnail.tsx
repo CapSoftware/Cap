@@ -1,7 +1,6 @@
-import { Logo, LogoBadge, LogoSpinner } from "@cap/ui";
+import { LogoSpinner } from "@cap/ui";
 import Image from "next/image";
 import { useEffect, useState } from "react";
-import { classNames } from "../utils/helpers";
 
 interface VideoThumbnailProps {
   userId: string;

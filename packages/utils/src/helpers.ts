@@ -33,3 +33,29 @@ export const getLatestVideoId = async () => {
 
   return "";
 };
+
+export const saveUserId = async (userId: string) => {
+  try {
+    if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+      window.localStorage.setItem("userId", userId);
+    }
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+export const getUserId = async () => {
+  if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+    return window.localStorage.getItem("userId") || "";
+  }
+
+  return "";
+};
+
+export const isUserPro = async () => {
+  if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+    return window.localStorage.getItem("pro") || false;
+  }
+
+  return false;
+};

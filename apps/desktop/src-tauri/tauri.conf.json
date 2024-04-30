@@ -1,6 +1,6 @@
 {
   "build": {
-    "beforeDevCommand": "next dev -p 3001 --turbo",
+    "beforeDevCommand": "next dev -p 3001",
     "beforeBuildCommand": "next build",
     "devPath": "http://localhost:3001",
     "distDir": "../out",

@@ -10,6 +10,7 @@ import {
   MessageSquareIcon,
   SmileIcon,
   Video,
+  Trash,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
@@ -33,7 +34,7 @@ type videoData = {
 }[];
 
 export const Caps = ({ data, count }: { data: videoData; count: number }) => {
-  const { push } = useRouter();
+  const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   console.log("page: ", page);
@@ -42,23 +43,16 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
   const limit = 16;
   const totalPages = Math.ceil(count / limit);
 
-  const nextPage = () => {
-    push(`/dashboard/caps?page=${page + 1}`);
-  };
-
-  const prevPage = () => {
-    if (page > 1) {
-      push(`/dashboard/caps?page=${page - 1}`);
-    }
-  };
-
   useEffect(() => {
     const fetchAnalytics = async () => {
       const analyticsData: Record<string, number> = {};
 
       for (const video of data) {
         const response = await fetch(
-          `/api/video/analytics?videoId=${video.id}`
+          `/api/video/analytics?videoId=${video.id}`,
+          {
+            cache: "force-cache",
+          }
         );
         const data = await response.json();
 
@@ -73,6 +67,27 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
 
     fetchAnalytics();
   }, [data]);
+
+  const deleteCap = async (videoId: string) => {
+    if (
+      !window.confirm(
+        "Are you sure you want to delete this Cap? It cannot be undone."
+      )
+    ) {
+      return;
+    }
+
+    const response = await fetch(`/api/video/delete?videoId=${videoId}`, {
+      method: "DELETE",
+    });
+
+    if (response.ok) {
+      refresh();
+      toast.success("Cap deleted successfully");
+    } else {
+      toast.error("Failed to delete Cap - please try again later");
+    }
+  };
 
   return (
     <div>
@@ -109,7 +124,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
           <div>
             <h1 className="text-3xl font-semibold mb-1">My Caps</h1>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {data.map((cap, index) => {
               const videoAnalytics = analytics[cap.id];
 
@@ -118,27 +133,38 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                   key={index}
                   className="rounded-xl border border-filler overflow-hidden relative"
                 >
-                  <button
-                    type="button"
-                    className="cursor-pointer border border-gray-300 absolute top-2 right-2 z-20 bg-white hover:bg-gray-300 w-6 h-6 m-0 p-0 rounded-full flex items-center justify-center transition-all"
-                    onClick={() => {
-                      if (
-                        process.env.NEXT_PUBLIC_IS_CAP &&
-                        process.env.NEXT_ENV === "production"
-                      ) {
-                        navigator.clipboard.writeText(
-                          `https://cap.link/${cap.id}`
-                        );
-                      } else {
-                        navigator.clipboard.writeText(
-                          `${process.env.NEXT_PUBLIC_URL}/s/${cap.id}`
-                        );
-                      }
-                      toast.success("Link copied to clipboard!");
-                    }}
-                  >
-                    <LinkIcon className="w-3 h-3" />
-                  </button>
+                  <div className="absolute top-2 right-2 space-y-2 z-20">
+                    <button
+                      type="button"
+                      className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-300 w-6 h-6 m-0 p-0 rounded-full flex items-center justify-center transition-all"
+                      onClick={() => {
+                        if (
+                          process.env.NEXT_PUBLIC_IS_CAP &&
+                          process.env.NEXT_ENV === "production"
+                        ) {
+                          navigator.clipboard.writeText(
+                            `https://cap.link/${cap.id}`
+                          );
+                        } else {
+                          navigator.clipboard.writeText(
+                            `${process.env.NEXT_PUBLIC_URL}/s/${cap.id}`
+                          );
+                        }
+                        toast.success("Link copied to clipboard!");
+                      }}
+                    >
+                      <LinkIcon className="w-3 h-3" />
+                    </button>
+                    <button
+                      type="button"
+                      className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-300 w-6 h-6 m-0 p-0 rounded-full flex items-center justify-center transition-all"
+                      onClick={async () => {
+                        await deleteCap(cap.id);
+                      }}
+                    >
+                      <Trash className="w-3 h-3" />
+                    </button>
+                  </div>
                   <a
                     className="group block"
                     href={

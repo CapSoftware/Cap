@@ -84,12 +84,26 @@ export default function DynamicSharedLayout({
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56">
                 <DropdownMenuItem>
-                  <Link
-                    className="w-full text-primary font-medium"
-                    href="/pricing"
-                  >
-                    Upgrade to Pro
-                  </Link>
+                  <div>
+                    {isUserOnProPlan({
+                      subscriptionStatus:
+                        user?.stripeSubscriptionStatus as string,
+                    }) ? (
+                      <Link
+                        className="w-full text-primary font-medium"
+                        href="/dashboard/settings/billing"
+                      >
+                        Cap Pro
+                      </Link>
+                    ) : (
+                      <Link
+                        className="w-full text-primary font-medium"
+                        href="/pricing"
+                      >
+                        Upgrade to Cap Pro
+                      </Link>
+                    )}
+                  </div>
                 </DropdownMenuItem>
                 <DropdownMenuItem>
                   <Link className="w-full" href="/dashboard/settings">

@@ -24,3 +24,5 @@ export const getCurrentUser = async () => {
 
   return currentUser;
 };
+
+export const userSelectProps = users.$inferSelect;

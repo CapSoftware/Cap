@@ -20,7 +20,6 @@ mod utils;
 mod media;
 
 use recording::{RecordingState, start_dual_recording, stop_all_recordings};
-use upload::upload_file;
 use media::{enumerate_audio_devices};
 use utils::{has_screen_capture_access};
 
@@ -187,7 +186,7 @@ fn main() {
 
         tray_menu
             .add_item(CustomMenuItem::new("show-window".to_string(), "Show Cap"))
-            // .add_item(CustomMenuItem::new("quit".to_string(), "Quit").accelerator("CmdOrControl+Q"))
+            .add_item(CustomMenuItem::new("quit".to_string(), "Quit").accelerator("CmdOrControl+Q"))
     }
 
     let tray = SystemTray::new().with_menu(create_tray_menu(None)).with_menu_on_left_click(false).with_title("Cap");
@@ -305,7 +304,6 @@ fn main() {
             start_dual_recording,
             stop_all_recordings,
             enumerate_audio_devices,
-            upload_file,
             start_server,
             open_screen_capture_preferences,
             open_mic_preferences,
@@ -325,10 +323,13 @@ fn main() {
                     if !window.is_focused().unwrap_or(false) {
                         window.set_focus().expect("Error while trying to set focus on main window");
                     }
+                    if(window.is_minimized().unwrap_or(false)) {
+                        window.unminimize().expect("Error while trying to unminimize main window");
+                    }
                 }
-                // "quit" => {
-                //     app.exit(0);
-                // }
+                "quit" => {
+                    app.exit(0);
+                }
                 item_id => {
                     if !item_id.starts_with("in") {
                         return;

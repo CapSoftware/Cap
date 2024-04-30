@@ -148,6 +148,8 @@ export const videos = mysqlTable(
     videoStartTime: varchar("videoStartTime", { length: 255 }),
     audioStartTime: varchar("audioStartTime", { length: 255 }),
     xStreamInfo: text("xStreamInfo"),
+    jobId: varchar("jobId", { length: 255 }),
+    jobStatus: varchar("jobStatus", { length: 255 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },

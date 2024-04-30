@@ -35,67 +35,51 @@ import toast from "react-hot-toast";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
 import { getLatestVideoId, saveLatestVideoId } from "@cap/utils";
-import { FileData } from "@ffmpeg/ffmpeg/dist/esm/types";
 
 class AsyncTaskQueue {
-  private queue: (() => Promise<void>)[] = [];
-  private isProcessing = false;
-  private resolveEmpty: (() => void) | null = null;
-  private emptyPromise: Promise<void> | null = null;
-  private isRecordingStopped = false;
+  private queue: (() => Promise<void>)[];
+  private activeTasks: number;
+  private resolveEmptyPromise: (() => void) | null;
 
-  async enqueue(task: () => Promise<void>) {
-    console.log("Task added to queue");
+  constructor() {
+    this.queue = [];
+    this.activeTasks = 0;
+    this.resolveEmptyPromise = null;
+  }
+
+  public enqueue(task: () => Promise<void>) {
     this.queue.push(task);
-    if (!this.emptyPromise) {
-      this.emptyPromise = new Promise<void>(
-        (resolve) => (this.resolveEmpty = resolve)
-      );
-    }
-    if (!this.isProcessing) {
-      await this.processQueue();
-    }
+    this.processQueue(); // Call processQueue whenever a new task is enqueued
   }
 
   private async processQueue() {
-    this.isProcessing = true;
-    while (this.queue.length > 0) {
-      console.log("Processing task");
-      const task = this.queue.shift();
-      if (task) {
-        this.isProcessing = true;
+    if (this.activeTasks >= 1 || this.queue.length === 0) {
+      return; // Don't start processing if there are already active tasks or the queue is empty
+    }
+
+    const task = this.queue.shift();
+    if (task) {
+      this.activeTasks++;
+      try {
         await task();
-        console.log("Task completed");
+      } finally {
+        this.activeTasks--;
+        if (this.activeTasks === 0 && this.resolveEmptyPromise) {
+          this.resolveEmptyPromise();
+          this.resolveEmptyPromise = null;
+        }
+        this.processQueue(); // Recursively call processQueue to handle the next task
       }
     }
-    this.isProcessing = false;
-    if (this.resolveEmpty && this.isRecordingStopped) {
-      this.resolveEmpty();
-      this.resolveEmpty = null;
-      this.emptyPromise = null;
-    }
   }
 
-  public async waitForEmpty() {
-    if (this.queue.length === 0 && !this.isProcessing) {
-      console.log("1: Queue is empty");
+  public waitForQueueEmpty(): Promise<void> {
+    if (this.activeTasks === 0 && this.queue.length === 0) {
       return Promise.resolve();
     }
-    return new Promise<void>((resolve) => {
-      const checkEmpty = () => {
-        if (this.queue.length === 0 && !this.isProcessing) {
-          console.log("2: Queue is empty");
-          resolve();
-        } else {
-          setTimeout(checkEmpty, 500);
-        }
-      };
-      checkEmpty();
+    return new Promise((resolve) => {
+      this.resolveEmptyPromise = resolve;
     });
-  }
-
-  public stopRecording() {
-    this.isRecordingStopped = true;
   }
 }
 
@@ -128,7 +112,7 @@ export const Record = ({
     null
   );
   const totalSegments = useRef(0);
-  const segmentStartTimeRef = useRef(0);
+  const readyToStopRecording = useRef(false);
   const muxQueue = new AsyncTaskQueue();
   const screenPreviewRef = useRef<HTMLVideoElement>(null);
   const webcamPreviewRef = useRef<HTMLVideoElement>(null);
@@ -216,13 +200,26 @@ export const Record = ({
         },
       });
       const devices = await navigator.mediaDevices.enumerateDevices();
-      console.log("Devices:", devices);
       const audioDevices = devices.filter(
         (device) => device.kind === "audioinput"
       );
+      audioDevices.push({
+        deviceId: "",
+        label: "None",
+        groupId: "",
+        kind: "audioinput",
+        toJSON: () => "",
+      });
       const videoDevices = devices.filter(
         (device) => device.kind === "videoinput"
       );
+      videoDevices.push({
+        deviceId: "",
+        label: "None",
+        groupId: "",
+        kind: "videoinput",
+        toJSON: () => "",
+      });
       audioDevicesRef.current = audioDevices;
       videoDevicesRef.current = videoDevices;
     } catch (error) {
@@ -339,6 +336,7 @@ export const Record = ({
     if (screenStream) {
       screenStream.getTracks().forEach((track) => track.stop());
       setScreenStream(null);
+      stopVideoCapture();
     }
   };
 
@@ -356,18 +354,6 @@ export const Record = ({
       toast.error(
         "No screen capture source selected, plesae select a screen source."
       );
-      setStartingRecording(false);
-      return;
-    }
-
-    if (!videoStream || !selectedVideoDevice) {
-      toast.error("No video source selected, please select a video option.");
-      setStartingRecording(false);
-      return;
-    }
-
-    if (!selectedAudioDevice) {
-      toast.error("No microphone selected, please select a microphone option.");
       setStartingRecording(false);
       return;
     }
@@ -432,25 +418,33 @@ export const Record = ({
 
     const drawCanvas = () => {
       if (ctx) {
-        // Clear the canvas
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // Get the current position and size of the screen preview
         const screenPreview = document.getElementById(
           "screenPreview"
         ) as HTMLVideoElement;
-        const screenRect = screenPreview.getBoundingClientRect();
-        const containerRect = document
-          .querySelector(".video-container")
-          ?.getBoundingClientRect();
+        const webcamPreview = document.getElementById(
+          "webcamPreview"
+        ) as HTMLVideoElement;
+        const videoContainer = document.querySelector(
+          ".video-container"
+        ) as HTMLElement;
 
-        if (containerRect) {
-          const screenX = screenRect.left - containerRect.left;
-          const screenY = screenRect.top - containerRect.top;
-          const screenWidth = screenRect.width;
-          const screenHeight = screenRect.height;
+        if (screenPreview && videoContainer) {
+          const screenRect = screenPreview.getBoundingClientRect();
+          const containerRect = videoContainer.getBoundingClientRect();
 
-          // Draw the screen preview on the canvas based on its position and size
+          const screenX =
+            (screenRect.left - containerRect.left) *
+            (canvas.width / containerRect.width);
+          const screenY =
+            (screenRect.top - containerRect.top) *
+            (canvas.height / containerRect.height);
+          const screenWidth =
+            screenRect.width * (canvas.width / containerRect.width);
+          const screenHeight =
+            screenRect.height * (canvas.height / containerRect.height);
+
           ctx.drawImage(
             screenPreview,
             screenX,
@@ -460,53 +454,58 @@ export const Record = ({
           );
         }
 
-        // Get the current position and size of the webcam preview
-        const webcamPreview = document.getElementById(
-          "webcamPreview"
-        ) as HTMLVideoElement;
-        const webcamRect = webcamPreview.getBoundingClientRect();
+        if (
+          webcamPreview &&
+          videoContainer &&
+          selectedVideoDeviceLabel !== "None"
+        ) {
+          const webcamRect = webcamPreview.getBoundingClientRect();
+          const containerRect = videoContainer.getBoundingClientRect();
 
-        if (containerRect) {
-          const camX = webcamRect.left - containerRect.left;
-          const camY = webcamRect.top - containerRect.top;
-          const camWidth = webcamRect.width;
-          const camHeight = webcamRect.height;
+          const webcamX =
+            (webcamRect.left - containerRect.left) *
+            (canvas.width / containerRect.width);
+          const webcamY =
+            (webcamRect.top - containerRect.top) *
+            (canvas.height / containerRect.height);
+          const webcamWidth =
+            webcamRect.width * (canvas.width / containerRect.width);
+          const webcamHeight =
+            webcamRect.height * (canvas.height / containerRect.height);
 
           // Calculate the aspect ratio of the webcam video
           const videoAspectRatio =
             webcamPreview.videoWidth / webcamPreview.videoHeight;
 
-          // Calculate the new dimensions to maintain the aspect ratio
-          let newCamWidth = camWidth;
-          let newCamHeight = camHeight;
-          if (camWidth / camHeight > videoAspectRatio) {
-            newCamWidth = camHeight * videoAspectRatio;
-          } else {
-            newCamHeight = camWidth / videoAspectRatio;
-          }
+          // Calculate the new dimensions to maintain the aspect ratio while fitting within the webcam preview
+          let newWebcamWidth = webcamWidth * 2;
+          let newWebcamHeight = newWebcamWidth / videoAspectRatio;
 
           // Calculate the offset to center the webcam video
-          const offsetX = (camWidth - newCamWidth) / 2;
-          const offsetY = (camHeight - newCamHeight) / 2;
+          const offsetX = (newWebcamWidth - webcamWidth) / 2;
+          const offsetY = (newWebcamHeight - webcamHeight) / 2;
 
-          // Set the position and size of the circular webcam preview on the canvas
+          // Create a circular clip path for the webcam preview
           ctx.save();
           ctx.beginPath();
           ctx.arc(
-            camX + camWidth / 2,
-            camY + camHeight / 2,
-            Math.min(newCamWidth, newCamHeight) / 2,
+            webcamX + webcamWidth / 2,
+            webcamY + webcamHeight / 2,
+            webcamWidth / 2,
             0,
             2 * Math.PI
           );
           ctx.clip();
+
+          // Draw the webcam preview on the canvas with the zoom adjustment
           ctx.drawImage(
             webcamPreview,
-            camX + offsetX,
-            camY + offsetY,
-            newCamWidth,
-            newCamHeight
+            webcamX - offsetX,
+            webcamY - offsetY,
+            newWebcamWidth,
+            newWebcamHeight
           );
+
           ctx.restore();
         }
 
@@ -526,9 +525,11 @@ export const Record = ({
       .getVideoTracks()
       .forEach((track) => combinedStream.addTrack(track));
 
-    videoStream
-      .getAudioTracks()
-      .forEach((track) => combinedStream.addTrack(track));
+    if (videoStream && selectedAudioDeviceLabel !== "None") {
+      videoStream
+        .getAudioTracks()
+        .forEach((track) => combinedStream.addTrack(track));
+    }
 
     const mimeTypes = [
       "video/webm;codecs=h264",
@@ -567,16 +568,6 @@ export const Record = ({
       videoRecorderOptions
     );
 
-    const videoBitsPerSecond = videoRecorder.videoBitsPerSecond;
-
-    const videoTracks = canvasStream.getVideoTracks();
-    const frameRate = videoTracks[0].getSettings().frameRate || 30;
-
-    const resolution = `${canvas.width}x${canvas.height}`;
-
-    let segmentStartTime = 0;
-    let segmentEndTime = 0;
-
     function recordVideoChunk() {
       if (recordingIntervalRef.current === "stop") {
         return;
@@ -591,28 +582,13 @@ export const Record = ({
       }, 5000);
     }
 
-    videoRecorder.onstart = () => {
-      segmentStartTime = Date.now();
-      segmentStartTimeRef.current = segmentStartTime;
-    };
-
     videoRecorder.ondataavailable = async (event) => {
       if (event.data.size > 0) {
-        segmentEndTime = Date.now();
-        const duration = (segmentEndTime - segmentStartTime) / 1000;
-
-        console.log("Segment duration:", duration);
-
         muxQueue.enqueue(async () => {
           await muxSegment({
             data: event.data,
             mimeType: videoRecorderOptions.mimeType,
-            bandwidth: videoBitsPerSecond,
-            framerate: frameRate,
-            resolution: resolution,
-            videoCodec: "h264",
-            audioCodec: "aac",
-            duration: Number(duration.toFixed(3)),
+            final: recordingIntervalRef.current === "stop" ? true : false,
           });
         });
       }
@@ -628,27 +604,19 @@ export const Record = ({
 
   const muxSegment = async ({
     data,
-    bandwidth,
     mimeType,
-    framerate,
-    resolution,
-    videoCodec,
-    audioCodec,
-    duration,
+    final,
   }: {
     data: Blob;
-    bandwidth: number;
     mimeType: string;
-    framerate: number;
-    resolution: string;
-    videoCodec?: string;
-    audioCodec?: string;
-    duration?: number;
+    final: boolean;
   }) => {
     return new Promise(async (resolve, reject) => {
-      const segmentIndex = totalSegments.current;
+      console.log("Muxing segment");
 
+      const segmentIndex = totalSegments.current;
       const videoSegment = new Blob([data], { type: "video/webm" });
+      let audioData;
 
       if (videoSegment) {
         const segmentIndexString = String(segmentIndex).padStart(3, "0");
@@ -665,7 +633,7 @@ export const Record = ({
           videoInput: `video_segment_${segmentIndexString}${
             mimeType.includes("mp4") ? ".mp4" : ".webm"
           }`,
-          videoOutput: `video_segment_${segmentIndexString}.ts`,
+          videoOutput: `video_segment_${segmentIndexString}.mp4`,
           audioOutput: `audio_segment_${segmentIndexString}.aac`,
         };
 
@@ -676,53 +644,48 @@ export const Record = ({
           "0:v",
           "-c:v",
           "libx264",
-          "-profile:v",
-          "main",
-          "-level",
-          "3.1",
           "-preset",
           "ultrafast",
           "-pix_fmt",
           "yuv420p",
+          "-r",
+          "30",
           "-f",
-          "mpegts",
+          "mp4",
           segmentPaths.videoOutput,
         ];
 
-        const audioFFmpegCommand = [
-          "-i",
-          segmentPaths.videoInput,
-          "-map",
-          "0:a",
-          "-c:a",
-          "aac",
-          "-b:a",
-          "128k",
-          "-profile:a",
-          "aac_low",
-          "-f",
-          "adts",
-          segmentPaths.audioOutput,
-        ];
+        await ffmpegRef.current.exec(videoFFmpegCommand);
 
-        const videoFFmpegExec = await ffmpegRef.current.exec(
-          videoFFmpegCommand
-        );
-
-        const audioFFmpegExec = await ffmpegRef.current.exec(
-          audioFFmpegCommand
-        );
+        if (videoStream && selectedAudioDeviceLabel !== "None") {
+          const audioFFmpegCommand = [
+            "-i",
+            segmentPaths.videoInput,
+            "-map",
+            "0:a",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-profile:a",
+            "aac_low",
+            segmentPaths.audioOutput,
+          ];
+          await ffmpegRef.current.exec(audioFFmpegCommand);
+        }
 
         const videoData = await ffmpegRef.current.readFile(
           segmentPaths.videoOutput
         );
 
-        const audioData = await ffmpegRef.current.readFile(
-          segmentPaths.audioOutput
-        );
+        if (videoStream && selectedAudioDeviceLabel !== "None") {
+          audioData = await ffmpegRef.current.readFile(
+            segmentPaths.audioOutput
+          );
+        }
 
         const segmentFilenames = {
-          video: `video/video_recording_${segmentIndexString}.ts`,
+          video: `video/video_recording_${segmentIndexString}.mp4`,
           audio: `audio/audio_recording_${segmentIndexString}.aac`,
         };
 
@@ -767,18 +730,15 @@ export const Record = ({
             file: videoData,
             filename: segmentFilenames.video,
             videoId,
-            duration,
-            resolution,
-            framerate,
-            bandwidth,
           });
 
-          await uploadSegment({
-            file: audioData,
-            filename: segmentFilenames.audio,
-            videoId,
-            duration,
-          });
+          if (videoStream && selectedAudioDeviceLabel !== "None" && audioData) {
+            await uploadSegment({
+              file: audioData,
+              filename: segmentFilenames.audio,
+              videoId,
+            });
+          }
         } catch (error) {
           console.error("Upload segment error:", error);
           reject(error);
@@ -786,10 +746,21 @@ export const Record = ({
 
         await ffmpegRef.current.deleteFile(segmentPaths.videoInput);
         await ffmpegRef.current.deleteFile(segmentPaths.videoOutput);
-        await ffmpegRef.current.deleteFile(segmentPaths.audioOutput);
+
+        if (videoStream && selectedAudioDeviceLabel !== "None" && audioData) {
+          await ffmpegRef.current.deleteFile(segmentPaths.audioOutput);
+        }
+
+        if (final) {
+          readyToStopRecording.current = true;
+        }
 
         resolve(void 0);
       } else {
+        if (final) {
+          readyToStopRecording.current = true;
+        }
+
         resolve(void 0);
       }
 
@@ -801,33 +772,15 @@ export const Record = ({
     file,
     filename,
     videoId,
-    duration = 3,
-    resolution,
-    framerate,
-    bandwidth,
-    videoCodec,
-    audioCodec,
   }: {
     file: Uint8Array | string;
     filename: string;
     videoId: string;
-    duration?: number;
-    resolution?: string;
-    framerate?: number;
-    bandwidth?: number;
-    videoCodec?: string;
-    audioCodec?: string;
   }) => {
     const formData = new FormData();
     formData.append("filename", filename);
     formData.append("videoId", videoId);
     formData.append("blobData", new Blob([file], { type: "video/mp2t" }));
-    formData.append("duration", String(duration));
-    formData.append("resolution", resolution || "");
-    formData.append("framerate", String(framerate || 30));
-    formData.append("bandwidth", String(bandwidth || 0));
-    formData.append("videoCodec", videoCodec || "");
-    formData.append("audioCodec", audioCodec || "");
 
     await fetch(`${process.env.NEXT_PUBLIC_URL}/api/upload/new`, {
       method: "POST",
@@ -840,19 +793,20 @@ export const Record = ({
 
     console.log("---Stopping recording function fired here---");
 
-    if (videoRecorder) {
-      videoRecorder.stop();
-    }
-
     if (recordingIntervalRef.current) {
       clearInterval(recordingIntervalRef.current);
       recordingIntervalRef.current = "stop";
     }
 
-    muxQueue.stopRecording();
+    if (videoRecorder) {
+      videoRecorder.stop();
+    }
 
-    await new Promise((resolve) => setTimeout(resolve, 3000));
-    await muxQueue.waitForEmpty();
+    while (readyToStopRecording.current === false) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    await muxQueue.waitForQueueEmpty();
 
     const videoId = await getLatestVideoId();
 
@@ -870,6 +824,9 @@ export const Record = ({
 
     setIsRecording(false);
     setStoppingRecording(false);
+
+    totalSegments.current = 0;
+    readyToStopRecording.current = false;
   };
 
   const handleRndDragStop = (
@@ -1137,8 +1094,8 @@ export const Record = ({
           </div>
         )}
         <div className="top-bar flex justify-between">
-          <a href="/" className="flex items-center">
-            <ArrowLeft className="w-6 h-6 text-gray-600" />
+          <a href="/dashboard" className="flex items-center">
+            <ArrowLeft className="w-7 h-7 text-gray-600" />
           </a>
           <Button
             className="min-w-[175px]"
@@ -1170,6 +1127,22 @@ export const Record = ({
               }}
               className={`video-container bg-black relative w-full mx-auto border-2 border-gray-200 rounded-xl overflow-hidden shadow-xl`}
             >
+              {!screenStream && (
+                <div
+                  className="absolute top-1/2 left-1/2 -translate-y-1/2 -translate-x-1/2 w-full h-full flex items-center justify-center"
+                  style={{ zIndex: 999 }}
+                >
+                  <div className="wrapper w-full text-center space-y-2">
+                    <p className="text-2xl text-white">
+                      Select a screen or window source to get started.
+                    </p>
+                    <p className="text-xl text-white">
+                      Once selected, click the "Start Recording" button to
+                      begin.
+                    </p>
+                  </div>
+                </div>
+              )}
               {isCenteredHorizontally && (
                 <div
                   className="crosshair absolute top-0 left-1/2 transform -translate-x-1/2 w-0.5 h-full bg-red-500"
@@ -1229,6 +1202,7 @@ export const Record = ({
               )}
               {videoStream && selectedVideoDeviceLabel !== "None" && (
                 <Rnd
+                  id="rndPreview"
                   position={{
                     x: webcamStyleSettings.x,
                     y: webcamStyleSettings.y,
@@ -1310,6 +1284,12 @@ export const Record = ({
                     <DropdownMenuItem
                       key={device.deviceId}
                       onSelect={() => {
+                        if (device.label === "None") {
+                          setSelectedVideoDevice("");
+                          setSelectedVideoDeviceLabel("None");
+                          stopVideoCapture();
+                          return;
+                        }
                         setSelectedVideoDevice(device.deviceId);
                         setSelectedVideoDeviceLabel(device.label);
                         startVideoCapture(
@@ -1341,6 +1321,11 @@ export const Record = ({
                     <DropdownMenuItem
                       key={device.deviceId}
                       onSelect={() => {
+                        if (device.label === "None") {
+                          setSelectedAudioDevice("");
+                          setSelectedAudioDeviceLabel("None");
+                          return;
+                        }
                         setSelectedAudioDevice(device.deviceId);
                         setSelectedAudioDeviceLabel(device.label);
                         startVideoCapture(

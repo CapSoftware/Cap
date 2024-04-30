@@ -11,6 +11,9 @@ import { initializeCameraWindow } from "@/utils/recording/utils";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/tauri";
 import toast from "react-hot-toast";
+import { authFetch } from "@/utils/auth/helpers";
+
+export const dynamic = "force-static";
 
 export default function CameraPage() {
   const [isSignedIn, setIsSignedIn] = useState(false);
@@ -18,8 +21,6 @@ export default function CameraPage() {
   const [loading, setLoading] = useState(true);
   const [permissions, setPermissions] = useState(getPermissions());
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
-
-  if (typeof window === "undefined") return null;
 
   useEffect(() => {
     const checkVersion = async () => {
@@ -71,6 +72,28 @@ export default function CameraPage() {
       const session = localStorage.getItem("session");
       if (session) {
         const { token, expires } = JSON.parse(session);
+
+        authFetch(
+          `${process.env.NEXT_PUBLIC_URL}/api/desktop/plan?origin=${window.location.origin}`,
+          {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        )
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.upgraded === true) {
+              localStorage.setItem("pro", "true");
+            } else if (data.upgraded === false) {
+              localStorage.removeItem("pro");
+            }
+          })
+          .catch((error) => console.error("Error:", error));
+
         if (token && new Date(expires * 1000) > new Date()) {
           setIsSignedIn(true);
           clearInterval(checkSession);

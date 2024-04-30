@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
   const user = await getCurrentUser();
   const { type, content, videoId, timestamp, parentCommentId } =
     await request.json();
-  const userId = user?.userId as string;
+  const userId = user?.id as string;
 
   if (!type || !content || !videoId) {
     console.error("Missing required data in /api/video/comment/route.ts");
