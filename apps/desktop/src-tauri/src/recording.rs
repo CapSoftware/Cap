@@ -10,13 +10,12 @@ use serde::{Serialize, Deserialize};
 use tauri::State;
 use futures::future::join_all;
 
-use crate::upload::upload_file;
+use crate::upload::{upload_file};
 
 use crate::media::MediaRecorder;
 
 pub struct RecordingState {
   pub media_process: Option<MediaRecorder>,
-  pub upload_handles: Mutex<Vec<JoinHandle<Result<(), String>>>>,
   pub recording_options: Option<RecordingOptions>,
   pub shutdown_flag: Arc<AtomicBool>,
   pub video_uploading_finished: Arc<AtomicBool>,
@@ -75,7 +74,6 @@ pub async fn start_dual_recording(
   let media_recording_result = media_recording_preparation.await.map_err(|e| e.to_string())?;
 
   state_guard.media_process = Some(media_recording_result);
-  state_guard.upload_handles = Mutex::new(vec![]);
   state_guard.recording_options = Some(options.clone());
   state_guard.shutdown_flag = shutdown_flag.clone();
   state_guard.video_uploading_finished = Arc::new(AtomicBool::new(false));
@@ -205,7 +203,7 @@ async fn start_upload_loop(
         if !upload_tasks.is_empty() {
             let _ = join_all(upload_tasks).await;
         }
-
+        
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     uploading_finished.store(true, Ordering::SeqCst);

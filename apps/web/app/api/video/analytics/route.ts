@@ -1,5 +1,7 @@
 import { NextRequest } from "next/server";
 
+export const revalidate = 300;
+
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const videoId = searchParams.get("videoId");

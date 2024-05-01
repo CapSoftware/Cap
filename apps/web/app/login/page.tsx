@@ -7,27 +7,25 @@ import { redirect } from "next/navigation";
 export default async function LoginPage() {
   const session = await getCurrentUser();
 
-  console.log('session:')
-  console.log(session);
-
   if (session) {
     redirect("/dashboard");
   }
 
   return (
-    <div className="wrapper w-full h-screen flex items-center justify-center">
-      <div className="relative overflow-hidden border-y border-gray-200 sm:rounded-2xl sm:border sm:shadow-xl">
-        <div className="flex flex-col items-center justify-center space-y-3 border-b border-gray-200 bg-white px-4 py-6 pt-8 text-center sm:px-16">
-          <a href="/">
-            <LogoBadge className="h-12 w-auto" />
-          </a>
-          <h3 className="text-xl font-semibold">Sign in to Cap</h3>
-          <p className="text-sm text-gray-500">
-            Beautiful, shareable screen recordings. Open source and
-            privacy-focused.
+    <div className="muted-custom-bg w-full h-screen flex items-center justify-center">
+      <div className="w-full max-w-lg relative overflow-hidden sm:rounded-2xl p-4 space-y-4">
+        <a href="/">
+          <LogoBadge className="h-12 w-auto fade-in-down" />
+        </a>
+        <div className="text-left flex flex-col items-start justify-center space-y-3">
+          <h1 className="text-3xl font-semibold fade-in-down animate-delay-1">
+            Sign in to Cap.
+          </h1>
+          <p className="text-2xl text-gray-500 fade-in-down animate-delay-1">
+            Effortless, instant screen sharing. Open source and cross-platform.
           </p>
         </div>
-        <div className="flex flex-col space-y-3 bg-gray-50 px-4 py-8 sm:px-16">
+        <div className="flex flex-col space-y-3">
           <Suspense
             fallback={
               <>

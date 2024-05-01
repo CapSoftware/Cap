@@ -26,6 +26,7 @@ export const users = mysqlTable(
   {
     id: nanoId("id").notNull().primaryKey().unique(),
     name: varchar("name", { length: 255 }),
+    lastName: varchar("lastName", { length: 255 }),
     email: varchar("email", { length: 255 }).unique().notNull(),
     emailVerified: timestamp("emailVerified"),
     image: varchar("image", { length: 255 }),
@@ -42,6 +43,7 @@ export const users = mysqlTable(
     activeSpaceId: nanoId("activeSpaceId"),
     created_at: timestamp("created_at").notNull().defaultNow(),
     updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
+    onboarding_completed_at: timestamp("onboarding_completed_at"),
   },
   (table) => ({
     emailIndex: uniqueIndex("email_idx").on(table.email),
@@ -145,6 +147,9 @@ export const videos = mysqlTable(
     public: boolean("public").notNull().default(true),
     videoStartTime: varchar("videoStartTime", { length: 255 }),
     audioStartTime: varchar("audioStartTime", { length: 255 }),
+    xStreamInfo: text("xStreamInfo"),
+    jobId: varchar("jobId", { length: 255 }),
+    jobStatus: varchar("jobStatus", { length: 255 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },

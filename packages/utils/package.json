@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "tailwind-merge": "^2.1.0",
-    "clsx": "^2.0.0"
+    "clsx": "^2.0.0",
+    "stripe": "^14.24.0"
   },
   "engines": {
     "node": "20"

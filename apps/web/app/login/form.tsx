@@ -36,7 +36,9 @@ export function LoginForm() {
               setLoading(false);
               if (res?.ok && !res?.error) {
                 setEmail("");
-                toast.success("Email sent - check your inbox!");
+                toast.success("Email sent - check your inbox!", {
+                  duration: 20000,
+                });
               } else {
                 toast.error("Error sending email - try again?");
               }
@@ -48,7 +50,7 @@ export function LoginForm() {
               toast.error("Error sending email - try again?");
             });
         }}
-        className="flex flex-col space-y-3"
+        className="flex flex-col space-y-3 fade-in-down animate-delay-2"
       >
         <div>
           <input
@@ -63,12 +65,38 @@ export function LoginForm() {
             onChange={(e) => {
               setEmail(e.target.value);
             }}
-            className="mt-1 block w-full appearance-none rounded-md border border-gray-300 px-3 py-2 placeholder-gray-400 shadow-sm focus:border-black focus:outline-none focus:ring-black sm:text-sm"
+            className="block w-full appearance-none rounded-full border border-gray-300 px-3 h-12 placeholder-gray-400 shadow-sm focus:border-black focus:outline-none focus:ring-black text-lg"
           />
         </div>
-        <Button variant="default" type="submit" disabled={loading}>
+        <Button
+          variant="default"
+          size="lg"
+          className="h-12 text-lg"
+          type="submit"
+          disabled={loading}
+        >
           Continue with Email
         </Button>
+        <p className="text-xs text-gray-500 pt-2">
+          By typing your email and clicking continue, you acknowledge that you
+          have both read and agree to Cap's{" "}
+          <a
+            href="/terms"
+            target="_blank"
+            className="text-gray-600 font-semibold"
+          >
+            Terms of Service
+          </a>{" "}
+          and{" "}
+          <a
+            href="/privacy"
+            target="_blank"
+            className="text-gray-600 font-semibold"
+          >
+            Privacy Policy
+          </a>
+          .
+        </p>
       </form>
     </>
   );

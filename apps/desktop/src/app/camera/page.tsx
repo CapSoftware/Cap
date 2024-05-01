@@ -2,6 +2,8 @@
 
 import { Camera } from "@/components/windows/Camera";
 
+export const dynamic = "force-static";
+
 export default function CameraPage() {
   return (
     <div

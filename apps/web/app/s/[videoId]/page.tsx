@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { videos, comments } from "@cap/database/schema";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
+import { notFound } from "next/navigation";
 
 type Props = {
   params: { [key: string]: string | string[] | undefined };
@@ -16,6 +17,11 @@ export async function generateMetadata(
 ): Promise<Metadata> {
   const videoId = params.videoId as string;
   const query = await db.select().from(videos).where(eq(videos.id, videoId));
+
+  if (query.length === 0) {
+    return notFound();
+  }
+
   const video = query[0];
 
   if (video.public === false) {
@@ -45,8 +51,7 @@ export default async function ShareVideoPage(props: Props) {
   const params = props.params;
   const videoId = params.videoId as string;
   const user = (await getCurrentUser()) as typeof userSelectProps | null;
-  const userId = user?.userId as string | undefined;
-
+  const userId = user?.id as string | undefined;
   const query = await db.select().from(videos).where(eq(videos.id, videoId));
 
   if (query.length === 0) {
@@ -55,9 +60,35 @@ export default async function ShareVideoPage(props: Props) {
 
   const video = query[0];
 
+  if (video.jobId === null) {
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/create?videoId=${videoId}&userId=${video.ownerId}`,
+      {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      }
+    );
+
+    await res.json();
+  }
+
+  if (video.jobStatus !== "COMPLETE") {
+    const status = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/status?videoId=${videoId}&userId=${video.ownerId}`,
+      {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      }
+    );
+
+    await status.json();
+  }
+
   if (video.public === false) {
     if (video.public === false && userId !== video.ownerId) {
-      return <p>Video is private</p>;
+      return <p>This video is private</p>;
     }
   }
 

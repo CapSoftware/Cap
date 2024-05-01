@@ -42,13 +42,15 @@ export default function RootLayout({
         <title>Cap Desktop App</title>
       </head>
       <body>
-        <Toaster />
-        <MediaDeviceProvider>{children}</MediaDeviceProvider>
-        <script
-          src="https://cdn.usefathom.com/script.js"
-          data-site="EWKEUHSN"
-          defer
-        ></script>
+        <>
+          <Toaster />
+          <MediaDeviceProvider>{children}</MediaDeviceProvider>
+          <script
+            src="https://cdn.usefathom.com/script.js"
+            data-site="EWKEUHSN"
+            defer
+          ></script>
+        </>
       </body>
     </html>
   );

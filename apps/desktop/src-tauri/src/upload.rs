@@ -1,12 +1,11 @@
-use serde_json::Value as JsonValue;
-use std::path::{Path};
-use std::process::Command;
 use reqwest;
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
+use serde_json::Value as JsonValue;
 
 use crate::recording::RecordingOptions;
-use crate::utils::ffmpeg_path_as_str;
 
-#[tauri::command]
 pub async fn upload_file(
     options: Option<RecordingOptions>,
     file_path: String,
@@ -14,9 +13,6 @@ pub async fn upload_file(
 ) -> Result<String, String> {
     if let Some(ref options) = options {
         println!("Uploading video...");
-
-        let video_duration = get_video_duration(&file_path).await?;
-        let video_duration_str = format!("{:.1}", video_duration);
 
         let file_name = Path::new(&file_path)
             .file_name()
@@ -32,7 +28,6 @@ pub async fn upload_file(
         // Create the request body for the Next.js handler
         let body = serde_json::json!({
             "userId": options.user_id,
-            "duration": video_duration_str,
             "fileKey": file_key,
             "awsBucket": options.aws_bucket,
             "awsRegion": options.aws_region,
@@ -100,19 +95,16 @@ pub async fn upload_file(
                 println!("File uploaded successfully");
             }
             Ok(response) => {
-                // The response was received without a network error, but the status code isn't a success.
-                let status = response.status(); // Get the status before consuming the response
+                let status = response.status();
                 let error_body = response.text().await.unwrap_or_else(|_| "<no response body>".to_string());
                 eprintln!("Failed to upload file. Status: {}. Body: {}", status, error_body);
                 return Err(format!("Failed to upload file. Status: {}. Body: {}", status, error_body));
             }
             Err(e) => {
-                // The send operation failed before we got any response at all (e.g., a network error).
                 return Err(format!("Failed to send upload file request: {}", e));
             }
         }
 
-        // Clean up the uploaded file
         println!("Removing file after upload: {}", file_path);
         let remove_result = tokio::fs::remove_file(&file_path).await;
         match &remove_result {
@@ -125,46 +117,4 @@ pub async fn upload_file(
     } else {
         return Err("No recording options provided".to_string());
     }
-}
-
-async fn get_video_duration(file_path: &str) -> Result<f64, String> {
-    let ffmpeg_binary_path_str = ffmpeg_path_as_str()?;
-
-    let output = Command::new(&ffmpeg_binary_path_str)
-        .args(&[
-            "-i", file_path,
-            "-f", "null",
-            "-"])
-        .output()
-        .map_err(|e| format!("Failed to execute FFmpeg for getting duration: {}", e))?;
-    
-    // Extract the duration from FFmpeg's stderr
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    println!("Stderr: {}", stderr);
-
-    let duration_line = stderr.split('\n')
-        .find(|line| line.contains("Duration"))
-        .ok_or("Duration line not found in FFmpeg output")?;
-
-    println!("Duration line: {}", duration_line);
-
-    let duration_str = duration_line.split("Duration:").nth(1).unwrap()
-        .split(',').next().unwrap()
-        .trim();
-
-    println!("Duration string: {}", duration_str);
-
-    let duration_parts: Vec<&str> = duration_str.split(':').collect();
-    if duration_parts.len() != 3 {
-        return Err("Invalid duration format".to_string());
-    }
-
-    let hours: f64 = duration_parts[0].parse().map_err(|_| "Failed to parse hours")?;
-    let minutes: f64 = duration_parts[1].parse().map_err(|_| "Failed to parse minutes")?;
-    let seconds: f64 = duration_parts[2].parse().map_err(|_| "Failed to parse seconds")?;
-
-    let total_seconds = hours * 3600.0 + minutes * 60.0 + seconds;
-
-    Ok(total_seconds)
 }

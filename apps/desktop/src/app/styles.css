@@ -172,7 +172,7 @@ body {
 }
 
 #app {
-  @apply bg-gradient-to-b from-[rgba(255,255,255,0.92)] to-[rgba(255,255,255,0.2)];
+  @apply bg-gradient-to-b from-[rgba(255,255,255,0.92)] to-[rgba(255,255,255,0.2)] border-2 border-gray-300;
 }
 
 * {
@@ -189,9 +189,6 @@ h5 {
 
 h1,
 h2,
-h3,
-h4,
-h5,
 a,
 p,
 span,

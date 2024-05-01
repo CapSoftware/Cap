@@ -2,7 +2,6 @@ import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { difference } from "next/dist/build/utils";
 
 export const dynamic = "force-dynamic";
 

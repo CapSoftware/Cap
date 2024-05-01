@@ -12,6 +12,7 @@ use image::codecs::jpeg::JpegEncoder;
 use tokio::io::{AsyncWriteExt};
 use tokio::process::{Command, Child, ChildStdin};
 use tokio::sync::{mpsc, Mutex};
+use tokio::try_join;
 
 use crate::recording::RecordingOptions;
 use crate::utils::{ffmpeg_path_as_str};
@@ -33,6 +34,9 @@ pub struct MediaRecorder {
     video_channel_sender: Option<mpsc::Sender<Vec<u8>>>,
     video_channel_receiver: Option<mpsc::Receiver<Vec<u8>>>,
     should_stop: Arc<AtomicBool>,
+    start_time: Option<Instant>,
+    audio_file_path: Option<String>,
+    video_file_path: Option<String>,
 }
 
 impl MediaRecorder {
@@ -51,6 +55,9 @@ impl MediaRecorder {
             video_channel_sender: None,
             video_channel_receiver: None,
             should_stop: Arc::new(AtomicBool::new(false)),
+            start_time: None,
+            audio_file_path: None,
+            video_file_path: None,
         }
     }
 
@@ -404,7 +411,7 @@ impl MediaRecorder {
         println!("Starting audio recording and processing...");
         let audio_output_chunk_pattern = format!("{}/audio_recording_%03d.aac", audio_file_path_owned);
         let audio_segment_list_filename = format!("{}/segment_list.txt", audio_file_path_owned);
-        let video_output_chunk_pattern = format!("{}/video_recording_%03d.ts", video_file_path_owned);
+        let video_output_chunk_pattern = format!("{}/video_recording_%03d.mp4", video_file_path_owned);
         let video_segment_list_filename = format!("{}/segment_list.txt", video_file_path_owned);
       
         let mut audio_filters = Vec::new();
@@ -451,7 +458,8 @@ impl MediaRecorder {
             "-segment_time", "3",
             "-segment_time_delta", "0.01",
             "-segment_list", &video_segment_list_filename,
-            "-segment_format", "mpegts",
+            "-segment_format", "mp4",
+            "-movflags", "frag_keyframe+empty_moov",
             "-reset_timestamps", "1",
             &video_output_chunk_pattern,
         ].into_iter().map(|s| s.to_string()).collect();
@@ -527,6 +535,9 @@ impl MediaRecorder {
             self.ffmpeg_audio_process = audio_child;
         }
 
+        self.start_time = Some(Instant::now());
+        self.audio_file_path = Some(audio_file_path_owned);
+        self.video_file_path = Some(video_file_path_owned);
         self.ffmpeg_video_process = Some(video_child);
         self.device_name = Some(device.name().expect("Failed to get device name"));
         
@@ -547,9 +558,37 @@ impl MediaRecorder {
     }
 
     pub async fn stop_media_recording(&mut self) -> Result<(), String> {
+        if let Some(start_time) = self.start_time {
+            let segment_duration = Duration::from_secs(3);
+            let recording_duration = start_time.elapsed();
+            let expected_segments = recording_duration.as_secs() / segment_duration.as_secs();
+            let audio_file_path = self.audio_file_path.as_ref().ok_or("Audio file path not set")?;
+            let video_file_path = self.video_file_path.as_ref().ok_or("Video file path not set")?;
+            let audio_segment_list_filename = format!("{}/segment_list.txt", audio_file_path);
+            let video_segment_list_filename = format!("{}/segment_list.txt", video_file_path);
+
+            loop {
+                let audio_segments = std::fs::read_to_string(&audio_segment_list_filename).unwrap_or_default();
+                let video_segments = std::fs::read_to_string(&video_segment_list_filename).unwrap_or_default();
+
+                let audio_segment_count = audio_segments.lines().count();
+                let video_segment_count = video_segments.lines().count();
+
+                if audio_segment_count >= expected_segments as usize && video_segment_count >= expected_segments as usize {
+                    println!("All segments generated");
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+        }
+
         if let Some(ref ffmpeg_audio_stdin) = self.ffmpeg_audio_stdin {
             let mut audio_stdin_guard = ffmpeg_audio_stdin.lock().await;
             if let Some(mut audio_stdin) = audio_stdin_guard.take() {
+                if let Err(e) = audio_stdin.write_all(b"q\n").await {
+                    eprintln!("Failed to send 'q' to audio FFmpeg process: {}", e);
+                }
                 let _ = audio_stdin.shutdown().await.map_err(|e| e.to_string());
             }
         }
@@ -557,6 +596,9 @@ impl MediaRecorder {
         if let Some(ref ffmpeg_video_stdin) = self.ffmpeg_video_stdin {
             let mut video_stdin_guard = ffmpeg_video_stdin.lock().await;
             if let Some(mut video_stdin) = video_stdin_guard.take() {
+                if let Err(e) = video_stdin.write_all(b"q\n").await {
+                    eprintln!("Failed to send 'q' to video FFmpeg process: {}", e);
+                }
                 let _ = video_stdin.shutdown().await.map_err(|e| e.to_string());
             }
         }

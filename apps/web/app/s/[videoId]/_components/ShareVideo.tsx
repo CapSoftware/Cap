@@ -119,7 +119,6 @@ export const ShareVideo = ({
     setCurrentTime(time);
   };
 
-  // Update useEffect for playback synchronization
   useEffect(() => {
     const syncPlayback = () => {
       const videoElement = videoRef.current;
@@ -127,7 +126,6 @@ export const ShareVideo = ({
       if (!isPlaying || isLoading || !videoElement) return;
 
       const handleTimeUpdate = () => {
-        // Avoid setting state on every time update to reduce re-renders
         setCurrentTime(videoElement.currentTime);
       };
 
@@ -142,13 +140,11 @@ export const ShareVideo = ({
     };
 
     syncPlayback();
-  }, [isPlaying, isLoading]); // Add isLoading to the dependency array
+  }, [isPlaying, isLoading]);
 
-  // Add a useEffect for seeking behavior
   useEffect(() => {
     const handleSeeking = () => {
       if (seeking && videoRef.current) {
-        // Optional: add throttling here to reduce frequency of seek updates
         setCurrentTime(videoRef.current.currentTime);
       }
     };
@@ -160,7 +156,7 @@ export const ShareVideo = ({
     return () => {
       videoElement?.removeEventListener("seeking", handleSeeking);
     };
-  }, [seeking]); // seeking state controls when this effect re-runs
+  }, [seeking]);
 
   const calculateNewTime = (event: any, seekBar: any) => {
     const rect = seekBar.getBoundingClientRect();
@@ -243,14 +239,33 @@ export const ShareVideo = ({
     }
   }, [isPlaying, isLoading]);
 
+  if (data.jobStatus === "ERROR") {
+    return (
+      <div className="flex items-center justify-center w-full h-full rounded-lg overflow-hidden">
+        <div
+          style={{ paddingBottom: "min(806px, 56.25%)" }}
+          className="relative w-full h-full rounded-lg bg-black flex items-center justify-center p-8"
+        >
+          <p className="text-white text-xl">
+            There was an error when processing the video. Please contact
+            support.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="relative flex h-full w-full overflow-hidden shadow-lg rounded-lg group"
       id="player"
     >
       {isLoading && (
-        <div className="absolute top-0 left-0 flex items-center justify-center w-full h-full z-10">
+        <div className="absolute top-0 left-0 flex flex-col items-center justify-center w-full h-full z-10">
           <LogoSpinner className="w-10 h-auto animate-spin" />
+          {data.jobStatus !== "COMPLETE" && (
+            <p className="text-white text-lg mt-5">Video is processing...</p>
+          )}
         </div>
       )}
       {isLoading === false && (
@@ -280,7 +295,7 @@ export const ShareVideo = ({
       >
         <VideoPlayer
           ref={videoRef}
-          videoSrc={`${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`}
+          videoSrc={`https://v.cap.so/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`}
         />
       </div>
       <div className="absolute bottom-0 z-20 w-full text-white bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-all">

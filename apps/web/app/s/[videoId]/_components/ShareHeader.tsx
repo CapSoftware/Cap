@@ -50,8 +50,11 @@ export const ShareHeader = ({
           <div className="flex items-center md:justify-between space-x-6">
             <div>
               <a
-                href={`${process.env.NEXT_PUBLIC_URL}?referrer=${data.id}`}
-                target="_blank"
+                href={
+                  user
+                    ? "/dashboard"
+                    : `${process.env.NEXT_PUBLIC_URL}?referrer=${data.id}`
+                }
               >
                 <LogoBadge className="w-8 h-auto" />
               </a>
@@ -70,10 +73,7 @@ export const ShareHeader = ({
                 <h1
                   className="text-2xl"
                   onClick={() => {
-                    if (
-                      user !== null &&
-                      user.userId.toString() === data.ownerId
-                    ) {
+                    if (user !== null && user.id.toString() === data.ownerId) {
                       setIsEditing(true);
                     }
                   }}

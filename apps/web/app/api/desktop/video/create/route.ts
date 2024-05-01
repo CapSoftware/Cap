@@ -82,7 +82,7 @@ export async function GET(req: NextRequest) {
   await db.insert(videos).values({
     id: id,
     name: `My Cap Recording - ${formattedDate}`,
-    ownerId: user.userId,
+    ownerId: user.id,
     awsRegion: awsRegion,
     awsBucket: awsBucket,
   });
@@ -113,7 +113,7 @@ export async function GET(req: NextRequest) {
   return new Response(
     JSON.stringify({
       id: id,
-      user_id: user.userId,
+      user_id: user.id,
       aws_region: awsRegion,
       aws_bucket: awsBucket,
     }),

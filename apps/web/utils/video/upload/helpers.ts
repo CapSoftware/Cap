@@ -1,10 +1,24 @@
-export async function uploadToS3(
-  filename: string,
-  blobData: string | Blob,
-  userId: string,
-  awsBucket: string,
-  awsRegion: string
-) {
+export async function uploadToS3({
+  filename,
+  blobData,
+  userId,
+  duration,
+  resolution,
+  videoCodec,
+  audioCodec,
+  awsBucket,
+  awsRegion,
+}: {
+  filename: string;
+  blobData: Blob;
+  userId: string;
+  duration?: string;
+  resolution?: string;
+  videoCodec?: string;
+  audioCodec?: string;
+  awsBucket: string;
+  awsRegion: string;
+}) {
   const response = await fetch(
     `${process.env.NEXT_PUBLIC_URL}/api/upload/signed`,
     {
@@ -15,6 +29,10 @@ export async function uploadToS3(
       body: JSON.stringify({
         userId: userId,
         fileKey: filename,
+        duration: duration,
+        resolution: resolution,
+        videoCodec: videoCodec,
+        audioCodec: audioCodec,
         awsBucket: awsBucket,
         awsRegion: awsRegion,
       }),
@@ -27,7 +45,6 @@ export async function uploadToS3(
   Object.entries(presignedPostData.fields).forEach(([key, value]) => {
     formData.append(key, value as string);
   });
-  // Append the file (blobData) to the formData
   formData.append("file", blobData);
 
   // Execute the upload using the presigned URL
@@ -40,6 +57,5 @@ export async function uploadToS3(
     return false;
   }
 
-  // Optionally return the S3 URL or any other info you need
   return true;
 }

@@ -6,18 +6,21 @@ import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
 import { Screen } from "@/components/icons/Screen";
 import { Window } from "@/components/icons/Window";
-import { ActionButton } from "@/components/recording/ActionButton";
+import { ActionButton } from "@/components/windows/inner/ActionButton";
 import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/tauri";
-import { getLatestVideoId, saveLatestVideoId } from "@/utils/database/utils";
+import {
+  getLatestVideoId,
+  saveLatestVideoId,
+  saveUserId,
+  getUserId,
+  isUserPro,
+} from "@cap/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
-import { appDataDir, join } from "@tauri-apps/api/path";
-import { open } from "@tauri-apps/api/shell";
-import * as Tauri from "@tauri-apps/api";
 
 declare global {
   interface Window {
@@ -40,8 +43,15 @@ export const Recorder = () => {
   const [currentStoppingMessage, setCurrentStoppingMessage] =
     useState("Stopping Recording");
   const [recordingTime, setRecordingTime] = useState("00:00");
-  const [canStopRecording, setCanStopRecording] = useState(false);
   const [hasStartedRecording, setHasStartedRecording] = useState(false);
+  const tauriWindow = import("@tauri-apps/api/window");
+  const proCheckPromise = isUserPro();
+  const [proCheck, setProCheck] = useState<boolean>(false);
+  const [limitReached, setLimitReached] = useState(false);
+
+  useEffect(() => {
+    proCheckPromise.then((result) => setProCheck(Boolean(result)));
+  }, [proCheckPromise]);
 
   const handleContextClick = async (option: "video" | "audio") => {
     const { showMenu } = await import("tauri-plugin-context-menu");
@@ -52,37 +62,39 @@ export const Recorder = () => {
           ? selectedVideoDevice === null
           : selectedAudioDevice === null;
       }
-    
+
       return deviceKind === "videoinput"
         ? device.index === selectedVideoDevice?.index
         : device.index === selectedAudioDevice?.index;
-    }
+    };
     const select = async (device: Device | null) => {
       // if (isSelected(device)) {
       //   return
       // }
-      emit("change-device", { type: deviceKind, device: device }).catch((error) => {
-        console.log("Failed to emit change-device event:", error);
-      });
-    }
+      emit("change-device", { type: deviceKind, device: device }).catch(
+        (error) => {
+          console.log("Failed to emit change-device event:", error);
+        }
+      );
+    };
 
-    const devicesOfKind = devices.filter((device) => device.kind === deviceKind);
+    const devicesOfKind = devices.filter(
+      (device) => device.kind === deviceKind
+    );
 
     const menuItems = [
       {
         label: "None",
         checked: isSelected(null),
-        event: async() => select(null)
+        event: async () => select(null),
       },
-      ...devicesOfKind.map((device) => (
-        {
-          label: device.label,
-          checked: isSelected(device),
-          event: async() => select(device)
-        }
-      ))
-    ]
-  
+      ...devicesOfKind.map((device) => ({
+        label: device.label,
+        checked: isSelected(device),
+        event: async () => select(device),
+      })),
+    ];
+
     await showMenu({
       items: [...menuItems],
       ...(devicesOfKind.length === 0 && {
@@ -94,12 +106,6 @@ export const Recorder = () => {
       }),
     });
   };
-
-  // const handleOverlayFinished = () => {
-  //   setIsRecording(true);
-  //   setStartingRecording(false);
-  //   // setCountdownActive(false);
-  // };
 
   const prepareVideoData = async () => {
     const session = JSON.parse(localStorage.getItem("session"));
@@ -119,6 +125,10 @@ export const Recorder = () => {
     if (res.status === 401) {
       console.error("Unauthorized");
       toast.error("Unauthorized - please sign in again.");
+      localStorage.removeItem("session");
+      if (typeof window !== "undefined") {
+        window.location.reload();
+      }
       return;
     }
 
@@ -131,24 +141,30 @@ export const Recorder = () => {
     }
 
     saveLatestVideoId(data.id);
+    saveUserId(data.user_id);
 
     return data;
   };
 
   useEffect(() => {
     let unlistenFn: UnlistenFn | null = null;
-    
+
     const setupListener = async () => {
       unlistenFn = await listen("tray-on-left-click", (_) => {
         if (isRecording) {
           handleStopAllRecordings();
         }
 
-        const currentWindow = Tauri.window.getCurrent();
-        if (!currentWindow.isVisible) {
-          currentWindow.show();
-        }
-        currentWindow.setFocus();
+        tauriWindow.then(({ getCurrent }) => {
+          const currentWindow = getCurrent();
+          if (!currentWindow.isVisible) {
+            currentWindow.show();
+          }
+          if (currentWindow.isMinimized()) {
+            currentWindow.unminimize();
+          }
+          currentWindow.setFocus();
+        });
       });
     };
 
@@ -159,7 +175,7 @@ export const Recorder = () => {
         unlistenFn();
       }
     };
-  }, [isRecording, canStopRecording]);
+  }, [isRecording]);
 
   const startDualRecording = async (videoData: {
     id: string;
@@ -178,26 +194,32 @@ export const Recorder = () => {
     if (window.fathom !== undefined) {
       window.fathom.trackEvent("start_recording");
     }
-    Tauri.window.getAll().forEach((window) => {
-      if (window.label !== "camera") {
-        window.hide();
-      }
+    tauriWindow.then(({ getAll }) => {
+      getAll().forEach((window) => {
+        if (window.label !== "camera") {
+          window.minimize();
+        }
+      });
     });
-
-    emit("toggle-recording", true);
-    await invoke("start_dual_recording", {
-      options: {
-        user_id: videoData.user_id,
-        video_id: videoData.id,
-        audio_name: selectedAudioDevice?.label,
-        aws_region: videoData.aws_region,
-        aws_bucket: videoData.aws_bucket,
-        screen_index: "Capture screen 0",
-        video_index: String(selectedVideoDevice?.index),
-      },
-    }).catch((error) => {
-      console.error("Error invoking start_screen_recording:", error);
-    });
+    await emit("toggle-recording", true);
+    try {
+      await invoke("start_dual_recording", {
+        options: {
+          user_id: videoData.user_id,
+          video_id: videoData.id,
+          audio_name: selectedAudioDevice?.label ?? "None",
+          aws_region: videoData.aws_region,
+          aws_bucket: videoData.aws_bucket,
+          screen_index: "Capture screen 0",
+          video_index: String(selectedVideoDevice?.index),
+        },
+      }).catch((error) => {
+        console.error("Error invoking start_screen_recording:", error);
+      });
+    } catch (error) {
+      console.error("Error starting screen recording:", error);
+      setStartingRecording(false);
+    }
   };
 
   const handleStartAllRecordings = async () => {
@@ -226,16 +248,27 @@ export const Recorder = () => {
   };
 
   const handleStopAllRecordings = async () => {
-    if (!canStopRecording) {
-      toast.error("Recording must be for a minimum of 5 seconds.");
-      return;
-    }
     setStoppingRecording(true);
+
+    try {
+      tauriWindow.then(({ WebviewWindow }) => {
+        const main = WebviewWindow.getByLabel("main");
+        if (main && main.isMinimized()) {
+          main.unminimize();
+        }
+      });
+    } catch (error) {
+      console.error("Error unminimizing main window:", error);
+    }
 
     try {
       console.log("Stopping recordings...");
 
-      await invoke("stop_all_recordings");
+      try {
+        await invoke("stop_all_recordings");
+      } catch (error) {
+        console.error("Error stopping recording:", error);
+      }
 
       if (window.fathom !== undefined) {
         window.fathom.trackEvent("stop_recording");
@@ -250,6 +283,9 @@ export const Recorder = () => {
           ? `${process.env.NEXT_PUBLIC_URL}/s/${await getLatestVideoId()}`
           : `https://cap.link/${await getLatestVideoId()}`;
 
+      const audio = new Audio("/recording-end.mp3");
+      await audio.play();
+
       if (
         !process.env.NEXT_PUBLIC_LOCAL_MODE ||
         process.env.NEXT_PUBLIC_LOCAL_MODE !== "true"
@@ -260,14 +296,12 @@ export const Recorder = () => {
       setIsRecording(false);
       setHasStartedRecording(false);
       setStoppingRecording(false);
-      setCanStopRecording(false);
-      emit("toggle-recording", false);
+      await emit("toggle-recording", false);
     } catch (error) {
       console.error("Error stopping recording:", error);
     }
 
     setIsRecording(false);
-    // setCountdownActive(false);
     setStoppingRecording(false);
   };
 
@@ -297,26 +331,52 @@ export const Recorder = () => {
     if (isRecording && !startingRecording) {
       const startTime = Date.now();
 
-      setTimeout(() => setCanStopRecording(true), 5000);
-
       intervalId = setInterval(() => {
         const seconds = Math.floor((Date.now() - startTime) / 1000);
         const minutes = Math.floor(seconds / 60);
         const formattedSeconds =
           seconds % 60 < 10 ? `0${seconds % 60}` : seconds % 60;
         setRecordingTime(`${minutes}:${formattedSeconds}`);
-
-        if (seconds >= 300) {
-          handleStopAllRecordings();
-        }
       }, 1000);
     }
-
     return () => {
       clearInterval(intervalId);
       setRecordingTime("00:00");
     };
   }, [isRecording, startingRecording]);
+
+  useEffect(() => {
+    if (isRecording && !startingRecording && !proCheck && !limitReached) {
+      const startTime = Date.now();
+      let intervalId: NodeJS.Timeout;
+
+      intervalId = setInterval(() => {
+        const seconds = Math.floor((Date.now() - startTime) / 1000);
+        if (seconds >= 300) {
+          setLimitReached(true);
+          tauriWindow.then(({ getCurrent }) => {
+            const currentWindow = getCurrent();
+            if (currentWindow.isMinimized()) {
+              currentWindow.unminimize();
+              toast.error(
+                "5 minute recording limit reached. Stopping recording in 10 seconds."
+              );
+
+              setTimeout(() => {
+                handleStopAllRecordings();
+                return;
+              }, 10000);
+            }
+          });
+        }
+      }, 1000);
+
+      return () => {
+        clearInterval(intervalId);
+        setLimitReached(false);
+      };
+    }
+  }, [isRecording, startingRecording, proCheck, limitReached]);
 
   return (
     <>
@@ -376,7 +436,11 @@ export const Recorder = () => {
                     width="full"
                     handler={() => handleContextClick("video")}
                     icon={<Video className="w-5 h-5" />}
-                    label={devices.length === 0 ? "Video" : selectedVideoDevice?.label || "None"}
+                    label={
+                      devices.length === 0
+                        ? "Video"
+                        : selectedVideoDevice?.label || "None"
+                    }
                     active={selectedVideoDevice !== null}
                     recordingOption={true}
                     optionName="Video"
@@ -385,7 +449,11 @@ export const Recorder = () => {
                     width="full"
                     handler={() => handleContextClick("audio")}
                     icon={<Microphone className="w-5 h-5" />}
-                    label={devices.length === 0 ? "Mic" : selectedAudioDevice?.label || "None"}
+                    label={
+                      devices.length === 0
+                        ? "Mic"
+                        : selectedAudioDevice?.label || "None"
+                    }
                     active={selectedAudioDevice !== null}
                     recordingOption={true}
                     optionName="Audio"
@@ -415,7 +483,11 @@ export const Recorder = () => {
               : "Start Recording"}
           </Button>
           <div className="text-center mt-3">
-            <p className="text-sm text-gray-600">5 min recording limit</p>
+            {proCheck === false ? (
+              <p className="text-sm text-gray-600">5 min recording limit</p>
+            ) : (
+              <p className="text-sm text-gray-600">No recording limit</p>
+            )}
           </div>
         </div>
         <Toaster />

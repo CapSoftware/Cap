@@ -47,10 +47,12 @@ export const MediaDeviceContext = createContext<
 export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   children,
 }) => {
-  const [selectedVideoDevice, setSelectedVideoDevice] =
-    useState<Device | null>(null);
-  const [selectedAudioDevice, setSelectedAudioDevice] =
-    useState<Device | null>(null);
+  const [selectedVideoDevice, setSelectedVideoDevice] = useState<Device | null>(
+    null
+  );
+  const [selectedAudioDevice, setSelectedAudioDevice] = useState<Device | null>(
+    null
+  );
   const [selectedDisplayType, setSelectedDisplayType] = useState<
     "screen" | "window" | "area"
   >("screen");
@@ -58,6 +60,7 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   const [isRecording, setIsRecording] = useState(false);
   const [startingRecording, setStartingRecording] = useState(false);
   const getDevicesCalled = useRef(false);
+  const tauriWindowImport = import("@tauri-apps/api/window");
 
   const getDevices = useCallback(async () => {
     await enumerateAndStoreDevices();
@@ -111,29 +114,40 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     if (!type) {
       return;
     }
+
+    if (typeof window === "undefined") return;
+
     if (window.fathom !== undefined) {
-      window.fathom.trackEvent(`${type === "videoinput" ? "video" : "audio"}_device_change`);
+      window.fathom.trackEvent(
+        `${type === "videoinput" ? "video" : "audio"}_device_change`
+      );
     }
     if (type === "videoinput") {
-      import("@tauri-apps/api/window").then(({ WebviewWindow }) => {
+      tauriWindowImport.then(({ WebviewWindow }) => {
         if (WebviewWindow.getByLabel("camera")) {
           WebviewWindow.getByLabel("camera").close();
         } else if (type === "videoinput" && device) {
           initializeCameraWindow();
         }
       });
-      
-      if ((!device && selectedVideoDevice) || (selectedVideoDevice?.index !== device?.index)) {
+
+      if (
+        (!device && selectedVideoDevice) ||
+        selectedVideoDevice?.index !== device?.index
+      ) {
         setSelectedVideoDevice(device);
       }
     }
 
     if (type === "audioinput") {
-      if ((!device && selectedAudioDevice) || (selectedAudioDevice?.index !== device?.index)) {
+      if (
+        (!device && selectedAudioDevice) ||
+        selectedAudioDevice?.index !== device?.index
+      ) {
         setSelectedAudioDevice(device);
       }
     }
-  }
+  };
 
   useEffect(() => {
     let unlistenFnChangeDevice: any;
@@ -141,18 +155,29 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
     const setupListeners = async () => {
       try {
-        unlistenFnChangeDevice = await listen<{ type: string, device: Device | null }>("change-device", (event) => {
-          updateSelectedDevice(event.payload.type as DeviceKind, event.payload.device);
+        unlistenFnChangeDevice = await listen<{
+          type: string;
+          device: Device | null;
+        }>("change-device", (event) => {
+          updateSelectedDevice(
+            event.payload.type as DeviceKind,
+            event.payload.device
+          );
         });
       } catch (error) {
         console.error("Error setting up change-device listener:", error);
       }
 
       try {
-        unlistenFnTraySetDevice = await listen<{ type: string, id: string | null }>("tray-set-device-id", (event) => {
+        unlistenFnTraySetDevice = await listen<{
+          type: string;
+          id: string | null;
+        }>("tray-set-device-id", (event) => {
           const id = event.payload.id;
           const kind = event.payload.type as DeviceKind;
-          const newDevice = id ? devices.find((device) => kind === device.kind && id === device.id) : null;
+          const newDevice = id
+            ? devices.find((device) => kind === device.kind && id === device.id)
+            : null;
           updateSelectedDevice(kind, newDevice);
         });
       } catch (error) {
@@ -164,9 +189,7 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
     if (devices.length !== 0) {
       emit("media-devices-set", {
-        mediaDevices: [
-          ...(devices as Omit<Device, 'index'>[])
-        ],
+        mediaDevices: [...(devices as Omit<Device, "index">[])],
         selectedVideo: selectedVideoDevice,
         selectedAudio: selectedAudioDevice,
       });

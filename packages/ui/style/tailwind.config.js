@@ -15,7 +15,7 @@ module.exports = function (app, options) {
         light: "300",
         normal: "400",
         medium: "500",
-        semibold: "600",
+        semibold: "500",
         bold: "600",
         extrabold: "600",
         "extra-bold": "600",
@@ -94,7 +94,10 @@ module.exports = function (app, options) {
         },
       },
     },
-    plugins: [require("tailwindcss-animate")],
+    plugins: [
+      require("tailwindcss-animate"),
+      require("@tailwindcss/typography"),
+    ],
   };
   return config;
 };

@@ -15,3 +15,47 @@ export const uuidFormat = (uuid: string) => {
 
 export const CAP_LOGO_URL =
   "https://raw.githubusercontent.com/CapSoftware/cap/main/app-icon.png";
+
+export const saveLatestVideoId = async (videoId: string) => {
+  try {
+    if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+      window.localStorage.setItem("latestVideoId", videoId);
+    }
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+export const getLatestVideoId = async () => {
+  if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+    return window.localStorage.getItem("latestVideoId") || "";
+  }
+
+  return "";
+};
+
+export const saveUserId = async (userId: string) => {
+  try {
+    if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+      window.localStorage.setItem("userId", userId);
+    }
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+export const getUserId = async () => {
+  if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+    return window.localStorage.getItem("userId") || "";
+  }
+
+  return "";
+};
+
+export const isUserPro = async () => {
+  if (typeof navigator !== "undefined" && typeof window !== "undefined") {
+    return window.localStorage.getItem("pro") || false;
+  }
+
+  return false;
+};

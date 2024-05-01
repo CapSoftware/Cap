@@ -88,7 +88,7 @@ export async function GET(request: NextRequest) {
   if (video.public === false) {
     const user = await getCurrentUser();
 
-    if (!user || user.userId !== video.ownerId) {
+    if (!user || user.id !== video.ownerId) {
       return new Response(
         JSON.stringify({ error: true, message: "Video is not public" }),
         {
@@ -138,8 +138,49 @@ export async function GET(request: NextRequest) {
         );
     }
 
+    const s3Client = new S3Client({
+      region: process.env.CAP_AWS_REGION || "",
+      credentials: {
+        accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
+        secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
+      },
+    });
+
     if (prefix === null) {
+      const videoSegmentCommand = new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: videoPrefix,
+        MaxKeys: 1,
+      });
+
+      const audioSegmentCommand = new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: audioPrefix,
+        MaxKeys: 1,
+      });
+
+      const [videoSegment, audioSegment] = await Promise.all([
+        s3Client.send(videoSegmentCommand),
+        s3Client.send(audioSegmentCommand),
+      ]);
+
+      const [videoMetadata, audioMetadata] = await Promise.all([
+        s3Client.send(
+          new HeadObjectCommand({
+            Bucket: bucket,
+            Key: videoSegment.Contents?.[0]?.Key ?? "",
+          })
+        ),
+        s3Client.send(
+          new HeadObjectCommand({
+            Bucket: bucket,
+            Key: audioSegment.Contents?.[0]?.Key ?? "",
+          })
+        ),
+      ]);
+
       const generatedPlaylist = await generateMasterPlaylist(
+        videoMetadata?.Metadata?.resolution ?? "",
         process.env.NEXT_PUBLIC_URL +
           "/api/playlist?userId=" +
           userId +
@@ -151,7 +192,8 @@ export async function GET(request: NextRequest) {
           userId +
           "&videoId=" +
           videoId +
-          "&videoType=audio"
+          "&videoType=audio",
+        video.xStreamInfo ?? ""
       );
 
       return new Response(generatedPlaylist, {
@@ -166,14 +208,6 @@ export async function GET(request: NextRequest) {
         },
       });
     }
-
-    const s3Client = new S3Client({
-      region: process.env.CAP_AWS_REGION || "",
-      credentials: {
-        accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-        secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
-      },
-    });
 
     objectsCommand = new ListObjectsV2Command({
       Bucket: bucket,
@@ -200,7 +234,14 @@ export async function GET(request: NextRequest) {
           })
         );
 
-        return { url: url, duration: metadata?.Metadata?.duration ?? "" };
+        return {
+          url: url,
+          duration: metadata?.Metadata?.duration ?? "",
+          bandwidth: metadata?.Metadata?.bandwidth ?? "",
+          resolution: metadata?.Metadata?.resolution ?? "",
+          videoCodec: metadata?.Metadata?.videocodec ?? "",
+          audioCodec: metadata?.Metadata?.audiocodec ?? "",
+        };
       })
     );
 
