@@ -1,7 +1,7 @@
 "use client";
 import { Fragment, useState } from "react";
 import { X, Menu } from "lucide-react";
-import { Logo } from "@cap/ui";
+import { LogoBadge } from "@cap/ui";
 import Link from "next/link";
 import { Dialog, Transition } from "@headlessui/react";
 import { AdminNavItems } from "./AdminNavItems";
@@ -38,7 +38,7 @@ export const AdminMobileNav = () => {
             leaveFrom="translate-x-0"
             leaveTo="-translate-x-full"
           >
-            <div className="relative flex-1 flex flex-col max-w-xs w-[275px] pt-5 pb-4 px-4 bg-gradient-to-b from-primary to-primary-3">
+            <div className="relative flex-1 flex flex-col max-w-xs w-[275px] pt-5 pb-4 px-4 bg-gray-50">
               <Transition.Child
                 as={Fragment}
                 enter="ease-in-out duration-300"
@@ -59,8 +59,8 @@ export const AdminMobileNav = () => {
                 </div>
               </Transition.Child>
               <div className="flex-shrink-0 flex items-center px-4">
-                <Link href="/inbox">
-                  <Logo className="h-6 w-auto" />
+                <Link href="/dashboard" className="block">
+                  <LogoBadge className="h-8 w-auto block" />
                 </Link>
               </div>
               <AdminNavItems />
@@ -83,7 +83,7 @@ export const AdminMobileNav = () => {
         <div className="flex justify-center lg:justify-end w-full px-6">
           <div className="flex-shrink-0 flex lg:hidden items-center px-4">
             <Link className="block" href="/inbox">
-              <Logo className="w-16 h-auto block" />
+              <LogoBadge className="w-auto h-8 block" />
             </Link>
           </div>
         </div>

@@ -6,9 +6,8 @@ import {
   LogOut,
   ChevronDown,
   Clapperboard,
-  Bell,
-  History,
   Video,
+  Download,
 } from "lucide-react";
 import Link from "next/link";
 import { classNames } from "@cap/utils";
@@ -47,8 +46,18 @@ export const AdminNavItems = () => {
       icon: Clapperboard,
       subNav: [],
     },
-    // { name: "Notifications", href: `/dashboard/notifications`, icon: Bell },
-    // { name: "History", href: `/dashboard/history`, icon: History },
+    {
+      name: "Web Recorder",
+      href: `/record`,
+      icon: Video,
+      subNav: [],
+    },
+    {
+      name: "Download macOS App",
+      href: `/download`,
+      icon: Download,
+      subNav: [],
+    },
     {
       name: "Settings",
       href: `/dashboard/settings`,
