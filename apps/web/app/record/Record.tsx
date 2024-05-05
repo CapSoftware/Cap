@@ -35,6 +35,8 @@ import toast from "react-hot-toast";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
 import { getLatestVideoId, saveLatestVideoId } from "@cap/utils";
+import { isUserOnProPlan } from "@cap/utils";
+import { LogoBadge } from "@cap/ui";
 
 class AsyncTaskQueue {
   private queue: (() => Promise<void>)[];
@@ -1093,30 +1095,52 @@ export const Record = ({
             </div>
           </div>
         )}
-        <div className="top-bar flex justify-between">
-          <a href="/dashboard" className="flex items-center">
-            <ArrowLeft className="w-7 h-7 text-gray-600" />
-          </a>
-          <Button
-            className="min-w-[175px]"
-            {...(isRecording && { variant: "destructive" })}
-            onClick={() => {
-              if (isRecording) {
-                stopRecording();
-              } else {
-                startRecording();
-              }
-            }}
-            spinner={startingRecording || stoppingRecording}
-          >
-            {startingRecording
-              ? "Starting..."
-              : isRecording
-              ? stoppingRecording
-                ? currentStoppingMessage
-                : `Stop - ${recordingTime}`
-              : "Start Recording"}
-          </Button>
+        <div className="top-bar grid grid-cols-12 justify-between">
+          <div className="col-span-4 flex items-center justify-start">
+            <a href="/dashboard" className="flex items-center">
+              <ArrowLeft className="w-7 h-7 text-gray-600" />
+              <LogoBadge className="w-8 h-auto ml-2" />
+            </a>
+          </div>
+          <div className="col-span-4 flex items-center justify-center">
+            {!isUserOnProPlan({
+              subscriptionStatus: user?.stripeSubscriptionStatus as string,
+            }) ? (
+              <p className="text-sm text-gray-600">No recording limit</p>
+            ) : (
+              <div>
+                <p className="text-sm text-gray-600">5 min recording limit</p>
+                <a
+                  href="/pricing"
+                  className="text-sm text-primary font-medium hover:underline"
+                >
+                  Upgrade to Cap Pro
+                </a>
+              </div>
+            )}
+          </div>
+          <div className="col-span-4 flex items-center justify-end">
+            <Button
+              className="min-w-[175px]"
+              {...(isRecording && { variant: "destructive" })}
+              onClick={() => {
+                if (isRecording) {
+                  stopRecording();
+                } else {
+                  startRecording();
+                }
+              }}
+              spinner={startingRecording || stoppingRecording}
+            >
+              {startingRecording
+                ? "Starting..."
+                : isRecording
+                ? stoppingRecording
+                  ? currentStoppingMessage
+                  : `Stop - ${recordingTime}`
+                : "Start Recording"}
+            </Button>
+          </div>
         </div>
         <div className="h-full flex-grow">
           <div className="w-full h-full top-0 left-0 h-full flex flex-col items-center justify-center">
