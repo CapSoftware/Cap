@@ -52,7 +52,7 @@ export const Footer = () => {
               </li>
               <li>
                 <a href="https://github.com/CapSoftware/Cap" target="_blank">
-                  Open source
+                  Open Source
                 </a>
               </li>
               <li>
@@ -73,12 +73,12 @@ export const Footer = () => {
               </li>
               <li>
                 <a href="https://discord.gg/y8gdQ3WRN3" target="_blank">
-                  Chat support
+                  Chat Support
                 </a>
               </li>
               <li>
                 <a href="https://cap.openstatus.dev/" target="_blank">
-                  System status
+                  System Status
                 </a>
               </li>
             </ul>
