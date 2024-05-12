@@ -63,7 +63,7 @@ export default async function PostPage({ params }: PostProps) {
       {post.metadata.image && (
         <div className="relative mb-12 h-[345px] w-full">
           <Image
-            className="m-0 w-full rounded-lg object-cover"
+            className="m-0 w-full rounded-lg object-contain sm:object-cover"
             src={post.metadata.image}
             alt={post.metadata.title}
             fill
@@ -73,16 +73,18 @@ export default async function PostPage({ params }: PostProps) {
         </div>
       )}
 
-      <header>
-        <h1 className="mb-2">{post.metadata.title}</h1>
-        <p className="space-x-1 text-xs text-gray-500">
-          <span>
-            {format(parseISO(post.metadata.publishedAt), "MMMM dd, yyyy")}
-          </span>
-        </p>
-      </header>
-      <hr className="my-6" />
-      <MDXRemote source={post.content} />
+      <div className="wrapper">
+        <header>
+          <h1 className="mb-2">{post.metadata.title}</h1>
+          <p className="space-x-1 text-xs text-gray-500">
+            <span>
+              {format(parseISO(post.metadata.publishedAt), "MMMM dd, yyyy")}
+            </span>
+          </p>
+        </header>
+        <hr className="my-6" />
+        <MDXRemote source={post.content} />
+      </div>
     </article>
   );
 }
