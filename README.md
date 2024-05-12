@@ -34,7 +34,7 @@ We're working on a self-hosting guide for Cap. This will include one-click deplo
 
 # Roadmap
 
-View what's currently in progress, and what's planned for the future: [Cap Roadmap](https://capso.notion.site/7aac740edeee49b5a23be901a7cb734e)
+View what's currently in progress, and what's planned for the future: [Cap Roadmap](https://cap.so/roadmap)
 
 # Monorepo App Architecture
 

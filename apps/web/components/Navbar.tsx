@@ -111,6 +111,9 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                     >
                       Support via Discord chat
                     </ListItem>
+                    <ListItem href="/roadmap" title="Roadmap">
+                      Upcoming features and improvements.
+                    </ListItem>
                   </ul>
                 </NavigationMenuContent>
               </NavigationMenuItem>
