@@ -1103,7 +1103,7 @@ export const Record = ({
             </a>
           </div>
           <div className="col-span-4 flex items-center justify-center">
-            {!isUserOnProPlan({
+            {isUserOnProPlan({
               subscriptionStatus: user?.stripeSubscriptionStatus as string,
             }) ? (
               <p className="text-sm text-gray-600">No recording limit</p>
