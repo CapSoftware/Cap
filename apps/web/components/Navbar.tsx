@@ -117,16 +117,16 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                   </ul>
                 </NavigationMenuContent>
               </NavigationMenuItem>
-
               <NavigationMenuItem>
                 <Button
+                  className={auth === false ? "min-w-[155px]" : ""}
                   href={auth === false ? "/login" : "/dashboard"}
                   size="sm"
                 >
                   {auth === false ? "Get started for free" : "Dashboard"}
                 </Button>
               </NavigationMenuItem>
-              <NavigationMenuItem className="pl-2">
+              <NavigationMenuItem className="pl-3">
                 <Link
                   href="https://github.com/CapSoftware/Cap"
                   passHref
