@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Script from "next/script";
 import { users } from "@cap/database/schema";
-import { Router } from "next/router";
+import { usePathname, useSearchParams } from "next/navigation";
 
 declare global {
   interface Window {
@@ -16,25 +16,17 @@ export function BentoScript({
 }: {
   user: typeof users.$inferSelect | null;
 }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   useEffect(() => {
-    const handleRouteChange = () => {
-      console.log("route change");
-      setTimeout(() => {
-        if (window.bento !== undefined) {
-          if (user) {
-            window.bento.identify(user.email);
-          }
-          window.bento.view();
-        }
-      }, 0);
-    };
-
-    Router.events.on("routeChangeComplete", handleRouteChange);
-
-    return () => {
-      Router.events.off("routeChangeComplete", handleRouteChange);
-    };
-  }, []);
+    if (window.bento !== undefined) {
+      if (user) {
+        window.bento.identify(user.email);
+      }
+      window.bento.view();
+    }
+  }, [pathname, searchParams]);
 
   return (
     <Script
