@@ -12,7 +12,10 @@ jobs:
       fail-fast: false
       matrix:
         platform: [macos-latest]
+        architecture: [x86_64]
     runs-on: ${{ matrix.platform }}
+    env:
+      ARCHFLAGS: "-arch ${MATRIX_ARCH:-x86_64}"
 
     steps:
       - name: Checkout repository
