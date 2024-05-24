@@ -16,7 +16,7 @@ jobs:
             args: "--target universal-apple-darwin"
     runs-on: ${{ matrix.platform }}
     env:
-      ARCHFLAGS: "-arch ${MATRIX_ARCH:-x86_64}"
+      ARCHFLAGS: "-arch x86_64 -arch arm64"
 
     steps:
       - name: Checkout repository
