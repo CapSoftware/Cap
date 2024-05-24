@@ -13,7 +13,7 @@ jobs:
       matrix:
         include:
           - platform: "macos-latest"
-            args: "--verbose --target universal-apple-darwin"
+            args: "--target universal-apple-darwin"
     runs-on: ${{ matrix.platform }}
     env:
       ARCHFLAGS: "-arch ${MATRIX_ARCH:-x86_64}"
