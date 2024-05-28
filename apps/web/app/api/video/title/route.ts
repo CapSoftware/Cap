@@ -8,7 +8,7 @@ import { eq } from "drizzle-orm";
 export async function PUT(request: NextRequest) {
   const user = await getCurrentUser();
   const { title, videoId } = await request.json();
-  const userId = user?.userId as string;
+  const userId = user?.id as string;
 
   if (!user || !title || !videoId) {
     console.error("Missing required data in /api/video/title/route.ts");

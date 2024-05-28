@@ -48,8 +48,6 @@ export async function DELETE(request: NextRequest) {
 
   const listedObjects = await s3Client.send(listObjectsCommand);
 
-  console.log("listedObjects:", listedObjects);
-
   if (listedObjects.Contents?.length) {
     const deleteObjectsCommand = new DeleteObjectsCommand({
       Bucket: bucket,
