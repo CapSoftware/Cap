@@ -232,9 +232,6 @@ export const Record = ({
   const startScreenCapture = async () => {
     try {
       const displayMediaOptions = {
-        video: {
-          displaySurface: "window",
-        },
         audio: false,
         surfaceSwitching: "exclude",
         selfBrowserSurface: "exclude",
@@ -798,17 +795,22 @@ export const Record = ({
     if (recordingIntervalRef.current) {
       clearInterval(recordingIntervalRef.current);
       recordingIntervalRef.current = "stop";
+      console.log("Recording interval stopped");
     }
 
     if (videoRecorder) {
       videoRecorder.stop();
+      console.log("Video recorder stopped");
     }
 
     while (readyToStopRecording.current === false) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
+      console.log("Waiting for readyToStopRecording");
     }
 
     await muxQueue.waitForQueueEmpty();
+
+    console.log("All segments muxed");
 
     const videoId = await getLatestVideoId();
 
