@@ -694,7 +694,10 @@ export const Record = ({
           const video = document.createElement("video");
           video.src = URL.createObjectURL(videoSegment);
           video.muted = true;
-          await video.play();
+          video.autoplay = true;
+          video.play().catch((error) => {
+            console.error("Video play failed:", error);
+          });
 
           const canvas = document.createElement("canvas");
 
@@ -722,6 +725,8 @@ export const Record = ({
             "image/jpeg",
             0.5
           );
+          video.remove();
+          canvas.remove();
         }
 
         try {
