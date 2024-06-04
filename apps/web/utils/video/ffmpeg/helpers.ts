@@ -91,7 +91,10 @@ export async function generateM3U8Playlist(
   let m3u8Content = baseM3U8Content;
   urls.forEach((segment) => {
     const { url, duration } = segment;
-    m3u8Content += `#EXTINF:${duration},\n${url}\n`;
+    m3u8Content += `#EXTINF:${duration},\n${url.replace(
+      "https://capso.s3.us-east-1.amazonaws.com",
+      "https://v.cap.so"
+    )}\n`;
   });
 
   m3u8Content += "#EXT-X-ENDLIST";
@@ -113,7 +116,10 @@ export async function generateMasterPlaylist(
 #EXT-X-INDEPENDENT-SEGMENTS
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en",URI="${audioPlaylistUrl}"
 #EXT-X-STREAM-INF:${streamInfo}
-${videoPlaylistUrl}
+${videoPlaylistUrl.replace(
+  "https://capso.s3.us-east-1.amazonaws.com",
+  "https://v.cap.so"
+)}
 `;
 
   return masterPlaylist;
