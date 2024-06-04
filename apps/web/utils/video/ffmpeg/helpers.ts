@@ -82,10 +82,10 @@ export async function generateM3U8Playlist(
   }[]
 ) {
   const baseM3U8Content = `#EXTM3U
-#EXT-X-INDEPENDENT-SEGMENTS
-#EXT-X-TARGETDURATION:4
-#EXT-X-VERSION:4
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:5
 #EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
 `;
 
   let m3u8Content = baseM3U8Content;
@@ -104,22 +104,24 @@ export async function generateM3U8Playlist(
 
 export async function generateMasterPlaylist(
   resolution: string,
+  bandwidth: string,
   videoPlaylistUrl: string,
-  audioPlaylistUrl: string,
+  audioPlaylistUrl: string | null,
   xStreamInfo: string
 ) {
   const streamInfo = xStreamInfo
     ? xStreamInfo + ',AUDIO="audio"'
-    : `RESOLUTION=${resolution},AUDIO="audio"`;
+    : `BANDWIDTH=${bandwidth},RESOLUTION=${resolution},AUDIO="audio"`;
   const masterPlaylist = `#EXTM3U
 #EXT-X-VERSION:4
 #EXT-X-INDEPENDENT-SEGMENTS
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en",URI="${audioPlaylistUrl}"
+${
+  audioPlaylistUrl
+    ? `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Audio",DEFAULT=YES,AUTOSELECT=YES,LANGUAGE="en",URI="${audioPlaylistUrl}"`
+    : ""
+}
 #EXT-X-STREAM-INF:${streamInfo}
-${videoPlaylistUrl.replace(
-  "https://capso.s3.us-east-1.amazonaws.com",
-  "https://v.cap.so"
-)}
+${videoPlaylistUrl}
 `;
 
   return masterPlaylist;

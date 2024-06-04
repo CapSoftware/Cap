@@ -2,9 +2,14 @@ use reqwest;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::process::{Command, Output};
+use std::str;
+use std::fs;
+use regex::Regex;
 use serde_json::Value as JsonValue;
 
 use crate::recording::RecordingOptions;
+use crate::utils::{ffmpeg_path_as_str};
 
 pub async fn upload_file(
     options: Option<RecordingOptions>,
@@ -13,6 +18,9 @@ pub async fn upload_file(
 ) -> Result<String, String> {
     if let Some(ref options) = options {
         println!("Uploading video...");
+
+        let duration = get_video_duration(&file_path).map_err(|e| format!("Failed to get video duration: {}", e))?;
+        let duration_str = duration.to_string();
 
         let file_name = Path::new(&file_path)
             .file_name()
@@ -24,14 +32,33 @@ pub async fn upload_file(
 
         let server_url_base: &'static str = dotenv_codegen::dotenv!("NEXT_PUBLIC_URL");
         let server_url = format!("{}/api/upload/signed", server_url_base);
+        
+        let body: serde_json::Value;
 
-        // Create the request body for the Next.js handler
-        let body = serde_json::json!({
-            "userId": options.user_id,
-            "fileKey": file_key,
-            "awsBucket": options.aws_bucket,
-            "awsRegion": options.aws_region,
-        });
+        if file_type == "video" {
+            let (codec_name, width, height, frame_rate, bit_rate) = log_video_info(&file_path).map_err(|e| format!("Failed to log video info: {}", e))?;
+              
+            body = serde_json::json!({
+                "userId": options.user_id,
+                "fileKey": file_key,
+                "awsBucket": options.aws_bucket,
+                "awsRegion": options.aws_region,
+                "duration": duration_str,
+                "resolution": format!("{}x{}", width, height),
+                "framerate": frame_rate,
+                "bandwidth": bit_rate,
+                "videoCodec": codec_name,
+            });
+        } else {
+
+            body = serde_json::json!({
+                "userId": options.user_id,
+                "fileKey": file_key,
+                "awsBucket": options.aws_bucket,
+                "awsRegion": options.aws_region,
+                "duration": duration_str,
+            });
+        }
 
         let client = reqwest::Client::new();
         let server_response = client.post(server_url)
@@ -117,4 +144,60 @@ pub async fn upload_file(
     } else {
         return Err("No recording options provided".to_string());
     }
+}
+
+pub fn get_video_duration(file_path: &str) -> Result<f64, std::io::Error> {
+    let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
+
+    let output = Command::new(ffmpeg_binary_path_str)
+        .arg("-i")
+        .arg(file_path)
+        .output()?;
+
+    let output_str = str::from_utf8(&output.stderr).unwrap();
+    let duration_regex = Regex::new(r"Duration: (\d{2}):(\d{2}):(\d{2})\.\d{2}").unwrap();
+    let caps = duration_regex.captures(output_str).unwrap();
+
+    let hours: f64 = caps.get(1).unwrap().as_str().parse().unwrap();
+    let minutes: f64 = caps.get(2).unwrap().as_str().parse().unwrap();
+    let seconds: f64 = caps.get(3).unwrap().as_str().parse().unwrap();
+
+    let duration = hours * 3600.0 + minutes * 60.0 + seconds;
+
+    Ok(duration)
+}
+
+fn log_video_info(file_path: &str) -> Result<(String, String, String, String, String), String> {
+    let output: Output = Command::new("ffprobe")
+        .arg("-v")
+        .arg("error")
+        .arg("-show_entries")
+        .arg("stream=bit_rate,codec_name,height,width,r_frame_rate")
+        .arg("-of")
+        .arg("default=noprint_wrappers=1:nokey=1")
+        .arg(file_path)
+        .output()
+        .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "ffprobe exited with non-zero status: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let info = String::from_utf8_lossy(&output.stdout);
+    let info_parts: Vec<&str> = info.split('\n').collect();
+    let codec_name = info_parts[0].to_string();
+    let width: String = info_parts[1].to_string();
+    let height: String = info_parts[2].to_string();
+    
+    // Parse frame rate as a fraction and convert to float
+    let frame_rate_parts: Vec<&str> = info_parts[3].split('/').collect();
+    let frame_rate: f64 = frame_rate_parts[0].parse::<f64>().unwrap() / frame_rate_parts[1].parse::<f64>().unwrap();
+    let frame_rate: String = frame_rate.to_string();
+    
+    let bit_rate: String = info_parts[4].to_string();
+
+    Ok((codec_name, width, height, frame_rate, bit_rate))
 }

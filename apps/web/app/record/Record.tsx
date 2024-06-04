@@ -34,7 +34,11 @@ import { ActionButton } from "./_components/ActionButton";
 import toast from "react-hot-toast";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
-import { getLatestVideoId, saveLatestVideoId } from "@cap/utils";
+import {
+  getLatestVideoId,
+  saveLatestVideoId,
+  getVideoDuration,
+} from "@cap/utils";
 import { isUserOnProPlan } from "@cap/utils";
 import { LogoBadge } from "@cap/ui";
 
@@ -70,7 +74,7 @@ class AsyncTaskQueue {
           this.resolveEmptyPromise();
           this.resolveEmptyPromise = null;
         }
-        this.processQueue(); // Recursively call processQueue to handle the next task
+        this.processQueue();
       }
     }
   }
@@ -134,7 +138,6 @@ export const Record = ({
 
   const [isCenteredHorizontally, setIsCenteredHorizontally] = useState(false);
   const [isCenteredVertically, setIsCenteredVertically] = useState(false);
-  const recordingIntervalRef = useRef<NodeJS.Timeout | null | string>(null);
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
   const defaultRndHandeStyles = {
@@ -389,7 +392,6 @@ export const Record = ({
     saveLatestVideoId(videoCreateData.id);
 
     setStartingRecording(true);
-    recordingIntervalRef.current = null;
 
     const combinedStream = new MediaStream();
     const canvas = document.createElement("canvas");
@@ -567,36 +569,45 @@ export const Record = ({
       videoRecorderOptions
     );
 
-    function recordVideoChunk() {
-      if (recordingIntervalRef.current === "stop") {
-        return;
-      }
-
-      videoRecorder.start();
-
-      recordingIntervalRef.current = setInterval(() => {
-        if (videoRecorder.state === "recording") videoRecorder.stop();
-
-        if (videoRecorder) recordVideoChunk();
-      }, 5000);
-    }
+    let chunks = [];
+    let segmentStartTime = Date.now();
+    const recordingStartTime = Date.now();
 
     videoRecorder.ondataavailable = async (event) => {
       if (event.data.size > 0) {
+        chunks.push(event.data);
+        const segmentEndTime = Date.now();
+        const segmentDuration = (segmentEndTime - segmentStartTime) / 1000.0;
+
+        const videoDuration = (Date.now() - recordingStartTime) / 1000.0;
+
+        console.log("Video duration:", videoDuration);
+        console.log("Segment duration:", segmentDuration);
+        console.log("Start:", Math.max(videoDuration - segmentDuration, 0));
+
         muxQueue.enqueue(async () => {
-          await muxSegment({
-            data: event.data,
-            mimeType: videoRecorderOptions.mimeType,
-            final: recordingIntervalRef.current === "stop" ? true : false,
-          });
+          try {
+            await muxSegment({
+              data: chunks,
+              mimeType: videoRecorderOptions.mimeType,
+              final: videoRecorder.state !== "recording",
+              start: Math.max(videoDuration - segmentDuration, 0),
+              end: videoDuration,
+              segmentTime: segmentDuration,
+            });
+          } catch (error) {
+            console.error("Error in muxSegment:", error);
+            readyToStopRecording.current = true;
+          }
         });
+
+        segmentStartTime = segmentEndTime;
       }
     };
 
-    recordVideoChunk();
+    videoRecorder.start(3000);
 
     setVideoRecorder(videoRecorder);
-
     setIsRecording(true);
     setStartingRecording(false);
   };
@@ -605,36 +616,67 @@ export const Record = ({
     data,
     mimeType,
     final,
+    start,
+    end,
+    segmentTime,
   }: {
-    data: Blob;
+    data: Blob[];
     mimeType: string;
     final: boolean;
+    start: number;
+    end: number;
+    segmentTime: number;
   }) => {
     return new Promise(async (resolve, reject) => {
       console.log("Muxing segment");
 
       const segmentIndex = totalSegments.current;
-      const videoSegment = new Blob([data], { type: "video/webm" });
-      let audioData;
+      const segmentIndexString = String(segmentIndex).padStart(3, "0");
+      const videoSegment = new Blob(data, { type: "video/webm" });
+      const segmentPaths = {
+        tempInput: `temp_segment_${segmentIndexString}${
+          mimeType.includes("mp4") ? ".mp4" : ".webm"
+        }`,
+        videoInput: `input_segment_${segmentIndexString}.ts`,
+        videoOutput: `video_segment_${segmentIndexString}.ts`,
+        audioOutput: `audio_segment_${segmentIndexString}.aac`,
+      };
 
       if (videoSegment) {
-        const segmentIndexString = String(segmentIndex).padStart(3, "0");
-
         const videoFile = await fetchFile(URL.createObjectURL(videoSegment));
-        ffmpegRef.current.writeFile(
-          `video_segment_${segmentIndexString}${
-            mimeType.includes("mp4") ? ".mp4" : ".webm"
-          }`,
-          videoFile
-        );
 
-        const segmentPaths = {
-          videoInput: `video_segment_${segmentIndexString}${
-            mimeType.includes("mp4") ? ".mp4" : ".webm"
-          }`,
-          videoOutput: `video_segment_${segmentIndexString}.mp4`,
-          audioOutput: `audio_segment_${segmentIndexString}.aac`,
-        };
+        await ffmpegRef.current.writeFile(segmentPaths.tempInput, videoFile);
+
+        const tempVideoCommand = [
+          "-ss",
+          start.toFixed(2),
+          "-to",
+          end.toFixed(2),
+          "-i",
+          segmentPaths.tempInput,
+          "-c:v",
+          "libx264",
+          "-preset",
+          "ultrafast",
+          "-crf",
+          "0",
+          "-pix_fmt",
+          "yuv420p",
+          "-r",
+          "30",
+          "-c:a",
+          "aac",
+          "-f",
+          "hls",
+          segmentPaths.videoInput,
+        ];
+
+        try {
+          await ffmpegRef.current.exec(tempVideoCommand);
+        } catch (error) {
+          console.error("Error executing tempVideoCommand with FFmpeg:", error);
+          return reject(error);
+        }
 
         const videoFFmpegCommand = [
           "-i",
@@ -649,14 +691,21 @@ export const Record = ({
           "yuv420p",
           "-r",
           "30",
-          "-f",
-          "mp4",
           segmentPaths.videoOutput,
         ];
 
-        await ffmpegRef.current.exec(videoFFmpegCommand);
+        try {
+          await ffmpegRef.current.exec(videoFFmpegCommand);
+        } catch (error) {
+          console.error(
+            "Error executing videoFFmpegCommand with FFmpeg:",
+            error
+          );
+          return reject(error);
+        }
 
         if (videoStream && selectedAudioDeviceLabel !== "None") {
+          console.log("Muxing audio");
           const audioFFmpegCommand = [
             "-i",
             segmentPaths.videoInput,
@@ -670,21 +719,56 @@ export const Record = ({
             "aac_low",
             segmentPaths.audioOutput,
           ];
-          await ffmpegRef.current.exec(audioFFmpegCommand);
+          try {
+            await ffmpegRef.current.exec(audioFFmpegCommand);
+            console.log(
+              "hereaudioexecuted: ",
+              await ffmpegRef.current.listDir("/")
+            );
+          } catch (error) {
+            console.error(
+              "Error executing audioFFmpegCommand with FFmpeg:",
+              error
+            );
+            console.log(
+              "audio error here: ",
+              await ffmpegRef.current.listDir("/")
+            );
+            return reject(error);
+          }
         }
 
-        const videoData = await ffmpegRef.current.readFile(
-          segmentPaths.videoOutput
-        );
-
-        if (videoStream && selectedAudioDeviceLabel !== "None") {
-          audioData = await ffmpegRef.current.readFile(
-            segmentPaths.audioOutput
+        let videoData;
+        try {
+          videoData = await ffmpegRef.current.readFile(
+            segmentPaths.videoOutput
           );
+          console.log("file list: ", await ffmpegRef.current.listDir("/"));
+        } catch (error) {
+          console.error("Error reading video file with FFmpeg:", error);
+          return reject(error);
+        }
+
+        let audioData;
+        if (videoStream && selectedAudioDeviceLabel !== "None") {
+          try {
+            audioData = await ffmpegRef.current.readFile(
+              segmentPaths.audioOutput
+            );
+
+            console.log("Found audio data:", audioData);
+          } catch (error) {
+            console.error("Error reading audio file with FFmpeg:", error);
+            console.log(
+              "audio error here: ",
+              await ffmpegRef.current.listDir("/")
+            );
+            return reject(error);
+          }
         }
 
         const segmentFilenames = {
-          video: `video/video_recording_${segmentIndexString}.mp4`,
+          video: `video/video_recording_${segmentIndexString}.ts`,
           audio: `audio/audio_recording_${segmentIndexString}.aac`,
         };
 
@@ -734,6 +818,7 @@ export const Record = ({
             file: videoData,
             filename: segmentFilenames.video,
             videoId,
+            duration: segmentTime.toFixed(1),
           });
 
           if (videoStream && selectedAudioDeviceLabel !== "None" && audioData) {
@@ -741,6 +826,7 @@ export const Record = ({
               file: audioData,
               filename: segmentFilenames.audio,
               videoId,
+              duration: segmentTime.toFixed(1),
             });
           }
         } catch (error) {
@@ -748,11 +834,39 @@ export const Record = ({
           reject(error);
         }
 
-        await ffmpegRef.current.deleteFile(segmentPaths.videoInput);
-        await ffmpegRef.current.deleteFile(segmentPaths.videoOutput);
+        console.log("herelast: ", await ffmpegRef.current.listDir("/"));
 
-        if (videoStream && selectedAudioDeviceLabel !== "None" && audioData) {
-          await ffmpegRef.current.deleteFile(segmentPaths.audioOutput);
+        // tempInput: `temp_segment_${segmentIndexString}${
+        //   mimeType.includes("mp4") ? ".mp4" : ".webm"
+        // }`,
+        // videoInput: `input_segment_${segmentIndexString}.ts`,
+        // videoOutput: `video_segment_${segmentIndexString}.ts`,
+        // audioOutput: `audio_segment_${segmentIndexString}.aac`,
+
+        try {
+          await ffmpegRef.current.deleteFile(segmentPaths.tempInput);
+        } catch (error) {
+          console.error("Error deleting temp input file:", error);
+        }
+
+        try {
+          await ffmpegRef.current.deleteFile(segmentPaths.videoInput);
+        } catch (error) {
+          console.error("Error deleting video input file:", error);
+        }
+
+        try {
+          await ffmpegRef.current.deleteFile(segmentPaths.videoOutput);
+        } catch (error) {
+          console.error("Error deleting video output file:", error);
+        }
+
+        if (audioData) {
+          try {
+            await ffmpegRef.current.deleteFile(segmentPaths.audioOutput);
+          } catch (error) {
+            console.error("Error deleting audio output file:", error);
+          }
         }
 
         if (final) {
@@ -776,15 +890,31 @@ export const Record = ({
     file,
     filename,
     videoId,
+    duration,
   }: {
     file: Uint8Array | string;
     filename: string;
     videoId: string;
+    duration?: string;
   }) => {
     const formData = new FormData();
     formData.append("filename", filename);
     formData.append("videoId", videoId);
-    formData.append("blobData", new Blob([file], { type: "video/mp2t" }));
+    let mimeType;
+    if (filename.endsWith(".aac")) {
+      mimeType = "audio/aac";
+    } else if (filename.endsWith(".jpg")) {
+      mimeType = "image/jpeg";
+    } else {
+      mimeType = "video/mp2t";
+    }
+    formData.append("blobData", new Blob([file], { type: mimeType }));
+    if (duration) {
+      formData.append("duration", String(duration));
+    }
+    if (filename.includes("video")) {
+      formData.append("framerate", "30");
+    }
 
     await fetch(`${process.env.NEXT_PUBLIC_URL}/api/upload/new`, {
       method: "POST",
@@ -796,12 +926,6 @@ export const Record = ({
     setStoppingRecording(true);
 
     console.log("---Stopping recording function fired here---");
-
-    if (recordingIntervalRef.current) {
-      clearInterval(recordingIntervalRef.current);
-      recordingIntervalRef.current = "stop";
-      console.log("Recording interval stopped");
-    }
 
     if (videoRecorder) {
       videoRecorder.stop();

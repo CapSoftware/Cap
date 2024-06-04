@@ -411,7 +411,7 @@ impl MediaRecorder {
         println!("Starting audio recording and processing...");
         let audio_output_chunk_pattern = format!("{}/audio_recording_%03d.aac", audio_file_path_owned);
         let audio_segment_list_filename = format!("{}/segment_list.txt", audio_file_path_owned);
-        let video_output_chunk_pattern = format!("{}/video_recording_%03d.mp4", video_file_path_owned);
+        let video_output_chunk_pattern = format!("{}/video_recording_%03d.ts", video_file_path_owned);
         let video_segment_list_filename = format!("{}/segment_list.txt", video_file_path_owned);
       
         let mut audio_filters = Vec::new();
@@ -458,7 +458,7 @@ impl MediaRecorder {
             "-segment_time", "3",
             "-segment_time_delta", "0.01",
             "-segment_list", &video_segment_list_filename,
-            "-segment_format", "mp4",
+            "-segment_format", "ts",
             "-movflags", "frag_keyframe+empty_moov",
             "-reset_timestamps", "1",
             &video_output_chunk_pattern,

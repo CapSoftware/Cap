@@ -59,3 +59,29 @@ export const isUserPro = async () => {
 
   return false;
 };
+
+function createVid(url: string) {
+  const vid = document.createElement("video");
+  vid.src = url;
+  vid.controls = false;
+  vid.muted = true;
+  vid.autoplay = false;
+  return vid;
+}
+
+export function getVideoDuration(blob: Blob) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(blob);
+    const vid = createVid(url);
+    vid.addEventListener("timeupdate", (_evt) => {
+      res(vid.duration);
+      vid.src = "";
+      URL.revokeObjectURL(url);
+    });
+    vid.onerror = (evt) => {
+      rej(evt);
+      URL.revokeObjectURL(url);
+    };
+    vid.currentTime = 1e101;
+  });
+}
