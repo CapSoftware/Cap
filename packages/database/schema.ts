@@ -150,6 +150,7 @@ export const videos = mysqlTable(
     xStreamInfo: text("xStreamInfo"),
     jobId: varchar("jobId", { length: 255 }),
     jobStatus: varchar("jobStatus", { length: 255 }),
+    skipProcessing: boolean("skipProcessing").notNull().default(false),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },

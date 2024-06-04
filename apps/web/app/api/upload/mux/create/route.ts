@@ -125,6 +125,29 @@ export async function GET(request: NextRequest) {
     const videoSegmentKeys = (videoSegments.Contents || []).map(
       (object) => `s3://${bucket}/${object.Key}`
     );
+
+    if (videoSegmentKeys.length > 149) {
+      await db
+        .update(videos)
+        .set({ skipProcessing: true })
+        .where(eq(videos.id, videoId));
+      return new Response(
+        JSON.stringify({
+          message: "Number of inputs exceeds limit, skipping processing",
+        }),
+        {
+          status: 200,
+          headers: {
+            "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+              ? origin
+              : "null",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+          },
+        }
+      );
+    }
+
     const audioSegmentKeys = (audioSegments.Contents || []).map(
       (object) => `s3://${bucket}/${object.Key}`
     );
