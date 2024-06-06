@@ -34,11 +34,7 @@ import { ActionButton } from "./_components/ActionButton";
 import toast from "react-hot-toast";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
-import {
-  getLatestVideoId,
-  saveLatestVideoId,
-  getVideoDuration,
-} from "@cap/utils";
+import { getLatestVideoId, saveLatestVideoId } from "@cap/utils";
 import { isUserOnProPlan } from "@cap/utils";
 import { LogoBadge } from "@cap/ui";
 
@@ -395,98 +391,92 @@ export const Record = ({
 
     const combinedStream = new MediaStream();
     const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-    // Get the video container element
+    let screenX: number,
+      screenY: number,
+      screenWidth: number,
+      screenHeight: number;
+    let webcamX: number,
+      webcamY: number,
+      webcamWidth: number,
+      webcamHeight: number;
+    let newWebcamWidth: number,
+      newWebcamHeight: number,
+      offsetX: number,
+      offsetY: number;
+    let intervalId: NodeJS.Timeout | null = null;
+
     const videoContainer = document.querySelector(
       ".video-container"
     ) as HTMLElement;
+    const screenPreview = document.getElementById(
+      "screenPreview"
+    ) as HTMLVideoElement;
+    const webcamPreview = document.getElementById(
+      "webcamPreview"
+    ) as HTMLVideoElement;
 
-    // Set the minimum width to 1000 pixels
-    const minWidth = 1000;
+    // Set canvas dimensions to video container dimensions
+    canvas.width = videoContainer.clientWidth;
+    canvas.height = videoContainer.clientHeight;
 
-    // Calculate the aspect ratio of the video container
-    const aspectRatio =
-      videoContainer.clientWidth / videoContainer.clientHeight;
+    // Calculate coordinates and dimensions once
+    if (screenPreview && videoContainer) {
+      const screenRect = screenPreview.getBoundingClientRect();
+      const containerRect = videoContainer.getBoundingClientRect();
 
-    // Set the canvas width to the minimum width or the video container width, whichever is larger
-    canvas.width = Math.max(minWidth, videoContainer.clientWidth);
+      screenX =
+        (screenRect.left - containerRect.left) *
+        (canvas.width / containerRect.width);
+      screenY =
+        (screenRect.top - containerRect.top) *
+        (canvas.height / containerRect.height);
+      screenWidth = screenRect.width * (canvas.width / containerRect.width);
+      screenHeight = screenRect.height * (canvas.height / containerRect.height);
+    }
 
-    // Calculate the canvas height based on the width and aspect ratio
-    canvas.height = canvas.width / aspectRatio;
+    if (
+      webcamPreview &&
+      videoContainer &&
+      selectedVideoDeviceLabel !== "None"
+    ) {
+      const webcamRect = webcamPreview.getBoundingClientRect();
+      const containerRect = videoContainer.getBoundingClientRect();
 
-    let animationFrameId: number;
+      webcamX =
+        (webcamRect.left - containerRect.left) *
+        (canvas.width / containerRect.width);
+      webcamY =
+        (webcamRect.top - containerRect.top) *
+        (canvas.height / containerRect.height);
+      webcamWidth = webcamRect.width * (canvas.width / containerRect.width);
+      webcamHeight = webcamRect.height * (canvas.height / containerRect.height);
+
+      const videoAspectRatio =
+        webcamPreview.videoWidth / webcamPreview.videoHeight;
+      newWebcamWidth = webcamWidth * 2;
+      newWebcamHeight = newWebcamWidth / videoAspectRatio;
+      offsetX = (newWebcamWidth - webcamWidth) / 2;
+      offsetY = (newWebcamHeight - webcamHeight) / 2;
+    }
 
     const drawCanvas = () => {
-      if (ctx) {
+      if (ctx && screenPreview && videoContainer) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        const screenPreview = document.getElementById(
-          "screenPreview"
-        ) as HTMLVideoElement;
-        const webcamPreview = document.getElementById(
-          "webcamPreview"
-        ) as HTMLVideoElement;
-        const videoContainer = document.querySelector(
-          ".video-container"
-        ) as HTMLElement;
-
-        if (screenPreview && videoContainer) {
-          const screenRect = screenPreview.getBoundingClientRect();
-          const containerRect = videoContainer.getBoundingClientRect();
-
-          const screenX =
-            (screenRect.left - containerRect.left) *
-            (canvas.width / containerRect.width);
-          const screenY =
-            (screenRect.top - containerRect.top) *
-            (canvas.height / containerRect.height);
-          const screenWidth =
-            screenRect.width * (canvas.width / containerRect.width);
-          const screenHeight =
-            screenRect.height * (canvas.height / containerRect.height);
-
-          ctx.drawImage(
-            screenPreview,
-            screenX,
-            screenY,
-            screenWidth,
-            screenHeight
-          );
-        }
+        ctx.drawImage(
+          screenPreview,
+          screenX,
+          screenY,
+          screenWidth,
+          screenHeight
+        );
 
         if (
           webcamPreview &&
           videoContainer &&
           selectedVideoDeviceLabel !== "None"
         ) {
-          const webcamRect = webcamPreview.getBoundingClientRect();
-          const containerRect = videoContainer.getBoundingClientRect();
-
-          const webcamX =
-            (webcamRect.left - containerRect.left) *
-            (canvas.width / containerRect.width);
-          const webcamY =
-            (webcamRect.top - containerRect.top) *
-            (canvas.height / containerRect.height);
-          const webcamWidth =
-            webcamRect.width * (canvas.width / containerRect.width);
-          const webcamHeight =
-            webcamRect.height * (canvas.height / containerRect.height);
-
-          // Calculate the aspect ratio of the webcam video
-          const videoAspectRatio =
-            webcamPreview.videoWidth / webcamPreview.videoHeight;
-
-          // Calculate the new dimensions to maintain the aspect ratio while fitting within the webcam preview
-          let newWebcamWidth = webcamWidth * 2;
-          let newWebcamHeight = newWebcamWidth / videoAspectRatio;
-
-          // Calculate the offset to center the webcam video
-          const offsetX = (newWebcamWidth - webcamWidth) / 2;
-          const offsetY = (newWebcamHeight - webcamHeight) / 2;
-
-          // Create a circular clip path for the webcam preview
           ctx.save();
           ctx.beginPath();
           ctx.arc(
@@ -497,8 +487,6 @@ export const Record = ({
             2 * Math.PI
           );
           ctx.clip();
-
-          // Draw the webcam preview on the canvas with the zoom adjustment
           ctx.drawImage(
             webcamPreview,
             webcamX - offsetX,
@@ -506,15 +494,41 @@ export const Record = ({
             newWebcamWidth,
             newWebcamHeight
           );
-
           ctx.restore();
         }
-
-        animationFrameId = requestAnimationFrame(drawCanvas);
       }
     };
 
-    drawCanvas();
+    const startDrawing = () => {
+      const drawLoop = () => {
+        drawCanvas();
+        animationFrameId = requestAnimationFrame(drawLoop);
+      };
+      drawLoop();
+      return animationFrameId;
+    };
+
+    const intervalDrawing = () => setInterval(drawCanvas, 1000 / 30); // 30 fps
+
+    // Start drawing on canvas using requestAnimationFrame
+    let animationFrameId: number = 0;
+    animationFrameId = startDrawing();
+    let animationIntervalId: number | NodeJS.Timeout | null = null;
+
+    // Fallback to setInterval if the tab is not active
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        cancelAnimationFrame(animationFrameId);
+        animationIntervalId = intervalDrawing();
+      } else {
+        if (animationIntervalId) {
+          clearInterval(animationIntervalId);
+          animationIntervalId = null;
+        }
+        animationFrameId = startDrawing();
+      }
+    });
+
     const canvasStream = canvas.captureStream(30);
     if (canvasStream.getVideoTracks().length === 0) {
       console.error("Canvas stream has no video tracks");
@@ -1205,6 +1219,22 @@ export const Record = ({
     }
   }, [audioDevicesRef, videoDevicesRef]);
 
+  // useEffect(() => {
+  //   const audio = new Audio("/sample-9s.mp3");
+  //   audio.loop = true;
+  //   audio.volume = 1;
+
+  //   const playAudio = () => {
+  //     audio.play();
+  //     window.removeEventListener("mousemove", playAudio);
+  //   };
+
+  //   window.addEventListener("mousemove", playAudio);
+
+  //   return () => {
+  //     window.removeEventListener("mousemove", playAudio);
+  //   };
+  // }, []);
   if (isLoading) {
     return (
       <div className="w-full h-screen flex items-center justify-center">

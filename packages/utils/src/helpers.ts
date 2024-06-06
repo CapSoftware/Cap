@@ -60,28 +60,24 @@ export const isUserPro = async () => {
   return false;
 };
 
-function createVid(url: string) {
-  const vid = document.createElement("video");
-  vid.src = url;
-  vid.controls = false;
-  vid.muted = true;
-  vid.autoplay = false;
-  return vid;
-}
+export async function getBlobDuration(blob: Blob) {
+  const tempVideoEl = document.createElement("video") as HTMLVideoElement;
 
-export function getVideoDuration(blob: Blob) {
-  return new Promise((res, rej) => {
-    const url = URL.createObjectURL(blob);
-    const vid = createVid(url);
-    vid.addEventListener("timeupdate", (_evt) => {
-      res(vid.duration);
-      vid.src = "";
-      URL.revokeObjectURL(url);
+  const durationP = new Promise((resolve, reject) => {
+    tempVideoEl.addEventListener("loadedmetadata", () => {
+      if (tempVideoEl.duration === Infinity) {
+        tempVideoEl.currentTime = Number.MAX_SAFE_INTEGER;
+        tempVideoEl.ontimeupdate = () => {
+          tempVideoEl.ontimeupdate = null;
+          resolve(tempVideoEl.duration);
+          tempVideoEl.currentTime = 0;
+        };
+      } else resolve(tempVideoEl.duration);
     });
-    vid.onerror = (evt) => {
-      rej(evt);
-      URL.revokeObjectURL(url);
-    };
-    vid.currentTime = 1e101;
+    tempVideoEl.onerror = () => resolve(0);
   });
+
+  tempVideoEl.src = URL.createObjectURL(blob);
+
+  return durationP;
 }
