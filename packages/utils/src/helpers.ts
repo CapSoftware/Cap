@@ -59,25 +59,3 @@ export const isUserPro = async () => {
 
   return false;
 };
-
-export async function getBlobDuration(blob: Blob) {
-  const tempVideoEl = document.createElement("video") as HTMLVideoElement;
-
-  const durationP = new Promise((resolve, reject) => {
-    tempVideoEl.addEventListener("loadedmetadata", () => {
-      if (tempVideoEl.duration === Infinity) {
-        tempVideoEl.currentTime = Number.MAX_SAFE_INTEGER;
-        tempVideoEl.ontimeupdate = () => {
-          tempVideoEl.ontimeupdate = null;
-          resolve(tempVideoEl.duration);
-          tempVideoEl.currentTime = 0;
-        };
-      } else resolve(tempVideoEl.duration);
-    });
-    tempVideoEl.onerror = () => resolve(0);
-  });
-
-  tempVideoEl.src = URL.createObjectURL(blob);
-
-  return durationP;
-}
