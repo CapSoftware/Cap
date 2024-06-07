@@ -34,14 +34,11 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       return row ?? null;
     },
     async getUserByEmail(email) {
-      console.log("getUserByEmail");
-      console.log("email", email);
       const rows = await db
         .select()
         .from(users)
         .where(eq(users.email, email))
         .limit(1);
-      console.log("rows", rows);
       const row = rows[0];
       return row ?? null;
     },

@@ -47,11 +47,10 @@ export async function GET(
 
     const url = asset.browser_download_url;
 
-    console.log(release.assets);
-
-    const signatureAsset = release.assets.find(
-      ({ name }: any) => name.includes(params.arch) && name.endsWith(".sig")
+    const signatureAsset = release.assets.find(({ name }: any) =>
+      name.endsWith(".sig")
     );
+
     if (!signatureAsset) {
       return new Response(null, {
         status: 204,

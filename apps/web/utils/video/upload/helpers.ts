@@ -47,7 +47,6 @@ export async function uploadToS3({
   });
   formData.append("file", blobData);
 
-  // Execute the upload using the presigned URL
   const uploadResponse = await fetch(presignedPostData.url, {
     method: "POST",
     body: formData,

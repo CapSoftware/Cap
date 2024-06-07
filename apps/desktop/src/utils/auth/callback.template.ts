@@ -8,7 +8,7 @@ export default `
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Open+Sans&display=swap" rel="stylesheet">
-  <title>My Notes</title>
+  <title>Cap Auth</title>
   <style>
     body {
       width: 100%;

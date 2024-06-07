@@ -89,7 +89,7 @@ export const Logo = ({
         </span>
       )}
       {showBeta && (
-        <span className="text-[10px] font-medium text-gray-500">
+        <span className="text-[10px] font-medium text-gray-500 min-w-[52px]">
           Beta v{process.env.appVersion}
         </span>
       )}

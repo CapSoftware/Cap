@@ -31,7 +31,10 @@ export const ShareHeader = ({
     );
     if (!response.ok) {
       toast.error("Failed to update title - please try again.");
+      return;
     }
+
+    toast.success("Video title updated");
 
     refresh();
   };

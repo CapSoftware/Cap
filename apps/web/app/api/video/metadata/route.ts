@@ -1,17 +1,16 @@
 import { type NextRequest } from "next/server";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { nanoId } from "@cap/database/helpers";
 import { videos } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 
 export async function PUT(request: NextRequest) {
   const user = await getCurrentUser();
-  const { title, videoId } = await request.json();
+  const { videoId, metadata } = await request.json();
   const userId = user?.id as string;
 
-  if (!user || !title || !videoId) {
-    console.error("Missing required data in /api/video/title/route.ts");
+  if (!user || !videoId || !metadata) {
+    console.error("Missing required data in /api/video/metadata/route.ts");
 
     return new Response(JSON.stringify({ error: true }), {
       status: 401,
@@ -46,7 +45,7 @@ export async function PUT(request: NextRequest) {
   await db
     .update(videos)
     .set({
-      name: title,
+      metadata: metadata,
     })
     .where(eq(videos.id, videoId));
 

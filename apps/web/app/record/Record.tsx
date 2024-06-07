@@ -70,7 +70,7 @@ class AsyncTaskQueue {
           this.resolveEmptyPromise();
           this.resolveEmptyPromise = null;
         }
-        this.processQueue(); // Recursively call processQueue to handle the next task
+        this.processQueue();
       }
     }
   }
@@ -134,7 +134,6 @@ export const Record = ({
 
   const [isCenteredHorizontally, setIsCenteredHorizontally] = useState(false);
   const [isCenteredVertically, setIsCenteredVertically] = useState(false);
-  const recordingIntervalRef = useRef<NodeJS.Timeout | null | string>(null);
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
   const defaultRndHandeStyles = {
@@ -232,9 +231,6 @@ export const Record = ({
   const startScreenCapture = async () => {
     try {
       const displayMediaOptions = {
-        video: {
-          displaySurface: "window",
-        },
         audio: false,
         surfaceSwitching: "exclude",
         selfBrowserSurface: "exclude",
@@ -392,102 +388,95 @@ export const Record = ({
     saveLatestVideoId(videoCreateData.id);
 
     setStartingRecording(true);
-    recordingIntervalRef.current = null;
 
     const combinedStream = new MediaStream();
     const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-    // Get the video container element
+    let screenX: number,
+      screenY: number,
+      screenWidth: number,
+      screenHeight: number;
+    let webcamX: number,
+      webcamY: number,
+      webcamWidth: number,
+      webcamHeight: number;
+    let newWebcamWidth: number,
+      newWebcamHeight: number,
+      offsetX: number,
+      offsetY: number;
+    let intervalId: NodeJS.Timeout | null = null;
+
     const videoContainer = document.querySelector(
       ".video-container"
     ) as HTMLElement;
+    const screenPreview = document.getElementById(
+      "screenPreview"
+    ) as HTMLVideoElement;
+    const webcamPreview = document.getElementById(
+      "webcamPreview"
+    ) as HTMLVideoElement;
 
-    // Set the minimum width to 1000 pixels
-    const minWidth = 1000;
+    // Set canvas dimensions to video container dimensions
+    canvas.width = videoContainer.clientWidth;
+    canvas.height = videoContainer.clientHeight;
 
-    // Calculate the aspect ratio of the video container
-    const aspectRatio =
-      videoContainer.clientWidth / videoContainer.clientHeight;
+    // Calculate coordinates and dimensions once
+    if (screenPreview && videoContainer) {
+      const screenRect = screenPreview.getBoundingClientRect();
+      const containerRect = videoContainer.getBoundingClientRect();
 
-    // Set the canvas width to the minimum width or the video container width, whichever is larger
-    canvas.width = Math.max(minWidth, videoContainer.clientWidth);
+      screenX =
+        (screenRect.left - containerRect.left) *
+        (canvas.width / containerRect.width);
+      screenY =
+        (screenRect.top - containerRect.top) *
+        (canvas.height / containerRect.height);
+      screenWidth = screenRect.width * (canvas.width / containerRect.width);
+      screenHeight = screenRect.height * (canvas.height / containerRect.height);
+    }
 
-    // Calculate the canvas height based on the width and aspect ratio
-    canvas.height = canvas.width / aspectRatio;
+    if (
+      webcamPreview &&
+      videoContainer &&
+      selectedVideoDeviceLabel !== "None"
+    ) {
+      const webcamRect = webcamPreview.getBoundingClientRect();
+      const containerRect = videoContainer.getBoundingClientRect();
 
-    let animationFrameId: number;
+      webcamX =
+        (webcamRect.left - containerRect.left) *
+        (canvas.width / containerRect.width);
+      webcamY =
+        (webcamRect.top - containerRect.top) *
+        (canvas.height / containerRect.height);
+      webcamWidth = webcamRect.width * (canvas.width / containerRect.width);
+      webcamHeight = webcamRect.height * (canvas.height / containerRect.height);
+
+      const videoAspectRatio =
+        webcamPreview.videoWidth / webcamPreview.videoHeight;
+      newWebcamWidth = webcamWidth * 2;
+      newWebcamHeight = newWebcamWidth / videoAspectRatio;
+      offsetX = (newWebcamWidth - webcamWidth) / 2;
+      offsetY = (newWebcamHeight - webcamHeight) / 2;
+    }
 
     const drawCanvas = () => {
-      if (ctx) {
+      if (ctx && screenPreview && videoContainer) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        const screenPreview = document.getElementById(
-          "screenPreview"
-        ) as HTMLVideoElement;
-        const webcamPreview = document.getElementById(
-          "webcamPreview"
-        ) as HTMLVideoElement;
-        const videoContainer = document.querySelector(
-          ".video-container"
-        ) as HTMLElement;
-
-        if (screenPreview && videoContainer) {
-          const screenRect = screenPreview.getBoundingClientRect();
-          const containerRect = videoContainer.getBoundingClientRect();
-
-          const screenX =
-            (screenRect.left - containerRect.left) *
-            (canvas.width / containerRect.width);
-          const screenY =
-            (screenRect.top - containerRect.top) *
-            (canvas.height / containerRect.height);
-          const screenWidth =
-            screenRect.width * (canvas.width / containerRect.width);
-          const screenHeight =
-            screenRect.height * (canvas.height / containerRect.height);
-
-          ctx.drawImage(
-            screenPreview,
-            screenX,
-            screenY,
-            screenWidth,
-            screenHeight
-          );
-        }
+        ctx.drawImage(
+          screenPreview,
+          screenX,
+          screenY,
+          screenWidth,
+          screenHeight
+        );
 
         if (
           webcamPreview &&
           videoContainer &&
           selectedVideoDeviceLabel !== "None"
         ) {
-          const webcamRect = webcamPreview.getBoundingClientRect();
-          const containerRect = videoContainer.getBoundingClientRect();
-
-          const webcamX =
-            (webcamRect.left - containerRect.left) *
-            (canvas.width / containerRect.width);
-          const webcamY =
-            (webcamRect.top - containerRect.top) *
-            (canvas.height / containerRect.height);
-          const webcamWidth =
-            webcamRect.width * (canvas.width / containerRect.width);
-          const webcamHeight =
-            webcamRect.height * (canvas.height / containerRect.height);
-
-          // Calculate the aspect ratio of the webcam video
-          const videoAspectRatio =
-            webcamPreview.videoWidth / webcamPreview.videoHeight;
-
-          // Calculate the new dimensions to maintain the aspect ratio while fitting within the webcam preview
-          let newWebcamWidth = webcamWidth * 2;
-          let newWebcamHeight = newWebcamWidth / videoAspectRatio;
-
-          // Calculate the offset to center the webcam video
-          const offsetX = (newWebcamWidth - webcamWidth) / 2;
-          const offsetY = (newWebcamHeight - webcamHeight) / 2;
-
-          // Create a circular clip path for the webcam preview
           ctx.save();
           ctx.beginPath();
           ctx.arc(
@@ -498,8 +487,6 @@ export const Record = ({
             2 * Math.PI
           );
           ctx.clip();
-
-          // Draw the webcam preview on the canvas with the zoom adjustment
           ctx.drawImage(
             webcamPreview,
             webcamX - offsetX,
@@ -507,15 +494,41 @@ export const Record = ({
             newWebcamWidth,
             newWebcamHeight
           );
-
           ctx.restore();
         }
-
-        animationFrameId = requestAnimationFrame(drawCanvas);
       }
     };
 
-    drawCanvas();
+    const startDrawing = () => {
+      const drawLoop = () => {
+        drawCanvas();
+        animationFrameId = requestAnimationFrame(drawLoop);
+      };
+      drawLoop();
+      return animationFrameId;
+    };
+
+    const intervalDrawing = () => setInterval(drawCanvas, 1000 / 30); // 30 fps
+
+    // Start drawing on canvas using requestAnimationFrame
+    let animationFrameId: number = 0;
+    animationFrameId = startDrawing();
+    let animationIntervalId: number | NodeJS.Timeout | null = null;
+
+    // Fallback to setInterval if the tab is not active
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        cancelAnimationFrame(animationFrameId);
+        animationIntervalId = intervalDrawing();
+      } else {
+        if (animationIntervalId) {
+          clearInterval(animationIntervalId);
+          animationIntervalId = null;
+        }
+        animationFrameId = startDrawing();
+      }
+    });
+
     const canvasStream = canvas.captureStream(30);
     if (canvasStream.getVideoTracks().length === 0) {
       console.error("Canvas stream has no video tracks");
@@ -570,36 +583,45 @@ export const Record = ({
       videoRecorderOptions
     );
 
-    function recordVideoChunk() {
-      if (recordingIntervalRef.current === "stop") {
-        return;
-      }
-
-      videoRecorder.start();
-
-      recordingIntervalRef.current = setInterval(() => {
-        if (videoRecorder.state === "recording") videoRecorder.stop();
-
-        if (videoRecorder) recordVideoChunk();
-      }, 5000);
-    }
+    let chunks = [];
+    let segmentStartTime = Date.now();
+    const recordingStartTime = Date.now();
 
     videoRecorder.ondataavailable = async (event) => {
       if (event.data.size > 0) {
+        chunks.push(event.data);
+        const segmentEndTime = Date.now();
+        const segmentDuration = (segmentEndTime - segmentStartTime) / 1000.0;
+
+        const videoDuration = (Date.now() - recordingStartTime) / 1000.0;
+
+        console.log("Video duration:", videoDuration);
+        console.log("Segment duration:", segmentDuration);
+        console.log("Start:", Math.max(videoDuration - segmentDuration, 0));
+
         muxQueue.enqueue(async () => {
-          await muxSegment({
-            data: event.data,
-            mimeType: videoRecorderOptions.mimeType,
-            final: recordingIntervalRef.current === "stop" ? true : false,
-          });
+          try {
+            await muxSegment({
+              data: chunks,
+              mimeType: videoRecorderOptions.mimeType,
+              final: videoRecorder.state !== "recording",
+              start: Math.max(videoDuration - segmentDuration, 0),
+              end: videoDuration,
+              segmentTime: segmentDuration,
+            });
+          } catch (error) {
+            console.error("Error in muxSegment:", error);
+            readyToStopRecording.current = true;
+          }
         });
+
+        segmentStartTime = segmentEndTime;
       }
     };
 
-    recordVideoChunk();
+    videoRecorder.start(3000);
 
     setVideoRecorder(videoRecorder);
-
     setIsRecording(true);
     setStartingRecording(false);
   };
@@ -608,36 +630,67 @@ export const Record = ({
     data,
     mimeType,
     final,
+    start,
+    end,
+    segmentTime,
   }: {
-    data: Blob;
+    data: Blob[];
     mimeType: string;
     final: boolean;
+    start: number;
+    end: number;
+    segmentTime: number;
   }) => {
     return new Promise(async (resolve, reject) => {
       console.log("Muxing segment");
 
       const segmentIndex = totalSegments.current;
-      const videoSegment = new Blob([data], { type: "video/webm" });
-      let audioData;
+      const segmentIndexString = String(segmentIndex).padStart(3, "0");
+      const videoSegment = new Blob(data, { type: "video/webm" });
+      const segmentPaths = {
+        tempInput: `temp_segment_${segmentIndexString}${
+          mimeType.includes("mp4") ? ".mp4" : ".webm"
+        }`,
+        videoInput: `input_segment_${segmentIndexString}.ts`,
+        videoOutput: `video_segment_${segmentIndexString}.ts`,
+        audioOutput: `audio_segment_${segmentIndexString}.aac`,
+      };
 
       if (videoSegment) {
-        const segmentIndexString = String(segmentIndex).padStart(3, "0");
-
         const videoFile = await fetchFile(URL.createObjectURL(videoSegment));
-        ffmpegRef.current.writeFile(
-          `video_segment_${segmentIndexString}${
-            mimeType.includes("mp4") ? ".mp4" : ".webm"
-          }`,
-          videoFile
-        );
 
-        const segmentPaths = {
-          videoInput: `video_segment_${segmentIndexString}${
-            mimeType.includes("mp4") ? ".mp4" : ".webm"
-          }`,
-          videoOutput: `video_segment_${segmentIndexString}.mp4`,
-          audioOutput: `audio_segment_${segmentIndexString}.aac`,
-        };
+        await ffmpegRef.current.writeFile(segmentPaths.tempInput, videoFile);
+
+        const tempVideoCommand = [
+          "-ss",
+          start.toFixed(2),
+          "-to",
+          end.toFixed(2),
+          "-i",
+          segmentPaths.tempInput,
+          "-c:v",
+          "libx264",
+          "-preset",
+          "ultrafast",
+          "-crf",
+          "0",
+          "-pix_fmt",
+          "yuv420p",
+          "-r",
+          "30",
+          "-c:a",
+          "aac",
+          "-f",
+          "hls",
+          segmentPaths.videoInput,
+        ];
+
+        try {
+          await ffmpegRef.current.exec(tempVideoCommand);
+        } catch (error) {
+          console.error("Error executing tempVideoCommand with FFmpeg:", error);
+          return reject(error);
+        }
 
         const videoFFmpegCommand = [
           "-i",
@@ -652,14 +705,21 @@ export const Record = ({
           "yuv420p",
           "-r",
           "30",
-          "-f",
-          "mp4",
           segmentPaths.videoOutput,
         ];
 
-        await ffmpegRef.current.exec(videoFFmpegCommand);
+        try {
+          await ffmpegRef.current.exec(videoFFmpegCommand);
+        } catch (error) {
+          console.error(
+            "Error executing videoFFmpegCommand with FFmpeg:",
+            error
+          );
+          return reject(error);
+        }
 
         if (videoStream && selectedAudioDeviceLabel !== "None") {
+          console.log("Muxing audio");
           const audioFFmpegCommand = [
             "-i",
             segmentPaths.videoInput,
@@ -673,21 +733,56 @@ export const Record = ({
             "aac_low",
             segmentPaths.audioOutput,
           ];
-          await ffmpegRef.current.exec(audioFFmpegCommand);
+          try {
+            await ffmpegRef.current.exec(audioFFmpegCommand);
+            console.log(
+              "hereaudioexecuted: ",
+              await ffmpegRef.current.listDir("/")
+            );
+          } catch (error) {
+            console.error(
+              "Error executing audioFFmpegCommand with FFmpeg:",
+              error
+            );
+            console.log(
+              "audio error here: ",
+              await ffmpegRef.current.listDir("/")
+            );
+            return reject(error);
+          }
         }
 
-        const videoData = await ffmpegRef.current.readFile(
-          segmentPaths.videoOutput
-        );
-
-        if (videoStream && selectedAudioDeviceLabel !== "None") {
-          audioData = await ffmpegRef.current.readFile(
-            segmentPaths.audioOutput
+        let videoData;
+        try {
+          videoData = await ffmpegRef.current.readFile(
+            segmentPaths.videoOutput
           );
+          console.log("file list: ", await ffmpegRef.current.listDir("/"));
+        } catch (error) {
+          console.error("Error reading video file with FFmpeg:", error);
+          return reject(error);
+        }
+
+        let audioData;
+        if (videoStream && selectedAudioDeviceLabel !== "None") {
+          try {
+            audioData = await ffmpegRef.current.readFile(
+              segmentPaths.audioOutput
+            );
+
+            console.log("Found audio data:", audioData);
+          } catch (error) {
+            console.error("Error reading audio file with FFmpeg:", error);
+            console.log(
+              "audio error here: ",
+              await ffmpegRef.current.listDir("/")
+            );
+            return reject(error);
+          }
         }
 
         const segmentFilenames = {
-          video: `video/video_recording_${segmentIndexString}.mp4`,
+          video: `video/video_recording_${segmentIndexString}.ts`,
           audio: `audio/audio_recording_${segmentIndexString}.aac`,
         };
 
@@ -697,7 +792,10 @@ export const Record = ({
           const video = document.createElement("video");
           video.src = URL.createObjectURL(videoSegment);
           video.muted = true;
-          await video.play();
+          video.autoplay = true;
+          video.play().catch((error) => {
+            console.error("Video play failed:", error);
+          });
 
           const canvas = document.createElement("canvas");
 
@@ -725,6 +823,8 @@ export const Record = ({
             "image/jpeg",
             0.5
           );
+          video.remove();
+          canvas.remove();
         }
 
         try {
@@ -732,6 +832,7 @@ export const Record = ({
             file: videoData,
             filename: segmentFilenames.video,
             videoId,
+            duration: segmentTime.toFixed(1),
           });
 
           if (videoStream && selectedAudioDeviceLabel !== "None" && audioData) {
@@ -739,6 +840,7 @@ export const Record = ({
               file: audioData,
               filename: segmentFilenames.audio,
               videoId,
+              duration: segmentTime.toFixed(1),
             });
           }
         } catch (error) {
@@ -746,11 +848,39 @@ export const Record = ({
           reject(error);
         }
 
-        await ffmpegRef.current.deleteFile(segmentPaths.videoInput);
-        await ffmpegRef.current.deleteFile(segmentPaths.videoOutput);
+        console.log("herelast: ", await ffmpegRef.current.listDir("/"));
 
-        if (videoStream && selectedAudioDeviceLabel !== "None" && audioData) {
-          await ffmpegRef.current.deleteFile(segmentPaths.audioOutput);
+        // tempInput: `temp_segment_${segmentIndexString}${
+        //   mimeType.includes("mp4") ? ".mp4" : ".webm"
+        // }`,
+        // videoInput: `input_segment_${segmentIndexString}.ts`,
+        // videoOutput: `video_segment_${segmentIndexString}.ts`,
+        // audioOutput: `audio_segment_${segmentIndexString}.aac`,
+
+        try {
+          await ffmpegRef.current.deleteFile(segmentPaths.tempInput);
+        } catch (error) {
+          console.error("Error deleting temp input file:", error);
+        }
+
+        try {
+          await ffmpegRef.current.deleteFile(segmentPaths.videoInput);
+        } catch (error) {
+          console.error("Error deleting video input file:", error);
+        }
+
+        try {
+          await ffmpegRef.current.deleteFile(segmentPaths.videoOutput);
+        } catch (error) {
+          console.error("Error deleting video output file:", error);
+        }
+
+        if (audioData) {
+          try {
+            await ffmpegRef.current.deleteFile(segmentPaths.audioOutput);
+          } catch (error) {
+            console.error("Error deleting audio output file:", error);
+          }
         }
 
         if (final) {
@@ -774,15 +904,31 @@ export const Record = ({
     file,
     filename,
     videoId,
+    duration,
   }: {
     file: Uint8Array | string;
     filename: string;
     videoId: string;
+    duration?: string;
   }) => {
     const formData = new FormData();
     formData.append("filename", filename);
     formData.append("videoId", videoId);
-    formData.append("blobData", new Blob([file], { type: "video/mp2t" }));
+    let mimeType;
+    if (filename.endsWith(".aac")) {
+      mimeType = "audio/aac";
+    } else if (filename.endsWith(".jpg")) {
+      mimeType = "image/jpeg";
+    } else {
+      mimeType = "video/mp2t";
+    }
+    formData.append("blobData", new Blob([file], { type: mimeType }));
+    if (duration) {
+      formData.append("duration", String(duration));
+    }
+    if (filename.includes("video")) {
+      formData.append("framerate", "30");
+    }
 
     await fetch(`${process.env.NEXT_PUBLIC_URL}/api/upload/new`, {
       method: "POST",
@@ -795,20 +941,19 @@ export const Record = ({
 
     console.log("---Stopping recording function fired here---");
 
-    if (recordingIntervalRef.current) {
-      clearInterval(recordingIntervalRef.current);
-      recordingIntervalRef.current = "stop";
-    }
-
     if (videoRecorder) {
       videoRecorder.stop();
+      console.log("Video recorder stopped");
     }
 
     while (readyToStopRecording.current === false) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
+      console.log("Waiting for readyToStopRecording");
     }
 
     await muxQueue.waitForQueueEmpty();
+
+    console.log("All segments muxed");
 
     const videoId = await getLatestVideoId();
 
@@ -1074,6 +1219,22 @@ export const Record = ({
     }
   }, [audioDevicesRef, videoDevicesRef]);
 
+  // useEffect(() => {
+  //   const audio = new Audio("/sample-9s.mp3");
+  //   audio.loop = true;
+  //   audio.volume = 1;
+
+  //   const playAudio = () => {
+  //     audio.play();
+  //     window.removeEventListener("mousemove", playAudio);
+  //   };
+
+  //   window.addEventListener("mousemove", playAudio);
+
+  //   return () => {
+  //     window.removeEventListener("mousemove", playAudio);
+  //   };
+  // }, []);
   if (isLoading) {
     return (
       <div className="w-full h-screen flex items-center justify-center">
@@ -1103,7 +1264,7 @@ export const Record = ({
             </a>
           </div>
           <div className="col-span-4 flex items-center justify-center">
-            {!isUserOnProPlan({
+            {isUserOnProPlan({
               subscriptionStatus: user?.stripeSubscriptionStatus as string,
             }) ? (
               <p className="text-sm text-gray-600">No recording limit</p>

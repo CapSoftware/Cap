@@ -153,46 +153,61 @@ export async function GET(request: NextRequest) {
         MaxKeys: 1,
       });
 
+      let audioSegment;
       const audioSegmentCommand = new ListObjectsV2Command({
         Bucket: bucket,
         Prefix: audioPrefix,
         MaxKeys: 1,
       });
 
-      const [videoSegment, audioSegment] = await Promise.all([
+      try {
+        audioSegment = await s3Client.send(audioSegmentCommand);
+      } catch (error) {
+        console.warn("No audio segment found for this video", error);
+      }
+
+      console.log("audioSegment", audioSegment);
+
+      const [videoSegment] = await Promise.all([
         s3Client.send(videoSegmentCommand),
-        s3Client.send(audioSegmentCommand),
       ]);
 
-      const [videoMetadata, audioMetadata] = await Promise.all([
+      let audioMetadata;
+      const [videoMetadata] = await Promise.all([
         s3Client.send(
           new HeadObjectCommand({
             Bucket: bucket,
             Key: videoSegment.Contents?.[0]?.Key ?? "",
           })
         ),
-        s3Client.send(
+      ]);
+
+      if (audioSegment?.KeyCount && audioSegment?.KeyCount > 0) {
+        audioMetadata = await s3Client.send(
           new HeadObjectCommand({
             Bucket: bucket,
             Key: audioSegment.Contents?.[0]?.Key ?? "",
           })
-        ),
-      ]);
+        );
+      }
 
       const generatedPlaylist = await generateMasterPlaylist(
         videoMetadata?.Metadata?.resolution ?? "",
+        videoMetadata?.Metadata?.bandwidth ?? "",
         process.env.NEXT_PUBLIC_URL +
           "/api/playlist?userId=" +
           userId +
           "&videoId=" +
           videoId +
           "&videoType=video",
-        process.env.NEXT_PUBLIC_URL +
-          "/api/playlist?userId=" +
-          userId +
-          "&videoId=" +
-          videoId +
-          "&videoType=audio",
+        audioMetadata
+          ? process.env.NEXT_PUBLIC_URL +
+              "/api/playlist?userId=" +
+              userId +
+              "&videoId=" +
+              videoId +
+              "&videoType=audio"
+          : null,
         video.xStreamInfo ?? ""
       );
 

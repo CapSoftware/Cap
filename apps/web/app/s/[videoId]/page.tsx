@@ -60,7 +60,7 @@ export default async function ShareVideoPage(props: Props) {
 
   const video = query[0];
 
-  if (video.jobId === null) {
+  if (video.jobId === null && video.skipProcessing === false) {
     const res = await fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/create?videoId=${videoId}&userId=${video.ownerId}`,
       {
@@ -73,7 +73,7 @@ export default async function ShareVideoPage(props: Props) {
     await res.json();
   }
 
-  if (video.jobStatus !== "COMPLETE") {
+  if (video.jobStatus !== "COMPLETE" && video.skipProcessing === false) {
     const status = await fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/status?videoId=${videoId}&userId=${video.ownerId}`,
       {

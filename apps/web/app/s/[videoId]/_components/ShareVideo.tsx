@@ -263,9 +263,6 @@ export const ShareVideo = ({
       {isLoading && (
         <div className="absolute top-0 left-0 flex flex-col items-center justify-center w-full h-full z-10">
           <LogoSpinner className="w-10 h-auto animate-spin" />
-          {data.jobStatus !== "COMPLETE" && (
-            <p className="text-white text-lg mt-5">Video is processing...</p>
-          )}
         </div>
       )}
       {isLoading === false && (
@@ -295,7 +292,11 @@ export const ShareVideo = ({
       >
         <VideoPlayer
           ref={videoRef}
-          videoSrc={`https://v.cap.so/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`}
+          videoSrc={
+            data.skipProcessing === true || data.jobStatus !== "COMPLETE"
+              ? `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`
+              : `https://v.cap.so/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`
+          }
         />
       </div>
       <div className="absolute bottom-0 z-20 w-full text-white bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-all">

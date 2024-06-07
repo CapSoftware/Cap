@@ -8,11 +8,7 @@ jobs:
   cap-desktop-release:
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [macos-latest]
-    runs-on: ${{ matrix.platform }}
+    runs-on: macos-latest
 
     steps:
       - name: Checkout repository
@@ -23,6 +19,8 @@ jobs:
 
       - name: Rust setup
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin, aarch64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -73,6 +71,7 @@ jobs:
           APPLE_API_KEY_PATH: api.p8
         with:
           projectPath: apps/desktop
+          args: --target universal-apple-darwin
           tagName: cap-v__VERSION__
           releaseName: "Cap v__VERSION__"
           releaseBody: "The latest version of Cap."
