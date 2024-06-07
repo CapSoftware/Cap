@@ -13,7 +13,9 @@ export const Camera = () => {
   const [isLoading, setIsLoading] = useState(true);
   const tauriWindowImport = import("@tauri-apps/api/window");
   const [cameraMirrored, setCameraMirrored] = useState(
-    localStorage.getItem("cameraMirrored") || "false"
+    typeof window !== "undefined"
+      ? localStorage.getItem("cameraMirrored") || "false"
+      : "false"
   );
 
   useEffect(() => {
@@ -55,7 +57,9 @@ export const Camera = () => {
       video.style.transform =
         newCameraMirrored === "true" ? "scaleX(-1)" : "scaleX(1)";
       setCameraMirrored(newCameraMirrored);
-      localStorage.setItem("cameraMirrored", newCameraMirrored);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("cameraMirrored", newCameraMirrored);
+      }
     }
   };
 
