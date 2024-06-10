@@ -37,6 +37,7 @@ import { fetchFile } from "@ffmpeg/util";
 import { getLatestVideoId, saveLatestVideoId } from "@cap/utils";
 import { isUserOnProPlan } from "@cap/utils";
 import { LogoBadge } from "@cap/ui";
+import { set } from "lodash";
 
 class AsyncTaskQueue {
   private queue: (() => Promise<void>)[];
@@ -240,6 +241,16 @@ export const Record = ({
       const stream = await navigator.mediaDevices.getDisplayMedia(
         displayMediaOptions
       );
+      if (stream) {
+        stream.getTracks().forEach((track: MediaStreamTrack) => {
+          track.onended = async () => {
+            if (isRecording === true) {
+              await stopRecording();
+            }
+          };
+        });
+      }
+
       const videoElement = document.createElement("video");
       videoElement.srcObject = stream;
 
@@ -387,7 +398,7 @@ export const Record = ({
 
     saveLatestVideoId(videoCreateData.id);
 
-    setStartingRecording(true);
+    setStartingRecording(false);
 
     const combinedStream = new MediaStream();
     const canvas = document.createElement("canvas");
@@ -599,12 +610,17 @@ export const Record = ({
         console.log("Segment duration:", segmentDuration);
         console.log("Start:", Math.max(videoDuration - segmentDuration, 0));
 
+        console.log(
+          "Final segment? ",
+          videoRecorder.state !== "recording" || stoppingRecording
+        );
+
         muxQueue.enqueue(async () => {
           try {
             await muxSegment({
               data: chunks,
               mimeType: videoRecorderOptions.mimeType,
-              final: videoRecorder.state !== "recording",
+              final: videoRecorder.state !== "recording" || stoppingRecording,
               start: Math.max(videoDuration - segmentDuration, 0),
               end: videoDuration,
               segmentTime: segmentDuration,
@@ -789,42 +805,52 @@ export const Record = ({
         const videoId = await getLatestVideoId();
 
         if (segmentIndex === 0) {
+          console.log("Generating screenshot...");
           const video = document.createElement("video");
           video.src = URL.createObjectURL(videoSegment);
           video.muted = true;
           video.autoplay = true;
+          video.playsInline = true;
+
+          video.addEventListener("loadeddata", async () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            const context = canvas.getContext("2d");
+            context?.drawImage(
+              video,
+              0,
+              0,
+              video.videoWidth,
+              video.videoHeight
+            );
+
+            canvas.toBlob(
+              async (screenshotBlob) => {
+                if (screenshotBlob) {
+                  const screenshotFile = await fetchFile(
+                    URL.createObjectURL(screenshotBlob)
+                  );
+
+                  const screenshotFilename = "screenshot/screen-capture.jpg";
+                  await uploadSegment({
+                    file: screenshotFile,
+                    filename: screenshotFilename,
+                    videoId,
+                  });
+                }
+              },
+              "image/jpeg",
+              0.5
+            );
+            video.remove();
+            canvas.remove();
+          });
+
           video.play().catch((error) => {
             console.error("Video play failed:", error);
           });
-
-          const canvas = document.createElement("canvas");
-
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-
-          const context = canvas.getContext("2d");
-          context?.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
-
-          canvas.toBlob(
-            async (screenshotBlob) => {
-              if (screenshotBlob) {
-                const screenshotFile = await fetchFile(
-                  URL.createObjectURL(screenshotBlob)
-                );
-
-                const screenshotFilename = "screenshot/screen-capture.jpg";
-                await uploadSegment({
-                  file: screenshotFile,
-                  filename: screenshotFilename,
-                  videoId,
-                });
-              }
-            },
-            "image/jpeg",
-            0.5
-          );
-          video.remove();
-          canvas.remove();
         }
 
         try {
@@ -849,13 +875,6 @@ export const Record = ({
         }
 
         console.log("herelast: ", await ffmpegRef.current.listDir("/"));
-
-        // tempInput: `temp_segment_${segmentIndexString}${
-        //   mimeType.includes("mp4") ? ".mp4" : ".webm"
-        // }`,
-        // videoInput: `input_segment_${segmentIndexString}.ts`,
-        // videoOutput: `video_segment_${segmentIndexString}.ts`,
-        // audioOutput: `audio_segment_${segmentIndexString}.aac`,
 
         try {
           await ffmpegRef.current.deleteFile(segmentPaths.tempInput);
@@ -947,7 +966,7 @@ export const Record = ({
     }
 
     while (readyToStopRecording.current === false) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 250));
       console.log("Waiting for readyToStopRecording");
     }
 
@@ -971,7 +990,6 @@ export const Record = ({
 
     setIsRecording(false);
     setStoppingRecording(false);
-
     totalSegments.current = 0;
     readyToStopRecording.current = false;
   };
@@ -1146,7 +1164,7 @@ export const Record = ({
   }, [screenStream, videoStream]);
 
   useEffect(() => {
-    if (stoppingRecording) {
+    if (stoppingRecording === true) {
       const messages = ["Processing video", "Almost done", "Finishing up"];
       let messageIndex = 0;
 
@@ -1157,7 +1175,7 @@ export const Record = ({
 
       nextMessage();
 
-      const intervalId = setInterval(nextMessage, 2500);
+      const intervalId = setInterval(nextMessage, 2000);
 
       return () => clearInterval(intervalId);
     } else {
@@ -1284,19 +1302,19 @@ export const Record = ({
             <Button
               className="min-w-[175px]"
               {...(isRecording && { variant: "destructive" })}
-              onClick={() => {
+              onClick={async () => {
                 if (isRecording) {
-                  stopRecording();
+                  await stopRecording();
                 } else {
-                  startRecording();
+                  await startRecording();
                 }
               }}
               spinner={startingRecording || stoppingRecording}
             >
-              {startingRecording
+              {startingRecording === true
                 ? "Starting..."
-                : isRecording
-                ? stoppingRecording
+                : isRecording === true
+                ? stoppingRecording === true
                   ? currentStoppingMessage
                   : `Stop - ${recordingTime}`
                 : "Start Recording"}
