@@ -33,6 +33,17 @@ use ffmpeg_sidecar::{
 
 use winit::monitor::{MonitorHandle, VideoMode};
 
+macro_rules! generate_handler {
+  ($($command:ident),*) => {{
+    #[cfg(debug_assertions)]
+    tauri_specta::ts::export(
+      specta::collect_types![$($command),*],
+      "../src/utils/commands.ts"
+    ).unwrap();
+
+    tauri::generate_handler![$($command),*]
+  }}
+}
 
 fn main() {
     let _ = fix_path_env::fix();
@@ -152,10 +163,14 @@ fn main() {
     }));
 
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
-    let monitor: MonitorHandle = event_loop.primary_monitor().expect("No primary monitor found");
+    let monitor: MonitorHandle = event_loop
+        .primary_monitor()
+        .expect("No primary monitor found");
     let video_modes: Vec<VideoMode> = monitor.video_modes().collect();
 
-    let max_mode = video_modes.iter().max_by_key(|mode| mode.size().width * mode.size().height);
+    let max_mode = video_modes
+        .iter()
+        .max_by_key(|mode| mode.size().width * mode.size().height);
 
     let (max_width, max_height) = if let Some(max_mode) = max_mode {
         println!("Maximum resolution: {:?}", max_mode.size());
@@ -167,10 +182,10 @@ fn main() {
 
     #[derive(serde::Deserialize, PartialEq)]
     enum DeviceKind {
-        #[serde(alias="videoinput")]
+        #[serde(alias = "videoinput")]
         Video,
-        #[serde(alias="audioinput")]
-        Audio
+        #[serde(alias = "audioinput")]
+        Audio,
     }
 
     #[derive(serde::Deserialize)]
@@ -178,7 +193,7 @@ fn main() {
     struct MediaDevice {
         id: String,
         kind: DeviceKind,
-        label: String
+        label: String,
     }
 
     fn create_tray_menu(submenus: Option<Vec<SystemTraySubmenu>>) -> SystemTrayMenu {
@@ -196,22 +211,10 @@ fn main() {
             .add_item(CustomMenuItem::new("quit".to_string(), "Quit").accelerator("CmdOrControl+Q"))
     }
 
-    let tray = SystemTray::new().with_menu(create_tray_menu(None)).with_menu_on_left_click(false).with_title("Cap");
-
-    #[cfg(debug_assertions)]
-    tauri_specta::ts::export(specta::collect_types![
-        start_dual_recording,
-        stop_all_recordings,
-        enumerate_audio_devices,
-        start_server,
-        open_screen_capture_preferences,
-        open_mic_preferences,
-        open_camera_preferences,
-        has_screen_capture_access,
-        reset_screen_permissions,
-        reset_microphone_permissions,
-        reset_camera_permissions,
-    ], "../src/utils/commands.ts").unwrap();
+    let tray = SystemTray::new()
+        .with_menu(create_tray_menu(None))
+        .with_menu_on_left_click(false)
+        .with_title("Cap");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
@@ -322,7 +325,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(generate_handler![
             start_dual_recording,
             stop_all_recordings,
             enumerate_audio_devices,
@@ -333,7 +336,7 @@ fn main() {
             has_screen_capture_access,
             reset_screen_permissions,
             reset_microphone_permissions,
-            reset_camera_permissions,
+            reset_camera_permissions
         ])
         .plugin(tauri_plugin_context_menu::init())
         .system_tray(tray)
