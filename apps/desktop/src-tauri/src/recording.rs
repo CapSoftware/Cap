@@ -30,7 +30,7 @@ unsafe impl Sync for RecordingState {}
 unsafe impl Send for MediaRecorder {}
 unsafe impl Sync for MediaRecorder {}
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, specta::Type)]
 pub struct RecordingOptions {
   pub user_id: String,
   pub video_id: String,
@@ -42,20 +42,21 @@ pub struct RecordingOptions {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn start_dual_recording(
   state: State<'_, Arc<Mutex<RecordingState>>>,
   options: RecordingOptions,
 ) -> Result<(), String> {
   println!("Starting screen recording...");
   let mut state_guard = state.lock().await;
-  
+
   let shutdown_flag = Arc::new(AtomicBool::new(false));
 
   let data_dir = state_guard.data_dir.as_ref()
       .ok_or("Data directory is not set in the recording state".to_string())?.clone();
 
   println!("data_dir: {:?}", data_dir);
-  
+
   let audio_chunks_dir = data_dir.join("chunks/audio");
   let video_chunks_dir = data_dir.join("chunks/video");
   let screenshot_dir = data_dir.join("screenshots");
@@ -63,13 +64,13 @@ pub async fn start_dual_recording(
   clean_and_create_dir(&audio_chunks_dir)?;
   clean_and_create_dir(&video_chunks_dir)?;
   clean_and_create_dir(&screenshot_dir)?;
-  
+
   let audio_name = if options.audio_name.is_empty() {
     None
   } else {
     Some(options.audio_name.clone())
   };
-  
+
   let media_recording_preparation = prepare_media_recording(&options, &audio_chunks_dir, &video_chunks_dir, &screenshot_dir, audio_name, state_guard.max_screen_width, state_guard.max_screen_height);
   let media_recording_result = media_recording_preparation.await.map_err(|e| e.to_string())?;
 
@@ -108,11 +109,12 @@ pub async fn start_dual_recording(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -> Result<(), String> {
     let mut guard = state.lock().await;
-    
+
     println!("Stopping media recording...");
-    
+
     guard.shutdown_flag.store(true, Ordering::SeqCst);
 
     if let Some(mut media_process) = guard.media_process.take() {
@@ -126,13 +128,13 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
     };
 
     if !is_local_mode {
-        while !guard.video_uploading_finished.load(Ordering::SeqCst) 
+        while !guard.video_uploading_finished.load(Ordering::SeqCst)
             || !guard.audio_uploading_finished.load(Ordering::SeqCst) {
             println!("Waiting for uploads to finish...");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
-    
+
     println!("All recordings and uploads stopped.");
 
     Ok(())
@@ -153,7 +155,7 @@ fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
               File::create(&segment_list_path).map_err(|e| e.to_string())?;
               Ok(())
           },
-          Err(e) => Err(e.to_string()), 
+          Err(e) => Err(e.to_string()),
       }
     } else {
       Ok(())
@@ -203,7 +205,7 @@ async fn start_upload_loop(
         if !upload_tasks.is_empty() {
             let _ = join_all(upload_tasks).await;
         }
-        
+
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     uploading_finished.store(true, Ordering::SeqCst);

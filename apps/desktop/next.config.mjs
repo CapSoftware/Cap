@@ -1,10 +1,10 @@
 import { withSentryConfig } from "@sentry/nextjs";
 /** @type {import('next').NextConfig} */
 
-import("dotenv").then(({ config }) => config({ path: "../../.env" }));
-
 import fs from "fs";
 import path from "path";
+
+fs.copyFileSync(path.resolve("../../.env"), path.resolve("./.env"));
 
 const packageJson = JSON.parse(
   fs.readFileSync(path.resolve("./package.json"), "utf8")
