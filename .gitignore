@@ -27,3 +27,4 @@ dist-ssr
 *.sw?
 .turbo
 pnpm-lock.yaml
+target
