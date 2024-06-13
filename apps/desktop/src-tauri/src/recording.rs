@@ -124,6 +124,7 @@ pub async fn start_dual_recording(
 }
 
 #[tauri::command]
+#[specta::specta]
 pub async fn stop_all_recordings(
     state: State<'_, Arc<Mutex<RecordingState>>>,
 ) -> Result<(), String> {
