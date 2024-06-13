@@ -515,9 +515,15 @@ impl MediaRecorder {
         ]);
 
         match time_offset {
-            Some((TimeOffsetTarget::Video, args)) => ffmpeg_command.splice(0..0, args.clone()),
-            Some((TimeOffsetTarget::Audio, args)) => audio_args.splice(0..0, args.clone()),
-            None => {}
+            Some((TimeOffsetTarget::Video, args)) => {
+                ffmpeg_command.splice(0..0, args.clone()).collect()
+            }
+            Some((TimeOffsetTarget::Audio, args)) => {
+                audio_args.splice(0..0, args.clone()).collect()
+            }
+            None => {
+                vec![]
+            }
         };
 
         if needs_audio {
