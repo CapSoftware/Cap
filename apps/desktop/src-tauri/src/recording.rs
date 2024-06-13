@@ -212,13 +212,9 @@ async fn start_upload_loop(
                 upload_tasks.push(tokio::spawn(async move {
                     let filepath_str = segment_path_clone.to_str().unwrap_or_default().to_owned();
                     println!("Uploading video: {}", filepath_str);
-                    upload_file(
-                        Some(options_clone),
-                        filepath_str,
-                        upload::FileType::VideoWithAudio,
-                    )
-                    .await
-                    .map(|_| ())
+                    upload_file(Some(options_clone), filepath_str, upload::FileType::Segment)
+                        .await
+                        .map(|_| ())
                 }));
             }
             watched_segments.insert(segment_filename.clone());
