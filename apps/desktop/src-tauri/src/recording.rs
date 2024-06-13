@@ -123,14 +123,13 @@ pub async fn start_dual_recording(
 }
 
 #[tauri::command]
-#[specta::specta]
 pub async fn stop_all_recordings(
     state: State<'_, Arc<Mutex<RecordingState>>>,
 ) -> Result<(), String> {
     let mut guard = state.lock().await;
-    
+
     println!("Stopping media recording...");
-    
+
     guard.shutdown_flag.store(true, Ordering::SeqCst);
 
     if let Some(mut media_process) = guard.media_process.take() {
@@ -152,7 +151,7 @@ pub async fn stop_all_recordings(
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
-    
+
     println!("All recordings and uploads stopped.");
 
     Ok(())
@@ -227,7 +226,7 @@ async fn start_upload_loop(
         if !upload_tasks.is_empty() {
             let _ = join_all(upload_tasks).await;
         }
-        
+
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     uploading_finished.store(true, Ordering::SeqCst);
