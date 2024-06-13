@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
   }
 
   const bucket = process.env.CAP_AWS_BUCKET || "";
-  const videoPrefix = `${userId}/${videoId}/video-with-audio/`;
+  const segmentsPrefix = `${userId}/${videoId}/segment/`;
 
   try {
     const s3Client = new S3Client({
@@ -108,18 +108,18 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    const videoSegmentCommand = new ListObjectsV2Command({
+    const segmentsCommand = new ListObjectsV2Command({
       Bucket: bucket,
-      Prefix: videoPrefix,
+      Prefix: segmentsPrefix,
     });
 
-    const videoSegments = await s3Client.send(videoSegmentCommand);
+    const segments = await s3Client.send(segmentsCommand);
 
-    const videoSegmentKeys = (videoSegments.Contents || []).map(
+    const segmentKeys = (segments.Contents || []).map(
       (object) => `s3://${bucket}/${object.Key}`
     );
 
-    if (videoSegmentKeys.length > 149) {
+    if (segmentKeys.length > 149) {
       await db
         .update(videos)
         .set({ skipProcessing: true })
@@ -154,7 +154,7 @@ export async function GET(request: NextRequest) {
     const createJobCommand = new CreateJobCommand({
       Role: process.env.CAP_AWS_MEDIACONVERT_ROLE_ARN || "",
       Settings: {
-        Inputs: videoSegmentKeys.map((videoSegmentKey) => {
+        Inputs: segmentKeys.map((videoSegmentKey) => {
           return {
             FileInput: videoSegmentKey,
             AudioSelectors: {

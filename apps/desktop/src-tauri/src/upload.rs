@@ -9,14 +9,14 @@ use crate::recording::RecordingOptions;
 use crate::utils::ffmpeg_path_as_str;
 
 pub enum FileType {
-    VideoWithAudio,
+    Segment,
     Screenshot,
 }
 
 impl std::fmt::Display for FileType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            FileType::VideoWithAudio => write!(f, "video-with-audio"),
+            FileType::Segment => write!(f, "segment"),
             FileType::Screenshot => write!(f, "screenshot"),
         }
     }
@@ -52,7 +52,7 @@ pub async fn upload_file(
         let server_url = format!("{}/api/upload/signed", server_url_base);
 
         let body = match file_type {
-            FileType::VideoWithAudio => {
+            FileType::Segment => {
                 let (codec_name, width, height, frame_rate, bit_rate) = log_video_info(&file_path)
                     .map_err(|e| format!("Failed to log video info: {}", e))?;
 
