@@ -480,36 +480,51 @@ impl MediaRecorder {
         std::fs::remove_file(&audio_pipe_path).ok();
         create_named_pipe(&audio_pipe_path).map_err(|e| e.to_string())?;
 
+        let time_offset = if needs_audio {
+            println!("Adjusting FFmpeg commands based on start times...");
+            create_time_offset_args(&audio_start_time, &video_start_time).await
+        } else {
+            None
+        };
+
         let size = format!("{}x{}", adjusted_width, adjusted_height);
-        let mut ffmpeg_command = vec![
+        let mut ffmpeg_command = flatten_str_args([
             ["-f", "rawvideo"],
             ["-pix_fmt", "bgra"],
             ["-s", &size],
             ["-r", "30"],
             ["-thread_queue_size", "4096"],
             ["-i", &video_pipe_path],
-        ];
+        ]);
 
-        if needs_audio {
-            ffmpeg_command.extend([
-                // in
-                ["-f", sample_format],
-                ["-ar", &sample_rate_str],
-                ["-ac", &channels_str],
-                ["-thread_queue_size", "4096"],
-                ["-i", &audio_pipe_path],
-                // out
-                [
-                    "-af",
-                    "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
-                ],
-                ["-c:a", "aac"],
-                ["-b:a", "128k"],
-                ["-async", "1"],
-            ]);
+        let mut audio_args = flatten_str_args([
+            // in
+            ["-f", sample_format],
+            ["-ar", &sample_rate_str],
+            ["-ac", &channels_str],
+            ["-thread_queue_size", "4096"],
+            ["-i", &audio_pipe_path],
+            // out
+            [
+                "-af",
+                "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
+            ],
+            ["-c:a", "aac"],
+            ["-b:a", "128k"],
+            ["-async", "1"],
+        ]);
+
+        match time_offset {
+            Some((TimeOffsetTarget::Video, args)) => ffmpeg_command.splice(0..0, args.clone()),
+            Some((TimeOffsetTarget::Audio, args)) => audio_args.splice(0..0, args.clone()),
+            None => {}
         };
 
-        ffmpeg_command.extend([
+        if needs_audio {
+            ffmpeg_command.extend(audio_args);
+        }
+
+        ffmpeg_command.extend(flatten_str_args([
             ["-vf", "fps=30,scale=in_range=full:out_range=limited"],
             ["-c:v", "libx264"],
             ["-preset", "ultrafast"],
@@ -524,24 +539,9 @@ impl MediaRecorder {
             ["-segment_format", "ts"],
             ["-movflags", "frag_keyframe+empty_moov"],
             ["-reset_timestamps", "1"],
-        ]);
+        ]));
 
-        let mut ffmpeg_command = ffmpeg_command
-            .into_iter()
-            .flatten()
-            .map(|s| s.to_string())
-            .chain([output_chunk_pattern])
-            .collect();
-
-        if needs_audio {
-            println!("Adjusting FFmpeg commands based on start times...");
-            adjust_ffmpeg_commands_based_on_start_times(
-                Arc::clone(&audio_start_time),
-                Arc::clone(&video_start_time),
-                &mut ffmpeg_command,
-            )
-            .await;
-        }
+        ffmpeg_command.push(output_chunk_pattern);
 
         println!("Starting FFmpeg process...");
 
@@ -551,8 +551,8 @@ impl MediaRecorder {
             .map_err(|e| e.to_string())?;
         println!("Ffmpeg process started");
 
-        if let Some(ffmpeg_stdin) = &self.ffmpeg_stdin {
-            let mut stdin_lock = ffmpeg_stdin.lock().await;
+        if let Some(ffmpeg_stdin_mutex) = &self.ffmpeg_stdin {
+            let mut stdin_lock = ffmpeg_stdin_mutex.lock().await;
             *stdin_lock = Some(ffmpeg_stdin);
             drop(stdin_lock);
             println!("Ffmpeg stdin set");
@@ -751,8 +751,8 @@ async fn start_recording_process(
 }
 
 async fn wait_for_start_times(
-    audio_start_time: Arc<Mutex<Option<Instant>>>,
-    video_start_time: Arc<Mutex<Option<Instant>>>,
+    audio_start_time: &Mutex<Option<Instant>>,
+    video_start_time: &Mutex<Option<Instant>>,
 ) -> (Instant, Instant) {
     loop {
         let audio_start_locked = audio_start_time.lock().await;
@@ -769,11 +769,15 @@ async fn wait_for_start_times(
     }
 }
 
-async fn adjust_ffmpeg_commands_based_on_start_times(
-    audio_start_time: Arc<Mutex<Option<Instant>>>,
-    video_start_time: Arc<Mutex<Option<Instant>>>,
-    ffmpeg_video_command: &mut Vec<String>,
-) {
+pub enum TimeOffsetTarget {
+    Audio,
+    Video,
+}
+
+async fn create_time_offset_args(
+    audio_start_time: &Mutex<Option<Instant>>,
+    video_start_time: &Mutex<Option<Instant>>,
+) -> Option<(TimeOffsetTarget, Vec<String>)> {
     let (audio_start, video_start) = wait_for_start_times(audio_start_time, video_start_time).await;
     let duration_difference = if audio_start > video_start {
         audio_start.duration_since(video_start)
@@ -792,17 +796,25 @@ async fn adjust_ffmpeg_commands_based_on_start_times(
     // Depending on which started first, adjust the relevant FFmpeg command
     if audio_start > video_start {
         // Offset the video start time
-        ffmpeg_video_command.splice(
-            0..0,
-            vec!["-itsoffset".to_string(), format!("{:.3}", offset_seconds)],
-        );
         println!("Applying -itsoffset {:.3} to video", offset_seconds);
+
+        Some((
+            TimeOffsetTarget::Video,
+            vec!["-itsoffset".to_string(), format!("{:.3}", offset_seconds)],
+        ))
     } else if video_start > audio_start {
         // Offset the audio start time
-        // ffmpeg_audio_command.splice(
-        //     0..0,
-        //     vec!["-itsoffset".to_string(), format!("{:.3}", offset_seconds)],
-        // );
         println!("Applying -itsoffset {:.3} to audio", offset_seconds);
+
+        Some((
+            TimeOffsetTarget::Audio,
+            vec!["-itsoffset".to_string(), format!("{:.3}", offset_seconds)],
+        ))
+    } else {
+        None
     }
+}
+
+fn flatten_str_args<'a>(args: impl IntoIterator<Item = [&'a str; 2]>) -> Vec<String> {
+    args.into_iter().flatten().map(|s| s.to_string()).collect()
 }
