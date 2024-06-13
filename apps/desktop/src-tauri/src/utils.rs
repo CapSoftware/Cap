@@ -110,8 +110,3 @@ pub fn create_named_pipe(path: &str) -> Result<(), nix::Error> {
     unistd::mkfifo(path, stat::Mode::S_IRWXU)?;
     Ok(())
 }
-
-pub fn remove_named_pipe(path: &str) -> Result<(), std::io::Error> {
-    std::fs::remove_file(path)?;
-    Ok(())
-}

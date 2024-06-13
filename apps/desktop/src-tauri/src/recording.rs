@@ -1,28 +1,30 @@
-use std::path::{Path, PathBuf};
-use std::collections::HashSet;
-use std::io::{self, BufReader, BufRead, ErrorKind};
-use std::fs::File;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use tokio::sync:: {Mutex};
-use tokio::task::JoinHandle;
-use tokio::time::{Duration};
-use serde::{Serialize, Deserialize};
-use tauri::State;
 use futures::future::join_all;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, ErrorKind};
+use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use tauri::State;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio::time::Duration;
 
-use crate::upload::{upload_file};
+use crate::upload::{self, upload_file};
 
 use crate::media::MediaRecorder;
 
 pub struct RecordingState {
-  pub media_process: Option<MediaRecorder>,
-  pub recording_options: Option<RecordingOptions>,
-  pub shutdown_flag: Arc<AtomicBool>,
-  pub video_uploading_finished: Arc<AtomicBool>,
-  pub audio_uploading_finished: Arc<AtomicBool>,
-  pub data_dir: Option<PathBuf>,
-  pub max_screen_width: usize,
-  pub max_screen_height: usize,
+    pub media_process: Option<MediaRecorder>,
+    pub recording_options: Option<RecordingOptions>,
+    pub shutdown_flag: Arc<AtomicBool>,
+    pub uploading_finished: Arc<AtomicBool>,
+    pub data_dir: Option<PathBuf>,
+    pub max_screen_width: usize,
+    pub max_screen_height: usize,
 }
 
 unsafe impl Send for RecordingState {}
@@ -32,85 +34,100 @@ unsafe impl Sync for MediaRecorder {}
 
 #[derive(Debug, Serialize, Deserialize, Clone, specta::Type)]
 pub struct RecordingOptions {
-  pub user_id: String,
-  pub video_id: String,
-  pub screen_index: String,
-  pub video_index: String,
-  pub audio_name: String,
-  pub aws_region: String,
-  pub aws_bucket: String,
+    pub user_id: String,
+    pub video_id: String,
+    pub screen_index: String,
+    pub video_index: String,
+    pub audio_name: String,
+    pub aws_region: String,
+    pub aws_bucket: String,
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn start_dual_recording(
-  state: State<'_, Arc<Mutex<RecordingState>>>,
-  options: RecordingOptions,
+    state: State<'_, Arc<Mutex<RecordingState>>>,
+    options: RecordingOptions,
 ) -> Result<(), String> {
-  println!("Starting screen recording...");
-  let mut state_guard = state.lock().await;
+    println!("Starting screen recording...");
+    let mut state_guard = state.lock().await;
 
-  let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
 
-  let data_dir = state_guard.data_dir.as_ref()
-      .ok_or("Data directory is not set in the recording state".to_string())?.clone();
+    let data_dir = state_guard
+        .data_dir
+        .as_ref()
+        .ok_or("Data directory is not set in the recording state".to_string())?
+        .clone();
 
-  println!("data_dir: {:?}", data_dir);
+    println!("data_dir: {:?}", data_dir);
 
-  let audio_chunks_dir = data_dir.join("chunks/audio");
-  let video_chunks_dir = data_dir.join("chunks/video");
-  let screenshot_dir = data_dir.join("screenshots");
+    let screenshot_dir = data_dir.join("screenshots");
+    let chunks_dir = data_dir.join("chunks");
 
-  clean_and_create_dir(&audio_chunks_dir)?;
-  clean_and_create_dir(&video_chunks_dir)?;
-  clean_and_create_dir(&screenshot_dir)?;
+    clean_and_create_dir(&chunks_dir)?;
+    clean_and_create_dir(&screenshot_dir)?;
 
-  let audio_name = if options.audio_name.is_empty() {
-    None
-  } else {
-    Some(options.audio_name.clone())
-  };
+    let audio_name = if options.audio_name.is_empty() {
+        None
+    } else {
+        Some(options.audio_name.clone())
+    };
 
-  let media_recording_preparation = prepare_media_recording(&options, &audio_chunks_dir, &video_chunks_dir, &screenshot_dir, audio_name, state_guard.max_screen_width, state_guard.max_screen_height);
-  let media_recording_result = media_recording_preparation.await.map_err(|e| e.to_string())?;
+    let media_recording_preparation = prepare_media_recording(
+        &options,
+        &chunks_dir,
+        &screenshot_dir,
+        audio_name,
+        state_guard.max_screen_width,
+        state_guard.max_screen_height,
+    );
+    let media_recording_result = media_recording_preparation
+        .await
+        .map_err(|e| e.to_string())?;
 
-  state_guard.media_process = Some(media_recording_result);
-  state_guard.recording_options = Some(options.clone());
-  state_guard.shutdown_flag = shutdown_flag.clone();
-  state_guard.video_uploading_finished = Arc::new(AtomicBool::new(false));
-  state_guard.audio_uploading_finished = Arc::new(AtomicBool::new(false));
+    state_guard.media_process = Some(media_recording_result);
+    state_guard.recording_options = Some(options.clone());
+    state_guard.shutdown_flag = shutdown_flag.clone();
+    state_guard.uploading_finished = Arc::new(AtomicBool::new(false));
 
-  let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
-      "true" => true,
-      _ => false,
-  };
+    let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
+        "true" => true,
+        _ => false,
+    };
 
-  if !is_local_mode {
-      let screen_upload = start_upload_loop(video_chunks_dir.clone(), options.clone(), "video".to_string(), shutdown_flag.clone(), state_guard.video_uploading_finished.clone());
-      let audio_upload = start_upload_loop(audio_chunks_dir, options.clone(), "audio".to_string(), shutdown_flag.clone(), state_guard.audio_uploading_finished.clone());
+    if !is_local_mode {
+        let upload = start_upload_loop(
+            chunks_dir.clone(),
+            options.clone(),
+            shutdown_flag.clone(),
+            state_guard.uploading_finished.clone(),
+        );
 
-      drop(state_guard);
+        drop(state_guard);
 
-      println!("Starting upload loops...");
+        println!("Starting upload loops...");
 
-      match tokio::try_join!(screen_upload, audio_upload) {
-          Ok(_) => {
-              println!("Both upload loops completed successfully.");
-          },
-          Err(e) => {
-              eprintln!("An error occurred: {}", e);
-          },
-      }
-  } else {
-      println!("Skipping upload loops due to NEXT_PUBLIC_LOCAL_MODE being set to 'true'.");
-  }
+        match upload.await {
+            Ok(_) => {
+                println!("Both upload loops completed successfully.");
+            }
+            Err(e) => {
+                eprintln!("An error occurred: {}", e);
+            }
+        }
+    } else {
+        println!("Skipping upload loops due to NEXT_PUBLIC_LOCAL_MODE being set to 'true'.");
+    }
 
-  Ok(())
+    Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -> Result<(), String> {
+pub async fn stop_all_recordings(
+    state: State<'_, Arc<Mutex<RecordingState>>>,
+) -> Result<(), String> {
     let mut guard = state.lock().await;
 
     println!("Stopping media recording...");
@@ -119,7 +136,10 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
 
     if let Some(mut media_process) = guard.media_process.take() {
         println!("Stopping media recording...");
-        media_process.stop_media_recording().await.expect("Failed to stop media recording");
+        media_process
+            .stop_media_recording()
+            .await
+            .expect("Failed to stop media recording");
     }
 
     let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
@@ -128,8 +148,7 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
     };
 
     if !is_local_mode {
-        while !guard.video_uploading_finished.load(Ordering::SeqCst)
-            || !guard.audio_uploading_finished.load(Ordering::SeqCst) {
+        while !guard.uploading_finished.load(Ordering::SeqCst) {
             println!("Waiting for uploads to finish...");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -148,24 +167,23 @@ fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
 
     if !dir.to_string_lossy().contains("screenshots") {
-      let segment_list_path = dir.join("segment_list.txt");
-      match File::open(&segment_list_path) {
-          Ok(_) => Ok(()),
-          Err(ref e) if e.kind() == ErrorKind::NotFound => {
-              File::create(&segment_list_path).map_err(|e| e.to_string())?;
-              Ok(())
-          },
-          Err(e) => Err(e.to_string()),
-      }
+        let segment_list_path = dir.join("segment_list.txt");
+        match File::open(&segment_list_path) {
+            Ok(_) => Ok(()),
+            Err(ref e) if e.kind() == ErrorKind::NotFound => {
+                File::create(&segment_list_path).map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            Err(e) => Err(e.to_string()),
+        }
     } else {
-      Ok(())
+        Ok(())
     }
 }
 
 async fn start_upload_loop(
     chunks_dir: PathBuf,
     options: RecordingOptions,
-    video_type: String,
     shutdown_flag: Arc<AtomicBool>,
     uploading_finished: Arc<AtomicBool>,
 ) -> Result<(), String> {
@@ -191,12 +209,17 @@ async fn start_upload_loop(
             let segment_path = chunks_dir.join(segment_filename);
             if segment_path.is_file() {
                 let options_clone = options.clone();
-                let video_type_clone = video_type.clone();
                 let segment_path_clone = segment_path.clone();
                 upload_tasks.push(tokio::spawn(async move {
                     let filepath_str = segment_path_clone.to_str().unwrap_or_default().to_owned();
-                    println!("Uploading video for {}: {}", video_type_clone, filepath_str);
-                    upload_file(Some(options_clone), filepath_str, video_type_clone).await.map(|_| ())
+                    println!("Uploading video: {}", filepath_str);
+                    upload_file(
+                        Some(options_clone),
+                        filepath_str,
+                        upload::FileType::VideoWithAudio,
+                    )
+                    .await
+                    .map(|_| ())
                 }));
             }
             watched_segments.insert(segment_filename.clone());
@@ -228,18 +251,25 @@ fn load_segment_list(segment_list_path: &Path) -> io::Result<HashSet<String>> {
 }
 
 async fn prepare_media_recording(
-  options: &RecordingOptions,
-  audio_chunks_dir: &Path,
-  screenshot_dir: &Path,
-  video_chunks_dir: &Path,
-  audio_name: Option<String>,
-  max_screen_width: usize,
-  max_screen_height: usize,
+    options: &RecordingOptions,
+    screenshot_dir: &Path,
+    video_chunks_dir: &Path,
+    audio_name: Option<String>,
+    max_screen_width: usize,
+    max_screen_height: usize,
 ) -> Result<MediaRecorder, String> {
-  let mut media_recorder = MediaRecorder::new();
-  let audio_file_path = audio_chunks_dir.to_str().unwrap();
-  let video_file_path = video_chunks_dir.to_str().unwrap();
-  let screenshot_dir_path = screenshot_dir.to_str().unwrap();
-  media_recorder.start_media_recording(options.clone(), audio_file_path, screenshot_dir_path, video_file_path, audio_name.as_ref().map(String::as_str), max_screen_width, max_screen_height).await?;
-  Ok(media_recorder)
+    let mut media_recorder = MediaRecorder::new();
+    let video_file_path = video_chunks_dir.to_str().unwrap();
+    let screenshot_dir_path = screenshot_dir.to_str().unwrap();
+    media_recorder
+        .start_media_recording(
+            options.clone(),
+            screenshot_dir_path,
+            video_file_path,
+            audio_name.as_ref().map(String::as_str),
+            max_screen_width,
+            max_screen_height,
+        )
+        .await?;
+    Ok(media_recorder)
 }
