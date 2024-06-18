@@ -13,6 +13,8 @@ import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 
+export const maxDuration = 120;
+
 export async function OPTIONS(request: NextRequest) {
   const origin = request.headers.get("origin") as string;
 
