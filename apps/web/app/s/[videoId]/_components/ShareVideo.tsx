@@ -13,6 +13,7 @@ import { LogoSpinner } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
 import { Tooltip } from "react-tooltip";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
+import { sub } from "date-fns";
 
 declare global {
   interface Window {
@@ -46,6 +47,7 @@ export const ShareVideo = ({
   const [videoMetadataLoaded, setVideoMetadataLoaded] = useState(false);
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
+  const [subtitlesVisible, setSubtitlesVisible] = useState(true);
   const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -318,7 +320,7 @@ export const ShareVideo = ({
         className="relative block w-full h-full rounded-lg bg-black"
         style={{ paddingBottom: "min(806px, 56.25%)" }}
       >
-        {currentSubtitle && currentSubtitle.text && (
+        {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
           <div className="absolute bottom-0 w-full text-center transform transition p-1.5 lg:p-2.5 xl:p-3.5 -translate-y-16 z-10">
             <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl leading-7 md:text-lg md:leading-9 lg:text-2xl lg:leading-11 2xl:text-3xl 2xl:leading-13 xs:text-base box-decoration-break-clone xs:leading-8 xl:text-2.5xl">
               {currentSubtitle.text}
@@ -417,6 +419,53 @@ export const ShareVideo = ({
           </div>
           <div className="flex justify-end space-x-2">
             <div className="flex items-center justify-end space-x-2">
+              {data.transcriptionStatus === "COMPLETE" && (
+                <span className="inline-flex">
+                  <button
+                    aria-label="Disable subtitles"
+                    className=" inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg"
+                    tabIndex={0}
+                    type="button"
+                    onClick={() => setSubtitlesVisible(!subtitlesVisible)}
+                  >
+                    {subtitlesVisible ? (
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        className="w-auto h-6"
+                        viewBox="0 0 24 24"
+                      >
+                        <rect
+                          width="18"
+                          height="14"
+                          x="3"
+                          y="5"
+                          rx="2"
+                          ry="2"
+                        ></rect>
+                        <path d="M7 15h4m4 0h2M7 11h2m4 0h4"></path>
+                      </svg>
+                    ) : (
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        className="w-auto h-6"
+                        viewBox="0 0 24 24"
+                      >
+                        <path d="M10.5 5H19a2 2 0 012 2v8.5M17 11h-.5M19 19H5a2 2 0 01-2-2V7a2 2 0 012-2M2 2l20 20M7 11h4M7 15h2.5"></path>
+                      </svg>
+                    )}
+                  </button>
+                </span>
+              )}
               <span className="inline-flex">
                 <button
                   aria-label="Mute video"
