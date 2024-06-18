@@ -250,9 +250,9 @@ export const ShareVideo = ({
   };
 
   useEffect(() => {
-    if (data.transcriptionStatus !== "complete") return;
+    if (data.transcriptionStatus !== "COMPLETE") return;
 
-    fetch(`https://v.cap.so/${data.ownerId}/${data.id}/subtitles.vtt`)
+    fetch(`https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`)
       .then((response) => response.text())
       .then((text) => {
         const parsedSubtitles = fromVtt(text);

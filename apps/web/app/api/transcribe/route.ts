@@ -143,25 +143,44 @@ export async function GET(request: NextRequest) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          videoId,
           segments: audioFiles,
           uploadUrl,
         }),
       }
     );
 
-    console.log("Tasks server response: ", await tasksServerResponse.json());
-
     if (tasksServerResponse.status !== 200) {
       throw new Error("Failed to merge audio segments");
     }
 
-    // // Transcribe the single file
-    // const transcription = await transcribeAudio(outputFilePath);
+    const uploadedFileUrl = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: `${userId}/${videoId}/merged/audio.mp3`,
+      })
+    );
 
-    // await db
-    //   .update(videos)
-    //   .set({ transcriptionStatus: "COMPLETE" })
-    //   .where(eq(videos.id, videoId));
+    const transcription = await transcribeAudio(uploadedFileUrl);
+
+    if (transcription === "") {
+      throw new Error("Failed to transcribe audio");
+    }
+
+    const uploadCommand = new PutObjectCommand({
+      Bucket: bucket,
+      Key: `${userId}/${videoId}/transcription.vtt`,
+      Body: transcription,
+      ContentType: "text/vtt",
+    });
+
+    await s3Client.send(uploadCommand);
+
+    await db
+      .update(videos)
+      .set({ transcriptionStatus: "COMPLETE" })
+      .where(eq(videos.id, videoId));
 
     return new Response(
       JSON.stringify({
@@ -189,6 +208,20 @@ export async function GET(request: NextRequest) {
   }
 }
 
+function formatToWebVTT(result: any): string {
+  let output = "WEBVTT\n\n";
+
+  result.results.utterances.forEach((utterance: any, index: number) => {
+    const start = formatTimestamp(utterance.start);
+    const end = formatTimestamp(utterance.end);
+    const text = utterance.transcript;
+
+    output += `${index + 1}\n${start} --> ${end}\n${text}\n\n`;
+  });
+
+  return output;
+}
+
 function formatTimestamp(seconds: number): string {
   const date = new Date(seconds * 1000);
   const hours = date.getUTCHours().toString().padStart(2, "0");
@@ -197,20 +230,6 @@ function formatTimestamp(seconds: number): string {
   const millis = (date.getUTCMilliseconds() / 1000).toFixed(3).slice(2, 5);
 
   return `${hours}:${minutes}:${secs}.${millis}`;
-}
-
-async function transcribeAudioSegment(
-  chunk: any,
-  startTime: number
-): Promise<any> {
-  const transcription = await transcribeAudio(chunk.url);
-  const duration = Number(chunk.duration);
-
-  return {
-    start: startTime,
-    text: transcription,
-    end: startTime + duration,
-  };
 }
 
 async function transcribeAudio(audioUrl: string): Promise<string> {
@@ -224,10 +243,13 @@ async function transcribeAudio(audioUrl: string): Promise<string> {
       model: "nova-2",
       smart_format: true,
       detect_language: true,
+      utterances: true,
     }
   );
 
   if (error) return "";
 
-  return result.results.channels[0].alternatives[0].transcript;
+  const captions = formatToWebVTT(result);
+
+  return captions;
 }
