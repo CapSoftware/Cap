@@ -13,9 +13,6 @@ COPY . .
 # Install all the dependencies
 RUN npm install
 
-# Expose the port the app runs in
-EXPOSE 3002
-
 # Build the app
 RUN npm run build
 
