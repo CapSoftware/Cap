@@ -113,64 +113,55 @@ export async function GET(request: NextRequest) {
 
     const objects = await s3Client.send(audioSegmentCommand);
 
-    const chunksUrls = await Promise.all(
+    const audioFiles = await Promise.all(
       (objects.Contents || []).map(async (object) => {
-        const url = await getSignedUrl(
+        const presignedUrl = await getSignedUrl(
           s3Client,
           new GetObjectCommand({
-            Bucket: bucket,
-            Key: object.Key,
-          }),
-          { expiresIn: 3600 }
-        );
-        const metadata = await s3Client.send(
-          new HeadObjectCommand({
             Bucket: bucket,
             Key: object.Key,
           })
         );
 
-        return {
-          url: url,
-          duration: metadata?.Metadata?.duration ?? "",
-          key: object.Key,
-        };
+        return presignedUrl;
       })
     );
 
-    let elapsedTime = 0;
-    const transcriptions = [];
-    for (const chunk of chunksUrls) {
-      const transcription = await transcribeAudioSegment(chunk, elapsedTime);
-      elapsedTime += Number(chunk.duration);
-      transcriptions.push(transcription);
-    }
-
-    const vttContent =
-      "WEBVTT\n\n" +
-      transcriptions
-        .map((transcription, index) => {
-          const end = transcription.end;
-          return `${index + 1}\n${formatTimestamp(
-            Number(transcription.start)
-          )} --> ${formatTimestamp(Number(end))}\n${transcription.text}\n\n`;
-        })
-        .join("");
-
-    const vttKey = `${userId}/${videoId}/subtitles.vtt`;
-    await s3Client.send(
+    const uploadUrl = await getSignedUrl(
+      s3Client,
       new PutObjectCommand({
         Bucket: bucket,
-        Key: vttKey,
-        Body: vttContent,
-        ContentType: "text/vtt",
+        Key: `${userId}/${videoId}/merged/audio.mp3`,
       })
     );
 
-    await db
-      .update(videos)
-      .set({ transcriptionStatus: "COMPLETE" })
-      .where(eq(videos.id, videoId));
+    const tasksServerResponse = await fetch(
+      `${process.env.NEXT_PUBLIC_TASKS_URL}/api/v1/merge-audio-segments`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          segments: audioFiles,
+          uploadUrl,
+        }),
+      }
+    );
+
+    console.log("Tasks server response: ", await tasksServerResponse.json());
+
+    if (tasksServerResponse.status !== 200) {
+      throw new Error("Failed to merge audio segments");
+    }
+
+    // // Transcribe the single file
+    // const transcription = await transcribeAudio(outputFilePath);
+
+    // await db
+    //   .update(videos)
+    //   .set({ transcriptionStatus: "COMPLETE" })
+    //   .where(eq(videos.id, videoId));
 
     return new Response(
       JSON.stringify({
@@ -182,6 +173,7 @@ export async function GET(request: NextRequest) {
       }
     );
   } catch (error) {
+    console.error("Error processing audio files", error);
     await db
       .update(videos)
       .set({ transcriptionStatus: "ERROR" })
@@ -231,7 +223,7 @@ async function transcribeAudio(audioUrl: string): Promise<string> {
     {
       model: "nova-2",
       smart_format: true,
-      language: "en-GB",
+      detect_language: true,
     }
   );
 
