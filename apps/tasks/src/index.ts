@@ -1,6 +1,7 @@
 import app from "./app";
 
-const port = process.env.TASKS_APP_PORT || 3002;
-app.listen(port, () => {
+const port = Number(process.env.PORT) || 3002;
+
+app.listen(port, "0.0.0.0", function () {
   console.log(`Listening: http://localhost:${port}`);
 });
