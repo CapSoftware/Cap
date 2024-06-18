@@ -1,23 +1,23 @@
 # Use an official Node runtime as the base image
 FROM node:20
 
+# Declaring env
+ENV NODE_ENV=production
+
 # Set the working directory in the container to /app
 WORKDIR /app
 
-# Copy package.json and package-lock.json to the working directory
-COPY package*.json ./
+# Copy all the files from the project’s root to the working directory in the container
+COPY . .
 
-# Install the application dependencies
+# Install all the dependencies
 RUN npm install
+
+# Expose the port the app runs in
+EXPOSE 3002
 
 # Install ffmpeg
 RUN apt-get update && apt-get install -y ffmpeg
 
-# Copy the rest of the application code to the working directory
-COPY . .
-
-# Make port 3002 available outside the container
-EXPOSE 3002
-
-# Run the application
-CMD [ "npm", "start" ]
+# Start the app
+CMD ["npm", "start"]
