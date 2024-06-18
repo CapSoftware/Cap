@@ -44,6 +44,8 @@ export async function POST(request: NextRequest) {
       ? "audio/webm"
       : fileKey.endsWith(".mp4")
       ? "video/mp4"
+      : fileKey.endsWith(".mp3")
+      ? "audio/mpeg"
       : "video/mp2t";
 
     const Fields = {
