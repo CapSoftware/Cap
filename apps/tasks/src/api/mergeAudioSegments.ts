@@ -7,28 +7,36 @@ const router = express.Router();
 router.post<{}>("/", async (req, res) => {
   const body = req.body;
 
-  if (!body.segments || body.segments.length === 0 || !body.uploadUrl) {
-    res.status(400).json({ message: "Segments or uploadUrl not provided" });
+  if (
+    !body.segments ||
+    body.segments.length === 0 ||
+    !body.uploadUrl ||
+    !body.videoId
+  ) {
+    res.status(400).json({ response: "FAILED" });
     return;
   }
 
-  // Create a ffmpeg command
-  const command = ffmpeg();
+  const outputDir = "./output";
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir);
+  }
 
-  // Add the audio files as inputs
+  const command = ffmpeg();
+  const filePath = `./output/merged_${body.videoId}.mp3`;
+
   for (const url of body.segments) {
     command.input(url);
   }
 
-  // Merge the audio files
   command
     .on("error", (err: any) => {
       console.log("An error occurred: " + err.message);
     })
     .on("end", async () => {
-      console.log("Merging finished !");
+      console.log("Merging finished!");
 
-      const buffer = fs.readFileSync("./merged.mp3");
+      const buffer = fs.readFileSync(filePath);
 
       const uploadResponse = await fetch(body.uploadUrl, {
         method: "PUT",
@@ -38,15 +46,17 @@ router.post<{}>("/", async (req, res) => {
         },
       });
 
+      fs.unlinkSync(filePath);
+
       if (!uploadResponse.ok) {
         console.error("Upload failed: ", await uploadResponse.text());
-        res.status(500).json({ message: "Upload failed" });
+        res.status(500).json({ response: "FAILED" });
         return;
       }
 
-      res.json({ response: "COMPLETE" });
+      res.status(200).json({ response: "COMPLETE" });
     })
-    .mergeToFile("./merged.mp3", "./");
+    .mergeToFile(filePath, "./");
 });
 
 export default router;

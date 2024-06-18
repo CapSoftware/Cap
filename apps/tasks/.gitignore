@@ -73,3 +73,5 @@ typings/
 .serverless
 
 dist
+
+output
