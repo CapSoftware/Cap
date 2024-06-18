@@ -14,27 +14,16 @@ import {
   generateM3U8Playlist,
   generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
+import { getHeaders } from "@/utils/helpers";
 
 export const revalidate = 3599;
-
-const allowedOrigins = [
-  process.env.NEXT_PUBLIC_URL,
-  "https://cap.link",
-  "cap.link",
-];
 
 export async function OPTIONS(request: NextRequest) {
   const origin = request.headers.get("origin") as string;
 
   return new Response(null, {
     status: 200,
-    headers: {
-      "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-        ? origin
-        : "null",
-      "Access-Control-Allow-Credentials": "true",
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
-    },
+    headers: getHeaders(origin),
   });
 }
 
@@ -54,13 +43,7 @@ export async function GET(request: NextRequest) {
       }),
       {
         status: 401,
-        headers: {
-          "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-            ? origin
-            : "null",
-          "Access-Control-Allow-Credentials": "true",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-        },
+        headers: getHeaders(origin),
       }
     );
   }
@@ -72,13 +55,7 @@ export async function GET(request: NextRequest) {
       JSON.stringify({ error: true, message: "Video does not exist" }),
       {
         status: 401,
-        headers: {
-          "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-            ? origin
-            : "null",
-          "Access-Control-Allow-Credentials": "true",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-        },
+        headers: getHeaders(origin),
       }
     );
   }
@@ -93,13 +70,7 @@ export async function GET(request: NextRequest) {
         JSON.stringify({ error: true, message: "Video is not public" }),
         {
           status: 401,
-          headers: {
-            "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-              ? origin
-              : "null",
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-          },
+          headers: getHeaders(origin),
         }
       );
     }
@@ -127,13 +98,7 @@ export async function GET(request: NextRequest) {
           JSON.stringify({ error: true, message: "Invalid video type" }),
           {
             status: 401,
-            headers: {
-              "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-                ? origin
-                : "null",
-              "Access-Control-Allow-Credentials": "true",
-              "Access-Control-Allow-Methods": "GET, OPTIONS",
-            },
+            headers: getHeaders(origin),
           }
         );
     }
@@ -213,14 +178,7 @@ export async function GET(request: NextRequest) {
 
       return new Response(generatedPlaylist, {
         status: 200,
-        headers: {
-          "content-type": "application/vnd.apple.mpegurl",
-          "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-            ? origin
-            : "null",
-          "Access-Control-Allow-Credentials": "true",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-        },
+        headers: getHeaders(origin),
       });
     }
 
@@ -264,14 +222,7 @@ export async function GET(request: NextRequest) {
 
     return new Response(generatedPlaylist, {
       status: 200,
-      headers: {
-        "content-type": "application/vnd.apple.mpegurl",
-        "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-          ? origin
-          : "null",
-        "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-      },
+      headers: getHeaders(origin),
     });
   } catch (error) {
     console.error("Error generating video segment URLs", error);
@@ -279,13 +230,7 @@ export async function GET(request: NextRequest) {
       JSON.stringify({ error: error, message: "Error generating video URLs" }),
       {
         status: 500,
-        headers: {
-          "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
-            ? origin
-            : "null",
-          "Access-Control-Allow-Credentials": "true",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-        },
+        headers: getHeaders(origin),
       }
     );
   }
