@@ -13,9 +13,6 @@ RUN npm install -g pnpm
 # Install the application dependencies
 RUN pnpm install
 
-# Install ffmpeg
-RUN apt-get update && apt-get install -y ffmpeg
-
 # Copy the rest of the application code to the working directory
 COPY . .
 
