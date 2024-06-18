@@ -212,13 +212,36 @@ export async function GET(request: NextRequest) {
 
 function formatToWebVTT(result: any): string {
   let output = "WEBVTT\n\n";
+  let captionIndex = 1;
 
-  result.results.utterances.forEach((utterance: any, index: number) => {
-    const start = formatTimestamp(utterance.start);
-    const end = formatTimestamp(utterance.end);
-    const text = utterance.transcript;
+  result.results.utterances.forEach((utterance: any) => {
+    let words = utterance.words;
+    let group = [];
+    let start = formatTimestamp(words[0].start);
+    let wordCount = 0;
 
-    output += `${index + 1}\n${start} --> ${end}\n${text}\n\n`;
+    for (let i = 0; i < words.length; i++) {
+      let word = words[i];
+      group.push(word.word);
+      wordCount++;
+
+      if (
+        word.punctuated_word.endsWith(",") ||
+        word.punctuated_word.endsWith(".") ||
+        (words[i + 1] && words[i + 1].start - word.end > 0.5) ||
+        wordCount === 8
+      ) {
+        let end = formatTimestamp(word.end);
+        let groupText = group.join(" ");
+
+        output += `${captionIndex}\n${start} --> ${end}\n${groupText}\n\n`;
+        captionIndex++;
+
+        group = [];
+        start = words[i + 1] ? formatTimestamp(words[i + 1].start) : start;
+        wordCount = 0; // Reset the counter for the next group
+      }
+    }
   });
 
   return output;
