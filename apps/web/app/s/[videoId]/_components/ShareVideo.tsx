@@ -12,6 +12,7 @@ import {
 import { LogoSpinner } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
 import { Tooltip } from "react-tooltip";
+import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 
 declare global {
   interface Window {
@@ -44,6 +45,7 @@ export const ShareVideo = ({
   const [seeking, setSeeking] = useState(false);
   const [videoMetadataLoaded, setVideoMetadataLoaded] = useState(false);
   const [overlayVisible, setOverlayVisible] = useState(true);
+  const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -239,6 +241,32 @@ export const ShareVideo = ({
     }
   }, [isPlaying, isLoading]);
 
+  const parseSubTime = (timeString: number) => {
+    const [hours, minutes, seconds] = timeString
+      .toString()
+      .split(":")
+      .map(Number);
+    return hours * 3600 + minutes * 60 + seconds;
+  };
+
+  useEffect(() => {
+    if (data.transcriptionStatus !== "complete") return;
+
+    fetch(`https://v.cap.so/${data.ownerId}/${data.id}/subtitles.vtt`)
+      .then((response) => response.text())
+      .then((text) => {
+        const parsedSubtitles = fromVtt(text);
+        console.log("Parsed subtitles:", parsedSubtitles);
+        setSubtitles(parsedSubtitles);
+      });
+  }, [data]);
+
+  const currentSubtitle = subtitles.find(
+    (subtitle) =>
+      parseSubTime(subtitle.startTime) <= currentTime &&
+      parseSubTime(subtitle.endTime) >= currentTime
+  );
+
   if (data.jobStatus === "ERROR") {
     return (
       <div className="flex items-center justify-center w-full h-full rounded-lg overflow-hidden">
@@ -290,6 +318,13 @@ export const ShareVideo = ({
         className="relative block w-full h-full rounded-lg bg-black"
         style={{ paddingBottom: "min(806px, 56.25%)" }}
       >
+        {currentSubtitle && currentSubtitle.text && (
+          <div className="absolute bottom-0 w-full text-center transform transition p-1.5 lg:p-2.5 xl:p-3.5 -translate-y-16 z-10">
+            <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl leading-7 md:text-lg md:leading-9 lg:text-2xl lg:leading-11 2xl:text-3xl 2xl:leading-13 xs:text-base box-decoration-break-clone xs:leading-8 xl:text-2.5xl">
+              {currentSubtitle.text}
+            </div>
+          </div>
+        )}
         <VideoPlayer
           ref={videoRef}
           videoSrc={
