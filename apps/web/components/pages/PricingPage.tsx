@@ -66,6 +66,10 @@ export const PricingPage = () => {
       available: true,
     },
     {
+      text: "Automatic audio transcriptions",
+      available: true,
+    },
+    {
       text: "Basic analytics",
       available: true,
     },
@@ -89,6 +93,10 @@ export const PricingPage = () => {
       available: true,
     },
     {
+      text: "Automatic audio transcriptions",
+      available: true,
+    },
+    {
       text: "Advanced analytics",
       available: true,
     },
@@ -99,10 +107,6 @@ export const PricingPage = () => {
   ];
 
   const plannedFeatures = [
-    {
-      text: "Automatic transcription",
-      available: false,
-    },
     {
       text: "Custom scenes (branded videos, automatic zoom)",
       available: false,
