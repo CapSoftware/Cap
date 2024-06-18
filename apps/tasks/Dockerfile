@@ -7,11 +7,11 @@ WORKDIR /app
 # Copy package.json and package-lock.json to the working directory
 COPY package*.json ./
 
-# Install pnpm
-RUN npm install -g pnpm
-
 # Install the application dependencies
-RUN pnpm install
+RUN npm install
+
+# Install ffmpeg
+RUN apt-get update && apt-get install -y ffmpeg
 
 # Copy the rest of the application code to the working directory
 COPY . .
@@ -20,4 +20,4 @@ COPY . .
 EXPOSE 3002
 
 # Run the application
-CMD [ "pnpm", "start" ]
+CMD [ "npm", "start" ]
