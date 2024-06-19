@@ -47,6 +47,7 @@ export const ShareVideo = ({
   const [overlayVisible, setOverlayVisible] = useState(true);
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [subtitlesVisible, setSubtitlesVisible] = useState(true);
+  const [videoSpeed, setVideoSpeed] = useState(1);
   const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -215,6 +216,21 @@ export const ShareVideo = ({
       window.open(videoUrl, "_blank");
     } else {
       document.exitFullscreen();
+    }
+  };
+
+  const handleSpeedChange = () => {
+    let newSpeed;
+    if (videoSpeed === 1) {
+      newSpeed = 1.5;
+    } else if (videoSpeed === 1.5) {
+      newSpeed = 2;
+    } else {
+      newSpeed = 1;
+    }
+    setVideoSpeed(newSpeed);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = newSpeed;
     }
   };
 
@@ -421,6 +437,17 @@ export const ShareVideo = ({
           </div>
           <div className="flex justify-end space-x-2">
             <div className="flex items-center justify-end space-x-2">
+              <span className="inline-flex">
+                <button
+                  aria-label="Change video speed"
+                  className=" inline-flex min-w-[45px] items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg"
+                  tabIndex={0}
+                  type="button"
+                  onClick={handleSpeedChange}
+                >
+                  {videoSpeed}x
+                </button>
+              </span>
               {data.transcriptionStatus === "COMPLETE" &&
                 subtitles.length > 0 && (
                   <span className="inline-flex">
