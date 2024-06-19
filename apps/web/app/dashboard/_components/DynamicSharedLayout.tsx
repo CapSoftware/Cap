@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
   Button,
 } from "@cap/ui";
-
+import { UsageButton } from "@/components/UsageButton";
 import { users, spaces } from "@cap/database/schema";
 import Link from "next/link";
 import { isUserOnProPlan } from "@cap/utils";
@@ -53,9 +53,7 @@ export default function DynamicSharedLayout({
                   Cap Pro
                 </Link>
               ) : (
-                <Link className="text-primary font-medium" href="/pricing">
-                  Upgrade to Cap Pro
-                </Link>
+                <UsageButton />
               )}
             </div>
             <DropdownMenu>
