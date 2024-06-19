@@ -75,7 +75,7 @@ export default async function ShareVideoPage(props: Props) {
 
   if (video.transcriptionStatus !== "COMPLETE") {
     fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
+      `${process.env.NEXT_PUBLIC_URL}/api/video/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
       {
         method: "GET",
         credentials: "include",
