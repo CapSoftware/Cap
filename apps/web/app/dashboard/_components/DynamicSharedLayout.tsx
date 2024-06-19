@@ -43,18 +43,7 @@ export default function DynamicSharedLayout({
           <AdminMobileNav />
           <div className="py-3 -mb-3 flex items-center justify-end wrapper space-x-3">
             <div>
-              {isUserOnProPlan({
-                subscriptionStatus: user?.stripeSubscriptionStatus as string,
-              }) ? (
-                <Link
-                  className="text-primary font-medium"
-                  href="/dashboard/settings/billing"
-                >
-                  Cap Pro
-                </Link>
-              ) : (
-                <UsageButton />
-              )}
+              <UsageButton />
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger
