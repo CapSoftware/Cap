@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { use, useEffect, useRef, useState } from "react";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { CloseX } from "@/components/icons/CloseX";
+import { Flip } from "@/components/icons/Flip";
 import { emit } from "@tauri-apps/api/event";
 
 export const Camera = () => {
@@ -11,6 +12,11 @@ export const Camera = () => {
   const { selectedVideoDevice } = useMediaDevices();
   const [isLoading, setIsLoading] = useState(true);
   const tauriWindowImport = import("@tauri-apps/api/window");
+  const [cameraMirrored, setCameraMirrored] = useState(
+    typeof window !== "undefined"
+      ? localStorage.getItem("cameraMirrored") || "false"
+      : "false"
+  );
 
   useEffect(() => {
     if (!videoRef.current || !selectedVideoDevice) return;
@@ -43,6 +49,19 @@ export const Camera = () => {
       }
     };
   }, [selectedVideoDevice]);
+
+  const mirrorCamera = () => {
+    if (videoRef.current) {
+      const video = videoRef.current;
+      const newCameraMirrored = cameraMirrored === "true" ? "false" : "true";
+      video.style.transform =
+        newCameraMirrored === "true" ? "scaleX(-1)" : "scaleX(1)";
+      setCameraMirrored(newCameraMirrored);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("cameraMirrored", newCameraMirrored);
+      }
+    }
+  };
 
   const setWindowSize = async (type: "sm" | "lg") => {
     if (typeof window === "undefined") return;
@@ -91,6 +110,14 @@ export const Camera = () => {
     });
   };
 
+  useEffect(() => {
+    if (videoRef.current) {
+      const video = videoRef.current;
+      video.style.transform =
+        cameraMirrored === "true" ? "scaleX(-1)" : "scaleX(1)";
+    }
+  }, []);
+
   return (
     <div
       data-tauri-drag-region
@@ -125,7 +152,7 @@ export const Camera = () => {
           </svg>
         </div>
       )}
-      <div className="opacity-0 group-hover:opacity-100 absolute top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 rounded-xl z-20 grid grid-cols-3 overflow-hidden">
+      <div className="opacity-0 group-hover:opacity-100 absolute top-3 left-1/2 transform -translate-x-1/2 bg-gray-800 rounded-xl z-20 grid grid-cols-4 overflow-hidden">
         <div
           onClick={() => {
             closeWindow();
@@ -151,6 +178,14 @@ export const Camera = () => {
           className="h-full flex items-center justify-center p-2 hover:bg-gray-900"
         >
           <span className="w-3 h-3 bg-gray-200 rounded-full"></span>
+        </div>
+        <div
+          onClick={mirrorCamera}
+          className="h-full flex items-center justify-center p-2 hover:bg-gray-900"
+        >
+          <div>
+            <Flip className="w-5 h-5 stroke-gray-200" />
+          </div>
         </div>
       </div>
       <canvas

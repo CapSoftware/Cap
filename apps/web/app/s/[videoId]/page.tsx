@@ -73,8 +73,19 @@ export default async function ShareVideoPage(props: Props) {
     await res.json();
   }
 
+  if (video.transcriptionStatus !== "COMPLETE") {
+    fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/video/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
+      {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      }
+    );
+  }
+
   if (video.jobStatus !== "COMPLETE" && video.skipProcessing === false) {
-    const status = await fetch(
+    fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/status?videoId=${videoId}&userId=${video.ownerId}`,
       {
         method: "GET",
@@ -82,8 +93,6 @@ export default async function ShareVideoPage(props: Props) {
         cache: "no-store",
       }
     );
-
-    await status.json();
   }
 
   if (video.public === false) {

@@ -50,6 +50,12 @@ const nextConfig = {
         port: "",
         pathname: "**",
       },
+      {
+        protocol: "https",
+        hostname: "*tasks.cap.so",
+        port: "",
+        pathname: "**",
+      },
     ],
   },
   async rewrites() {

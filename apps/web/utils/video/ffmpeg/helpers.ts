@@ -13,10 +13,6 @@ export const concatenateSegments = async (
     throw new Error("FFmpeg not loaded");
   }
 
-  console.log("Running concatenateSegments...");
-
-  console.log("concatenateSegments:", segmentsUrls);
-
   await ffmpeg.load();
 
   // Feed the video segments to FFmpeg

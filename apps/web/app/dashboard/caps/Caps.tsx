@@ -23,6 +23,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@cap/ui";
+import { debounce } from "lodash";
 
 type videoData = {
   id: string;
@@ -42,6 +43,43 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
   const { user } = useSharedContext();
   const limit = 16;
   const totalPages = Math.ceil(count / limit);
+  const [isEditing, setIsEditing] = useState<null | string>(null);
+  const [titles, setTitles] = useState<Record<string, string>>({});
+
+  const handleTitleBlur = async ({ id }: { id: string }) => {
+    setIsEditing(id);
+
+    if (!titles[id]) {
+      setIsEditing(null);
+      return;
+    }
+
+    const response = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/video/title`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: titles[id], videoId: id }),
+      }
+    );
+    if (!response.ok) {
+      toast.error("Failed to update title - please try again.");
+      return;
+    }
+
+    toast.success("Video title updated");
+
+    setIsEditing(null);
+  };
+
+  const handleTitleKeyDown = debounce(
+    async ({ key, id }: { key: string; id: string }) => {
+      if (key === "Enter") {
+        handleTitleBlur({ id });
+      }
+    },
+    300
+  );
 
   useEffect(() => {
     const fetchAnalytics = async () => {
@@ -180,8 +218,41 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                       alt={`${cap.name} Thumbnail`}
                     />
                   </a>
-                  <div className="p-4">
-                    <p className="font-medium">{cap.name}</p>
+                  <div className="flex flex-col p-4">
+                    {isEditing !== null && isEditing === cap.id ? (
+                      <textarea
+                        rows={1}
+                        value={titles[cap.id] || cap.name}
+                        onChange={(e) =>
+                          setTitles({
+                            ...titles,
+                            [cap.id]: e.target.value,
+                          })
+                        }
+                        onBlur={() => {
+                          handleTitleBlur({ id: cap.id });
+                        }}
+                        onKeyDown={(e) => {
+                          handleTitleKeyDown({ key: e.key, id: cap.id });
+                        }}
+                        autoFocus
+                        className="font-medium box-border"
+                      />
+                    ) : (
+                      <p
+                        className="font-medium"
+                        onClick={() => {
+                          if (
+                            user !== null &&
+                            user.id.toString() === cap.ownerId
+                          ) {
+                            setIsEditing(cap.id);
+                          }
+                        }}
+                      >
+                        {titles[cap.id] || cap.name}
+                      </p>
+                    )}
                     <p className="text-sm text-gray-400">
                       {moment(cap.createdAt).fromNow()}
                     </p>
