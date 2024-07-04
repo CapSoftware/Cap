@@ -3,8 +3,10 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { comments } from "@cap/database/schema";
 import { db } from "@cap/database";
+import { rateLimitMiddleware } from "@/utils/helpers";
+import { headers } from "next/headers";
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   const user = await getCurrentUser();
   const { type, content, videoId, timestamp, parentCommentId } =
     await request.json();
@@ -42,3 +44,8 @@ export async function POST(request: NextRequest) {
     })
   );
 }
+
+export const POST = (request: NextRequest) => {
+  const headersList = headers();
+  return rateLimitMiddleware(10, handlePost(request), headersList);
+};

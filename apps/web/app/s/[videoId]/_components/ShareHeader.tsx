@@ -29,6 +29,12 @@ export const ShareHeader = ({
         body: JSON.stringify({ title, videoId: data.id }),
       }
     );
+
+    if (response.status === 429) {
+      toast.error("Too many requests - please try again later.");
+      return;
+    }
+
     if (!response.ok) {
       toast.error("Failed to update title - please try again.");
       return;
