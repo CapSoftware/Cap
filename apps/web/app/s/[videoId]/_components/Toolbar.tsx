@@ -5,6 +5,7 @@ import { videos } from "@cap/database/schema";
 import { userSelectProps } from "@cap/database/auth/session";
 import { useRouter } from "next/navigation";
 import { Button } from "@cap/ui";
+import toast from "react-hot-toast";
 
 // million-ignore
 export const Toolbar = ({
@@ -77,6 +78,11 @@ export const Toolbar = ({
         }),
       }
     );
+
+    if (response.status === 429) {
+      toast.error("Too many requests - please try again later.");
+      return;
+    }
 
     if (!response.ok) {
       console.error("Failed to record emoji reaction");
