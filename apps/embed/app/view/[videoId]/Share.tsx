@@ -14,10 +14,8 @@ export const Share = ({
   comments: (typeof commentsSchema.$inferSelect)[];
 }) => {
   return (
-    <div>
-      <div className="space-y-6">
-        <ShareVideo data={data} user={user} comments={comments} />
-      </div>
+    <div className="w-full h-full space-y-6">
+      <ShareVideo data={data} user={user} comments={comments} />
     </div>
   );
 };

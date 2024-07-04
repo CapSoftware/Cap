@@ -48,9 +48,9 @@ export default async function RootLayout({
         <meta name="msapplication-TileColor" content="#da532c" />
         <meta name="theme-color" content="#ffffff" />
       </head>
-      <body>
+      <body className="w-screen h-screen">
         <Toaster />
-        <main className="w-full overflow-hidden">{children}</main>
+        <main className="w-full h-full overflow-hidden">{children}</main>
       </body>
     </html>
   );

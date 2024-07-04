@@ -316,10 +316,10 @@ export const ShareVideo = ({
 
   if (data.jobStatus === "ERROR") {
     return (
-      <div className="flex items-center justify-center w-full h-full rounded-lg overflow-hidden">
+      <div className="flex items-center justify-center w-full h-full overflow-hidden">
         <div
           style={{ paddingBottom: "min(806px, 56.25%)" }}
-          className="relative w-full h-full rounded-lg bg-black flex items-center justify-center p-8"
+          className="relative w-full h-full bg-black flex items-center justify-center p-8"
         >
           <p className="text-white text-xl">
             There was an error when processing the video. Please contact
@@ -332,7 +332,7 @@ export const ShareVideo = ({
 
   return (
     <div
-      className="relative flex h-full w-full overflow-hidden shadow-lg rounded-lg group"
+      className="relative flex h-full w-full overflow-hidden shadow-lg group"
       id="player"
     >
       {isLoading && (
@@ -390,7 +390,7 @@ export const ShareVideo = ({
         </div>
       )}
       <div
-        className="relative block w-full h-full rounded-lg bg-black"
+        className="relative block w-full h-full bg-black"
         style={{ paddingBottom: "min(806px, 56.25%)" }}
       >
         {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
