@@ -191,6 +191,8 @@ fn main() {
 
     let tray = SystemTray::new().with_menu(create_tray_menu(None)).with_menu_on_left_click(false).with_title("Cap");
 
+    tauri_plugin_deep_link::prepare("so.cap.desktop");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_positioner::init())
@@ -297,6 +299,14 @@ fn main() {
 
                 tray_handle.set_menu(new_menu).expect("Error while updating the tray menu items");
             });
+
+            if let Err(e) = tauri_plugin_deep_link::register("caprecorder", move |request| {
+                if let Err(e) = handle.emit_all("deeplink-triggered", request) {
+                    eprintln!("Failed to emit deeplink event: {}", e);
+                };
+            }) {
+                eprintln!("Error while registering the deeplink scheme: {}", e);
+            }
 
             Ok(())
         })
