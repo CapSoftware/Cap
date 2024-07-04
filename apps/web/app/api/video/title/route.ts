@@ -4,8 +4,10 @@ import { nanoId } from "@cap/database/helpers";
 import { videos } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
+import { headers } from "next/headers";
+import { rateLimitMiddleware } from "@/utils/helpers";
 
-export async function PUT(request: NextRequest) {
+export async function handlePut(request: NextRequest) {
   const user = await getCurrentUser();
   const { title, videoId } = await request.json();
   const userId = user?.id as string;
@@ -59,3 +61,8 @@ export async function PUT(request: NextRequest) {
     })
   );
 }
+
+export const PUT = (request: NextRequest) => {
+  const headersList = headers();
+  return rateLimitMiddleware(10, handlePut(request), headersList);
+};
