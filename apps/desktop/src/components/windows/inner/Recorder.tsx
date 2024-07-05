@@ -168,7 +168,9 @@ export const Recorder = () => {
       });
     };
 
-    setupListener();
+    setupListener().catch((error) => {
+      console.error("Failed to setup tray click listener: ", error);
+    });
 
     return () => {
       if (unlistenFn) {
@@ -181,7 +183,7 @@ export const Recorder = () => {
     let unlistenFn: UnlistenFn | null = null;
 
     const setupListener = async () => {
-      await listen<string>("deeplink-triggered", (event) => {
+      unlistenFn = await listen<string>("deeplink-triggered", (event) => {
         const request = event.payload;
         console.log(`Deeplink request: ${request}`);
 
@@ -194,17 +196,16 @@ export const Recorder = () => {
               return;
             }
 
-            const setDevice = (newDeviceLabel: string, currentDeviceLabel: string, kind: "audioinput" | "videoinput") => {
+            const setDevice = (newDeviceLabel: string, currentDeviceLabel: string | null, kind: "audioinput" | "videoinput") => {
               if (currentDeviceLabel === newDeviceLabel) {
                 return;
               }
 
               let deviceToSet: Device | null = null;
-
               if (newDeviceLabel !== "none") {
                 const filtered = devices.filter((device) => device.label === newDeviceLabel && device.kind === kind);
                 if (filtered.length !== 1) {
-                  throw Error(`Deeplink triggered with invalid/unkown ${kind} label: ${newDeviceLabel}`);
+                  throw Error(`Deeplink triggered with invalid/unkown ${kind} device label: ${newDeviceLabel}`);
                 }
                 deviceToSet = filtered[0];
               }
@@ -214,7 +215,7 @@ export const Recorder = () => {
                   console.log("Failed to emit change-device event:", error);
                 }
               );
-            }
+            };
 
             try {
               setDevice(params.get("mic_in_label"), selectedAudioDevice?.label, "audioinput");

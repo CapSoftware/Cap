@@ -81,9 +81,11 @@ export const createDeeplinkCommands = (handlers: Record<string, (params: URLSear
       
       if (commandLiteral in handlers) {
         handlers[commandLiteral](params);
+      } else {
+        throw Error(`Invalid command literal ${commandLiteral}`);
       }
     } catch (error: unknown) {
-      console.error(`Invalid deeplink: ${request}`, error);
+      console.error(`Deeplink process error: ${request}`, error);
     }
   };
 }
