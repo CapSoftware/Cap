@@ -40,7 +40,6 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
   const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
-  console.log("page: ", page);
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
   const { user } = useSharedContext();
   const limit = 15;
@@ -364,69 +363,71 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
               );
             })}
           </div>
-          <div>
-            <Pagination>
-              <PaginationContent>
-                {page > 1 && (
+          {(data.length > limit || data.length === limit || page !== 1) && (
+            <div>
+              <Pagination>
+                <PaginationContent>
+                  {page > 1 && (
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href={
+                          process.env.NEXT_PUBLIC_URL +
+                          `/dashboard/caps?page=${page === 1 ? page : page - 1}`
+                        }
+                      />
+                    </PaginationItem>
+                  )}
                   <PaginationItem>
-                    <PaginationPrevious
+                    <PaginationLink
+                      href={
+                        process.env.NEXT_PUBLIC_URL + `/dashboard/caps?page=1`
+                      }
+                      isActive={page === 1}
+                    >
+                      1
+                    </PaginationLink>
+                  </PaginationItem>
+                  {page !== 1 && (
+                    <PaginationItem>
+                      <PaginationLink
+                        href={
+                          process.env.NEXT_PUBLIC_URL +
+                          `/dashboard/caps?page=${page}`
+                        }
+                        isActive={true}
+                      >
+                        {page}
+                      </PaginationLink>
+                    </PaginationItem>
+                  )}
+                  {totalPages > page + 1 && (
+                    <PaginationItem>
+                      <PaginationLink
+                        href={
+                          process.env.NEXT_PUBLIC_URL +
+                          `/dashboard/caps?page=${page + 1}`
+                        }
+                        isActive={page === page + 1}
+                      >
+                        {page + 1}
+                      </PaginationLink>
+                    </PaginationItem>
+                  )}
+                  {page > 2 && <PaginationEllipsis />}
+                  <PaginationItem>
+                    <PaginationNext
                       href={
                         process.env.NEXT_PUBLIC_URL +
-                        `/dashboard/caps?page=${page === 1 ? page : page - 1}`
+                        `/dashboard/caps?page=${
+                          page === totalPages ? page : page + 1
+                        }`
                       }
                     />
                   </PaginationItem>
-                )}
-                <PaginationItem>
-                  <PaginationLink
-                    href={
-                      process.env.NEXT_PUBLIC_URL + `/dashboard/caps?page=1`
-                    }
-                    isActive={page === 1}
-                  >
-                    1
-                  </PaginationLink>
-                </PaginationItem>
-                {page !== 1 && (
-                  <PaginationItem>
-                    <PaginationLink
-                      href={
-                        process.env.NEXT_PUBLIC_URL +
-                        `/dashboard/caps?page=${page}`
-                      }
-                      isActive={true}
-                    >
-                      {page}
-                    </PaginationLink>
-                  </PaginationItem>
-                )}
-                {totalPages > page + 1 && (
-                  <PaginationItem>
-                    <PaginationLink
-                      href={
-                        process.env.NEXT_PUBLIC_URL +
-                        `/dashboard/caps?page=${page + 1}`
-                      }
-                      isActive={page === page + 1}
-                    >
-                      {page + 1}
-                    </PaginationLink>
-                  </PaginationItem>
-                )}
-                {page > 2 && <PaginationEllipsis />}
-                <PaginationItem>
-                  <PaginationNext
-                    href={
-                      process.env.NEXT_PUBLIC_URL +
-                      `/dashboard/caps?page=${
-                        page === totalPages ? page : page + 1
-                      }`
-                    }
-                  />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
-          </div>
+                </PaginationContent>
+              </Pagination>
+            </div>
+          )}
         </div>
       )}
     </div>
