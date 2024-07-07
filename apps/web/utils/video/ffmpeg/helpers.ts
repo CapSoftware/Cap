@@ -121,8 +121,8 @@ export const playlistToMp4 = async (
       "0",
       "-i",
       "videolist.txt",
-      "-c:v",
-      "libx264",
+      "-c",
+      "copy",
       videoName + ".mp4",
     ]);
   }
