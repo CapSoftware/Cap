@@ -3,7 +3,7 @@ import { Button } from "@cap/ui";
 import moment from "moment";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { useRouter, useSearchParams } from "next/navigation";
-import toast from "react-hot-toast";
+import toast, { Toaster } from "react-hot-toast";
 import {
   EyeIcon,
   LinkIcon,
@@ -11,6 +11,7 @@ import {
   SmileIcon,
   Video,
   Trash,
+  DownloadIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
@@ -24,6 +25,7 @@ import {
   PaginationPrevious,
 } from "@cap/ui";
 import { debounce } from "lodash";
+import { playlistToMp4 } from "@/utils/video/ffmpeg/helpers";
 
 type videoData = {
   id: string;
@@ -41,9 +43,10 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
   console.log("page: ", page);
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
   const { user } = useSharedContext();
-  const limit = 16;
+  const limit = 15;
   const totalPages = Math.ceil(count / limit);
   const [isEditing, setIsEditing] = useState<null | string>(null);
+  const [isDownloading, setIsDownloading] = useState<null | string>(null);
   const [titles, setTitles] = useState<Record<string, string>>({});
 
   const handleTitleBlur = async ({ id }: { id: string }) => {
@@ -106,6 +109,46 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
     fetchAnalytics();
   }, [data]);
 
+  const downloadCap = async (videoId: string) => {
+    if (isDownloading !== null) {
+      toast.error(
+        "You are already downloading a Cap. Please wait for it to finish downloading."
+      );
+      return;
+    }
+
+    setIsDownloading(videoId);
+
+    toast
+      .promise(
+        (async () => {
+          const video = data.find((cap) => cap.id === videoId);
+          if (!video) {
+            throw new Error("Video not found");
+          }
+
+          const videoName = video.name || "Cap Video";
+          const mp4Blob = await playlistToMp4(user.id, video.id, video.name);
+          const downloadUrl = window.URL.createObjectURL(mp4Blob);
+          const a = document.createElement("a");
+          a.style.display = "none";
+          a.href = downloadUrl;
+          a.download = `${videoName}.mp4`;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(downloadUrl);
+        })(),
+        {
+          loading: "Downloading Cap...",
+          success: "Cap downloaded",
+          error: "Failed to download Cap",
+        }
+      )
+      .finally(() => {
+        setIsDownloading(null); // Reset downloading state after completion or failure
+      });
+  };
+
   const deleteCap = async (videoId: string) => {
     if (
       !window.confirm(
@@ -162,7 +205,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
           <div>
             <h1 className="text-3xl font-semibold mb-1">My Caps</h1>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 xl:grid-cols-3 gap-6">
             {data.map((cap, index) => {
               const videoAnalytics = analytics[cap.id];
 
@@ -174,7 +217,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                   <div className="absolute top-2 right-2 space-y-2 z-20">
                     <button
                       type="button"
-                      className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-300 w-6 h-6 m-0 p-0 rounded-full flex items-center justify-center transition-all"
+                      className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-200 w-8 h-8 m-0 p-0 rounded-full flex items-center justify-center transition-all"
                       onClick={() => {
                         if (
                           process.env.NEXT_PUBLIC_IS_CAP &&
@@ -191,16 +234,56 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                         toast.success("Link copied to clipboard!");
                       }}
                     >
-                      <LinkIcon className="w-3 h-3" />
+                      <LinkIcon className="w-4 h-4" />
                     </button>
                     <button
                       type="button"
-                      className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-300 w-6 h-6 m-0 p-0 rounded-full flex items-center justify-center transition-all"
+                      className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-200 w-8 h-8 m-0 p-0 rounded-full flex items-center justify-center transition-all"
+                      onClick={async () => {
+                        if (isDownloading === cap.id) {
+                          return;
+                        }
+
+                        await downloadCap(cap.id);
+                      }}
+                    >
+                      {isDownloading === cap.id ? (
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="w-6 h-6"
+                          viewBox="0 0 24 24"
+                        >
+                          <style>
+                            {
+                              "@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"
+                            }
+                          </style>
+                          <path
+                            fill="#000"
+                            d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
+                            opacity={0.25}
+                          />
+                          <path
+                            fill="#00"
+                            d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
+                            style={{
+                              transformOrigin: "center",
+                              animation: "spinner_AtaB .75s infinite linear",
+                            }}
+                          />
+                        </svg>
+                      ) : (
+                        <DownloadIcon className="w-4 h-4" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-200 w-8 h-8 m-0 p-0 rounded-full flex items-center justify-center transition-all"
                       onClick={async () => {
                         await deleteCap(cap.id);
                       }}
                     >
-                      <Trash className="w-3 h-3" />
+                      <Trash className="w-4 h-4" />
                     </button>
                   </div>
                   <a
