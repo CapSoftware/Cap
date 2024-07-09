@@ -19,6 +19,7 @@ import {
   isUserPro,
 } from "@cap/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
+import * as commands from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 
@@ -203,8 +204,8 @@ export const Recorder = () => {
     });
     await emit("toggle-recording", true);
     try {
-      await invoke("start_dual_recording", {
-        options: {
+      await commands
+        .startDualRecording({
           user_id: videoData.user_id,
           video_id: videoData.id,
           audio_name: selectedAudioDevice?.label ?? "None",
@@ -212,10 +213,10 @@ export const Recorder = () => {
           aws_bucket: videoData.aws_bucket,
           screen_index: "Capture screen 0",
           video_index: String(selectedVideoDevice?.index),
-        },
-      }).catch((error) => {
-        console.error("Error invoking start_screen_recording:", error);
-      });
+        })
+        .catch((error) => {
+          console.error("Error invoking start_screen_recording:", error);
+        });
     } catch (error) {
       console.error("Error starting screen recording:", error);
       setStartingRecording(false);
@@ -265,7 +266,7 @@ export const Recorder = () => {
       console.log("Stopping recordings...");
 
       try {
-        await invoke("stop_all_recordings");
+        await commands.stopAllRecordings();
       } catch (error) {
         console.error("Error stopping recording:", error);
       }
