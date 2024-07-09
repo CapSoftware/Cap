@@ -3,6 +3,7 @@
 import { Button, LogoBadge } from "@cap/ui";
 import { useEffect, useState } from "react";
 import { savePermissions, getPermissions } from "@/utils/helpers";
+import * as commands from "@/utils/commands";
 import { invoke } from "@tauri-apps/api/tauri";
 
 export const Permissions = () => {
@@ -19,7 +20,7 @@ export const Permissions = () => {
   });
 
   const checkScreenCapture = async () => {
-    const hasAccess = await invoke("has_screen_capture_access");
+    const hasAccess = await commands.hasScreenCaptureAccess();
     if (hasAccess) {
       await savePermissions("screen", true);
       setPermissions((prev) => ({
@@ -108,11 +109,11 @@ export const Permissions = () => {
 
   const handlePermissionOpened = (permission: string) => {
     if (permission === "screen") {
-      invoke("open_screen_capture_preferences");
+      commands.openScreenCapturePreferences();
     } else if (permission === "camera") {
-      invoke("open_camera_preferences");
+      commands.openCameraPreferences();
     } else if (permission === "microphone") {
-      invoke("open_mic_preferences");
+      commands.openMicPreferences();
     }
   };
 

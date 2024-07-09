@@ -44,6 +44,8 @@ jpeg-encoder = "0.6.0"
 nix = "0.20.0"
 urlencoding = "2.1.2"
 bytes = "1.0"
+tauri-specta = { version = "1", features = ["javascript", "typescript"] }
+specta = "1"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem

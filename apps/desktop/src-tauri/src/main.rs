@@ -8,7 +8,7 @@ use regex::Regex;
 use tokio::sync::Mutex;
 use std::sync::atomic::{AtomicBool};
 use std::{vec};
-use tauri::{command, CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu, Window};
+use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu, Window};
 use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 use window_shadows::set_shadow;
 use tauri_plugin_positioner::{WindowExt, Position};
@@ -33,10 +33,21 @@ use ffmpeg_sidecar::{
 
 use winit::monitor::{MonitorHandle, VideoMode};
 
+macro_rules! generate_handler {
+  ($($command:ident),*) => {{
+    #[cfg(debug_assertions)]
+    tauri_specta::ts::export(
+      specta::collect_types![$($command),*],
+      "../src/utils/commands.ts"
+    ).unwrap();
 
-fn main() {    
+    tauri::generate_handler![$($command),*]
+  }}
+}
+
+fn main() {
     let _ = fix_path_env::fix();
-    
+
     std::panic::set_hook(Box::new(|info| {
         eprintln!("Thread panicked: {:?}", info);
     }));
@@ -71,7 +82,8 @@ fn main() {
 
     handle_ffmpeg_installation().expect("Failed to install FFmpeg");
 
-    #[command]
+    #[tauri::command]
+    #[specta::specta]
     async fn start_server(window: Window) -> Result<u16, String> {
         start(move |url| {
             let _ = window.emit("redirect_uri", url);
@@ -80,6 +92,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn open_screen_capture_preferences() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("open")
@@ -89,6 +102,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn open_mic_preferences() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("open")
@@ -98,6 +112,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn open_camera_preferences() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("open")
@@ -107,6 +122,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn reset_screen_permissions() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("tccutil")
@@ -118,6 +134,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn reset_microphone_permissions() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("tccutil")
@@ -129,6 +146,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn reset_camera_permissions() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("tccutil")
@@ -145,10 +163,14 @@ fn main() {
     }));
 
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
-    let monitor: MonitorHandle = event_loop.primary_monitor().expect("No primary monitor found");
+    let monitor: MonitorHandle = event_loop
+        .primary_monitor()
+        .expect("No primary monitor found");
     let video_modes: Vec<VideoMode> = monitor.video_modes().collect();
 
-    let max_mode = video_modes.iter().max_by_key(|mode| mode.size().width * mode.size().height);
+    let max_mode = video_modes
+        .iter()
+        .max_by_key(|mode| mode.size().width * mode.size().height);
 
     let (max_width, max_height) = if let Some(max_mode) = max_mode {
         println!("Maximum resolution: {:?}", max_mode.size());
@@ -160,10 +182,10 @@ fn main() {
 
     #[derive(serde::Deserialize, PartialEq)]
     enum DeviceKind {
-        #[serde(alias="videoinput")]
+        #[serde(alias = "videoinput")]
         Video,
-        #[serde(alias="audioinput")]
-        Audio
+        #[serde(alias = "audioinput")]
+        Audio,
     }
 
     #[derive(serde::Deserialize)]
@@ -171,7 +193,7 @@ fn main() {
     struct MediaDevice {
         id: String,
         kind: DeviceKind,
-        label: String
+        label: String,
     }
 
     fn create_tray_menu(submenus: Option<Vec<SystemTraySubmenu>>) -> SystemTrayMenu {
@@ -189,7 +211,10 @@ fn main() {
             .add_item(CustomMenuItem::new("quit".to_string(), "Quit").accelerator("CmdOrControl+Q"))
     }
 
-    let tray = SystemTray::new().with_menu(create_tray_menu(None)).with_menu_on_left_click(false).with_title("Cap");
+    let tray = SystemTray::new()
+        .with_menu(create_tray_menu(None))
+        .with_menu_on_left_click(false)
+        .with_title("Cap");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_oauth::init())
@@ -197,14 +222,14 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle();
 
-            if let Some(options_window) = app.get_window("main") { 
+            if let Some(options_window) = app.get_window("main") {
               let _ = options_window.move_window(Position::Center);
               #[cfg(target_os = "macos")]
               apply_vibrancy(&options_window, NSVisualEffectMaterial::MediumLight, None, Some(16.0)).expect("Unsupported platform! 'apply_vibrancy' is only supported on macOS");
 
               #[cfg(target_os = "windows")]
               apply_blur(&options_window, Some((255, 255, 255, 255))).expect("Unsupported platform! 'apply_blur' is only supported on Windows");
-            
+
               set_shadow(&options_window, true).expect("Unsupported platform!");
             }
 
@@ -249,7 +274,7 @@ fn main() {
                     }
                 }
             });
-            
+
             let tray_handle = app.tray_handle();
             app.listen_global("media-devices-set", move|event| {
                 #[derive(serde::Deserialize)]
@@ -265,7 +290,7 @@ fn main() {
                     let id_prefix = if kind == DeviceKind::Video {
                         "video"
                     } else {
-                        "audio" 
+                        "audio"
                     };
                     let mut none_item = CustomMenuItem::new(format!("in_{}_none", id_prefix), "None");
                     if selected_device.is_none() {
@@ -277,13 +302,13 @@ fn main() {
                         .filter(|device| device.kind == kind)
                         .fold(initial, |tray_items, device| {
                             let mut menu_item = CustomMenuItem::new(format!("in_{}_{}", id_prefix, device.id), &device.label);
-                        
+
                             if let Some(selected) = selected_device {
                                 if selected.label == device.label {
                                     menu_item = menu_item.selected();
                                 }
                             }
-                            
+
                             tray_items.add_item(menu_item)
                         })
                 }
@@ -300,7 +325,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(generate_handler![
             start_dual_recording,
             stop_all_recordings,
             enumerate_audio_devices,
@@ -311,7 +336,7 @@ fn main() {
             has_screen_capture_access,
             reset_screen_permissions,
             reset_microphone_permissions,
-            reset_camera_permissions,
+            reset_camera_permissions
         ])
         .plugin(tauri_plugin_context_menu::init())
         .system_tray(tray)
@@ -348,7 +373,7 @@ fn main() {
                         let kind = if item_id.contains("video") { "videoinput" } else { "audioinput" };
 
                         app.emit_all("tray-set-device-id", SetDevicePayload {
-                            device_type: kind.to_string(), 
+                            device_type: kind.to_string(),
                             id: if device_id == "none" { None } else { Some(device_id) }
                         }).expect("Failed to emit tray set media device event to windows");
                     }
