@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.wrapper {
+  @apply mx-auto w-[92%] max-w-screen-xl;
+}
+
+.wrapper-max {
+  @apply max-w-screen-2xl;
+}
+
+.wrapper-sm {
+  @apply max-w-5xl;
+}
+
+*,
+*:before,
+*:after {
+  box-sizing: border-box;
+}
+
+* {
+  min-width: 0;
+  min-height: 0;
+}

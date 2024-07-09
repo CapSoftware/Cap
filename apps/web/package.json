@@ -17,6 +17,7 @@
     "@cap/database": "workspace:*",
     "@cap/ui": "workspace:*",
     "@cap/utils": "workspace:*",
+    "@deepgram/sdk": "^3.3.4",
     "@ffmpeg/ffmpeg": "^0.12.10",
     "@ffmpeg/util": "^0.12.1",
     "@headlessui/react": "^1.7.17",
@@ -55,6 +56,7 @@
     "react-tooltip": "^5.26.3",
     "resend": "1.1.0",
     "server-only": "^0.0.1",
+    "subtitles-parser-vtt": "^0.1.0",
     "tailwind-merge": "^2.1.0",
     "zod": "^3.22.4"
   },

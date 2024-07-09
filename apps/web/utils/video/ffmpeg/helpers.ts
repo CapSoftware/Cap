@@ -1,76 +1,137 @@
-import { FFmpeg as FfmpegType } from "@ffmpeg/ffmpeg";
-import { fetchFile } from "@ffmpeg/util";
+import { FFmpeg } from "@ffmpeg/ffmpeg";
 
-export const concatenateSegments = async (
-  ffmpeg: FfmpegType,
-  segmentsUrls: string[],
+export const playlistToMp4 = async (
+  userId: string,
   videoId: string,
-  outputFilename: string,
-  inputFormat: string,
-  outputFormat: string
+  videoName: string
 ) => {
+  const ffmpeg = new FFmpeg();
+  await ffmpeg.load();
+
   if (!ffmpeg) {
     throw new Error("FFmpeg not loaded");
   }
 
-  console.log("Running concatenateSegments...");
+  const videoFetch = await fetch(
+    `${process.env.NEXT_PUBLIC_URL}/api/video/playlistUrl?userId=${userId}&videoId=${videoId}`
+  );
 
-  console.log("concatenateSegments:", segmentsUrls);
-
-  await ffmpeg.load();
-
-  // Feed the video segments to FFmpeg
-  for (let i = 0; i < segmentsUrls.length; i++) {
-    console.log("Fetching file...");
-    const fetchedFile = await fetchFile(segmentsUrls[i]);
-    ffmpeg.writeFile(`file${i}.${inputFormat}`, fetchedFile);
+  if (videoFetch.status !== 200) {
+    throw new Error("Could not fetch video");
   }
 
-  // Create a file with all the file names
-  const fileList = "file_list.txt";
-  const concatList = segmentsUrls
-    .map((url, index) => `file file${index}.${inputFormat}`)
+  const video = await videoFetch.json();
+
+  if (!video.playlistOne) {
+    throw new Error("Video does not have a valid video playlist");
+  }
+
+  // Fetch the video playlist data
+  const videoResponse = await fetch(video.playlistOne);
+  const videoData = await videoResponse.text();
+  const videoUrls = videoData
+    .split("\n")
+    .filter((line) => line && !line.startsWith("#"));
+
+  // Download video files and write to FFmpeg FS
+  for (const [index, url] of videoUrls.entries()) {
+    const fullUrl = url.startsWith("https")
+      ? url
+      : `https://v.cap.so/${userId}/${videoId}/output/${url}`;
+    const segmentResponse = await fetch(fullUrl);
+    const segmentData = new Uint8Array(await segmentResponse.arrayBuffer());
+    await ffmpeg.writeFile(`video${index}.ts`, segmentData);
+  }
+
+  // Concatenate all video files using FFmpeg
+  const videoConcatList = videoUrls
+    .map((_, index) => `file 'video${index}.ts'`)
     .join("\n");
-  ffmpeg.writeFile(fileList, concatList);
+  await ffmpeg.writeFile("videolist.txt", videoConcatList);
 
-  console.log("Concatenating using ffmpeg script...");
+  if (video.playlistTwo) {
+    // Fetch the audio playlist data if available
+    const audioResponse = await fetch(video.playlistTwo);
+    const audioData = await audioResponse.text();
+    const audioUrls = audioData
+      .split("\n")
+      .filter((line) => line && !line.startsWith("#"));
 
-  await ffmpeg.exec([
-    "-f",
-    "concat",
-    "-safe",
-    "0",
-    "-i",
-    fileList,
-    "-r",
-    `${outputFilename === "video_output.mp4" ? 30 : 60}`,
-    "-c",
-    "copy",
-    outputFilename,
-  ]);
+    // Download audio files and write to FFmpeg FS
+    for (const [index, url] of audioUrls.entries()) {
+      const fullUrl = url.startsWith("https")
+        ? url
+        : `https://v.cap.so/tzv973qb6ghnznf/z3ha0dv61q5hrdw/output/${url}`;
+      const segmentResponse = await fetch(fullUrl);
+      const segmentData = new Uint8Array(await segmentResponse.arrayBuffer());
+      await ffmpeg.writeFile(`audio${index}.ts`, segmentData);
+    }
 
-  // Read the resulting file
-  const data = await ffmpeg.readFile(outputFilename);
+    // Concatenate all audio files using FFmpeg
+    const audioConcatList = audioUrls
+      .map((_, index) => `file 'audio${index}.ts'`)
+      .join("\n");
+    await ffmpeg.writeFile("audiolist.txt", audioConcatList);
 
-  // // Convert the data to a Blob
-  // const blob = new Blob([data], {
-  //   type: `video/${outputFormat}`,
-  // });
+    // Merge video and audio into final MP4
+    await ffmpeg.exec([
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-i",
+      "videolist.txt",
+      "-c",
+      "copy",
+      "temp_video.mp4",
+    ]);
+    await ffmpeg.exec([
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-i",
+      "audiolist.txt",
+      "-c",
+      "copy",
+      "temp_audio.mp4",
+    ]);
+    await ffmpeg.exec([
+      "-i",
+      "temp_video.mp4",
+      "-i",
+      "temp_audio.mp4",
+      "-c:v",
+      "copy",
+      "-c:a",
+      "aac",
+      "-async",
+      "1", // Adjusts audio to match the number of video frames
+      "-vsync",
+      "1", // Ensures frames are handled correctly
+      "-copyts", // Copy timestamps
+      videoName + ".mp4",
+    ]);
+  } else {
+    // Only video available, process as single MP4
+    await ffmpeg.exec([
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-i",
+      "videolist.txt",
+      "-c",
+      "copy",
+      videoName + ".mp4",
+    ]);
+  }
 
-  // console.log("Uploading to S3...");
+  // Read the result and create a Blob
+  const mp4Data = await ffmpeg.readFile(videoName + ".mp4");
+  const mp4Blob = new Blob([mp4Data], { type: "video/mp4" });
 
-  // const formData = new FormData();
-  // formData.append("filename", outputFilename);
-  // formData.append("videoId", videoId);
-  // formData.append("blobData", blob);
-
-  // await fetch(`${process.env.NEXT_PUBLIC_URL}/api/upload/new`, {
-  //   method: "POST",
-  //   body: formData,
-  // });
-
-  // Return the URL to the MP4 on S3
-  return data;
+  return mp4Blob;
 };
 
 export async function generateM3U8Playlist(

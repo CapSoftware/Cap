@@ -151,6 +151,7 @@ export const videos = mysqlTable(
     jobId: varchar("jobId", { length: 255 }),
     jobStatus: varchar("jobStatus", { length: 255 }),
     skipProcessing: boolean("skipProcessing").notNull().default(false),
+    transcriptionStatus: varchar("transcriptionStatus", { length: 255 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
   },

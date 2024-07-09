@@ -18,7 +18,7 @@ export default async function CapsPage({
   searchParams: { [key: string]: string | string[] | undefined };
 }) {
   const page = Number(searchParams.page) || 1;
-  const limit = Number(searchParams.limit) || 16;
+  const limit = Number(searchParams.limit) || 15;
   const user = await getCurrentUser();
   const userId = user?.id as string;
 

@@ -95,6 +95,8 @@ pub async fn upload_file(
             "audio/aac"
         } else if file_path.to_lowercase().ends_with(".webm") { 
             "audio/webm" 
+        } else if file_path.to_lowercase().ends_with(".mp3") { 
+            "audio/mpeg"
         } else {
             "video/mp2t"
         };
@@ -155,14 +157,14 @@ pub fn get_video_duration(file_path: &str) -> Result<f64, std::io::Error> {
         .output()?;
 
     let output_str = str::from_utf8(&output.stderr).unwrap();
-    let duration_regex = Regex::new(r"Duration: (\d{2}):(\d{2}):(\d{2})\.\d{2}").unwrap();
+    let duration_regex = Regex::new(r"Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})").unwrap();
     let caps = duration_regex.captures(output_str).unwrap();
 
     let hours: f64 = caps.get(1).unwrap().as_str().parse().unwrap();
     let minutes: f64 = caps.get(2).unwrap().as_str().parse().unwrap();
-    let seconds: f64 = caps.get(3).unwrap().as_str().parse().unwrap();
-
-    let duration = hours * 3600.0 + minutes * 60.0 + seconds;
+    let seconds: f64 = caps.get(3).unwrap().as_str().parse::<f64>().unwrap();
+    let milliseconds: f64 = caps.get(4).unwrap().as_str().parse::<f64>().unwrap() / 100.0;
+    let duration = hours * 3600.0 + minutes * 60.0 + seconds + milliseconds;
 
     Ok(duration)
 }
