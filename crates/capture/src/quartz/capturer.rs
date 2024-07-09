@@ -56,6 +56,10 @@ impl Capturer {
             stream
         };
 
+        if queue.is_null() {
+            return Err(CGError::Failure);
+        }
+
         match unsafe { CGDisplayStreamStart(stream) } {
             CGError::Success => Ok(Capturer {
                 stream, queue, width, height, format, display

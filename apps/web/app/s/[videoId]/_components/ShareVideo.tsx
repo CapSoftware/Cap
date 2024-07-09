@@ -12,6 +12,9 @@ import {
 import { LogoSpinner } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
 import { Tooltip } from "react-tooltip";
+import { fromVtt, Subtitle } from "subtitles-parser-vtt";
+import { is } from "drizzle-orm";
+import toast from "react-hot-toast";
 
 declare global {
   interface Window {
@@ -44,6 +47,12 @@ export const ShareVideo = ({
   const [seeking, setSeeking] = useState(false);
   const [videoMetadataLoaded, setVideoMetadataLoaded] = useState(false);
   const [overlayVisible, setOverlayVisible] = useState(true);
+  const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
+  const [subtitlesVisible, setSubtitlesVisible] = useState(true);
+  const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
+    useState(false);
+
+  const [videoSpeed, setVideoSpeed] = useState(1);
   const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
@@ -215,6 +224,21 @@ export const ShareVideo = ({
     }
   };
 
+  const handleSpeedChange = () => {
+    let newSpeed;
+    if (videoSpeed === 1) {
+      newSpeed = 1.5;
+    } else if (videoSpeed === 1.5) {
+      newSpeed = 2;
+    } else {
+      newSpeed = 1;
+    }
+    setVideoSpeed(newSpeed);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = newSpeed;
+    }
+  };
+
   const watchedPercentage =
     longestDuration > 0 ? (currentTime / longestDuration) * 100 : 0;
 
@@ -238,6 +262,52 @@ export const ShareVideo = ({
       syncPlay();
     }
   }, [isPlaying, isLoading]);
+
+  const parseSubTime = (timeString: number) => {
+    const [hours, minutes, seconds] = timeString
+      .toString()
+      .split(":")
+      .map(Number);
+    return hours * 3600 + minutes * 60 + seconds;
+  };
+
+  useEffect(() => {
+    const fetchSubtitles = () => {
+      fetch(`https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`)
+        .then((response) => response.text())
+        .then((text) => {
+          const parsedSubtitles = fromVtt(text);
+          setSubtitles(parsedSubtitles);
+        });
+    };
+
+    if (data.transcriptionStatus === "COMPLETE") {
+      fetchSubtitles();
+    } else {
+      const intervalId = setInterval(() => {
+        fetch(`/api/video/transcribe/status?videoId=${data.id}`)
+          .then((response) => response.json())
+          .then(({ transcriptionStatus }) => {
+            if (transcriptionStatus === "PROCESSING") {
+              setIsTranscriptionProcessing(true);
+            } else if (transcriptionStatus === "COMPLETE") {
+              fetchSubtitles();
+              clearInterval(intervalId);
+            } else if (transcriptionStatus === "FAILED") {
+              clearInterval(intervalId);
+            }
+          });
+      }, 1000);
+
+      return () => clearInterval(intervalId);
+    }
+  }, [data]);
+
+  const currentSubtitle = subtitles.find(
+    (subtitle) =>
+      parseSubTime(subtitle.startTime) <= currentTime &&
+      parseSubTime(subtitle.endTime) >= currentTime
+  );
 
   if (data.jobStatus === "ERROR") {
     return (
@@ -290,6 +360,16 @@ export const ShareVideo = ({
         className="relative block w-full h-full rounded-lg bg-black"
         style={{ paddingBottom: "min(806px, 56.25%)" }}
       >
+        {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
+          <div className="absolute bottom-0 w-full text-center transform transition p-1.5 lg:p-2.5 xl:p-3.5 -translate-y-16 z-10">
+            <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl leading-7 md:text-lg md:leading-9 lg:text-2xl lg:leading-11 2xl:text-3xl 2xl:leading-13 xs:text-base box-decoration-break-clone xs:leading-8 xl:text-2.5xl">
+              {currentSubtitle.text
+                .replace("- ", "")
+                .replace(".", "")
+                .replace(",", "")}
+            </div>
+          </div>
+        )}
         <VideoPlayer
           ref={videoRef}
           videoSrc={
@@ -384,7 +464,105 @@ export const ShareVideo = ({
             <div className="flex items-center justify-end space-x-2">
               <span className="inline-flex">
                 <button
-                  aria-label="Mute video"
+                  aria-label={`Change video speed to ${videoSpeed}x`}
+                  className=" inline-flex min-w-[45px] items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg"
+                  tabIndex={0}
+                  type="button"
+                  onClick={handleSpeedChange}
+                >
+                  {videoSpeed}x
+                </button>
+              </span>
+              {isTranscriptionProcessing && subtitles.length === 0 && (
+                <span className="inline-flex">
+                  <button
+                    aria-label={isPlaying ? "Pause video" : "Play video"}
+                    className=" inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg"
+                    tabIndex={0}
+                    type="button"
+                    onClick={() => {
+                      toast.error("Transcription is processing");
+                    }}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="w-6 h-6"
+                      viewBox="0 0 24 24"
+                    >
+                      <style>
+                        {
+                          "@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"
+                        }
+                      </style>
+                      <path
+                        fill="#FFF"
+                        d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
+                        opacity={0.25}
+                      />
+                      <path
+                        fill="#FFF"
+                        d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
+                        style={{
+                          transformOrigin: "center",
+                          animation: "spinner_AtaB .75s infinite linear",
+                        }}
+                      />
+                    </svg>
+                  </button>
+                </span>
+              )}
+              {subtitles.length > 0 && (
+                <span className="inline-flex">
+                  <button
+                    aria-label={
+                      subtitlesVisible ? "Hide subtitles" : "Show subtitles"
+                    }
+                    className=" inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg"
+                    tabIndex={0}
+                    type="button"
+                    onClick={() => setSubtitlesVisible(!subtitlesVisible)}
+                  >
+                    {subtitlesVisible ? (
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        className="w-auto h-6"
+                        viewBox="0 0 24 24"
+                      >
+                        <rect
+                          width="18"
+                          height="14"
+                          x="3"
+                          y="5"
+                          rx="2"
+                          ry="2"
+                        ></rect>
+                        <path d="M7 15h4m4 0h2M7 11h2m4 0h4"></path>
+                      </svg>
+                    ) : (
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        className="w-auto h-6"
+                        viewBox="0 0 24 24"
+                      >
+                        <path d="M10.5 5H19a2 2 0 012 2v8.5M17 11h-.5M19 19H5a2 2 0 01-2-2V7a2 2 0 012-2M2 2l20 20M7 11h4M7 15h2.5"></path>
+                      </svg>
+                    )}
+                  </button>
+                </span>
+              )}
+              <span className="inline-flex">
+                <button
+                  aria-label={videoRef?.current?.muted ? "Unmute" : "Mute"}
                   className=" inline-flex items-center text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-slate-100 border-transparent hover:text-white focus:border-white hover:bg-slate-100 hover:bg-opacity-10 active:bg-slate-100 active:bg-opacity-10 px-2 py-2 justify-center rounded-lg"
                   tabIndex={0}
                   type="button"
