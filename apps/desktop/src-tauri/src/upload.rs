@@ -17,7 +17,7 @@ pub async fn upload_file(
     file_type: String,
 ) -> Result<String, String> {
     if let Some(ref options) = options {
-        println!("Uploading video...");
+        tracing::info!("Uploading video...");
 
         let duration = get_video_duration(&file_path).map_err(|e| format!("Failed to get video duration: {}", e))?;
         let duration_str = duration.to_string();
@@ -70,7 +70,7 @@ pub async fn upload_file(
             .await
             .map_err(|e| format!("Failed to read response from Next.js handler: {}", e))?;
 
-        println!("Server response: {}", server_response);
+        tracing::debug!("Server response: {}", server_response);
 
 
         // Deserialize the server response
@@ -89,7 +89,7 @@ pub async fn upload_file(
             form = form.text(key.to_string(), value_str.to_owned());
         }
 
-        println!("Uploading file: {}", file_path);
+        tracing::info!("Uploading file: {}", file_path);
         
         let mime_type = if file_path.to_lowercase().ends_with(".aac") {
             "audio/aac"
@@ -112,7 +112,7 @@ pub async fn upload_file(
         let post_url = presigned_post_data["presignedPostData"]["url"].as_str()
             .ok_or("URL is missing or not a string")?;
 
-        println!("Uploading file to: {}", post_url);
+        tracing::info!("Uploading file to: {}", post_url);
 
         let response = client.post(post_url)
             .multipart(form)
@@ -121,12 +121,12 @@ pub async fn upload_file(
 
         match response {
             Ok(response) if response.status().is_success() => {
-                println!("File uploaded successfully");
+                tracing::info!("File uploaded successfully");
             }
             Ok(response) => {
                 let status = response.status();
                 let error_body = response.text().await.unwrap_or_else(|_| "<no response body>".to_string());
-                eprintln!("Failed to upload file. Status: {}. Body: {}", status, error_body);
+                tracing::error!("Failed to upload file. Status: {}. Body: {}", status, error_body);
                 return Err(format!("Failed to upload file. Status: {}. Body: {}", status, error_body));
             }
             Err(e) => {
@@ -134,11 +134,11 @@ pub async fn upload_file(
             }
         }
 
-        println!("Removing file after upload: {}", file_path);
+        tracing::info!("Removing file after upload: {}", file_path);
         let remove_result = tokio::fs::remove_file(&file_path).await;
         match &remove_result {
-            Ok(_) => println!("File removed successfully"),
-            Err(e) => println!("Failed to remove file after upload: {}", e),
+            Ok(_) => tracing::info!("File removed successfully"),
+            Err(e) => tracing::info!("Failed to remove file after upload: {}", e),
         }
         remove_result.map_err(|e| format!("Failed to remove file after upload: {}", e))?;
 

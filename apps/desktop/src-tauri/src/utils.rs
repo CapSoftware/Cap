@@ -20,34 +20,32 @@ pub fn has_screen_capture_access() -> bool {
     let one_second = Duration::new(1, 0);
     let one_frame = one_second / 60;
 
-    println!("width: {}", width);
-    println!("height: {}", height);
+    tracing::debug!("width: {}", width);
+    tracing::debug!("height: {}", height);
 
     let result = panic::catch_unwind(|| {
         let mut capturer = match Capturer::new(display, width, height) {
             Ok(capturer) => {
-                println!("Capturer created");
+                tracing::debug!("Capturer created");
                 capturer
             }
             Err(e) => {
-                println!("Capturer not created: {}", e);
+                tracing::error!("Capturer not created: {}", e);
                 return false;
             }
         };
-
-        println!("Capturer created");
 
         let start = Instant::now();
 
         loop {
             if start.elapsed() > Duration::from_secs(2) {
-                println!("Loop exited");
+                tracing::debug!("Loop exited");
                 return false;
             }
 
             match capturer.frame() {
                 Ok(_frame) => {
-                    println!("Frame captured");
+                    tracing::debug!("Frame captured");
                     return true;
                 }
                 Err(error) => {
@@ -55,7 +53,7 @@ pub fn has_screen_capture_access() -> bool {
                         thread::sleep(one_frame);
                         continue;
                     } else {
-                        println!("Error: {}", error);
+                        tracing::error!("Error: {}", error);
                         return false;
                     }
                 }
@@ -63,7 +61,7 @@ pub fn has_screen_capture_access() -> bool {
         }
     });
 
-    println!("Result: {:?}", result);
+    tracing::debug!("Result: {:?}", result);
 
     match result {
         Ok(val) => val,

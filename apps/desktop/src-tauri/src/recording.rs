@@ -47,7 +47,7 @@ pub async fn start_dual_recording(
   state: State<'_, Arc<Mutex<RecordingState>>>,
   options: RecordingOptions,
 ) -> Result<(), String> {
-  println!("Starting screen recording...");
+  tracing::info!("Starting screen recording...");
   let mut state_guard = state.lock().await;
 
   let shutdown_flag = Arc::new(AtomicBool::new(false));
@@ -55,7 +55,7 @@ pub async fn start_dual_recording(
   let data_dir = state_guard.data_dir.as_ref()
       .ok_or("Data directory is not set in the recording state".to_string())?.clone();
 
-  println!("data_dir: {:?}", data_dir);
+  tracing::debug!("data_dir: {:?}", data_dir);
 
   let audio_chunks_dir = data_dir.join("chunks/audio");
   let video_chunks_dir = data_dir.join("chunks/video");
@@ -91,18 +91,18 @@ pub async fn start_dual_recording(
 
       drop(state_guard);
 
-      println!("Starting upload loops...");
+      tracing::info!("Starting upload loops...");
 
       match tokio::try_join!(screen_upload, audio_upload) {
           Ok(_) => {
-              println!("Both upload loops completed successfully.");
+              tracing::info!("Both upload loops completed successfully.");
           },
           Err(e) => {
-              eprintln!("An error occurred: {}", e);
+              tracing::error!("An error occurred: {}", e);
           },
       }
   } else {
-      println!("Skipping upload loops due to NEXT_PUBLIC_LOCAL_MODE being set to 'true'.");
+      tracing::info!("Skipping upload loops due to NEXT_PUBLIC_LOCAL_MODE being set to 'true'.");
   }
 
   Ok(())
@@ -113,12 +113,12 @@ pub async fn start_dual_recording(
 pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -> Result<(), String> {
     let mut guard = state.lock().await;
 
-    println!("Stopping media recording...");
+    tracing::info!("Stopping media recording...");
 
     guard.shutdown_flag.store(true, Ordering::SeqCst);
 
     if let Some(mut media_process) = guard.media_process.take() {
-        println!("Stopping media recording...");
+        tracing::info!("Stopping media recording...");
         media_process.stop_media_recording().await.expect("Failed to stop media recording");
     }
 
@@ -130,12 +130,12 @@ pub async fn stop_all_recordings(state: State<'_, Arc<Mutex<RecordingState>>>) -
     if !is_local_mode {
         while !guard.video_uploading_finished.load(Ordering::SeqCst)
             || !guard.audio_uploading_finished.load(Ordering::SeqCst) {
-            println!("Waiting for uploads to finish...");
+            tracing::debug!("Waiting for uploads to finish...");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
-    println!("All recordings and uploads stopped.");
+    tracing::info!("All recordings and uploads stopped.");
 
     Ok(())
 }
@@ -195,7 +195,7 @@ async fn start_upload_loop(
                 let segment_path_clone = segment_path.clone();
                 upload_tasks.push(tokio::spawn(async move {
                     let filepath_str = segment_path_clone.to_str().unwrap_or_default().to_owned();
-                    println!("Uploading video for {}: {}", video_type_clone, filepath_str);
+                    tracing::debug!("Uploading video for {}: {}", video_type_clone, filepath_str);
                     upload_file(Some(options_clone), filepath_str, video_type_clone).await.map(|_| ())
                 }));
             }

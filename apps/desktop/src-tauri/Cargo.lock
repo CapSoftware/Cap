@@ -646,6 +646,8 @@ dependencies = [
  "tauri-specta",
  "tokio",
  "tokio-util",
+ "tracing",
+ "tracing-subscriber",
  "urlencoding",
  "which",
  "window-shadows",

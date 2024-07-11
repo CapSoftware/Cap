@@ -13,6 +13,7 @@ use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 use window_shadows::set_shadow;
 use tauri_plugin_positioner::{WindowExt, Position};
 use tauri_plugin_oauth::start;
+use tracing_subscriber;
 
 mod recording;
 mod upload;
@@ -46,37 +47,40 @@ macro_rules! generate_handler {
 }
 
 fn main() {
-    let _ = fix_path_env::fix();
+    tracing_subscriber::fmt::init();
 
     std::panic::set_hook(Box::new(|info| {
-        eprintln!("Thread panicked: {:?}", info);
+        // TODO: More expressive panic data collection (configurable backtrace capture especially)
+        tracing::error!("Thread panicked: {:?}", info);
     }));
+
+    let _ = fix_path_env::fix();
 
     fn handle_ffmpeg_installation() -> FfmpegResult<()> {
         if ffmpeg_is_installed() {
-            println!("FFmpeg is already installed! 🎉");
+            tracing::info!("FFmpeg is already installed! 🎉");
             return Ok(());
         }
 
+        tracing::info!("FFmpeg not found. Attempting to install...");
         match check_latest_version() {
-            Ok(version) => println!("Latest available version: {}", version),
-            Err(_) => println!("Skipping version check on this platform."),
+            Ok(version) => tracing::debug!("Latest available version: {}", version),
+            Err(_) => tracing::debug!("Skipping version check on this platform."),
         }
 
         let download_url = ffmpeg_download_url()?;
         let destination = sidecar_dir()?;
 
-        println!("Downloading from: {:?}", download_url);
+        tracing::debug!("Downloading from: {:?}", download_url);
         let archive_path = download_ffmpeg_package(download_url, &destination)?;
-        println!("Downloaded package: {:?}", archive_path);
+        tracing::debug!("Downloaded package: {:?}", archive_path);
 
-        println!("Extracting...");
+        tracing::debug!("Extracting...");
         unpack_ffmpeg(&archive_path, &destination)?;
 
         let version = ffmpeg_version()?;
-        println!("FFmpeg version: {}", version);
 
-        println!("Done! 🏁");
+        tracing::info!("Done! Installed FFmpeg version {} 🏁", version);
         Ok(())
     }
 
@@ -172,12 +176,15 @@ fn main() {
         .iter()
         .max_by_key(|mode| mode.size().width * mode.size().height);
 
-    let (max_width, max_height) = if let Some(max_mode) = max_mode {
-        println!("Maximum resolution: {:?}", max_mode.size());
-        (max_mode.size().width, max_mode.size().height)
-    } else {
-        println!("Failed to determine maximum resolution.");
-        (0, 0)
+    let (max_width, max_height) = match max_mode {
+        Some(max_mode) => {
+            tracing::debug!("Maximum resolution: {:?}", max_mode.size());
+            (max_mode.size().width, max_mode.size().height)
+        },
+        None => {
+            tracing::debug!("Failed to determine maximum resolution.");
+            (0, 0)
+        }
     };
 
     #[derive(serde::Deserialize, PartialEq)]
@@ -261,16 +268,16 @@ fn main() {
                                 };
 
                                 if let Err(e) = tray_handle.set_icon(tauri::Icon::Raw(icon_bytes)) {
-                                    eprintln!("Error while setting tray icon: {}", e);
+                                    tracing::warn!("Error while setting tray icon: {}", e);
                                 }
                             }
                             Err(e) => {
-                                eprintln!("Error while deserializing recording state from event payload: {}", e);
+                                tracing::warn!("Error while deserializing recording state from event payload: {}", e);
                             }
                         }
                     }
                     None => {
-                        eprintln!("Error while opening event payload");
+                        tracing::warn!("Error while opening event payload");
                     }
                 }
             });

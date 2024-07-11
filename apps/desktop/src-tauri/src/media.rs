@@ -21,6 +21,9 @@ use capture::{Capturer, Display};
 
 const FRAME_RATE: u64 = 30;
 
+// TODO: This struct's associated functions cannot be instrumented by tracing because
+// `cpal::Stream` does not implement the `Debug` trait, preventing a straightforward
+// Debug implementation from being derived. Would have to implement it by hand here.
 pub struct MediaRecorder {
     pub options: Option<RecordingOptions>,
     ffmpeg_audio_process: Option<tokio::process::Child>,
@@ -64,7 +67,7 @@ impl MediaRecorder {
     pub async fn start_media_recording(&mut self, options: RecordingOptions, audio_file_path: &str, video_file_path: &str, screenshot_file_path: &str, custom_device: Option<&str>, max_screen_width: usize, max_screen_height: usize) -> Result<(), String> {
         self.options = Some(options.clone());
 
-        println!("Custom device: {:?}", custom_device);
+        tracing::debug!("Custom device: {:?}", custom_device);
 
         let host = cpal::default_host();
         let devices = host.devices().expect("Failed to get devices");
@@ -79,12 +82,12 @@ impl MediaRecorder {
         let (video_tx, video_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
         let calculated_stride = (adjusted_width * 4) as usize;
 
-        println!("Display width: {}", w);
-        println!("Display height: {}", h);
-        println!("Adjusted width: {}", adjusted_width);
-        println!("Adjusted height: {}", adjusted_height);
-        println!("Capture size: {}", capture_size);
-        println!("Calculated stride: {}", calculated_stride);
+        tracing::debug!("Display width: {}", w);
+        tracing::debug!("Display height: {}", h);
+        tracing::debug!("Adjusted width: {}", adjusted_width);
+        tracing::debug!("Adjusted height: {}", adjusted_height);
+        tracing::debug!("Capture size: {}", capture_size);
+        tracing::debug!("Calculated stride: {}", calculated_stride);
 
         let audio_start_time = Arc::new(Mutex::new(None));
         let video_start_time = Arc::new(Mutex::new(None));
@@ -121,7 +124,7 @@ impl MediaRecorder {
             host.default_input_device().expect("No default input device available")
         };
 
-        println!("Using audio device: {}", device.name().expect("Failed to get device name"));
+        tracing::info!("Using audio device: {}", device.name().expect("Failed to get device name"));
 
         let config = device.supported_input_configs()
             .expect("Failed to get supported input configs")
@@ -141,13 +144,13 @@ impl MediaRecorder {
             _ => panic!("Unsupported sample format."),
         };
 
-        println!("Sample rate: {}", sample_rate);
-        println!("Channels: {}", channels);
-        println!("Sample format: {}", sample_format);
+        tracing::debug!("Sample rate: {}", sample_rate);
+        tracing::debug!("Channels: {}", channels);
+        tracing::debug!("Sample format: {}", sample_format);
 
         let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
 
-        println!("FFmpeg binary path: {}", ffmpeg_binary_path_str);
+        tracing::debug!("FFmpeg binary path: {}", ffmpeg_binary_path_str);
 
         let audio_file_path_owned = audio_file_path.to_owned();
         let video_file_path_owned = video_file_path.to_owned();
@@ -158,11 +161,11 @@ impl MediaRecorder {
         let ffmpeg_video_stdin = self.ffmpeg_video_stdin.clone();
 
         let err_fn = move |err| {
-            eprintln!("an error occurred on stream: {}", err);
+            tracing::error!("an error occurred on stream: {}", err);
         };
 
         if custom_device != Some("None") {
-            println!("Building input stream...");
+            tracing::trace!("Building input stream...");
 
             let stream_result: Result<cpal::Stream, cpal::BuildStreamError> = match config.sample_format() {
               SampleFormat::I8 => device.build_input_stream(
@@ -175,7 +178,7 @@ impl MediaRecorder {
                           let bytes = data.iter().map(|&sample| sample as u8).collect::<Vec<u8>>();
                           if let Some(sender) = &audio_channel_sender {
                             if sender.try_send(bytes).is_err() {
-                              eprintln!("Channel send error. Dropping data.");
+                              tracing::warn!("Channel send error. Dropping data.");
                             }
                           }
 
@@ -183,7 +186,7 @@ impl MediaRecorder {
                               if start_time_option.is_none() {
                                   **start_time_option = Some(Instant::now());
 
-                                  println!("Audio start time captured");
+                                  tracing::trace!("Audio start time captured");
                               }
                           }
                       }
@@ -202,7 +205,7 @@ impl MediaRecorder {
                           LittleEndian::write_i16_into(data, &mut bytes);
                           if let Some(sender) = &audio_channel_sender {
                               if sender.try_send(bytes).is_err() {
-                                  eprintln!("Channel send error. Dropping data.");
+                                  tracing::warn!("Channel send error. Dropping data.");
                               }
                           }
 
@@ -210,7 +213,7 @@ impl MediaRecorder {
                               if start_time_option.is_none() {
                                   **start_time_option = Some(Instant::now());
 
-                                  println!("Audio start time captured");
+                                  tracing::trace!("Audio start time captured");
                               }
                           }
                       }
@@ -229,7 +232,7 @@ impl MediaRecorder {
                           LittleEndian::write_i32_into(data, &mut bytes);
                           if let Some(sender) = &audio_channel_sender {
                               if sender.try_send(bytes).is_err() {
-                                  eprintln!("Channel send error. Dropping data.");
+                                  tracing::warn!("Channel send error. Dropping data.");
                               }
                           }
 
@@ -237,7 +240,7 @@ impl MediaRecorder {
                               if start_time_option.is_none() {
                                   **start_time_option = Some(Instant::now());
 
-                                  println!("Audio start time captured");
+                                  tracing::trace!("Audio start time captured");
                               }
                           }
                       }
@@ -256,7 +259,7 @@ impl MediaRecorder {
                           LittleEndian::write_f32_into(data, &mut bytes);
                           if let Some(sender) = &audio_channel_sender {
                               if sender.try_send(bytes).is_err() {
-                                  eprintln!("Channel send error. Dropping data.");
+                                  tracing::warn!("Channel send error. Dropping data.");
                               }
                           }
 
@@ -264,7 +267,7 @@ impl MediaRecorder {
                               if start_time_option.is_none() {
                                   **start_time_option = Some(Instant::now());
 
-                                  println!("Audio start time captured");
+                                  tracing::trace!("Audio start time captured");
                               }
                           }
                       }
@@ -285,7 +288,7 @@ impl MediaRecorder {
         let capture_frame_at = Duration::from_secs(3);
 
         std::thread::spawn(move || {
-            println!("Starting video recording capture thread...");
+            tracing::trace!("Starting video recording capture thread...");
 
             let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
                 "true" => true,
@@ -342,7 +345,7 @@ impl MediaRecorder {
                                     let mut encoder = JpegEncoder::new_with_quality(&mut output_file, 20);
 
                                     if let Err(e) = encoder.encode_image(&image) {
-                                        eprintln!("Failed to save screenshot: {}", e);
+                                        tracing::warn!("Failed to save screenshot: {}", e);
                                     } else {
                                         if !is_local_mode {
                                             let rt = tokio::runtime::Runtime::new().unwrap();
@@ -352,22 +355,22 @@ impl MediaRecorder {
                                                 match upload_task.await {
                                                     Ok(result) => {
                                                         match result {
-                                                            Ok(_) => println!("Screenshot captured and saved to {:?}", path),
-                                                            Err(e) => eprintln!("Failed to upload file: {}", e),
+                                                            Ok(_) => tracing::info!("Screenshot captured and saved to {:?}", path),
+                                                            Err(e) => tracing::warn!("Failed to upload file: {}", e),
                                                         }
                                                     },
-                                                    Err(e) => eprintln!("Failed to join task: {}", e),
+                                                    Err(e) => tracing::error!("Failed to join task: {}", e),
                                                 }
                                             });
                                         }
-                                        println!("Screenshot captured and saved to {:?}", path);
+                                        tracing::info!("Screenshot captured and saved to {:?}", path);
                                     }
                                 });
                             }
 
                             if let Some(sender) = &video_channel_sender {
                                 if sender.try_send(frame_data).is_err() {
-                                    eprintln!("Channel send error. Dropping data.");
+                                    tracing::error!("Channel send error. Dropping data.");
                                 }
                             }
 
@@ -377,7 +380,7 @@ impl MediaRecorder {
                                 if start_time_option.is_none() {
                                     **start_time_option = Some(Instant::now());
 
-                                    println!("Video start time captured");
+                                    tracing::trace!("Video start time captured");
                                 }
                             }
 
@@ -388,7 +391,7 @@ impl MediaRecorder {
                             continue;
                         },
                         Err(error) => {
-                            eprintln!("Capture error: {}", error);
+                            tracing::error!("Capture error: {}", error);
                             break;
                         },
                     }
@@ -405,11 +408,11 @@ impl MediaRecorder {
 
             let elapsed_total_time = start_time.elapsed();
             let fps = frame_count as f64 / elapsed_total_time.as_secs_f64();
-            println!("Current FPS: {}", fps);
+            tracing::trace!("Current FPS: {}", fps);
         });
 
-        println!("Starting audio recording and processing...");
-        let audio_output_chunk_pattern = format!("{}/audio_recording_%03d.aac", audio_file_path_owned);
+        tracing::info!("Starting audio recording and processing...");
+        let  audio_output_chunk_pattern = format!("{}/audio_recording_%03d.aac", audio_file_path_owned);
         let audio_segment_list_filename = format!("{}/segment_list.txt", audio_file_path_owned);
         let video_output_chunk_pattern = format!("{}/video_recording_%03d.ts", video_file_path_owned);
         let video_segment_list_filename = format!("{}/segment_list.txt", video_file_path_owned);
@@ -465,7 +468,7 @@ impl MediaRecorder {
         ].into_iter().map(|s| s.to_string()).collect();
 
         if custom_device != Some("None") {
-            println!("Adjusting FFmpeg commands based on start times...");
+            tracing::trace!("Adjusting FFmpeg commands based on start times...");
             adjust_ffmpeg_commands_based_on_start_times(
                 Arc::clone(&audio_start_time),
                 Arc::clone(&video_start_time),
@@ -474,7 +477,7 @@ impl MediaRecorder {
             ).await;
         }
 
-        println!("Starting FFmpeg audio and video processes...");
+        tracing::trace!("Starting FFmpeg audio and video processes...");
 
         let mut audio_stdin: Option<ChildStdin> = None;
         let mut audio_child: Option<Child> = None;
@@ -483,28 +486,28 @@ impl MediaRecorder {
             let (child, stdin) = self.start_audio_ffmpeg_processes(&ffmpeg_binary_path_str, &ffmpeg_audio_command).await.map_err(|e| e.to_string())?;
             audio_child = Some(child);
             audio_stdin = Some(stdin);
-            println!("Audio process started");
+            tracing::trace!("Audio process started");
         }
 
         let (video_child, video_stdin) = self.start_video_ffmpeg_processes(&ffmpeg_binary_path_str, &ffmpeg_video_command).await.map_err(|e| e.to_string())?;
-        println!("Video process started");
+        tracing::trace!("Video process started");
 
         if let Some(ffmpeg_audio_stdin) = &self.ffmpeg_audio_stdin {
             let mut audio_stdin_lock = ffmpeg_audio_stdin.lock().await;
             *audio_stdin_lock = audio_stdin;
             drop(audio_stdin_lock);
-            println!("Audio stdin set");
+            tracing::trace!("Audio stdin set");
         }
 
         if let Some(ffmpeg_video_stdin) = &self.ffmpeg_video_stdin {
             let mut video_stdin_lock = ffmpeg_video_stdin.lock().await;
             *video_stdin_lock = Some(video_stdin);
             drop(video_stdin_lock);
-            println!("Video stdin set");
+            tracing::trace!("Video stdin set");
         }
 
         if custom_device != Some("None") {
-            println!("Starting audio channel senders...");
+            tracing::trace!("Starting audio channel senders...");
             tokio::spawn(async move {
                 while let Some(bytes) = &audio_channel_receiver.lock().await.as_mut().unwrap().recv().await {
                     if let Some(audio_stdin_arc) = &ffmpeg_audio_stdin{
@@ -518,7 +521,7 @@ impl MediaRecorder {
             });
         }
 
-        println!("Starting video channel senders...");
+        tracing::trace!("Starting video channel senders...");
         tokio::spawn(async move {
             while let Some(bytes) = &video_channel_receiver.lock().await.as_mut().unwrap().recv().await {
                 if let Some(video_stdin_arc) = &ffmpeg_video_stdin {
@@ -541,15 +544,15 @@ impl MediaRecorder {
         self.ffmpeg_video_process = Some(video_child);
         self.device_name = Some(device.name().expect("Failed to get device name"));
 
-        println!("End of the start_audio_recording function");
+        tracing::trace!("End of the start_audio_recording function");
 
         Ok(())
     }
 
-    pub fn trigger_play (&mut self) -> Result<(), &'static str> {
+    pub fn trigger_play(&mut self) -> Result<(), &'static str> {
         if let Some(ref mut stream) = self.stream {
             stream.play().map_err(|_| "Failed to play stream")?;
-            println!("Audio recording playing.");
+            tracing::info!("Audio recording playing.");
         } else {
             return Err("Starting the recording did not work");
         }
@@ -575,7 +578,7 @@ impl MediaRecorder {
                 let video_segment_count = video_segments.lines().count();
 
                 if audio_segment_count >= expected_segments as usize && video_segment_count >= expected_segments as usize {
-                    println!("All segments generated");
+                    tracing::info!("All segments generated");
                     break;
                 }
 
@@ -587,7 +590,7 @@ impl MediaRecorder {
             let mut audio_stdin_guard = ffmpeg_audio_stdin.lock().await;
             if let Some(mut audio_stdin) = audio_stdin_guard.take() {
                 if let Err(e) = audio_stdin.write_all(b"q\n").await {
-                    eprintln!("Failed to send 'q' to audio FFmpeg process: {}", e);
+                    tracing::error!("Failed to send 'q' to audio FFmpeg process: {}", e);
                 }
                 let _ = audio_stdin.shutdown().await.map_err(|e| e.to_string());
             }
@@ -597,7 +600,7 @@ impl MediaRecorder {
             let mut video_stdin_guard = ffmpeg_video_stdin.lock().await;
             if let Some(mut video_stdin) = video_stdin_guard.take() {
                 if let Err(e) = video_stdin.write_all(b"q\n").await {
-                    eprintln!("Failed to send 'q' to video FFmpeg process: {}", e);
+                    tracing::error!("Failed to send 'q' to video FFmpeg process: {}", e);
                 }
                 let _ = video_stdin.shutdown().await.map_err(|e| e.to_string());
             }
@@ -615,7 +618,7 @@ impl MediaRecorder {
 
         if let Some(ref mut stream) = self.stream {
             stream.pause().map_err(|_| "Failed to pause stream")?;
-            println!("Audio recording paused.");
+            tracing::info!("Audio recording paused.");
         } else {
             return Err("Original recording was not started".to_string());
         }
@@ -628,7 +631,7 @@ impl MediaRecorder {
             let _ = process.kill().await.map_err(|e| e.to_string());
         }
 
-        println!("Audio recording stopped.");
+        tracing::info!("Audio recording stopped.");
         Ok(())
     }
 
@@ -638,12 +641,12 @@ impl MediaRecorder {
         audio_ffmpeg_command: &[String],
     ) -> Result<(Child, ChildStdin), Error> {
         let mut audio_process = start_recording_process(ffmpeg_binary_path, audio_ffmpeg_command).await.map_err(|e| {
-            eprintln!("Failed to start audio recording process: {}", e);
+            tracing::error!("Failed to start audio recording process: {}", e);
             std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
         })?;
 
         let audio_stdin = audio_process.stdin.take().ok_or_else(|| {
-            eprintln!("Failed to take audio stdin");
+            tracing::error!("Failed to take audio stdin");
             std::io::Error::new(std::io::ErrorKind::Other, "Failed to take audio stdin")
         })?;
 
@@ -656,12 +659,12 @@ impl MediaRecorder {
         video_ffmpeg_command: &[String],
     ) -> Result<(Child, ChildStdin), Error> {
         let mut video_process = start_recording_process(ffmpeg_binary_path, video_ffmpeg_command).await.map_err(|e| {
-            eprintln!("Failed to start video recording process: {}", e);
+            tracing::error!("Failed to start video recording process: {}", e);
             std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
         })?;
 
         let video_stdin = video_process.stdin.take().ok_or_else(|| {
-            eprintln!("Failed to take video stdin");
+            tracing::error!("Failed to take video stdin");
             std::io::Error::new(std::io::ErrorKind::Other, "Failed to take video stdin")
         })?;
 
@@ -672,6 +675,7 @@ impl MediaRecorder {
 
 #[tauri::command]
 #[specta::specta]
+#[tracing::instrument]
 pub fn enumerate_audio_devices() -> Vec<String> {
     let host = cpal::default_host();
     let default_device = host.default_input_device().expect("No default input device available");
@@ -697,6 +701,7 @@ pub fn enumerate_audio_devices() -> Vec<String> {
 
 use tokio::io::{BufReader, AsyncBufReadExt};
 
+#[tracing::instrument]
 async fn start_recording_process(
     ffmpeg_binary_path_str: &str,
     args: &[String],
@@ -711,7 +716,8 @@ async fn start_recording_process(
       tokio::spawn(async move {
             let mut process_reader = BufReader::new(process_stderr).lines();
             while let Ok(Some(line)) = process_reader.next_line().await {
-                eprintln!("FFmpeg process STDERR: {}", line);
+                // TODO: Collect this into one event. Custom implementation of Into<Stdio>?
+                tracing::error!("FFmpeg process STDERR: {}", line);
             }
         });
     }
@@ -719,6 +725,7 @@ async fn start_recording_process(
     Ok(process)
 }
 
+#[tracing::instrument]
 async fn wait_for_start_times(
     audio_start_time: Arc<Mutex<Option<Instant>>>,
     video_start_time: Arc<Mutex<Option<Instant>>>,
@@ -738,6 +745,7 @@ async fn wait_for_start_times(
     }
 }
 
+#[tracing::instrument]
 async fn adjust_ffmpeg_commands_based_on_start_times(
     audio_start_time: Arc<Mutex<Option<Instant>>>,
     video_start_time: Arc<Mutex<Option<Instant>>>,
@@ -751,9 +759,9 @@ async fn adjust_ffmpeg_commands_based_on_start_times(
         video_start.duration_since(audio_start)
     };
 
-    println!("Duration difference: {:?}", duration_difference);
-    println!("Audio start: {:?}", audio_start);
-    println!("Video start: {:?}", video_start);
+    tracing::debug!("Duration difference: {:?}", duration_difference);
+    tracing::debug!("Audio start: {:?}", audio_start);
+    tracing::debug!("Video start: {:?}", video_start);
 
     // Convert the duration difference to a float representing seconds
     let offset_seconds = duration_difference.as_secs() as f64
@@ -765,13 +773,13 @@ async fn adjust_ffmpeg_commands_based_on_start_times(
         ffmpeg_video_command.splice(0..0, vec![
             "-itsoffset".to_string(), format!("{:.3}", offset_seconds)
         ]);
-        println!("Applying -itsoffset {:.3} to video", offset_seconds);
+        tracing::info!("Applying -itsoffset {:.3} to video", offset_seconds);
     } else if video_start > audio_start {
         // Offset the audio start time
         ffmpeg_audio_command.splice(0..0, vec![
             "-itsoffset".to_string(), format!("{:.3}", offset_seconds)
         ]);
-        println!("Applying -itsoffset {:.3} to audio", offset_seconds);
+        tracing::info!("Applying -itsoffset {:.3} to audio", offset_seconds);
     }
 
 }
