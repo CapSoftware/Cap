@@ -21,9 +21,6 @@ use capture::{Capturer, Display};
 
 const FRAME_RATE: u64 = 30;
 
-// TODO: This struct's associated functions cannot be instrumented by tracing because
-// `cpal::Stream` does not implement the `Debug` trait, preventing a straightforward
-// Debug implementation from being derived. Would have to implement it by hand here.
 pub struct MediaRecorder {
     pub options: Option<RecordingOptions>,
     ffmpeg_audio_process: Option<tokio::process::Child>,
@@ -64,6 +61,7 @@ impl MediaRecorder {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn start_media_recording(&mut self, options: RecordingOptions, audio_file_path: &str, video_file_path: &str, screenshot_file_path: &str, custom_device: Option<&str>, max_screen_width: usize, max_screen_height: usize) -> Result<(), String> {
         self.options = Some(options.clone());
 
@@ -560,6 +558,7 @@ impl MediaRecorder {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn stop_media_recording(&mut self) -> Result<(), String> {
         if let Some(start_time) = self.start_time {
             let segment_duration = Duration::from_secs(3);

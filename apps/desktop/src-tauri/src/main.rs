@@ -13,7 +13,9 @@ use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 use window_shadows::set_shadow;
 use tauri_plugin_positioner::{WindowExt, Position};
 use tauri_plugin_oauth::start;
-use tracing_subscriber;
+use tracing::Level;
+use tracing_subscriber::prelude::*;
+use sentry_tracing::EventFilter;
 
 mod recording;
 mod upload;
@@ -47,14 +49,28 @@ macro_rules! generate_handler {
 }
 
 fn main() {
-    tracing_subscriber::fmt::init();
+    let _ = fix_path_env::fix();
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(sentry_tracing::layer().event_filter(|metadata| {
+            match metadata.level() {
+                &Level::WARN => EventFilter::Event,
+                _ => EventFilter::Ignore,
+            }
+        }))
+        .init();
 
     std::panic::set_hook(Box::new(|info| {
         // TODO: More expressive panic data collection (configurable backtrace capture especially)
         tracing::error!("Thread panicked: {:?}", info);
     }));
 
-    let _ = fix_path_env::fix();
+    // TODO: Move this endpoint into environment variable/other external configuration
+    let _guard = sentry::init(("https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200", sentry::ClientOptions {
+        release: sentry::release_name!(),
+        ..Default::default()
+    }));
 
     fn handle_ffmpeg_installation() -> FfmpegResult<()> {
         if ffmpeg_is_installed() {
@@ -160,11 +176,6 @@ fn main() {
             .spawn()
             .expect("failed to reset camera permissions");
     }
-
-    let _guard = sentry::init(("https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200", sentry::ClientOptions {
-      release: sentry::release_name!(),
-      ..Default::default()
-    }));
 
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
     let monitor: MonitorHandle = event_loop

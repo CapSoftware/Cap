@@ -11,6 +11,7 @@ use serde_json::Value as JsonValue;
 use crate::recording::RecordingOptions;
 use crate::utils::{ffmpeg_path_as_str};
 
+#[tracing::instrument]
 pub async fn upload_file(
     options: Option<RecordingOptions>,
     file_path: String,
