@@ -12,6 +12,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/tauri";
 import toast from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
+import * as commands from "@/utils/commands";
 
 export const dynamic = "force-static";
 
@@ -32,9 +33,9 @@ export default function CameraPage() {
         localStorage.setItem("cap_test_build_version", appVersion);
 
         if (localStorage.getItem("permissions")) {
-          await invoke("reset_screen_permissions");
-          await invoke("reset_camera_permissions");
-          await invoke("reset_microphone_permissions");
+          await commands.resetScreenPermissions();
+          await commands.resetCameraPermissions();
+          await commands.resetMicrophonePermissions();
           console.log("Permissions reset");
           const permissions = JSON.parse(
             localStorage.getItem("permissions") || "{}"

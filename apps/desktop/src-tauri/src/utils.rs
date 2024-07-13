@@ -1,15 +1,14 @@
-use std::process::{Command};
-use ffmpeg_sidecar::{
-    paths::sidecar_dir,
-};
 use capture::{Capturer, Display};
-use std::time::{Duration, Instant};
+use ffmpeg_sidecar::paths::sidecar_dir;
+use std::io::ErrorKind::WouldBlock;
 use std::panic;
 use std::path::Path;
+use std::process::Command;
 use std::thread;
-use std::io::ErrorKind::WouldBlock;
+use std::time::{Duration, Instant};
 
 #[tauri::command]
+#[specta::specta]
 pub fn has_screen_capture_access() -> bool {
     let display = match Display::primary() {
         Ok(display) => display,
@@ -29,10 +28,10 @@ pub fn has_screen_capture_access() -> bool {
             Ok(capturer) => {
                 println!("Capturer created");
                 capturer
-            },
+            }
             Err(e) => {
                 println!("Capturer not created: {}", e);
-                return false; 
+                return false;
             }
         };
 
@@ -50,7 +49,7 @@ pub fn has_screen_capture_access() -> bool {
                 Ok(_frame) => {
                     println!("Frame captured");
                     return true;
-                },
+                }
                 Err(error) => {
                     if error.kind() == WouldBlock {
                         thread::sleep(one_frame);
@@ -93,9 +92,9 @@ pub fn ffmpeg_path_as_str() -> Result<String, String> {
     } else {
         "ffmpeg"
     };
-    
+
     let path = sidecar_dir().map_err(|e| e.to_string())?.join(binary_name);
-    
+
     if Path::new(&path).exists() {
         path.to_str()
             .map(|s| s.to_owned())

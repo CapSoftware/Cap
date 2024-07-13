@@ -4,7 +4,7 @@
   </p>
 	<h1 align="center"><b>Cap</b></h1>
 	<p align="center">
-		Effortless, instant screen sharing. Open source and cross-platform.
+		The open source Loom alternative.
     <br />
     <a href="https://cap.so"><strong>Cap.so »</strong></a>
     <br />
@@ -24,7 +24,7 @@
 
 > NOTE: Cap is under active development, and is currently in public beta. This repository is updated regularly with changes and new releases.
 
-Cap is an open source alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.
+Cap is the open source alternative to Loom. It's a video messaging tool that allows you to record, edit and share videos in seconds.
 
 ![cap-emoji-banner](https://github.com/CapSoftware/cap/assets/33632126/85425396-ad31-463b-b209-7c4bdf7e2e4f)
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/tauri";
+import * as commands from "@/utils/commands";
 
 export const enumerateAndStoreDevices = async () => {
   if (typeof navigator !== "undefined" && typeof window !== "undefined") {
@@ -8,7 +8,7 @@ export const enumerateAndStoreDevices = async () => {
       video: true,
     });
     const video = await navigator.mediaDevices.enumerateDevices();
-    const audio: string[] = await invoke("enumerate_audio_devices");
+    const audio: string[] = await commands.enumerateAudioDevices();
     const videoDevices = video.filter((device) => device.kind === "videoinput");
     const audioDevices = audio.map((device) => {
       return {
