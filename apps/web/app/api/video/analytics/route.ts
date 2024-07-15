@@ -2,7 +2,7 @@ import { dub } from "@/utils/dub";
 import { ClicksCount } from "dub/models/components";
 import { NextRequest } from "next/server";
 
-export const revalidate = 180;
+export const revalidate = 300;
 
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
@@ -22,11 +22,9 @@ export async function GET(request: NextRequest) {
       domain: "cap.link",
       key: videoId,
     });
-    console.log(response);
     const { clicks: analytics } = response as ClicksCount;
 
     if (typeof analytics !== "number" || analytics === null) {
-      console.log("analytics error");
       return new Response(JSON.stringify({ error: true }), {
         status: 401,
         headers: {
@@ -42,7 +40,6 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error: any) {
-    // Handle specific 'not_found' error
     if (error.code === "not_found") {
       return new Response(
         JSON.stringify({
@@ -58,8 +55,6 @@ export async function GET(request: NextRequest) {
         }
       );
     }
-
-    // Handle other unexpected errors
     return new Response(JSON.stringify({ error: true }), {
       status: 500,
       headers: {
