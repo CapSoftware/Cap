@@ -18,7 +18,8 @@ import {
   getUserId,
   isUserPro,
 } from "@cap/utils";
-import { createDeeplinkCommands, openLinkInBrowser } from "@/utils/helpers";
+import { openLinkInBrowser } from "@/utils/helpers";
+import * as commands from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 
@@ -168,9 +169,7 @@ export const Recorder = () => {
       });
     };
 
-    setupListener().catch((error) => {
-      console.error("Failed to setup tray click listener: ", error);
-    });
+    setupListener();
 
     return () => {
       if (unlistenFn) {
@@ -178,74 +177,6 @@ export const Recorder = () => {
       }
     };
   }, [isRecording]);
-
-  useEffect(() => {
-    let unlistenFn: UnlistenFn | null = null;
-
-    const setupListener = async () => {
-      unlistenFn = await listen<string>("deeplink-triggered", (event) => {
-        const request = event.payload;
-        console.log(`Deeplink request: ${request}`);
-
-        const handleCommands = createDeeplinkCommands({
-          'open-dashboard': (_) => {
-            openLinkInBrowser(`${process.env.NEXT_PUBLIC_URL}/dashboard`);
-          },
-          'start-recording': (params) => {
-            if (isRecording) {
-              return;
-            }
-
-            const setDevice = (newDeviceLabel: string, currentDeviceLabel: string | null, kind: "audioinput" | "videoinput") => {
-              if (currentDeviceLabel === newDeviceLabel) {
-                return;
-              }
-
-              let deviceToSet: Device | null = null;
-              if (newDeviceLabel !== "none") {
-                const filtered = devices.filter((device) => device.label === newDeviceLabel && device.kind === kind);
-                if (filtered.length !== 1) {
-                  throw Error(`Deeplink triggered with invalid/unkown ${kind} device label: ${newDeviceLabel}`);
-                }
-                deviceToSet = filtered[0];
-              }
-
-              emit("change-device", { type: kind, device: deviceToSet }).catch(
-                (error) => {
-                  console.log("Failed to emit change-device event:", error);
-                }
-              );
-            };
-
-            try {
-              setDevice(params.get("mic_in_label"), selectedAudioDevice?.label, "audioinput");
-              setDevice(params.get("vid_in_label"), selectedVideoDevice?.label, "videoinput");
-              
-              handleStartAllRecordings();
-            } catch (error: unknown) {
-              console.error(error);
-            }
-          },
-          'stop-recording': (_) => {
-            if (isRecording) {
-              handleStopAllRecordings();
-            }
-          }
-        });
-
-        handleCommands(request);
-      });
-    }
-
-    setupListener().catch((error) => {
-      console.error("Failed to setup deeplink listener: ", error);
-    });
-    return () => {
-      if (unlistenFn) {
-        unlistenFn();
-      }
-    }
-  }, [isRecording, selectedAudioDevice, selectedVideoDevice, devices]);
 
   const startDualRecording = async (videoData: {
     id: string;
@@ -273,8 +204,8 @@ export const Recorder = () => {
     });
     await emit("toggle-recording", true);
     try {
-      await invoke("start_dual_recording", {
-        options: {
+      await commands
+        .startDualRecording({
           user_id: videoData.user_id,
           video_id: videoData.id,
           audio_name: selectedAudioDevice?.label ?? "None",
@@ -282,10 +213,10 @@ export const Recorder = () => {
           aws_bucket: videoData.aws_bucket,
           screen_index: "Capture screen 0",
           video_index: String(selectedVideoDevice?.index),
-        },
-      }).catch((error) => {
-        console.error("Error invoking start_screen_recording:", error);
-      });
+        })
+        .catch((error) => {
+          console.error("Error invoking start_screen_recording:", error);
+        });
     } catch (error) {
       console.error("Error starting screen recording:", error);
       setStartingRecording(false);
@@ -335,7 +266,7 @@ export const Recorder = () => {
       console.log("Stopping recordings...");
 
       try {
-        await invoke("stop_all_recordings");
+        await commands.stopAllRecordings();
       } catch (error) {
         console.error("Error stopping recording:", error);
       }

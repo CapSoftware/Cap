@@ -19,7 +19,7 @@ import { isUserOnProPlan } from "@cap/utils";
 type SharedContext = {
   spaceData: (typeof spaces.$inferSelect)[] | null;
   activeSpace: typeof spaces.$inferSelect | null;
-  user: typeof users.$inferSelect | null;
+  user: typeof users.$inferSelect;
 };
 
 const Context = createContext<SharedContext>({} as SharedContext);

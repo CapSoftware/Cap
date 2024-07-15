@@ -65,20 +65,20 @@ impl MediaRecorder {
         self.options = Some(options.clone());
 
         println!("Custom device: {:?}", custom_device);
-        
+
         let host = cpal::default_host();
         let devices = host.devices().expect("Failed to get devices");
         let _display = Display::primary().expect("Failed to find primary display");
         let w = max_screen_width;
         let h = max_screen_height;
-        
+
         let adjusted_width = w & !2;
         let adjusted_height = h & !2;
         let capture_size = adjusted_width * adjusted_height * 4;
         let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
         let (video_tx, video_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
         let calculated_stride = (adjusted_width * 4) as usize;
-        
+
         println!("Display width: {}", w);
         println!("Display height: {}", h);
         println!("Adjusted width: {}", adjusted_width);
@@ -103,7 +103,7 @@ impl MediaRecorder {
         let video_channel_receiver = Arc::new(Mutex::new(self.video_channel_receiver.take()));
 
         let should_stop = Arc::clone(&self.should_stop);
-        
+
         let mut input_devices = devices.filter_map(|device| {
             let supported_input_configs = device.supported_input_configs();
             if supported_input_configs.is_ok() && supported_input_configs.unwrap().count() > 0 {
@@ -144,23 +144,23 @@ impl MediaRecorder {
         println!("Sample rate: {}", sample_rate);
         println!("Channels: {}", channels);
         println!("Sample format: {}", sample_format);
-        
+
         let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
 
         println!("FFmpeg binary path: {}", ffmpeg_binary_path_str);
-        
+
         let audio_file_path_owned = audio_file_path.to_owned();
         let video_file_path_owned = video_file_path.to_owned();
         let sample_rate_str = sample_rate.to_string();
         let channels_str = channels.to_string();
-        
+
         let ffmpeg_audio_stdin = self.ffmpeg_audio_stdin.clone();
         let ffmpeg_video_stdin = self.ffmpeg_video_stdin.clone();
 
         let err_fn = move |err| {
             eprintln!("an error occurred on stream: {}", err);
         };
-        
+
         if custom_device != Some("None") {
             println!("Building input stream...");
 
@@ -171,17 +171,17 @@ impl MediaRecorder {
                       let audio_start_time = Arc::clone(&audio_start_time);
                       move |data: &[i8], _: &_| {
                           let mut first_frame_time_guard = audio_start_time.try_lock();
-                          
+
                           let bytes = data.iter().map(|&sample| sample as u8).collect::<Vec<u8>>();
                           if let Some(sender) = &audio_channel_sender {
                             if sender.try_send(bytes).is_err() {
                               eprintln!("Channel send error. Dropping data.");
                             }
                           }
-                          
+
                           if let Ok(ref mut start_time_option) = first_frame_time_guard {
                               if start_time_option.is_none() {
-                                  **start_time_option = Some(Instant::now()); 
+                                  **start_time_option = Some(Instant::now());
 
                                   println!("Audio start time captured");
                               }
@@ -194,7 +194,7 @@ impl MediaRecorder {
               SampleFormat::I16 => device.build_input_stream(
                   &config.into(),
                   {
-                      let audio_start_time = Arc::clone(&audio_start_time); 
+                      let audio_start_time = Arc::clone(&audio_start_time);
                       move |data: &[i16], _: &_| {
                           let mut first_frame_time_guard = audio_start_time.try_lock();
 
@@ -208,7 +208,7 @@ impl MediaRecorder {
 
                           if let Ok(ref mut start_time_option) = first_frame_time_guard {
                               if start_time_option.is_none() {
-                                  **start_time_option = Some(Instant::now()); 
+                                  **start_time_option = Some(Instant::now());
 
                                   println!("Audio start time captured");
                               }
@@ -235,7 +235,7 @@ impl MediaRecorder {
 
                           if let Ok(ref mut start_time_option) = first_frame_time_guard {
                               if start_time_option.is_none() {
-                                  **start_time_option = Some(Instant::now()); 
+                                  **start_time_option = Some(Instant::now());
 
                                   println!("Audio start time captured");
                               }
@@ -262,7 +262,7 @@ impl MediaRecorder {
 
                           if let Ok(ref mut start_time_option) = first_frame_time_guard {
                               if start_time_option.is_none() {
-                                  **start_time_option = Some(Instant::now()); 
+                                  **start_time_option = Some(Instant::now());
 
                                   println!("Audio start time captured");
                               }
@@ -274,16 +274,16 @@ impl MediaRecorder {
               ),
               _sample_format => Err(cpal::BuildStreamError::DeviceNotAvailable),
             };
-            
+
             let stream = stream_result.map_err(|_| "Failed to build input stream")?;
             self.stream = Some(stream);
             self.trigger_play()?;
         }
 
-        let video_start_time_clone = Arc::clone(&video_start_time); 
+        let video_start_time_clone = Arc::clone(&video_start_time);
         let screenshot_file_path_owned = format!("{}/screen-capture.jpg", screenshot_file_path);
         let capture_frame_at = Duration::from_secs(3);
-        
+
         std::thread::spawn(move || {
             println!("Starting video recording capture thread...");
 
@@ -301,7 +301,7 @@ impl MediaRecorder {
             let start_time = Instant::now();
             let mut time_next = Instant::now() + spf;
             let mut screenshot_captured: bool = false;
-            
+
             while !should_stop.load(Ordering::SeqCst) {
                 let options_clone = options.clone();
                 let now = Instant::now();
@@ -375,7 +375,7 @@ impl MediaRecorder {
 
                             if let Ok(ref mut start_time_option) = first_frame_time_guard {
                                 if start_time_option.is_none() {
-                                    **start_time_option = Some(Instant::now()); 
+                                    **start_time_option = Some(Instant::now());
 
                                     println!("Video start time captured");
                                 }
@@ -413,7 +413,7 @@ impl MediaRecorder {
         let audio_segment_list_filename = format!("{}/segment_list.txt", audio_file_path_owned);
         let video_output_chunk_pattern = format!("{}/video_recording_%03d.ts", video_file_path_owned);
         let video_segment_list_filename = format!("{}/segment_list.txt", video_file_path_owned);
-      
+
         let mut audio_filters = Vec::new();
 
         if channels > 2 {
@@ -488,7 +488,7 @@ impl MediaRecorder {
 
         let (video_child, video_stdin) = self.start_video_ffmpeg_processes(&ffmpeg_binary_path_str, &ffmpeg_video_command).await.map_err(|e| e.to_string())?;
         println!("Video process started");
-        
+
         if let Some(ffmpeg_audio_stdin) = &self.ffmpeg_audio_stdin {
             let mut audio_stdin_lock = ffmpeg_audio_stdin.lock().await;
             *audio_stdin_lock = audio_stdin;
@@ -530,7 +530,7 @@ impl MediaRecorder {
                 }
             }
         });
-        
+
         if custom_device != Some("None") {
             self.ffmpeg_audio_process = audio_child;
         }
@@ -540,9 +540,9 @@ impl MediaRecorder {
         self.video_file_path = Some(video_file_path_owned);
         self.ffmpeg_video_process = Some(video_child);
         self.device_name = Some(device.name().expect("Failed to get device name"));
-        
+
         println!("End of the start_audio_recording function");
-        
+
         Ok(())
     }
 
@@ -671,6 +671,7 @@ impl MediaRecorder {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn enumerate_audio_devices() -> Vec<String> {
     let host = cpal::default_host();
     let default_device = host.default_input_device().expect("No default input device available");
@@ -697,8 +698,8 @@ pub fn enumerate_audio_devices() -> Vec<String> {
 use tokio::io::{BufReader, AsyncBufReadExt};
 
 async fn start_recording_process(
-    ffmpeg_binary_path_str: &str, 
-    args: &[String], 
+    ffmpeg_binary_path_str: &str,
+    args: &[String],
 ) -> Result<tokio::process::Child, std::io::Error> {
     let mut process = Command::new(ffmpeg_binary_path_str)
         .args(args)
@@ -725,7 +726,7 @@ async fn wait_for_start_times(
     loop {
         let audio_start_locked = audio_start_time.lock().await;
         let video_start_locked = video_start_time.lock().await;
-        
+
         if audio_start_locked.is_some() && video_start_locked.is_some() {
             let audio_start = *audio_start_locked.as_ref().unwrap();
             let video_start = *video_start_locked.as_ref().unwrap();
@@ -755,7 +756,7 @@ async fn adjust_ffmpeg_commands_based_on_start_times(
     println!("Video start: {:?}", video_start);
 
     // Convert the duration difference to a float representing seconds
-    let offset_seconds = duration_difference.as_secs() as f64 
+    let offset_seconds = duration_difference.as_secs() as f64
         + duration_difference.subsec_nanos() as f64 * 1e-9;
 
     // Depending on which started first, adjust the relevant FFmpeg command
