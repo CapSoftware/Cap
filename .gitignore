@@ -14,6 +14,7 @@ dist-ssr
 .env
 .env.production
 .env.test
+target
 
 # Editor directories and files
 .vscode/*
@@ -27,4 +28,3 @@ dist-ssr
 *.sw?
 .turbo
 pnpm-lock.yaml
-/target
