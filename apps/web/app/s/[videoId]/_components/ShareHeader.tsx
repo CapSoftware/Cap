@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "react-hot-toast";
 import { LinkIcon } from "lucide-react";
-import { Tooltip } from "react-tooltip";
 
 export const ShareHeader = ({
   data,
@@ -53,7 +52,6 @@ export const ShareHeader = ({
 
   return (
     <>
-      <Tooltip data-tooltip-id="clipboard" />
       <div>
         <div className="md:flex md:items-center md:justify-between space-x-0 md:space-x-6">
           <div className="flex items-center md:justify-between space-x-6">
