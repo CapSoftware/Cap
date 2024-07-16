@@ -6,15 +6,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  Button,
 } from "@cap/ui";
 import { UsageButton } from "@/components/UsageButton";
 import { users, spaces } from "@cap/database/schema";
 import Link from "next/link";
 import { isUserOnProPlan } from "@cap/utils";
+import { signOut } from "next-auth/react";
 
 type SharedContext = {
   spaceData: (typeof spaces.$inferSelect)[] | null;
@@ -119,9 +118,9 @@ export default function DynamicSharedLayout({
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem>
-                  <Link className="w-full" href="/logout">
+                  <button className="w-full" onClick={() => signOut()}>
                     Sign out
-                  </Link>
+                  </button>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
