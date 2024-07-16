@@ -104,14 +104,9 @@ pub fn ffmpeg_path_as_str() -> Result<String, String> {
     }
 }
 
-pub fn create_named_pipe(path: &str) -> Result<(), nix::Error> {
+pub fn create_named_pipe(path: &Path) -> Result<(), nix::Error> {
     use nix::sys::stat;
     use nix::unistd;
     unistd::mkfifo(path, stat::Mode::S_IRWXU)?;
-    Ok(())
-}
-
-pub fn remove_named_pipe(path: &str) -> Result<(), std::io::Error> {
-    std::fs::remove_file(path)?;
     Ok(())
 }
