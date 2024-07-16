@@ -1,3 +1,5 @@
+import { dub } from "@/utils/dub";
+import { ClicksCount } from "dub/models/components";
 import { NextRequest } from "next/server";
 
 export const revalidate = 300;
@@ -15,32 +17,49 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const dubOptions = {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${process.env.DUB_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-  };
+  try {
+    const response = await dub.analytics.retrieve({
+      domain: "cap.link",
+      key: videoId,
+    });
+    const { clicks: analytics } = response as ClicksCount;
 
-  const analytics = await fetch(
-    `https://api.dub.co/analytics/clicks?projectSlug=cap&domain=cap.link&key=${videoId}`,
-    dubOptions
-  ).then((response) => response.json());
+    if (typeof analytics !== "number" || analytics === null) {
+      return new Response(JSON.stringify({ error: true }), {
+        status: 401,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
 
-  if (typeof analytics !== "number") {
+    return new Response(JSON.stringify({ count: analytics }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  } catch (error: any) {
+    if (error.code === "not_found") {
+      return new Response(
+        JSON.stringify({
+          error: true,
+          message: "Video link not found.",
+          docUrl: error.docUrl,
+        }),
+        {
+          status: 404,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    }
     return new Response(JSON.stringify({ error: true }), {
-      status: 401,
+      status: 500,
       headers: {
         "Content-Type": "application/json",
       },
     });
   }
-
-  return new Response(JSON.stringify({ count: analytics }), {
-    status: 200,
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
 }

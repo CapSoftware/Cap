@@ -368,6 +368,9 @@ importers:
       drizzle-orm:
         specifier: 0.30.9
         version: 0.30.9(@planetscale/database@1.13.0)(@types/react@18.2.48)(mysql2@3.9.7)(react@18.2.0)
+      dub:
+        specifier: ^0.33.1
+        version: 0.33.1(zod@3.22.4)
       hls.js:
         specifier: ^1.5.3
         version: 1.5.3
@@ -9291,6 +9294,14 @@ packages:
       react: 18.2.0
     dev: false
 
+  /dub@0.33.1(zod@3.22.4):
+    resolution: {integrity: sha512-R0X0z9+nPCLs7J62kH2K3tX5L6fNigsPsw/Ch6zvfMy3hgSuSrA6idGQ474e/kJQdXXSi8T4hZsAPy1UzTZHAA==}
+    peerDependencies:
+      zod: '>= 3'
+    dependencies:
+      zod: 3.22.4
+    dev: false
+
   /eastasianwidth@0.2.0:
     resolution: {integrity: sha512-I88TYZWc9XiYHRQ4/3c5rjjfgkjhLyW2luGIheGERbNQ6OY7yTybanSpDXZa8y7VUP9YmDcYa+eyq4ca7iLqWA==}
 
@@ -10007,7 +10018,7 @@ packages:
       doctrine: 2.1.0
       eslint: 8.57.0
       eslint-import-resolver-node: 0.3.9
-      eslint-module-utils: 2.8.0(@typescript-eslint/parser@5.62.0)(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.1)(eslint@8.57.0)
+      eslint-module-utils: 2.8.0(@typescript-eslint/parser@7.13.1)(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.1)(eslint@8.57.0)
       hasown: 2.0.0
       is-core-module: 2.13.1
       is-glob: 4.0.3

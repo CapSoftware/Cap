@@ -4,6 +4,7 @@ import { videos } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { cookies } from "next/headers";
+import { dub } from "@/utils/dub";
 
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
@@ -91,23 +92,11 @@ export async function GET(req: NextRequest) {
     process.env.NEXT_PUBLIC_IS_CAP &&
     process.env.NEXT_PUBLIC_ENVIRONMENT === "production"
   ) {
-    const dubOptions = {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.DUB_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        url: process.env.NEXT_PUBLIC_URL + "/s/" + id,
-        key: id,
-        domain: "cap.link",
-      }),
-    };
-
-    await fetch("https://api.dub.co/links?projectSlug=cap", dubOptions)
-      .then((response) => response.json())
-      .then((response) => console.log(response))
-      .catch((err) => console.error(err));
+    await dub.links.create({
+      url: process.env.NEXT_PUBLIC_URL + "/s/" + id,
+      domain: "cap.link",
+      key: id,
+    });
   }
 
   return new Response(
