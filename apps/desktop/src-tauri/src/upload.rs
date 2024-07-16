@@ -112,14 +112,11 @@ pub async fn upload_file(
 
         println!("Uploading file: {file_path:?}");
 
-        let mime_type = if file_path.extension().unwrap() == ".aac" {
-            "audio/aac"
-        } else if file_path.extension().unwrap() == ".mp3" {
-            "audio/mpeg"
-        } else if file_path.extension().unwrap() == ".webm" {
-            "audio/webm"
-        } else {
-            "video/mp2t"
+        let mime_type = match file_path.extension() {
+            Some(ext) if ext == "aac" => "audio/aac",
+            Some(ext) if ext == "mp3" => "audio/mpeg",
+            Some(ext) if ext == "webm" => "audio/webm",
+            _ => "video/mp2t",
         };
 
         let file_bytes = tokio::fs::read(&file_path)
