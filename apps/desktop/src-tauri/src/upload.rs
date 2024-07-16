@@ -1,22 +1,25 @@
 use regex::Regex;
 use reqwest;
 use serde_json::Value as JsonValue;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::str;
 
 use crate::recording::RecordingOptions;
 use crate::utils::ffmpeg_path_as_str;
 
+#[derive(Clone, Copy)]
 pub enum FileType {
-    Segment,
+    Video,
+    Audio,
     Screenshot,
 }
 
 impl std::fmt::Display for FileType {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            FileType::Segment => write!(f, "segment"),
+            FileType::Video => write!(f, "video"),
+            FileType::Audio => write!(f, "audio"),
             FileType::Screenshot => write!(f, "screenshot"),
         }
     }
@@ -24,7 +27,7 @@ impl std::fmt::Display for FileType {
 
 pub async fn upload_file(
     options: Option<RecordingOptions>,
-    file_path: String,
+    file_path: PathBuf,
     file_type: FileType,
 ) -> Result<String, String> {
     if let Some(ref options) = options {
@@ -41,18 +44,15 @@ pub async fn upload_file(
             .to_string();
 
         let file_key = format!(
-            "{}/{}/{}/{}",
-            options.user_id,
-            options.video_id,
-            file_type.to_string(),
-            file_name
+            "{}/{}/{file_type}/{file_name}",
+            options.user_id, options.video_id,
         );
 
         let server_url_base: &'static str = dotenv_codegen::dotenv!("NEXT_PUBLIC_URL");
         let server_url = format!("{}/api/upload/signed", server_url_base);
 
         let body = match file_type {
-            FileType::Segment => {
+            FileType::Video => {
                 let (codec_name, width, height, frame_rate, bit_rate) = log_video_info(&file_path)
                     .map_err(|e| format!("Failed to log video info: {}", e))?;
 
@@ -68,7 +68,7 @@ pub async fn upload_file(
                     "videoCodec": codec_name,
                 })
             }
-            FileType::Screenshot => {
+            FileType::Audio | FileType::Screenshot => {
                 serde_json::json!({
                     "userId": options.user_id,
                     "fileKey": file_key,
@@ -110,11 +110,13 @@ pub async fn upload_file(
             form = form.text(key.to_string(), value_str.to_owned());
         }
 
-        println!("Uploading file: {}", file_path);
+        println!("Uploading file: {file_path:?}");
 
-        let mime_type = if file_path.to_lowercase().ends_with(".aac") {
+        let mime_type = if file_path.extension().unwrap() == ".aac" {
             "audio/aac"
-        } else if file_path.to_lowercase().ends_with(".webm") {
+        } else if file_path.extension().unwrap() == ".mp3" {
+            "audio/mpeg"
+        } else if file_path.extension().unwrap() == ".webm" {
             "audio/webm"
         } else {
             "video/mp2t"
@@ -162,7 +164,7 @@ pub async fn upload_file(
             }
         }
 
-        println!("Removing file after upload: {}", file_path);
+        println!("Removing file after upload: {file_path:?}");
         let remove_result = tokio::fs::remove_file(&file_path).await;
         match &remove_result {
             Ok(_) => println!("File removed successfully"),
@@ -176,7 +178,7 @@ pub async fn upload_file(
     }
 }
 
-pub fn get_video_duration(file_path: &str) -> Result<f64, std::io::Error> {
+pub fn get_video_duration(file_path: &Path) -> Result<f64, std::io::Error> {
     let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
 
     let output = Command::new(ffmpeg_binary_path_str)
@@ -185,19 +187,19 @@ pub fn get_video_duration(file_path: &str) -> Result<f64, std::io::Error> {
         .output()?;
 
     let output_str = str::from_utf8(&output.stderr).unwrap();
-    let duration_regex = Regex::new(r"Duration: (\d{2}):(\d{2}):(\d{2})\.\d{2}").unwrap();
+    let duration_regex = Regex::new(r"Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})").unwrap();
     let caps = duration_regex.captures(output_str).unwrap();
 
     let hours: f64 = caps.get(1).unwrap().as_str().parse().unwrap();
     let minutes: f64 = caps.get(2).unwrap().as_str().parse().unwrap();
-    let seconds: f64 = caps.get(3).unwrap().as_str().parse().unwrap();
-
-    let duration = hours * 3600.0 + minutes * 60.0 + seconds;
+    let seconds: f64 = caps.get(3).unwrap().as_str().parse::<f64>().unwrap();
+    let milliseconds: f64 = caps.get(4).unwrap().as_str().parse::<f64>().unwrap() / 100.0;
+    let duration = hours * 3600.0 + minutes * 60.0 + seconds + milliseconds;
 
     Ok(duration)
 }
 
-fn log_video_info(file_path: &str) -> Result<(String, String, String, String, String), String> {
+fn log_video_info(file_path: &Path) -> Result<(String, String, String, String, String), String> {
     let output: Output = Command::new("ffprobe")
         .arg("-v")
         .arg("error")

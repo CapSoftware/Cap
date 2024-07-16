@@ -4,7 +4,7 @@ use cpal::SampleFormat;
 use image::codecs::jpeg::JpegEncoder;
 use image::{ImageBuffer, ImageFormat, Rgba};
 use std::io::{Error, ErrorKind::WouldBlock};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -37,7 +37,7 @@ pub struct MediaRecorder {
     video_channel_receiver: Option<mpsc::Receiver<Vec<u8>>>,
     should_stop: Arc<AtomicBool>,
     start_time: Option<Instant>,
-    file_path: Option<String>,
+    file_path: Option<PathBuf>,
 }
 
 impl MediaRecorder {
@@ -61,8 +61,9 @@ impl MediaRecorder {
     pub async fn start_media_recording(
         &mut self,
         options: RecordingOptions,
-        chunks_file_path: &str,
-        screenshot_file_path: &str,
+        audio_chunks_dir: &Path,
+        video_chunks_dir: &Path,
+        screenshot_folder: &Path,
         custom_device: Option<&str>,
         max_screen_width: usize,
         max_screen_height: usize,
@@ -305,7 +306,7 @@ impl MediaRecorder {
         }
 
         let video_start_time_clone = Arc::clone(&video_start_time);
-        let screenshot_file_path_owned = format!("{screenshot_file_path}/screen-capture.jpg");
+        let screenshot_file_path = screenshot_folder.join("screen-capture.jpg");
         let capture_frame_at = Duration::from_secs(3);
 
         std::thread::spawn(move || {
@@ -354,16 +355,14 @@ impl MediaRecorder {
 
                             if now - start_time >= capture_frame_at && !screenshot_captured {
                                 screenshot_captured = true;
-                                let screenshot_file_path_owned_cloned =
-                                    screenshot_file_path_owned.clone();
                                 let mut frame_data_clone = frame_data.clone();
 
+                                let screenshot_file_path = screenshot_file_path.clone();
                                 std::thread::spawn(move || {
                                     for chunk in frame_data_clone.chunks_mut(4) {
                                         chunk.swap(0, 2);
                                     }
 
-                                    let path = Path::new(&screenshot_file_path_owned_cloned);
                                     let image: ImageBuffer<Rgba<u8>, Vec<u8>> =
                                         ImageBuffer::from_raw(
                                             adjusted_width.try_into().unwrap(),
@@ -372,29 +371,33 @@ impl MediaRecorder {
                                         )
                                         .expect("Failed to create image buffer");
 
-                                    let mut output_file = std::fs::File::create(&path)
-                                        .expect("Failed to create output file");
+                                    let mut output_file =
+                                        std::fs::File::create(&screenshot_file_path)
+                                            .expect("Failed to create output file");
                                     let mut encoder =
                                         JpegEncoder::new_with_quality(&mut output_file, 20);
 
                                     if let Err(e) = encoder.encode_image(&image) {
                                         eprintln!("Failed to save screenshot: {}", e);
                                     } else {
+                                        println!(
+                                            "Screenshot captured and saved to {:?}",
+                                            screenshot_file_path
+                                        );
+
                                         if !is_local_mode {
                                             let rt = tokio::runtime::Runtime::new().unwrap();
-                                            let screenshot_file_path_owned_cloned_copy =
-                                                screenshot_file_path_owned_cloned.clone();
-                                            rt.block_on(async {
+                                            rt.block_on(async move {
                                                 let upload_task = tokio::spawn(upload_file(
                                                     Some(options_clone),
-                                                    screenshot_file_path_owned_cloned_copy.clone(),
+                                                    screenshot_file_path.clone(),
                                                     upload::FileType::Screenshot,
                                                 ));
                                                 match upload_task.await {
                                                     Ok(result) => match result {
                                                         Ok(_) => println!(
                                                             "Screenshot captured and saved to {:?}",
-                                                            path
+                                                            screenshot_file_path
                                                         ),
                                                         Err(e) => eprintln!(
                                                             "Failed to upload file: {}",
@@ -407,7 +410,6 @@ impl MediaRecorder {
                                                 }
                                             });
                                         }
-                                        println!("Screenshot captured and saved to {:?}", path);
                                     }
                                 });
                             }
@@ -456,8 +458,10 @@ impl MediaRecorder {
         });
 
         println!("Starting audio recording and processing...");
-        let output_chunk_pattern = format!("{chunks_file_path}/recording_%03d.ts");
-        let segment_list_filename = format!("{chunks_file_path}/segment_list.txt");
+        let audio_chunk_pattern = chunks_file_path.join("audio/recording_%03d.aac");
+        let video_chunk_pattern = chunks_file_path.join("video/recording_%03d.ts");
+        let audio_segment_list_filename = chunks_file_path.join("audio/segment_list.txt");
+        let video_segment_list_filename = chunks_file_path.join("video/segment_list.txt");
 
         let mut audio_filters = Vec::new();
 
@@ -467,14 +471,14 @@ impl MediaRecorder {
 
         audio_filters.push("loudnorm");
 
-        std::fs::create_dir_all(format!("{chunks_file_path}/pipes")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(chunks_file_path.join("pipes")).map_err(|e| e.to_string())?;
 
-        let video_pipe_path = format!("{chunks_file_path}/pipes/video.pipe");
+        let video_pipe_path = chunks_file_path.join("pipes/video.pipe");
 
         std::fs::remove_file(&video_pipe_path).ok();
         create_named_pipe(&video_pipe_path).map_err(|e| e.to_string())?;
 
-        let audio_pipe_path = format!("{chunks_file_path}/pipes/audio.pipe");
+        let audio_pipe_path = chunks_file_path.join("pipes/audio.pipe");
 
         std::fs::remove_file(&audio_pipe_path).ok();
         create_named_pipe(&audio_pipe_path).map_err(|e| e.to_string())?;
@@ -487,71 +491,57 @@ impl MediaRecorder {
         };
 
         let size = format!("{}x{}", adjusted_width, adjusted_height);
-        let mut ffmpeg_command = flatten_str_args([
-            ["-f", "rawvideo"],
-            ["-pix_fmt", "bgra"],
-            ["-s", &size],
-            ["-r", "30"],
-            ["-thread_queue_size", "4096"],
-            ["-i", &video_pipe_path],
-        ]);
 
-        let mut audio_args = flatten_str_args([
-            // in
-            ["-f", sample_format],
-            ["-ar", &sample_rate_str],
-            ["-ac", &channels_str],
-            ["-thread_queue_size", "4096"],
-            ["-i", &audio_pipe_path],
-            // out
-            [
-                "-af",
-                "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
-            ],
-            ["-c:a", "aac"],
-            ["-b:a", "128k"],
-            ["-async", "1"],
-        ]);
+        let mut ffmpeg_command = Command::new(ffmpeg_binary_path_str);
 
-        match time_offset {
-            Some((TimeOffsetTarget::Video, args)) => {
-                ffmpeg_command.splice(0..0, args.clone()).collect()
-            }
-            Some((TimeOffsetTarget::Audio, args)) => {
-                audio_args.splice(0..0, args.clone()).collect()
-            }
-            None => {
-                vec![]
-            }
-        };
-
-        if needs_audio {
-            ffmpeg_command.extend(audio_args);
+        if let Some((TimeOffsetTarget::Video, args)) = &time_offset {
+            ffmpeg_command.args(args);
         }
 
-        ffmpeg_command.extend(flatten_str_args([
-            ["-vf", "fps=30,scale=in_range=full:out_range=limited"],
-            ["-c:v", "libx264"],
-            ["-preset", "ultrafast"],
-            ["-pix_fmt", "yuv420p"],
-            ["-tune", "zerolatency"],
-            ["-vsync", "1"],
-            ["-force_key_frames", "expr:gte(t,n_forced*3)"],
-            ["-f", "segment"],
-            ["-segment_time", "3"],
-            ["-segment_time_delta", "0.01"],
-            ["-segment_list", &segment_list_filename],
-            ["-segment_format", "ts"],
-            ["-movflags", "frag_keyframe+empty_moov"],
-            ["-reset_timestamps", "1"],
-        ]));
+        ffmpeg_command
+            // video in
+            .args(["-f", "rawvideo", "-pix_fmt", "bgra"])
+            .args(["-s", &size, "-r", "30"])
+            .args(["-thread_queue_size", "4096", "-i"])
+            .arg(&video_pipe_path)
+            // video out
+            .args(["-vf", "fps=30,scale=in_range=full:out_range=limited"])
+            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
+            .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
+            .args(["-f", "segment", "-movflags", "frag_keyframe+empty_moov"])
+            .args(["-reset_timestamps", "1", "-an"])
+            .args(["-segment_time", "3"])
+            .args(["-segment_format", "ts"])
+            .args(["-segment_time_delta", "0.01", "-segment_list"])
+            .args([&video_segment_list_filename, &video_chunk_pattern]);
 
-        ffmpeg_command.push(output_chunk_pattern);
+        if needs_audio {
+            if let Some((TimeOffsetTarget::Audio, args)) = &time_offset {
+                ffmpeg_command.args(args);
+            }
+
+            ffmpeg_command
+                // audio in
+                .args(["-f", sample_format, "-ar", &sample_rate_str])
+                .args(["-ac", &channels_str, "-thread_queue_size", "4096", "-i"])
+                .arg(&audio_pipe_path)
+                // out
+                .args([
+                    "-af",
+                    "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
+                ])
+                .args(["-codec:a", "aac", "-b:a", "128k"])
+                .args(["-async", "1", "-f", "segment"])
+                .args(["-segment_time", "3", "-segment_time_delta", "0.01"])
+                .args(["-reset_timestamps", "1", "-vn", "-segment_list"])
+                .args([&audio_segment_list_filename, &audio_chunk_pattern]);
+        }
 
         println!("Starting FFmpeg process...");
 
         let (ffmpeg_child, ffmpeg_stdin) = self
-            .start_ffmpeg_process(&ffmpeg_binary_path_str, &ffmpeg_command)
+            .start_ffmpeg_process(ffmpeg_command)
             .await
             .map_err(|e| e.to_string())?;
         println!("Ffmpeg process started");
@@ -604,7 +594,7 @@ impl MediaRecorder {
         });
 
         self.start_time = Some(Instant::now());
-        self.file_path = Some(chunks_file_path.to_string());
+        self.file_path = Some(chunks_file_path.to_path_buf());
         self.ffmpeg_process = Some(ffmpeg_child);
         self.device_name = Some(device.name().expect("Failed to get device name"));
 
@@ -630,7 +620,7 @@ impl MediaRecorder {
             let recording_duration = start_time.elapsed();
             let expected_segments = recording_duration.as_secs() / segment_duration.as_secs();
             let file_path = self.file_path.as_ref().ok_or("File path not set")?;
-            let segment_list_filename = format!("{}/segment_list.txt", file_path);
+            let segment_list_filename = file_path.join("segment_list.txt");
 
             loop {
                 let segments = std::fs::read_to_string(&segment_list_filename).unwrap_or_default();
@@ -683,15 +673,14 @@ impl MediaRecorder {
 
     async fn start_ffmpeg_process(
         &self,
-        ffmpeg_binary_path: &str,
-        video_ffmpeg_command: &[String],
+        cmd: Command,
+        // ffmpeg_binary_path: &str,
+        // video_ffmpeg_command: &[String],
     ) -> Result<(Child, ChildStdin), Error> {
-        let mut video_process = start_recording_process(ffmpeg_binary_path, video_ffmpeg_command)
-            .await
-            .map_err(|e| {
-                eprintln!("Failed to start video recording process: {}", e);
-                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-            })?;
+        let mut video_process = start_recording_process(cmd).await.map_err(|e| {
+            eprintln!("Failed to start video recording process: {}", e);
+            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+        })?;
 
         let video_stdin = video_process.stdin.take().ok_or_else(|| {
             eprintln!("Failed to take video stdin");
@@ -703,6 +692,7 @@ impl MediaRecorder {
 }
 
 #[tauri::command]
+#[specta::specta]
 pub fn enumerate_audio_devices() -> Vec<String> {
     let host = cpal::default_host();
     let default_device = host
@@ -733,14 +723,11 @@ pub fn enumerate_audio_devices() -> Vec<String> {
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 async fn start_recording_process(
-    ffmpeg_binary_path_str: &str,
-    args: &[String],
+    mut cmd: Command,
+    // ffmpeg_binary_path_str: &str,
+    // args: &[String],
 ) -> Result<tokio::process::Child, std::io::Error> {
-    let mut process = Command::new(ffmpeg_binary_path_str)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let mut process = cmd.stdin(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
 
     if let Some(process_stderr) = process.stderr.take() {
         tokio::spawn(async move {

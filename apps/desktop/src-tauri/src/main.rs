@@ -35,6 +35,18 @@ use ffmpeg_sidecar::{
 
 use winit::monitor::{MonitorHandle, VideoMode};
 
+macro_rules! generate_handler {
+  ($($command:ident),*) => {{
+    #[cfg(debug_assertions)]
+    tauri_specta::ts::export(
+      specta::collect_types![$($command),*],
+      "../src/utils/commands.ts"
+    ).unwrap();
+
+    tauri::generate_handler![$($command),*]
+  }}
+}
+
 fn main() {
     let _ = fix_path_env::fix();
 
@@ -73,6 +85,7 @@ fn main() {
     handle_ffmpeg_installation().expect("Failed to install FFmpeg");
 
     #[tauri::command]
+    #[specta::specta]
     async fn start_server(window: Window) -> Result<u16, String> {
         start(move |url| {
             let _ = window.emit("redirect_uri", url);
@@ -81,6 +94,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn open_screen_capture_preferences() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("open")
@@ -90,6 +104,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn open_mic_preferences() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("open")
@@ -99,6 +114,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn open_camera_preferences() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("open")
@@ -108,6 +124,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn reset_screen_permissions() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("tccutil")
@@ -119,6 +136,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn reset_microphone_permissions() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("tccutil")
@@ -130,6 +148,7 @@ fn main() {
     }
 
     #[tauri::command]
+    #[specta::specta]
     fn reset_camera_permissions() {
         #[cfg(target_os = "macos")]
         std::process::Command::new("tccutil")
@@ -221,7 +240,8 @@ fn main() {
                 media_process: None,
                 recording_options: None,
                 shutdown_flag: Arc::new(AtomicBool::new(false)),
-                uploading_finished: Arc::new(AtomicBool::new(false)),
+                video_uploading_finished: Arc::new(AtomicBool::new(false)),
+                audio_uploading_finished: Arc::new(AtomicBool::new(false)),
                 data_dir: Some(data_directory),
                 max_screen_width: max_width as usize,
                 max_screen_height: max_height as usize,
@@ -307,7 +327,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(generate_handler![
             start_dual_recording,
             stop_all_recordings,
             enumerate_audio_devices,
@@ -318,7 +338,7 @@ fn main() {
             has_screen_capture_access,
             reset_screen_permissions,
             reset_microphone_permissions,
-            reset_camera_permissions,
+            reset_camera_permissions
         ])
         .plugin(tauri_plugin_context_menu::init())
         .system_tray(tray)
