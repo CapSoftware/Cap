@@ -79,9 +79,9 @@ pub async fn start_dual_recording(
 
     let media_recording_preparation = prepare_media_recording(
         &options,
+        &screenshot_dir,
         &audio_chunks_dir,
         &video_chunks_dir,
-        &screenshot_dir,
         audio_name,
         state_guard.max_screen_width,
         state_guard.max_screen_height,
@@ -102,32 +102,26 @@ pub async fn start_dual_recording(
     };
 
     if !is_local_mode {
-        let screen_upload = start_upload_loop(
+        let video_upload = start_upload_loop(
             video_chunks_dir.clone(),
             options.clone(),
-            "video".to_string(),
+            upload::FileType::Video,
             shutdown_flag.clone(),
             state_guard.video_uploading_finished.clone(),
         );
         let audio_upload = start_upload_loop(
             audio_chunks_dir,
             options.clone(),
-            "audio".to_string(),
+            upload::FileType::Audio,
             shutdown_flag.clone(),
             state_guard.audio_uploading_finished.clone(),
-        );
-        let upload = start_upload_loop(
-            chunks_dir.clone(),
-            options.clone(),
-            shutdown_flag.clone(),
-            state_guard.uploading_finished.clone(),
         );
 
         drop(state_guard);
 
         println!("Starting upload loops...");
 
-        match upload.await {
+        match tokio::try_join!(video_upload, audio_upload) {
             Ok(_) => {
                 println!("Both upload loops completed successfully.");
             }

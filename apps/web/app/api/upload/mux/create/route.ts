@@ -97,7 +97,8 @@ export async function GET(request: NextRequest) {
   }
 
   const bucket = process.env.CAP_AWS_BUCKET || "";
-  const segmentsPrefix = `${userId}/${videoId}/segment/`;
+  const videoPrefix = `${userId}/${videoId}/video/`;
+  const audioPrefix = `${userId}/${videoId}/audio/`;
 
   try {
     const s3Client = new S3Client({
@@ -108,18 +109,24 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    const segmentsCommand = new ListObjectsV2Command({
+    const videoSegmentCommand = new ListObjectsV2Command({
       Bucket: bucket,
-      Prefix: segmentsPrefix,
+      Prefix: videoPrefix,
     });
 
-    const segments = await s3Client.send(segmentsCommand);
+    const audioSegmentCommand = new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: audioPrefix,
+    });
 
-    const segmentKeys = (segments.Contents || []).map(
+    const videoSegments = await s3Client.send(videoSegmentCommand);
+    const audioSegments = await s3Client.send(audioSegmentCommand);
+
+    const videoSegmentKeys = (videoSegments.Contents || []).map(
       (object) => `s3://${bucket}/${object.Key}`
     );
 
-    if (segmentKeys.length > 149) {
+    if (videoSegmentKeys.length > 149) {
       await db
         .update(videos)
         .set({ skipProcessing: true })
@@ -141,6 +148,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const audioSegmentKeys = (audioSegments.Contents || []).map(
+      (object) => `s3://${bucket}/${object.Key}`
+    );
+
     const mediaConvertClient = new MediaConvertClient({
       region: process.env.CAP_AWS_REGION || "",
       credentials: {
@@ -154,14 +165,18 @@ export async function GET(request: NextRequest) {
     const createJobCommand = new CreateJobCommand({
       Role: process.env.CAP_AWS_MEDIACONVERT_ROLE_ARN || "",
       Settings: {
-        Inputs: segmentKeys.map((videoSegmentKey) => {
+        Inputs: videoSegmentKeys.map((videoSegmentKey, index) => {
+          const audioSegmentKey = audioSegmentKeys[index];
           return {
             FileInput: videoSegmentKey,
-            AudioSelectors: {
-              "Audio Selector 1": {
-                DefaultSelection: "DEFAULT",
+            ...(audioSegmentKey && {
+              AudioSelectors: {
+                "Audio Selector 1": {
+                  DefaultSelection: "DEFAULT",
+                  ExternalAudioFileInput: audioSegmentKey,
+                },
               },
-            },
+            }),
             VideoSelector: {},
             TimecodeSource: "ZEROBASED",
           };
@@ -203,19 +218,21 @@ export async function GET(request: NextRequest) {
                     },
                   },
                 },
-                AudioDescriptions: [
-                  {
-                    AudioSourceName: "Audio Selector 1",
-                    CodecSettings: {
-                      Codec: "AAC",
-                      AacSettings: {
-                        Bitrate: 128000,
-                        CodingMode: "CODING_MODE_2_0",
-                        SampleRate: 48000,
+                ...(audioSegmentKeys.length > 0 && {
+                  AudioDescriptions: [
+                    {
+                      AudioSourceName: "Audio Selector 1",
+                      CodecSettings: {
+                        Codec: "AAC",
+                        AacSettings: {
+                          Bitrate: 128000,
+                          CodingMode: "CODING_MODE_2_0",
+                          SampleRate: 48000,
+                        },
                       },
                     },
-                  },
-                ],
+                  ],
+                }),
               },
             ],
           },

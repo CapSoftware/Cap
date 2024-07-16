@@ -61,9 +61,9 @@ impl MediaRecorder {
     pub async fn start_media_recording(
         &mut self,
         options: RecordingOptions,
+        screenshot_dir: &Path,
         audio_chunks_dir: &Path,
         video_chunks_dir: &Path,
-        screenshot_folder: &Path,
         custom_device: Option<&str>,
         max_screen_width: usize,
         max_screen_height: usize,
@@ -306,7 +306,7 @@ impl MediaRecorder {
         }
 
         let video_start_time_clone = Arc::clone(&video_start_time);
-        let screenshot_file_path = screenshot_folder.join("screen-capture.jpg");
+        let screenshot_file_path = screenshot_dir.join("screen-capture.jpg");
         let capture_frame_at = Duration::from_secs(3);
 
         std::thread::spawn(move || {
