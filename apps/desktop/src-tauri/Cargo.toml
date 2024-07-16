@@ -14,7 +14,36 @@ tauri-build = { version = "1.5.1", features = [] }
 ffmpeg-sidecar = "0.5.1"
 
 [dependencies]
-tauri = { version = "1.6.1", features = [ "system-tray", "updater", "macos-private-api", "window-set-position", "fs-write-file", "fs-remove-file", "fs-read-file", "fs-rename-file", "fs-exists", "fs-remove-dir", "fs-read-dir", "fs-copy-file", "fs-create-dir", "window-set-ignore-cursor-events", "window-unminimize", "window-minimize", "window-close", "window-show", "window-start-dragging", "window-hide", "window-unmaximize", "window-maximize", "window-set-always-on-top", "shell-open", "devtools", "os-all", "http-all", "icon-png"] }
+tauri = { version = "1.6.1", features = [
+  "system-tray",
+  "updater",
+  "macos-private-api",
+  "window-set-position",
+  "fs-write-file",
+  "fs-remove-file",
+  "fs-read-file",
+  "fs-rename-file",
+  "fs-exists",
+  "fs-remove-dir",
+  "fs-read-dir",
+  "fs-copy-file",
+  "fs-create-dir",
+  "window-set-ignore-cursor-events",
+  "window-unminimize",
+  "window-minimize",
+  "window-close",
+  "window-show",
+  "window-start-dragging",
+  "window-hide",
+  "window-unmaximize",
+  "window-maximize",
+  "window-set-always-on-top",
+  "shell-open",
+  "devtools",
+  "os-all",
+  "http-all",
+  "icon-png",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri-plugin-context-menu = "0.7.0"
@@ -35,7 +64,7 @@ dotenv_codegen = "0.15.0"
 byteorder = "1.4.3"
 bytemuck = "1.14.3"
 regex = "1"
-capture = { path = "./src/capture" }
+capture = { path = "../../../crates/capture" }
 image = "0.24.9"
 sentry = "0.32.2"
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }

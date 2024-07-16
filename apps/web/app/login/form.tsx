@@ -11,6 +11,7 @@ export function LoginForm() {
   const next = searchParams?.get("next");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
 
   useEffect(() => {
     const error = searchParams?.get("error");
@@ -31,21 +32,17 @@ export function LoginForm() {
             ...(next && next.length > 0 ? { callbackUrl: next } : {}),
           })
             .then((res) => {
-              console.log("res");
-              console.log(res);
               setLoading(false);
               if (res?.ok && !res?.error) {
                 setEmail("");
-                toast.success("Email sent - check your inbox!", {
-                  duration: 20000,
-                });
+                setEmailSent(true);
+                toast.success("Email sent - check your inbox!");
               } else {
                 toast.error("Error sending email - try again?");
               }
             })
             .catch((err) => {
-              console.log("err");
-              console.log(err);
+              setEmailSent(false);
               setLoading(false);
               toast.error("Error sending email - try again?");
             });
@@ -58,10 +55,11 @@ export function LoginForm() {
             name="email"
             autoFocus
             type="email"
-            placeholder="tim@apple.com"
+            placeholder={emailSent ? "" : "tim@apple.com"}
             autoComplete="email"
             required
             value={email}
+            disabled={emailSent}
             onChange={(e) => {
               setEmail(e.target.value);
             }}
@@ -73,9 +71,9 @@ export function LoginForm() {
           size="lg"
           className="h-12 text-lg"
           type="submit"
-          disabled={loading}
+          disabled={loading || emailSent}
         >
-          Continue with Email
+          {emailSent ? "Email was sent to your inbox" : "Continue with Email"}
         </Button>
         <p className="text-xs text-gray-500 pt-2">
           By typing your email and clicking continue, you acknowledge that you
@@ -98,6 +96,20 @@ export function LoginForm() {
           .
         </p>
       </form>
+      {emailSent && (
+        <div>
+          <button
+            className="mt-5 text-sm text-gray-500 underline hover:text-black"
+            onClick={() => {
+              setEmailSent(false);
+              setEmail("");
+              setLoading(false);
+            }}
+          >
+            Click to restart sign in process.
+          </button>
+        </div>
+      )}
     </>
   );
 }
