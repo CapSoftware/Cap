@@ -37,7 +37,8 @@ pub struct MediaRecorder {
     video_channel_receiver: Option<mpsc::Receiver<Vec<u8>>>,
     should_stop: Arc<AtomicBool>,
     start_time: Option<Instant>,
-    file_path: Option<PathBuf>,
+    audio_file_path: Option<PathBuf>,
+    video_file_path: Option<PathBuf>,
 }
 
 impl MediaRecorder {
@@ -54,7 +55,8 @@ impl MediaRecorder {
             video_channel_receiver: None,
             should_stop: Arc::new(AtomicBool::new(false)),
             start_time: None,
-            file_path: None,
+            audio_file_path: None,
+            video_file_path: None,
         }
     }
 
@@ -458,10 +460,10 @@ impl MediaRecorder {
         });
 
         println!("Starting audio recording and processing...");
-        let audio_chunk_pattern = chunks_file_path.join("audio/recording_%03d.aac");
-        let video_chunk_pattern = chunks_file_path.join("video/recording_%03d.ts");
-        let audio_segment_list_filename = chunks_file_path.join("audio/segment_list.txt");
-        let video_segment_list_filename = chunks_file_path.join("video/segment_list.txt");
+        let audio_chunk_pattern = audio_chunks_dir.join("recording_%03d.aac");
+        let video_chunk_pattern = video_chunks_dir.join("recording_%03d.ts");
+        let audio_segment_list_filename = audio_chunks_dir.join("segment_list.txt");
+        let video_segment_list_filename = video_chunks_dir.join("segment_list.txt");
 
         let mut audio_filters = Vec::new();
 
@@ -471,14 +473,12 @@ impl MediaRecorder {
 
         audio_filters.push("loudnorm");
 
-        std::fs::create_dir_all(chunks_file_path.join("pipes")).map_err(|e| e.to_string())?;
-
-        let video_pipe_path = chunks_file_path.join("pipes/video.pipe");
+        let video_pipe_path = video_chunks_dir.join("pipe.pipe");
 
         std::fs::remove_file(&video_pipe_path).ok();
         create_named_pipe(&video_pipe_path).map_err(|e| e.to_string())?;
 
-        let audio_pipe_path = chunks_file_path.join("pipes/audio.pipe");
+        let audio_pipe_path = audio_chunks_dir.join("pipe.pipe");
 
         std::fs::remove_file(&audio_pipe_path).ok();
         create_named_pipe(&audio_pipe_path).map_err(|e| e.to_string())?;
@@ -594,7 +594,8 @@ impl MediaRecorder {
         });
 
         self.start_time = Some(Instant::now());
-        self.file_path = Some(chunks_file_path.to_path_buf());
+        self.audio_file_path = Some(audio_chunks_dir.to_path_buf());
+        self.video_file_path = Some(video_chunks_dir.to_path_buf());
         self.ffmpeg_process = Some(ffmpeg_child);
         self.device_name = Some(device.name().expect("Failed to get device name"));
 
@@ -619,15 +620,29 @@ impl MediaRecorder {
             let segment_duration = Duration::from_secs(3);
             let recording_duration = start_time.elapsed();
             let expected_segments = recording_duration.as_secs() / segment_duration.as_secs();
-            let file_path = self.file_path.as_ref().ok_or("File path not set")?;
-            let segment_list_filename = file_path.join("segment_list.txt");
+            let audio_file_path = self
+                .audio_file_path
+                .as_ref()
+                .ok_or("Audio file path not set")?;
+            let video_file_path = self
+                .video_file_path
+                .as_ref()
+                .ok_or("Video file path not set")?;
+            let audio_segment_list_filename = audio_file_path.join("segment_list.txt");
+            let video_segment_list_filename = video_file_path.join("segment_list.txt");
 
             loop {
-                let segments = std::fs::read_to_string(&segment_list_filename).unwrap_or_default();
+                let audio_segments =
+                    std::fs::read_to_string(&audio_segment_list_filename).unwrap_or_default();
+                let video_segments =
+                    std::fs::read_to_string(&video_segment_list_filename).unwrap_or_default();
 
-                let segment_count = segments.lines().count();
+                let audio_segment_count = audio_segments.lines().count();
+                let video_segment_count = video_segments.lines().count();
 
-                if segment_count >= expected_segments as usize {
+                if audio_segment_count >= expected_segments as usize
+                    && video_segment_count >= expected_segments as usize
+                {
                     println!("All segments generated");
                     break;
                 }
@@ -671,12 +686,7 @@ impl MediaRecorder {
         Ok(())
     }
 
-    async fn start_ffmpeg_process(
-        &self,
-        cmd: Command,
-        // ffmpeg_binary_path: &str,
-        // video_ffmpeg_command: &[String],
-    ) -> Result<(Child, ChildStdin), Error> {
+    async fn start_ffmpeg_process(&self, cmd: Command) -> Result<(Child, ChildStdin), Error> {
         let mut video_process = start_recording_process(cmd).await.map_err(|e| {
             eprintln!("Failed to start video recording process: {}", e);
             std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
@@ -724,8 +734,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 async fn start_recording_process(
     mut cmd: Command,
-    // ffmpeg_binary_path_str: &str,
-    // args: &[String],
 ) -> Result<tokio::process::Child, std::io::Error> {
     let mut process = cmd.stdin(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
 
@@ -804,8 +812,4 @@ async fn create_time_offset_args(
     } else {
         None
     }
-}
-
-fn flatten_str_args<'a>(args: impl IntoIterator<Item = [&'a str; 2]>) -> Vec<String> {
-    args.into_iter().flatten().map(|s| s.to_string()).collect()
 }

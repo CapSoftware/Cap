@@ -67,9 +67,9 @@ pub async fn start_dual_recording(
     let audio_chunks_dir = data_dir.join("chunks/audio");
     let video_chunks_dir = data_dir.join("chunks/video");
 
+    clean_and_create_dir(&screenshot_dir)?;
     clean_and_create_dir(&audio_chunks_dir)?;
     clean_and_create_dir(&video_chunks_dir)?;
-    clean_and_create_dir(&screenshot_dir)?;
 
     let audio_name = if options.audio_name.is_empty() {
         None
