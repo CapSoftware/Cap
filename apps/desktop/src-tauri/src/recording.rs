@@ -161,7 +161,9 @@ pub async fn stop_all_recordings(
     };
 
     if !is_local_mode {
-        while !guard.uploading_finished.load(Ordering::SeqCst) {
+        while !guard.video_uploading_finished.load(Ordering::SeqCst)
+            || !guard.audio_uploading_finished.load(Ordering::SeqCst)
+        {
             println!("Waiting for uploads to finish...");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
