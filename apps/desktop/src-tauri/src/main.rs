@@ -17,6 +17,7 @@ use tracing::Level;
 use tracing_subscriber::prelude::*;
 use sentry_tracing::EventFilter;
 
+mod app;
 mod recording;
 mod upload;
 mod utils;
@@ -51,8 +52,31 @@ macro_rules! generate_handler {
 fn main() {
     let _ = fix_path_env::fix();
 
+    let context = tauri::generate_context!();
+    let log_directory = tauri::api::path::app_log_dir(&context.config()).unwrap_or_else(|| {
+        println!("Using current directory as log directory");
+        PathBuf::new().join("logs")
+    });
+    let rolling_log = tracing_appender::rolling::daily(log_directory, "cap_debug.log");
+    let (log_writer, _log_guard) = tracing_appender::non_blocking(rolling_log);
+
+    // TODO: Move this endpoint into environment variable/other external configuration
+    let _guard = sentry::init(("https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200", sentry::ClientOptions {
+        release: sentry::release_name!(),
+        ..Default::default()
+    }));
+
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stdout.with_max_level(app::config::logging_level()))
+                .pretty()
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(log_writer.with_max_level(Level::DEBUG))
+                .with_ansi(false)
+        )
         .with(sentry_tracing::layer().event_filter(|metadata| {
             match metadata.level() {
                 &Level::WARN => EventFilter::Event,
@@ -64,12 +88,16 @@ fn main() {
     std::panic::set_hook(Box::new(|info| {
         // TODO: More expressive panic data collection (configurable backtrace capture especially)
         tracing::error!("Thread panicked: {:?}", info);
-    }));
-
-    // TODO: Move this endpoint into environment variable/other external configuration
-    let _guard = sentry::init(("https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200", sentry::ClientOptions {
-        release: sentry::release_name!(),
-        ..Default::default()
+        // If the panic has a source location, record it as structured fields.
+        if let Some(location) = info.location() {
+            tracing::error!(
+                panic.file = location.file(),
+                panic.line = location.line(),
+                message = %info,
+            );
+        } else {
+            tracing::error!(message = %info);
+        }
     }));
 
     fn handle_ffmpeg_installation() -> FfmpegResult<()> {
@@ -402,6 +430,6 @@ fn main() {
             },
             _ => {}
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("Error while running tauri application");
 }

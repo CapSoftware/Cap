@@ -14,6 +14,7 @@ use tokio::process::{Command, Child, ChildStdin};
 use tokio::sync::{mpsc, Mutex};
 use tokio::try_join;
 
+use crate::app::config;
 use crate::recording::RecordingOptions;
 use crate::utils::{ffmpeg_path_as_str};
 use crate::upload::upload_file;
@@ -288,10 +289,7 @@ impl MediaRecorder {
         std::thread::spawn(move || {
             tracing::trace!("Starting video recording capture thread...");
 
-            let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
-                "true" => true,
-                _ => false,
-            };
+            let is_local_mode = config::is_local_mode();
 
             let mut capturer = Capturer::new(Display::primary().expect("Failed to find primary display"), w.try_into().unwrap(), h.try_into().unwrap()).expect("Failed to start capture");
 
