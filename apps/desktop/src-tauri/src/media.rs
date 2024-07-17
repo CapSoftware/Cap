@@ -2,8 +2,8 @@ use byteorder::{ ByteOrder, LittleEndian };
 use cpal::traits::{ DeviceTrait, HostTrait, StreamTrait };
 use cpal::SampleFormat;
 use image::codecs::jpeg::JpegEncoder;
-use image::{ ImageBuffer, ImageFormat, Rgba };
-use std::io::{ Error, ErrorKind::WouldBlock };
+use image::{ ImageBuffer, Rgba };
+use std::io::{ Error };
 use std::path::{ Path, PathBuf };
 use std::process::Stdio;
 use std::sync::{ atomic::{ AtomicBool, Ordering }, Arc };
@@ -13,14 +13,13 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::process::{ Child, ChildStdin, Command };
 use tokio::sync::{ mpsc, Mutex };
-use tokio::try_join;
 
 use crate::recording::RecordingOptions;
 use crate::upload::{ self, upload_file };
 use crate::utils::{ create_named_pipe, ffmpeg_path_as_str };
-use capture::{ Capturer, Display };
+use scap::{ capturer::{ Point, Area, Size, Capturer, Options }, frame::Frame };
 
-const FRAME_RATE: u64 = 30;
+const FRAME_RATE: u64 = 60;
 
 pub struct MediaRecorder {
     pub options: Option<RecordingOptions>,
@@ -73,7 +72,6 @@ impl MediaRecorder {
 
         let host = cpal::default_host();
         let devices = host.devices().expect("Failed to get devices");
-        let _display = Display::primary().expect("Failed to find primary display");
         let w = max_screen_width;
         let h = max_screen_height;
 
@@ -318,11 +316,37 @@ impl MediaRecorder {
                 _ => false,
             };
 
-            let mut capturer = Capturer::new(
-                Display::primary().expect("Failed to find primary display"),
-                w.try_into().unwrap(),
-                h.try_into().unwrap()
-            ).expect("Failed to start capture");
+            if !scap::has_permission() {
+                println!("❌ Permission not granted. Requesting permission...");
+                if !scap::request_permission() {
+                    println!("❌ Permission denied");
+                    return;
+                }
+            }
+
+            let targets = scap::get_targets();
+
+            let scap_options = Options {
+                fps: 60,
+                targets,
+                show_cursor: true,
+                show_highlight: true,
+                excluded_targets: None,
+                output_type: scap::frame::FrameType::BGRAFrame,
+                output_resolution: scap::capturer::Resolution::_720p,
+                source_rect: Some(Area {
+                    origin: Point { x: 0.0, y: 0.0 },
+                    size: Size {
+                        width: 2000.0,
+                        height: 1000.0,
+                    },
+                }),
+                ..Default::default()
+            };
+
+            let mut capturer = Capturer::new(scap_options);
+
+            capturer.start_capture();
 
             let fps = FRAME_RATE;
             let spf = Duration::from_nanos(1_000_000_000 / fps);
@@ -333,31 +357,14 @@ impl MediaRecorder {
             let mut screenshot_captured: bool = false;
 
             while !should_stop.load(Ordering::SeqCst) {
+                let frame = capturer.get_next_frame().expect("Error");
                 let options_clone = options.clone();
                 let now = Instant::now();
 
                 if now >= time_next {
-                    match capturer.frame() {
-                        Ok(frame) => {
-                            let mut frame_data = Vec::with_capacity(
-                                capture_size.try_into().unwrap()
-                            );
-
-                            for row in 0..adjusted_height {
-                                let padded_stride = frame
-                                    .stride_override()
-                                    .unwrap_or(calculated_stride);
-                                assert!(
-                                    padded_stride >= calculated_stride,
-                                    "Image stride with padding should not be smaller than calculated bytes per row"
-                                );
-                                // Each row should skip the padding of the previous row
-                                let start = row * padded_stride;
-                                // Each row should stop before/trim off its padding, for compatibility with software that doesn't follow arbitrary padding.
-                                let end = start + calculated_stride;
-                                frame_data.extend_from_slice(&frame[start..end]);
-                            }
-
+                    match frame {
+                        Frame::BGRA(frame) => {
+                            let frame_data = &frame.data;
                             if now - start_time >= capture_frame_at && !screenshot_captured {
                                 screenshot_captured = true;
                                 let mut frame_data_clone = frame_data.clone();
@@ -425,7 +432,7 @@ impl MediaRecorder {
                             }
 
                             if let Some(sender) = &video_channel_sender {
-                                if sender.try_send(frame_data).is_err() {
+                                if sender.try_send(frame_data.clone()).is_err() {
                                     eprintln!("Channel send error. Dropping data.");
                                 }
                             }
@@ -442,14 +449,7 @@ impl MediaRecorder {
 
                             frame_count += 1;
                         }
-                        Err(error) if error.kind() == WouldBlock => {
-                            std::thread::sleep(Duration::from_millis(1));
-                            continue;
-                        }
-                        Err(error) => {
-                            eprintln!("Capture error: {}", error);
-                            break;
-                        }
+                        _ => {}
                     }
 
                     time_next += spf;
