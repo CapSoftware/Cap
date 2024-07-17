@@ -387,7 +387,7 @@ impl MediaRecorder {
                                     if let Err(e) = encoder.encode_image(&image) {
                                         tracing::warn!("Failed to save screenshot: {}", e);
                                     } else {
-                                        println!(
+                                        tracing::info!(
                                             "Screenshot captured and saved to {:?}",
                                             screenshot_file_path
                                         );
