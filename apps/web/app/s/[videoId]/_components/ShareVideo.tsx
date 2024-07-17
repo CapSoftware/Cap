@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import { LogoSpinner } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
-import { Tooltip } from "react-tooltip";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { is } from "drizzle-orm";
 import toast from "react-hot-toast";
@@ -410,7 +409,6 @@ export const ShareVideo = ({
                         : "User"
                     }`}
                   >
-                    <Tooltip id={comment.id} />
                     <span>
                       {comment.type === "text" ? (
                         <MessageSquare
