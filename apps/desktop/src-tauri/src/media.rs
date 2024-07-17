@@ -558,6 +558,7 @@ impl MediaRecorder {
 
         if needs_audio {
             tracing::trace!("Starting audio channel senders...");
+            let audio_should_stop = Arc::clone(&self.should_stop);
 
             tokio::spawn(async move {
                 let mut audio_pipe = File::create(audio_pipe_path).await.unwrap();
@@ -569,6 +570,9 @@ impl MediaRecorder {
                         .unwrap()
                         .recv().await
                 {
+                    if audio_should_stop.load(Ordering::SeqCst) {
+                        break;
+                    }
                     audio_pipe
                         .write_all(&bytes).await
                         .expect("Failed to write audio data to FFmpeg stdin");
@@ -577,16 +581,19 @@ impl MediaRecorder {
         }
 
         tracing::trace!("Starting video channel senders...");
+        let video_should_stop = Arc::clone(&self.should_stop);
         tokio::spawn(async move {
             let mut pipe = File::create(video_pipe_path).await.unwrap();
 
-            while
-                let Some(bytes) = &video_channel_receiver
+            while let Some(bytes) = &video_channel_receiver
                     .lock().await
                     .as_mut()
                     .unwrap()
                     .recv().await
             {
+                if video_should_stop.load(Ordering::SeqCst) {
+                    break;
+                }
                 pipe.write_all(&bytes).await.expect("Failed to write video data to FFmpeg stdin");
             }
         });
