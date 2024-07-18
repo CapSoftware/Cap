@@ -1,27 +1,29 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::LinkedList;
-use std::sync::{Arc};
-use std::path::PathBuf;
 use cpal::Devices;
 use regex::Regex;
-use tokio::sync::Mutex;
-use std::sync::atomic::{AtomicBool};
-use std::{vec};
-use tauri::{CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu, Window};
-use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
-use window_shadows::set_shadow;
-use tauri_plugin_positioner::{WindowExt, Position};
+use std::collections::LinkedList;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::vec;
+use tauri::{
+    CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu, Window,
+};
 use tauri_plugin_oauth::start;
+use tauri_plugin_positioner::{Position, WindowExt};
+use tokio::sync::Mutex;
+use window_shadows::set_shadow;
+use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 
+mod media;
 mod recording;
 mod upload;
 mod utils;
-mod media;
 
-use recording::{RecordingState, start_dual_recording, stop_all_recordings};
-use media::{enumerate_audio_devices};
-use utils::{has_screen_capture_access};
+use media::enumerate_audio_devices;
+use recording::{start_dual_recording, stop_all_recordings, RecordingState};
+use utils::has_screen_capture_access;
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
