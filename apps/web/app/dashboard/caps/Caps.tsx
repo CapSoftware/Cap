@@ -26,6 +26,7 @@ import {
 } from "@cap/ui";
 import { debounce } from "lodash";
 import { playlistToMp4 } from "@/utils/video/ffmpeg/helpers";
+import { Tooltip } from "react-tooltip";
 
 type videoData = {
   id: string;
@@ -144,7 +145,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
         }
       )
       .finally(() => {
-        setIsDownloading(null); // Reset downloading state after completion or failure
+        setIsDownloading(null);
       });
   };
 
@@ -211,7 +212,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
               return (
                 <div
                   key={index}
-                  className="rounded-xl border border-filler overflow-hidden relative"
+                  className="rounded-xl border border-filler relative"
                 >
                   <div className="absolute top-2 right-2 space-y-2 z-20">
                     <button
@@ -232,8 +233,11 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                         }
                         toast.success("Link copied to clipboard!");
                       }}
+                      data-tooltip-id={cap.id + "_copy"}
+                      data-tooltip-content="Copy shareable Cap link"
                     >
                       <LinkIcon className="w-4 h-4" />
+                      <Tooltip id={cap.id + "_copy"} />
                     </button>
                     <button
                       type="button"
@@ -245,6 +249,8 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
 
                         await downloadCap(cap.id);
                       }}
+                      data-tooltip-id={cap.id + "_download"}
+                      data-tooltip-content="Download your Cap recording"
                     >
                       {isDownloading === cap.id ? (
                         <svg
@@ -272,7 +278,10 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                           />
                         </svg>
                       ) : (
-                        <DownloadIcon className="w-4 h-4" />
+                        <>
+                          <DownloadIcon className="w-4 h-4" />
+                          <Tooltip id={cap.id + "_download"} />
+                        </>
                       )}
                     </button>
                     <button
@@ -281,8 +290,11 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                       onClick={async () => {
                         await deleteCap(cap.id);
                       }}
+                      data-tooltip-id={cap.id + "_delete"}
+                      data-tooltip-content="Delete your Cap recording"
                     >
                       <Trash className="w-4 h-4" />
+                      <Tooltip id={cap.id + "_delete"} />
                     </button>
                   </div>
                   <a
@@ -335,27 +347,49 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                         {titles[cap.id] || cap.name}
                       </p>
                     )}
-                    <p className="text-sm text-gray-400">
-                      {moment(cap.createdAt).fromNow()}
+                    <p>
+                      <span
+                        className="text-sm text-gray-400"
+                        data-tooltip-id={cap.id + "_createdAt"}
+                        data-tooltip-content={`Cap created at ${cap.createdAt}`}
+                      >
+                        {moment(cap.createdAt).fromNow()}
+                      </span>
+                      <Tooltip id={cap.id + "_createdAt"} />
                     </p>
-                    <div className="flex items-center space-x-3 mt-2 text-sm text-gray-600">
-                      <div className="flex items-center">
+                    <div className="flex items-center space-x-3 mt-2 text-sm text-gray-60">
+                      <div
+                        className="flex items-center"
+                        data-tooltip-id={cap.id + "_analytics"}
+                        data-tooltip-content={`${videoAnalytics} unique views via your shareable Cap.link. Refreshed every 5 minutes.`}
+                      >
                         <EyeIcon className="w-4 h-4 mr-1" />
                         <span className="text-gray-600">
                           {videoAnalytics ?? "-"}
                         </span>
+                        <Tooltip id={cap.id + "_analytics"} />
                       </div>
-                      <div className="flex items-center">
+                      <div
+                        className="flex items-center"
+                        data-tooltip-id={cap.id + "_comments"}
+                        data-tooltip-content={`${cap.totalComments} comments`}
+                      >
                         <MessageSquareIcon className="w-4 h-4 mr-1" />
                         <span className="text-gray-600">
                           {cap.totalComments}
                         </span>
+                        <Tooltip id={cap.id + "_comments"} />
                       </div>
-                      <div className="flex items-center">
+                      <div
+                        className="flex items-center"
+                        data-tooltip-id={cap.id + "_reactions"}
+                        data-tooltip-content={`${cap.totalReactions} reactions`}
+                      >
                         <SmileIcon className="w-4 h-4 mr-1" />
                         <span className="text-gray-600">
                           {cap.totalReactions}
                         </span>
+                        <Tooltip id={cap.id + "_reactions"} />
                       </div>
                     </div>
                   </div>

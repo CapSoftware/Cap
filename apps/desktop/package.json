@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.2.7",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "RUST_BACKTRACE=1 tauri dev",
     "build": "tsc && next build",
     "tauri": "tauri"
   },
