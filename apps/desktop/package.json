@@ -20,6 +20,7 @@
     "cookies-next": "^4.1.0",
     "date-fns": "^3.2.0",
     "dotenv": "^16.3.1",
+    "lucide-react": "^0.294.0",
     "million": "^2.6.4",
     "next": "^14.2.3",
     "next-auth": "^4.24.5",

@@ -77,7 +77,11 @@ export const openSettingsWindow = async () => {
   webview = new WebviewWindow("settings", {
     focus: true,
     url: "/settings",
-    decorations: false
+    decorations: false,
+    minWidth: 800,
+    minHeight: 600,
+    width: 923,
+    height: 330,
   });
   webview.once("tauri://error", function (e) {
     console.error(e);
