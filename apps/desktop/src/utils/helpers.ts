@@ -1,5 +1,7 @@
 "use client";
 
+import { WebviewWindow } from "@tauri-apps/api/window";
+
 export const openLinkInBrowser = async (url: string) => {
   let open:
     | ((path: string, openWith?: string) => Promise<void>)
@@ -65,4 +67,27 @@ export const savePermissions = async (permission: string, value: boolean) => {
   } catch (error) {
     console.error("Failed to save permissions:", error);
   }
+};
+
+export const openSettingsWindow = async () => {
+  let webview: WebviewWindow;
+  if ((webview = WebviewWindow.getByLabel("settings"))) {
+    return;
+  }
+  webview = new WebviewWindow("settings", {
+    focus: true,
+    url: "/settings",
+    decorations: false
+  });
+  webview.once("tauri://error", function (e) {
+    console.error(e);
+  });
+};
+
+export const closeSettingsWindow = async () => {
+  let webview:WebviewWindow;
+  if ((webview = WebviewWindow.getByLabel("settings"))) {
+    webview.close()
+  }
+  return
 };
