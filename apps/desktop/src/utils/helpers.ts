@@ -77,11 +77,12 @@ export const openSettingsWindow = async () => {
   webview = new WebviewWindow("settings", {
     focus: true,
     url: "/settings",
-    decorations: false,
+    // decorations: false,
     minWidth: 800,
     minHeight: 600,
     width: 923,
     height: 330,
+    titleBarStyle: "overlay",
   });
   webview.once("tauri://error", function (e) {
     console.error(e);
@@ -89,9 +90,9 @@ export const openSettingsWindow = async () => {
 };
 
 export const closeSettingsWindow = async () => {
-  let webview:WebviewWindow;
+  let webview: WebviewWindow;
   if ((webview = WebviewWindow.getByLabel("settings"))) {
-    webview.close()
+    webview.close();
   }
-  return
+  return;
 };
