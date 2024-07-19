@@ -72,22 +72,8 @@ impl MediaRecorder {
 
         let host = cpal::default_host();
         let devices = host.devices().expect("Failed to get devices");
-        let w = max_screen_width;
-        let h = max_screen_height;
-
-        let adjusted_width = w & !2;
-        let adjusted_height = h & !2;
-        let capture_size = adjusted_width * adjusted_height * 4;
         let (audio_tx, audio_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
         let (video_tx, video_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(2048);
-        let calculated_stride = (adjusted_width * 4) as usize;
-
-        println!("Display width: {}", w);
-        println!("Display height: {}", h);
-        println!("Adjusted width: {}", adjusted_width);
-        println!("Adjusted height: {}", adjusted_height);
-        println!("Capture size: {}", capture_size);
-        println!("Calculated stride: {}", calculated_stride);
 
         let audio_start_time = Arc::new(Mutex::new(None));
         let video_start_time = Arc::new(Mutex::new(None));
@@ -308,6 +294,28 @@ impl MediaRecorder {
         let screenshot_file_path = screenshot_dir.join("screen-capture.jpg");
         let capture_frame_at = Duration::from_secs(3);
 
+        let scap_options = Options {
+            fps: 60,
+            show_cursor: true,
+            show_highlight: true,
+            excluded_targets: None,
+            output_type: scap::frame::FrameType::BGR0,
+            output_resolution: scap::capturer::Resolution::_720p,
+            // source_rect: Some(Area {
+            //     origin: Point { x: 0.0, y: 0.0 },
+            //     size: Size {
+            //         width: 2000.0,
+            //         height: 1000.0,
+            //     },
+            // }),
+            ..Default::default()
+        };
+
+        let mut capturer = Capturer::new(scap_options);
+        let capture_size = capturer.get_output_frame_size();
+        let width = capture_size[0];
+        let height = capture_size[1];
+
         std::thread::spawn(move || {
             println!("Starting video recording capture thread...");
 
@@ -324,112 +332,49 @@ impl MediaRecorder {
                 }
             }
 
-            let targets = scap::get_targets();
-
-            let scap_options = Options {
-                fps: 60,
-                targets,
-                show_cursor: true,
-                show_highlight: true,
-                excluded_targets: None,
-                output_type: scap::frame::FrameType::BGRAFrame,
-                output_resolution: scap::capturer::Resolution::_720p,
-                source_rect: Some(Area {
-                    origin: Point { x: 0.0, y: 0.0 },
-                    size: Size {
-                        width: 2000.0,
-                        height: 1000.0,
-                    },
-                }),
-                ..Default::default()
-            };
-
-            let mut capturer = Capturer::new(scap_options);
-
             capturer.start_capture();
 
             let fps = FRAME_RATE;
-            let spf = Duration::from_nanos(1_000_000_000 / fps);
-
             let mut frame_count = 0u32;
             let start_time = Instant::now();
-            let mut time_next = Instant::now() + spf;
             let mut screenshot_captured: bool = false;
 
+            let mut is_video_start_time_set = false;
+
             while !should_stop.load(Ordering::SeqCst) {
-                let frame = capturer.get_next_frame().expect("Error");
-                let options_clone = options.clone();
-                let now = Instant::now();
-
-                if now >= time_next {
-                    match frame {
-                        Frame::BGRA(frame) => {
+                match capturer.get_next_frame() {
+                    Ok(frame) => {
+                        if let Frame::BGR0(frame) = frame {
                             let frame_data = &frame.data;
-                            if now - start_time >= capture_frame_at && !screenshot_captured {
-                                screenshot_captured = true;
-                                let mut frame_data_clone = frame_data.clone();
 
-                                let screenshot_file_path = screenshot_file_path.clone();
-                                std::thread::spawn(move || {
-                                    for chunk in frame_data_clone.chunks_mut(4) {
-                                        chunk.swap(0, 2);
-                                    }
-
-                                    let image: ImageBuffer<
-                                        Rgba<u8>,
-                                        Vec<u8>
-                                    > = ImageBuffer::from_raw(
-                                        adjusted_width.try_into().unwrap(),
-                                        adjusted_height.try_into().unwrap(),
-                                        frame_data_clone
-                                    ).expect("Failed to create image buffer");
-
-                                    let mut output_file = std::fs::File
-                                        ::create(&screenshot_file_path)
-                                        .expect("Failed to create output file");
-                                    let mut encoder = JpegEncoder::new_with_quality(
-                                        &mut output_file,
-                                        20
-                                    );
-
-                                    if let Err(e) = encoder.encode_image(&image) {
-                                        eprintln!("Failed to save screenshot: {}", e);
-                                    } else {
-                                        println!(
-                                            "Screenshot captured and saved to {:?}",
-                                            screenshot_file_path
-                                        );
-
-                                        if !is_local_mode {
-                                            let rt = tokio::runtime::Runtime::new().unwrap();
-                                            rt.block_on(async move {
-                                                let upload_task = tokio::spawn(
-                                                    upload_file(
-                                                        Some(options_clone),
-                                                        screenshot_file_path.clone(),
-                                                        upload::FileType::Screenshot
-                                                    )
-                                                );
-                                                match upload_task.await {
-                                                    Ok(result) =>
-                                                        match result {
-                                                            Ok(_) =>
-                                                                println!(
-                                                                    "Screenshot captured and saved to {:?}",
-                                                                    screenshot_file_path
-                                                                ),
-                                                            Err(e) =>
-                                                                eprintln!("Failed to upload file: {}", e),
-                                                        }
-                                                    Err(e) => {
-                                                        eprintln!("Failed to join task: {}", e)
-                                                    }
-                                                }
-                                            });
+                            // Set video start time if not already set
+                            tokio::runtime::Runtime
+                                ::new()
+                                .unwrap()
+                                .block_on(async {
+                                    if !is_video_start_time_set {
+                                        let mut video_start_time_guard =
+                                            video_start_time_clone.lock().await;
+                                        if video_start_time_guard.is_none() {
+                                            *video_start_time_guard = Some(Instant::now());
+                                            println!("Video start time captured");
+                                            is_video_start_time_set = true; // Update the flag
                                         }
                                     }
                                 });
-                            }
+
+                            println!("Frame captured");
+                            // if now - start_time >= capture_frame_at && !screenshot_captured {
+                            //     screenshot_captured = true;
+                            //     process_screenshot(
+                            //         frame_data,
+                            //         &screenshot_file_path,
+                            //         adjusted_width,
+                            //         adjusted_height,
+                            //         &options_clone,
+                            //         is_local_mode
+                            //     ).await;
+                            // }
 
                             if let Some(sender) = &video_channel_sender {
                                 if sender.try_send(frame_data.clone()).is_err() {
@@ -437,28 +382,13 @@ impl MediaRecorder {
                                 }
                             }
 
-                            let mut first_frame_time_guard = video_start_time_clone.try_lock();
-
-                            if let Ok(ref mut start_time_option) = first_frame_time_guard {
-                                if start_time_option.is_none() {
-                                    **start_time_option = Some(Instant::now());
-
-                                    println!("Video start time captured");
-                                }
-                            }
-
                             frame_count += 1;
                         }
-                        _ => {}
                     }
-
-                    time_next += spf;
-                }
-
-                // Sleep until the next frame time
-                let now = Instant::now();
-                if time_next > now {
-                    std::thread::sleep(time_next - now);
+                    Err(e) => {
+                        eprintln!("Failed to receive frame: {}", e);
+                        break;
+                    }
                 }
             }
 
@@ -498,7 +428,7 @@ impl MediaRecorder {
             None
         };
 
-        let size = format!("{}x{}", adjusted_width, adjusted_height);
+        let size = format!("{}x{}", width, height);
 
         let mut ffmpeg_command = Command::new(ffmpeg_binary_path_str);
 
@@ -509,11 +439,11 @@ impl MediaRecorder {
         ffmpeg_command
             // video in
             .args(["-f", "rawvideo", "-pix_fmt", "bgra"])
-            .args(["-s", &size, "-r", "30"])
+            .args(["-s", &size, "-r", "60"])
             .args(["-thread_queue_size", "4096", "-i"])
             .arg(&video_pipe_path)
             // video out
-            .args(["-vf", "fps=30,scale=in_range=full:out_range=limited"])
+            .args(["-vf", "fps=60,scale=in_range=full:out_range=limited"])
             .args(["-c:v", "libx264", "-preset", "ultrafast"])
             .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
             .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])

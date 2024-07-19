@@ -1975,12 +1975,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hound"
-version = "3.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
-
-[[package]]
 name = "html5ever"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4003,17 +3997,13 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8759a122294835ac0df383a04e60b41834bc911edc4b93329bfcfd1fe0ab70fa"
+source = "git+https://github.com/CapSoftware/scap#5ee8692ab32ebb92055f997f0b9eacfc14f4d230"
 dependencies = [
  "apple-sys-helmer-fork",
- "bytes",
+ "cocoa 0.25.0",
  "core-graphics-helmer-fork",
- "cpal",
  "dbus",
- "hound",
- "image",
- "itertools 0.12.1",
+ "objc",
  "pipewire",
  "rand 0.8.5",
  "screencapturekit",
