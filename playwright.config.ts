@@ -12,7 +12,7 @@ const DEFAULT_NAVIGATION_TIMEOUT = 120000;
 const DEFAULT_EXPECT_TIMEOUT = 120000;
 const DEFAULT_TEST_TIMEOUT = 240000;
 
-const headless = true; // Set to true for headless mode
+const headless = true; 
 
 const webServer = [
   {
@@ -57,7 +57,7 @@ const config: PlaywrightTestConfig = {
   outputDir: path.join(outputDir, 'results'),
   webServer,
   use: {
-    baseURL: process.env.PUBLIC_URL || 'http://localhost:3000',
+    baseURL: process.env.NEXT_PUBLIC_URL || 'http://localhost:3000',
     locale: 'en-US',
     trace: 'retain-on-failure',
     headless,
