@@ -60,7 +60,7 @@ tauri-plugin-deep-link = { git = "https://github.com/FabianLars/tauri-plugin-dee
 window-vibrancy = "0.4.3"
 window-shadows = "0.2.2"
 chrono = "0.4.33"
-dotenv_codegen = "0.15.0"
+dotenvy_macro = "0.15.7"
 byteorder = "1.4.3"
 bytemuck = "1.14.3"
 regex = "1"

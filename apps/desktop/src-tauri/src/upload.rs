@@ -49,7 +49,7 @@ pub async fn upload_file(
             options.user_id, options.video_id,
         );
 
-        let server_url_base: &'static str = dotenv_codegen::dotenv!("NEXT_PUBLIC_URL");
+        let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
         let server_url = format!("{}/api/upload/signed", server_url_base);
 
         let body = match file_type {
@@ -150,7 +150,8 @@ pub async fn upload_file(
                     .unwrap_or_else(|_| "<no response body>".to_string());
                 tracing::error!(
                     "Failed to upload file. Status: {}. Body: {}",
-                    status, error_body
+                    status,
+                    error_body
                 );
                 return Err(format!(
                     "Failed to upload file. Status: {}. Body: {}",

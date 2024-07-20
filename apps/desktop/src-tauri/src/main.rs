@@ -55,52 +55,39 @@ fn main() {
     let _ = fix_path_env::fix();
 
     let context = tauri::generate_context!();
-    let log_directory = tauri::api::path::app_log_dir(&context.config()).unwrap_or_else(|| {
-        println!("Using current directory as log directory");
-        PathBuf::new().join("logs")
-    });
-    let rolling_log = tracing_appender::rolling::daily(log_directory, "cap_debug.log");
+    let rolling_log = app::get_log_file(&context);
     let (log_writer, _log_guard) = tracing_appender::non_blocking(rolling_log);
 
-    // TODO: Move this endpoint into environment variable/other external configuration
-    let _guard = sentry::init(("https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200", sentry::ClientOptions {
+    let sentry_guard = sentry::init(sentry::ClientOptions {
+        dsn: app::config::sentry_dsn(),
         release: sentry::release_name!(),
         ..Default::default()
-    }));
+    });
+    let maybe_sentry_subscriber =
+        sentry_guard
+            .is_enabled()
+            .then_some(
+                sentry_tracing::layer().event_filter(|metadata| match metadata.level() {
+                    &Level::WARN => EventFilter::Event,
+                    _ => EventFilter::Ignore,
+                }),
+            );
 
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout.with_max_level(app::config::logging_level()))
-                .pretty()
+                .pretty(),
         )
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(log_writer.with_max_level(Level::DEBUG))
-                .with_ansi(false)
+                .with_ansi(false),
         )
-        .with(sentry_tracing::layer().event_filter(|metadata| {
-            match metadata.level() {
-                &Level::WARN => EventFilter::Event,
-                _ => EventFilter::Ignore,
-            }
-        }))
+        .with(maybe_sentry_subscriber)
         .init();
 
-    std::panic::set_hook(Box::new(|info| {
-        // TODO: More expressive panic data collection (configurable backtrace capture especially)
-        tracing::error!("Thread panicked: {:?}", info);
-        // If the panic has a source location, record it as structured fields.
-        if let Some(location) = info.location() {
-            tracing::error!(
-                panic.file = location.file(),
-                panic.line = location.line(),
-                message = %info,
-            );
-        } else {
-            tracing::error!(message = %info);
-        }
-    }));
+    std::panic::set_hook(Box::new(app::panic_hook));
 
     fn handle_ffmpeg_installation() -> FfmpegResult<()> {
         if ffmpeg_is_installed() {
@@ -221,7 +208,7 @@ fn main() {
         Some(max_mode) => {
             tracing::debug!("Maximum resolution: {:?}", max_mode.size());
             (max_mode.size().width, max_mode.size().height)
-        },
+        }
         None => {
             tracing::debug!("Failed to determine maximum resolution.");
             (0, 0)
