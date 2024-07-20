@@ -29,24 +29,38 @@ export const Camera = () => {
 
     if (typeof navigator === "undefined") return;
 
-    navigator.mediaDevices
-      .getUserMedia(constraints)
-      .then((stream) => {
-        video.srcObject = stream;
-        video.play();
-        setIsLoading(false);
-      })
-      .catch((err) => {
-        console.error(err);
-      });
+    const initializeVideoStream = () => {
+      navigator.mediaDevices
+        .getUserMedia(constraints)
+        .then((stream) => {
+          video.srcObject = stream;
+          video.play();
+          setIsLoading(false);
+        })
+        .catch((err) => {
+          console.error(err);
+        });
+    }
 
-    return () => {
+    const onVisibilityChanged = () => {
+      if (document.hidden) stop();
+      else initializeVideoStream();
+    }
+
+    const stop = () => {
       if (video.srcObject) {
         const stream = video.srcObject as MediaStream;
         stream.getTracks().forEach((track) => {
           track.stop();
         });
       }
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChanged);
+
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibilityChanged);
     };
   }, [selectedVideoDevice]);
 
