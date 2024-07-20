@@ -1,17 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use cpal::Devices;
 use regex::Regex;
 use sentry_tracing::EventFilter;
-use std::collections::LinkedList;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::vec;
 use tauri::{
-    CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu, Window,
+    CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu,
 };
-use tauri_plugin_oauth::start;
 use tauri_plugin_positioner::{Position, WindowExt};
 use tokio::sync::Mutex;
 use tracing::Level;
@@ -19,15 +16,16 @@ use tracing_subscriber::prelude::*;
 use window_shadows::set_shadow;
 use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 
+#[macro_use]
 mod app;
 mod media;
 mod recording;
 mod upload;
 mod utils;
 
+use app::commands::*;
 use media::enumerate_audio_devices;
 use recording::{start_dual_recording, stop_all_recordings, RecordingState};
-use utils::has_screen_capture_access;
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
@@ -38,18 +36,6 @@ use ffmpeg_sidecar::{
 };
 
 use winit::monitor::{MonitorHandle, VideoMode};
-
-macro_rules! generate_handler {
-  ($($command:ident),*) => {{
-    #[cfg(debug_assertions)]
-    tauri_specta::ts::export(
-      specta::collect_types![$($command),*],
-      "../src/utils/commands.ts"
-    ).unwrap();
-
-    tauri::generate_handler![$($command),*]
-  }}
-}
 
 fn main() {
     let _ = fix_path_env::fix();
@@ -118,81 +104,6 @@ fn main() {
     }
 
     handle_ffmpeg_installation().expect("Failed to install FFmpeg");
-
-    #[tauri::command]
-    #[specta::specta]
-    async fn start_server(window: Window) -> Result<u16, String> {
-        start(move |url| {
-            let _ = window.emit("redirect_uri", url);
-        })
-        .map_err(|err| err.to_string())
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn open_screen_capture_preferences() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
-            .spawn()
-            .expect("failed to open system preferences");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn open_mic_preferences() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-            .spawn()
-            .expect("failed to open system preferences");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn open_camera_preferences() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
-            .spawn()
-            .expect("failed to open system preferences");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn reset_screen_permissions() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("tccutil")
-            .arg("reset")
-            .arg("ScreenCapture")
-            .arg("so.cap.desktop")
-            .spawn()
-            .expect("failed to reset screen permissions");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn reset_microphone_permissions() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("tccutil")
-            .arg("reset")
-            .arg("Microphone")
-            .arg("so.cap.desktop")
-            .spawn()
-            .expect("failed to reset microphone permissions");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn reset_camera_permissions() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("tccutil")
-            .arg("reset")
-            .arg("Camera")
-            .arg("so.cap.desktop")
-            .spawn()
-            .expect("failed to reset camera permissions");
-    }
 
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
     let monitor: MonitorHandle = event_loop
@@ -383,7 +294,7 @@ fn main() {
                     if !window.is_focused().unwrap_or(false) {
                         window.set_focus().expect("Error while trying to set focus on main window");
                     }
-                    if(window.is_minimized().unwrap_or(false)) {
+                    if window.is_minimized().unwrap_or(false) {
                         window.unminimize().expect("Error while trying to unminimize main window");
                     }
                 }
