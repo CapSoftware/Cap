@@ -69,7 +69,7 @@ export function LoginForm() {
             <div className="py-3 px-6 flex items-center justify-center bg-red-600 rounded-xl mt-3">
               <p className="text-white text-lg">
                 <span className="font-bold text-white">Development mode:</span>{" "}
-                Auth URL will be logged to console
+                Auth URL will be logged to your dev console.
               </p>
             </div>
           )}
@@ -81,7 +81,11 @@ export function LoginForm() {
           type="submit"
           disabled={loading || emailSent}
         >
-          {emailSent ? "Email was sent to your inbox" : "Continue with Email"}
+          {emailSent
+            ? process.env.NODE_ENV === "development"
+              ? "Email sent to your terminal"
+              : "Email sent to your inbox"
+            : "Continue with Email"}
         </Button>
         <p className="text-xs text-gray-500 pt-2">
           By typing your email and clicking continue, you acknowledge that you
