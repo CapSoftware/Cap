@@ -10,5 +10,6 @@ export default {
   dbCredentials: {
     uri: process.env.DATABASE_URL,
   },
+  out: "./migrations",
   driver: "mysql2",
 } satisfies Config;
