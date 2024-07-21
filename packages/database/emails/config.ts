@@ -1,7 +1,9 @@
 import { JSXElementConstructor, ReactElement } from "react";
 import { Resend } from "resend";
 
-export const resend = new Resend(process.env.RESEND_API_KEY);
+export const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
 
 export const sendEmail = async ({
   email,
@@ -16,12 +18,11 @@ export const sendEmail = async ({
   marketing?: boolean;
   test?: boolean;
 }) => {
-  if (!process.env.RESEND_API_KEY) {
-    console.log(
-      "Resend is not configured. You need to add a RESEND_API_KEY in your .env file for emails to work."
-    );
+  if (!resend) {
+    console.info(`Email to ${email} with subject ${subject} sent from Cap`);
     return Promise.resolve();
   }
+
   return resend.emails.send({
     from: marketing
       ? "Richie from Cap.so <richie@cap.so>"
