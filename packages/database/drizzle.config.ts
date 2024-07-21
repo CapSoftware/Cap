@@ -1,9 +1,15 @@
 import type { Config } from "drizzle-kit";
 
+if (!process.env.DATABASE_URL?.startsWith("mysql://"))
+  throw new Error(
+    "DATABASE_URL must be a 'mysql://' URI. Drizzle Kit doesn't support the fetch adapter!"
+  );
+
 export default {
   schema: "./schema.ts",
   dbCredentials: {
-    uri: `mysql://${process.env.DB_PLANETSCALE_USERNAME}:${process.env.DB_PLANETSCALE_PASSWORD}@${process.env.DB_PLANETSCALE_HOST}/${process.env.DB_PLANETSCALE_DATABASE}?ssl={"rejectUnauthorized":false}`,
+    uri: process.env.DATABASE_URL,
   },
+  out: "./migrations",
   driver: "mysql2",
 } satisfies Config;

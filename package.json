@@ -1,7 +1,8 @@
 {
   "scripts": {
     "build": "dotenv -e .env -- turbo run build",
-    "dev": "dotenv -e .env -- turbo run dev --no-cache",
+    "dev": "(cd apps/web && docker-compose up -d)  && dotenv -e .env -- pnpm --dir packages/database db:generate && dotenv -e .env -- pnpm --dir packages/database db:push && dotenv -e .env -- turbo run dev --no-cache",
+    "dev:manual": "dotenv -e .env -- turbo run dev --no-cache",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",

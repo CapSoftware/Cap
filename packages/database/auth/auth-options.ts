@@ -24,11 +24,15 @@ export const authOptions: NextAuthOptions = {
   providers: [
     EmailProvider({
       sendVerificationRequest({ identifier, url }) {
-        sendEmail({
-          email: identifier,
-          subject: `Your Cap Login Link`,
-          react: LoginLink({ url, email: identifier }),
-        });
+        if (process.env.NODE_ENV === "development") {
+          console.log(`Login link: ${url}`);
+        } else {
+          sendEmail({
+            email: identifier,
+            subject: `Your Cap Login Link`,
+            react: LoginLink({ url, email: identifier }),
+          });
+        }
       },
     }),
   ],
