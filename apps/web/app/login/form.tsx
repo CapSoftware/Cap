@@ -65,6 +65,14 @@ export function LoginForm() {
             }}
             className="block w-full appearance-none rounded-full border border-gray-300 px-3 h-12 placeholder-gray-400 shadow-sm focus:border-black focus:outline-none focus:ring-black text-lg"
           />
+          {process.env.NODE_ENV === "development" && (
+            <div className="py-3 px-6 flex items-center justify-center bg-red-600 rounded-xl mt-3">
+              <p className="text-white text-lg">
+                <span className="font-bold text-white">Development mode:</span>{" "}
+                Auth URL will be logged to console
+              </p>
+            </div>
+          )}
         </div>
         <Button
           variant="default"
