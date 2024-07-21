@@ -36,7 +36,7 @@ This is a very top level guide right now, but if you want to develop for both th
 1. Clone the repository
 2. Install dependencies with `pnpm install`
 3. Clone .env.example and rename it to .env
-4. At the root of the directory, run the app with `pnpm dev`. This will create a local database simulator, create the necessary DB migrations, and run both the web app and desktop app concurrently.
+4. At the root of the directory, run the app with `pnpm dev`. This will create a local database simulator, run the necessary DB migrations, and start both the web app and desktop app concurrently.
 5. Make sure both the the desktop app, and web app can be built without any errors. For the desktop app, use `pnpm tauri:build`. For the web app, use `pnpm build`
 6. Submit a PR with your changes
 
