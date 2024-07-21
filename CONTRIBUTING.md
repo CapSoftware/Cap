@@ -22,10 +22,12 @@ There are many ways to contribute to Cap. You can:
 - [Suggest a feature (via Discord)](https://discord.com/invite/y8gdQ3WRN3)
 - Submit a PR
 
-### Development Requirements ###
+### Development Requirements
+
 - Node Version 20+
 - Cargo 1.77.0+ (previous versions may work)
 - pnpm 8.10.5+
+- Docker ([OrbStack](https://orbstack.dev/) recommended)
 
 ### How do I get started with development on my local machine?
 
@@ -34,12 +36,11 @@ This is a very top level guide right now, but if you want to develop for both th
 1. Clone the repository
 2. Install dependencies with `pnpm install`
 3. Clone .env.example and rename it to .env
-4. Add your own API keys to the .env file
-5. At the root of the directory, run the app with `pnpm dev`
-6. Make sure both the the desktop app, and web app can be built without any errors. For the desktop app, use `pnpm tauri:build`. For the web app, use `pnpm build`
-7. Submit a PR with your changes
+4. At the root of the directory, run the app with `pnpm dev`. This will create a local database simulator, create the necessary DB migrations, and run both the web app and desktop app concurrently.
+5. Make sure both the the desktop app, and web app can be built without any errors. For the desktop app, use `pnpm tauri:build`. For the web app, use `pnpm build`
+6. Submit a PR with your changes
 
-### How do I run the desktop app locally without needing to use auth? ###
+### How do I run the desktop app locally without needing to use auth?
 
 You can run cap in "local mode", which means that no auth is required for the desktop app, and no video segments are uploaded. Similar to the above steps, this is how you can run the Cap desktop app in local mode with the least amount of .env vars.
 
@@ -49,6 +50,6 @@ You can run cap in "local mode", which means that no auth is required for the de
 4. Make sure you have `NEXT_PUBLIC_ENVIRONMENT=development`, `NEXT_PUBLIC_URL=http://localhost:3000` and `NEXT_PUBLIC_LOCAL_MODE=true`. These should be the only .env vars that you require to get the desktop app up and running.
 5. At the root of the directory, run the app with `pnpm dev`
 
-### How do I view the screen recording segments locally? ###
+### How do I view the screen recording segments locally?
 
 The video segments are stored in your app data directory, under the folder `so.cap.desktop`. You should see a directory called `chunks`, which will contain both `video` and `audio` directories. You can find the relevant segments in either of those.
