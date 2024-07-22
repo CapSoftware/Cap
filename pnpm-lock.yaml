@@ -535,6 +535,9 @@ importers:
 
   packages/database:
     dependencies:
+      '@mattrax/mysql-planetscale':
+        specifier: ^0.0.2
+        version: 0.0.2
       '@paralleldrive/cuid2':
         specifier: ^2.2.2
         version: 2.2.2
@@ -10480,7 +10483,15 @@ snapshots:
       jju: 1.4.0
       read-yaml-file: 1.1.0
 
-  '@mdx-js/mdx@2.3.0':
+  /@mattrax/mysql-planetscale@0.0.2:
+    resolution: {integrity: sha512-wrbsQ8c5FOcicJV1VgV791MWRDkNOpMZapmKAUzXWRMfZrmm7msHZ8IcL78BtTBSUXKf+VvE9zN+qg4p/LafWw==}
+    dependencies:
+      '@planetscale/database': 1.18.0
+      mysql2: 3.9.7
+    dev: false
+
+  /@mdx-js/mdx@2.3.0:
+    resolution: {integrity: sha512-jLuwRlz8DQfQNiUCJR50Y09CGPq3fLtmtUQfVrj79E0JWu3dvsVcxVIcfhR5h0iXu+/z++zDrYeiJqifRynJkA==}
     dependencies:
       '@types/estree-jsx': 1.0.5
       '@types/mdx': 2.0.13
@@ -10761,7 +10772,13 @@ snapshots:
 
   '@planetscale/database@1.13.0': {}
 
-  '@radix-ui/primitive@1.0.0':
+  /@planetscale/database@1.18.0:
+    resolution: {integrity: sha512-t2XdOfrVgcF7AW791FtdPS27NyNqcE1SpoXgk3HpziousvUMsJi4Q6NL3JyOBpsMOrvk94749o8yyonvX5quPw==}
+    engines: {node: '>=16'}
+    dev: false
+
+  /@radix-ui/primitive@1.0.0:
+    resolution: {integrity: sha512-3e7rn8FDMin4CgeL7Z/49smCA3rFYY3Ha2rUQ7HRWFadS5iCRw08ZgVT1LaNTCNqgvrUiyczLflrVrF0SRQtNA==}
     dependencies:
       '@babel/runtime': 7.23.8
 
@@ -14361,7 +14378,7 @@ snapshots:
       doctrine: 2.1.0
       eslint: 8.56.0
       eslint-import-resolver-node: 0.3.9
-      eslint-module-utils: 2.8.0(@typescript-eslint/parser@5.62.0(eslint@8.56.0)(typescript@5.4.5))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.1(@typescript-eslint/parser@5.62.0(eslint@8.56.0)(typescript@5.4.5))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.29.1)(eslint@8.56.0))(eslint@8.56.0)
+      eslint-module-utils: 2.8.0(@typescript-eslint/parser@5.62.0)(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.1)(eslint@8.57.0)
       hasown: 2.0.0
       is-core-module: 2.13.1
       is-glob: 4.0.3
