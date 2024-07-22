@@ -11,7 +11,7 @@ edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "1.5.1", features = [] }
-ffmpeg-sidecar = "0.5.1"
+ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
 
 [dependencies]
 tauri = { version = "1.6.1", features = [
@@ -48,7 +48,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri-plugin-context-menu = "0.7.0"
 tauri-plugin-positioner = { version = "1.0.4", features = ["system-tray"] }
-ffmpeg-sidecar = "0.5.1"
+ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
 cpal = "0.15.2"
 which = "4.2.2"
 tokio = { version = "1.35.1", features = ["full"] }

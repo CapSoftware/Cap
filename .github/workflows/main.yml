@@ -44,12 +44,15 @@ jobs:
         id: get_version
         run: echo "appVersion=$(jq -r '.version' apps/desktop/package.json)" >> $GITHUB_OUTPUT
 
-      - name: Create .env file
+      - name: Create .env file in root
         run: |
-          echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" > apps/desktop/.env
-          echo "appVersion=${{ steps.get_version.outputs.appVersion }}" >> apps/desktop/.env
-          echo "NEXT_PUBLIC_ENVIRONMENT=production" >> apps/desktop/.env
-          echo "NEXT_PUBLIC_LOCAL_MODE=false" >> apps/desktop/.env
+          echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" > .env
+          echo "appVersion=${{ steps.get_version.outputs.appVersion }}" >> .env
+          echo "NEXT_PUBLIC_ENVIRONMENT=production" >> .env
+          echo "NEXT_PUBLIC_LOCAL_MODE=false" >> .env
+
+      - name: Copy .env to apps/desktop
+        run: cp .env apps/desktop/.env
 
       - name: Output .env file
         run: cat apps/desktop/.env
