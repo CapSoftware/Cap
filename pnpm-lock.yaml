@@ -532,6 +532,9 @@ importers:
 
   packages/database:
     dependencies:
+      '@mattrax/mysql-planetscale':
+        specifier: ^0.0.2
+        version: 0.0.2
       '@paralleldrive/cuid2':
         specifier: ^2.2.2
         version: 2.2.2
@@ -3849,6 +3852,13 @@ packages:
       read-yaml-file: 1.1.0
     dev: false
 
+  /@mattrax/mysql-planetscale@0.0.2:
+    resolution: {integrity: sha512-wrbsQ8c5FOcicJV1VgV791MWRDkNOpMZapmKAUzXWRMfZrmm7msHZ8IcL78BtTBSUXKf+VvE9zN+qg4p/LafWw==}
+    dependencies:
+      '@planetscale/database': 1.18.0
+      mysql2: 3.9.7
+    dev: false
+
   /@mdx-js/mdx@2.3.0:
     resolution: {integrity: sha512-jLuwRlz8DQfQNiUCJR50Y09CGPq3fLtmtUQfVrj79E0JWu3dvsVcxVIcfhR5h0iXu+/z++zDrYeiJqifRynJkA==}
     dependencies:
@@ -4355,6 +4365,11 @@ packages:
 
   /@planetscale/database@1.13.0:
     resolution: {integrity: sha512-sb9tUoF+Po55o+3PRHZVeH8XzUIABKBKcnq6oBUa+p/2uau/E2EXhnUPXmkC/x7oB6ILBqmqTL6dPP5Dn6d6iA==}
+    engines: {node: '>=16'}
+    dev: false
+
+  /@planetscale/database@1.18.0:
+    resolution: {integrity: sha512-t2XdOfrVgcF7AW791FtdPS27NyNqcE1SpoXgk3HpziousvUMsJi4Q6NL3JyOBpsMOrvk94749o8yyonvX5quPw==}
     engines: {node: '>=16'}
     dev: false
 
@@ -10018,7 +10033,7 @@ packages:
       doctrine: 2.1.0
       eslint: 8.57.0
       eslint-import-resolver-node: 0.3.9
-      eslint-module-utils: 2.8.0(@typescript-eslint/parser@7.13.1)(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.1)(eslint@8.57.0)
+      eslint-module-utils: 2.8.0(@typescript-eslint/parser@5.62.0)(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.1)(eslint@8.57.0)
       hasown: 2.0.0
       is-core-module: 2.13.1
       is-glob: 4.0.3
