@@ -17,20 +17,5 @@ services:
       - 3306:3306
     volumes:
       - ps-mysql:/var/lib/mysql
-  planetscale-proxy:
-    image: ghcr.io/mattrobenolt/ps-http-sim:latest
-    command:
-      [
-        "-mysql-no-pass",
-        "-listen-port=3900",
-        "-mysql-dbname=planetscale",
-        "-mysql-addr=ps-mysql",
-      ]
-    depends_on:
-      - ps-mysql
-    ports:
-      - 3900:3900
-    links:
-      - ps-mysql
 volumes:
   ps-mysql:
