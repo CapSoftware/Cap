@@ -7,19 +7,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::vec;
 use tauri::{
-    CustomMenuItem,
-    Manager,
-    SystemTray,
-    SystemTrayEvent,
-    SystemTrayMenu,
-    SystemTraySubmenu,
+    CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu,
 };
-use tauri_plugin_positioner::{ Position, WindowExt };
+use tauri_plugin_positioner::{Position, WindowExt};
 use tokio::sync::Mutex;
 use tracing::Level;
 use tracing_subscriber::prelude::*;
 use window_shadows::set_shadow;
-use window_vibrancy::{ apply_blur, apply_vibrancy, NSVisualEffectMaterial };
+use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 
 #[macro_use]
 mod app;
@@ -30,16 +25,16 @@ mod utils;
 
 use app::commands::*;
 use media::enumerate_audio_devices;
-use recording::{ start_dual_recording, stop_all_recordings, RecordingState };
+use recording::{start_dual_recording, stop_all_recordings, RecordingState};
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
-    download::{ check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg },
+    download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
     paths::sidecar_dir,
     version::ffmpeg_version,
 };
 
-use winit::monitor::{ MonitorHandle, VideoMode };
+use winit::monitor::{MonitorHandle, VideoMode};
 
 fn main() {
     let _ = fix_path_env::fix();
@@ -53,28 +48,26 @@ fn main() {
         release: sentry::release_name!(),
         ..Default::default()
     });
-    let maybe_sentry_subscriber = sentry_guard.is_enabled().then_some(
-        sentry_tracing::layer().event_filter(|metadata| {
-            match metadata.level() {
-                &Level::WARN => EventFilter::Event,
-                _ => EventFilter::Ignore,
-            }
-        })
-    );
+    let maybe_sentry_subscriber =
+        sentry_guard
+            .is_enabled()
+            .then_some(
+                sentry_tracing::layer().event_filter(|metadata| match metadata.level() {
+                    &Level::WARN => EventFilter::Event,
+                    _ => EventFilter::Ignore,
+                }),
+            );
 
-    tracing_subscriber
-        ::registry()
+    tracing_subscriber::registry()
         .with(
-            tracing_subscriber::fmt
-                ::layer()
+            tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout.with_max_level(app::config::logging_level()))
-                .pretty()
+                .pretty(),
         )
         .with(
-            tracing_subscriber::fmt
-                ::layer()
+            tracing_subscriber::fmt::layer()
                 .with_writer(log_writer.with_max_level(Level::DEBUG))
-                .with_ansi(false)
+                .with_ansi(false),
         )
         .with(maybe_sentry_subscriber)
         .init();
@@ -97,9 +90,8 @@ fn main() {
         let destination = sidecar_dir().map_err(|e| e.to_string())?;
 
         tracing::debug!("Downloading from: {:?}", download_url);
-        let archive_path = download_ffmpeg_package(download_url, &destination).map_err(|e|
-            e.to_string()
-        )?;
+        let archive_path =
+            download_ffmpeg_package(download_url, &destination).map_err(|e| e.to_string())?;
         tracing::debug!("Downloaded package: {:?}", archive_path);
 
         tracing::debug!("Extracting...");
@@ -114,102 +106,18 @@ fn main() {
     if let Err(error) = handle_ffmpeg_installation() {
         tracing::error!(error);
         // TODO: UI message instead
-        panic!(
-            "Failed to install FFmpeg, which is required for Cap to function. Shutting down now"
-        );
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    async fn start_server(window: Window) -> Result<u16, String> {
-        start(move |url| {
-            let _ = window.emit("redirect_uri", url);
-        }).map_err(|err| err.to_string())
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn open_screen_capture_preferences() {
-        #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
-            .spawn()
-            .expect("failed to open system preferences");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn open_mic_preferences() {
-        #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-            .spawn()
-            .expect("failed to open system preferences");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn open_camera_preferences() {
-        #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
-            .spawn()
-            .expect("failed to open system preferences");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn reset_screen_permissions() {
-        #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("tccutil")
-            .arg("reset")
-            .arg("ScreenCapture")
-            .arg("so.cap.desktop")
-            .spawn()
-            .expect("failed to reset screen permissions");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn reset_microphone_permissions() {
-        #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("tccutil")
-            .arg("reset")
-            .arg("Microphone")
-            .arg("so.cap.desktop")
-            .spawn()
-            .expect("failed to reset microphone permissions");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn reset_camera_permissions() {
-        #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("tccutil")
-            .arg("reset")
-            .arg("Camera")
-            .arg("so.cap.desktop")
-            .spawn()
-            .expect("failed to reset camera permissions");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn close_webview(app_handle: tauri::AppHandle, label: String) -> bool {
-        app_handle.get_window(&label).is_some_and(|window| window.close().is_ok())
-    }
+        panic!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now")
+    };
 
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
-    let monitor: MonitorHandle = event_loop.primary_monitor().expect("No primary monitor found");
+    let monitor: MonitorHandle = event_loop
+        .primary_monitor()
+        .expect("No primary monitor found");
     let video_modes: Vec<VideoMode> = monitor.video_modes().collect();
 
-    let max_mode = video_modes.iter().max_by_key(|mode| mode.size().width * mode.size().height);
+    let max_mode = video_modes
+        .iter()
+        .max_by_key(|mode| mode.size().width * mode.size().height);
 
     let (max_width, max_height) = match max_mode {
         Some(max_mode) => {
@@ -318,10 +226,7 @@ fn main() {
                                 }
                             }
                             Err(e) => {
-                                tracing::warn!(
-                                    "Error while deserializing recording state from event payload: {}",
-                                    e
-                                );
+                                tracing::warn!("Error while deserializing recording state from event payload: {}", e);
                             }
                         }
                     }
@@ -417,8 +322,7 @@ fn main() {
                 has_screen_capture_access,
                 reset_screen_permissions,
                 reset_microphone_permissions,
-                reset_camera_permissions,
-                close_webview
+                reset_camera_permissions
             ]
         )
         .plugin(tauri_plugin_context_menu::init())

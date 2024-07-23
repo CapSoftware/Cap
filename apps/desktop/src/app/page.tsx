@@ -107,12 +107,10 @@ export default function CameraPage() {
   }, []);
 
   useEffect(() => {
-    commands.closeWebview("camera").then(() => {
-      if (isSignedIn && !cameraWindowOpen && permissions.confirmed === true) {
-        initializeCameraWindow();
-        setCameraWindowOpen(true);
-      }
-    });
+    if (isSignedIn && !cameraWindowOpen && permissions.confirmed === true) {
+      initializeCameraWindow();
+      setCameraWindowOpen(true);
+    }
   }, [isSignedIn, cameraWindowOpen, permissions.confirmed]);
 
   if (process.env.NEXT_PUBLIC_LOCAL_MODE === "true") {
