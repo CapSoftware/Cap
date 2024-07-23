@@ -85,7 +85,9 @@ impl MediaRecorder {
         max_screen_height: usize,
     ) -> Result<(), String> {
         if !scap::has_permission() {
+            tracing::warn!("Screen capturing permission not granted. Requesting permission...");
             scap::request_permission();
+            return Err("App does not have screen capturing permission".into());
         }
 
         let options_clone = options.clone();
