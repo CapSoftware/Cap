@@ -11,6 +11,7 @@
     "db:drop": "drizzle-kit drop --config=drizzle.config.ts"
   },
   "dependencies": {
+    "@mattrax/mysql-planetscale": "^0.0.2",
     "@paralleldrive/cuid2": "^2.2.2",
     "@planetscale/database": "^1.13.0",
     "@react-email/components": "^0.0.13",

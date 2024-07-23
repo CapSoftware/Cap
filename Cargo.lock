@@ -1447,9 +1447,11 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-sidecar"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5b56b7872b0cbc828e83043a82268b111e3648dab25f29079fce448648e572a"
+version = "1.1.0"
+source = "git+https://github.com/CapSoftware/ffmpeg-sidecar?branch=main#ccf93fc3fb0ed9d367d82db7061741bf5faecf5a"
+dependencies = [
+ "anyhow",
+]
 
 [[package]]
 name = "field-offset"

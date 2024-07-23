@@ -11,24 +11,33 @@ export const config = {
   maxDuration: 120,
 };
 
+const secret =
+  process.env.NODE_ENV === "development"
+    ? process.env.NEXTAUTH_SECRET_DEV
+    : process.env.NEXTAUTH_SECRET;
+
 export const authOptions: NextAuthOptions = {
   adapter: DrizzleAdapter(db),
   debug: true,
   session: {
     strategy: "jwt",
   },
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: secret as string,
   pages: {
     signIn: "/login",
   },
   providers: [
     EmailProvider({
       sendVerificationRequest({ identifier, url }) {
-        sendEmail({
-          email: identifier,
-          subject: `Your Cap Login Link`,
-          react: LoginLink({ url, email: identifier }),
-        });
+        if (process.env.NODE_ENV === "development") {
+          console.log(`Login link: ${url}`);
+        } else {
+          sendEmail({
+            email: identifier,
+            subject: `Your Cap Login Link`,
+            react: LoginLink({ url, email: identifier }),
+          });
+        }
       },
     }),
   ],
