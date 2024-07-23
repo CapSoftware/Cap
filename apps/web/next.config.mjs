@@ -4,6 +4,12 @@ import million from "million/compiler";
 
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
 
+if (process.env.DB_PLANETSCALE_HOST !== undefined) {
+  throw new Error(
+    "DB_PLANETSCALE_HOST no longer supported. Use DATABASE_URL instead. Must start with mysql:// for local dev, and https:// for production."
+  );
+}
+
 import fs from "fs";
 import path from "path";
 

@@ -5,7 +5,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 use tauri::{Assets, Context};
-use tracing_appender::rolling::RollingFileAppender;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 
 #[macro_use]
 pub mod commands;
@@ -57,5 +57,10 @@ pub fn get_log_file<A: Assets>(context: &Context<A>) -> RollingFileAppender {
         }
     }
 
-    tracing_appender::rolling::daily(log_directory, "cap_debug.log")
+    RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("cap_debug")
+        .filename_suffix("log")
+        .build(log_directory)
+        .unwrap()
 }

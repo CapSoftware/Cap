@@ -3,13 +3,13 @@ use tauri_plugin_oauth::start;
 
 macro_rules! generate_handler {
     ($($command:ident),*) => {{
-      #[cfg(debug_assertions)]
-      tauri_specta::ts::export(
-        specta::collect_types![$($command),*],
-        "../../src/utils/commands.ts"
-      ).unwrap();
+        #[cfg(debug_assertions)]
+        tauri_specta::ts::export(
+            specta::collect_types![$($command),*],
+            "../../src/utils/commands.ts"
+        ).unwrap();
 
-      tauri::generate_handler![$($command),*]
+        tauri::generate_handler![$($command),*]
     }}
 }
 
