@@ -233,7 +233,6 @@ fn main() {
             let handle = app.handle();
 
             if let Some(options_window) = app.get_window("main") {
-                options_window.open_devtools();
               let _ = options_window.move_window(Position::Center);
               #[cfg(target_os = "macos")]
               apply_vibrancy(&options_window, NSVisualEffectMaterial::MediumLight, None, Some(16.0)).expect("Unsupported platform! 'apply_vibrancy' is only supported on macOS");
