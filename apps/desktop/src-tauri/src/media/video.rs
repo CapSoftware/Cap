@@ -7,6 +7,7 @@ use scap::{
 use std::{
     future::Future,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 use tokio::sync::mpsc::error::TrySendError;
@@ -21,13 +22,15 @@ pub struct VideoCapturer {
     should_stop: SharedFlag,
     pub frame_width: u32,
     pub frame_height: u32,
-    frame_receiver: Option<mpsc::Receiver<Vec<u8>>>,
+    frame_receiver: Option<mpsc::Receiver<Arc<Vec<u8>>>>,
 }
 
 impl VideoCapturer {
+    pub const FPS: u32 = 60;
+
     pub fn new(_width: usize, _height: usize, should_stop: SharedFlag) -> VideoCapturer {
         let mut capturer = Capturer::new(Options {
-            fps: 60,
+            fps: Self::FPS,
             target: None,
             show_cursor: true,
             show_highlight: true,
@@ -62,14 +65,17 @@ impl VideoCapturer {
 
         self.frame_receiver = Some(receiver);
         let screenshot_file_path = screenshot_dir.as_ref().join("screen-capture.jpg");
-        let should_stop = self.should_stop.clone();
 
         std::thread::spawn(move || {
             tracing::trace!("Starting video recording capture thread...");
 
+            let mut frame_count = 0u32;
+            let mut last_sampled_frame_count = 0u32;
             let capture_start_time = Instant::now();
+            let mut fps_sample_time = Instant::now();
             let mut screenshot_captured: bool = false;
             let take_screenshot_delay = Duration::from_secs(3);
+            let mut last_frame: Option<Arc<Vec<u8>>> = None;
 
             capturer.start_capture();
 
@@ -79,13 +85,27 @@ impl VideoCapturer {
 
                 match capturer.get_next_frame() {
                     Ok(Frame::BGRA(frame)) => {
-                        // TODO: Check if stride needs adjusting. Implement that in scap instead of here?
                         let now = Instant::now();
+
+                        let width = frame.width;
+                        let height = frame.height;
+                        let frame_data = match frame.width == 0 && frame.height == 0 {
+                            true => match last_frame.take() {
+                                Some(data) => data,
+                                None => {
+                                    tracing::error!(
+                                        "Somehow got an idle frame before any complete frame"
+                                    );
+                                    continue;
+                                }
+                            },
+                            false => Arc::new(frame.data),
+                        };
 
                         if now - capture_start_time >= take_screenshot_delay && !screenshot_captured
                         {
                             screenshot_captured = true;
-                            let mut frame_data_clone = frame.data.clone();
+                            let mut frame_data_clone = (*frame_data).clone();
 
                             std::thread::spawn(move || {
                                 for chunk in frame_data_clone.chunks_mut(4) {
@@ -93,8 +113,8 @@ impl VideoCapturer {
                                 }
 
                                 let image: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
-                                    frame.width.try_into().unwrap(),
-                                    frame.height.try_into().unwrap(),
+                                    width.try_into().unwrap(),
+                                    height.try_into().unwrap(),
                                     frame_data_clone,
                                 )
                                 .expect("Failed to create image buffer");
@@ -139,7 +159,8 @@ impl VideoCapturer {
                             });
                         }
 
-                        match sender.try_send(frame.data) {
+                        last_frame = Some(Arc::clone(&frame_data));
+                        match sender.try_send(frame_data) {
                             Ok(_) => {
                                 let mut first_frame_time_guard = start_time.try_lock();
 
@@ -156,16 +177,29 @@ impl VideoCapturer {
                                 tracing::error!("Channel buffer is full!");
                             }
                             _ => {
-                                tracing::info!("Recording has been stopped. Dropping data.");
+                                tracing::trace!("Recording has been stopped. Dropping data.");
                                 break;
                             }
                         }
+                        frame_count += 1;
                     }
                     Ok(_) => unreachable!(),
                     Err(error) => {
                         tracing::error!("Capture error: {}", error);
                         break;
                     }
+                }
+
+                let elapsed_time = fps_sample_time.elapsed();
+                let elapsed_total_time = capture_start_time.elapsed();
+                if elapsed_time > Duration::from_millis(1500) {
+                    let delta_frame_count = frame_count - last_sampled_frame_count;
+                    let current_fps = (delta_frame_count as f64) / elapsed_time.as_secs_f64();
+                    let total_fps = (frame_count as f64) / elapsed_total_time.as_secs_f64();
+
+                    last_sampled_frame_count = frame_count;
+                    fps_sample_time = Instant::now();
+                    tracing::info!("🏁🏁 Current FPS: {current_fps}, Total FPS: {total_fps}");
                 }
             }
         });
@@ -191,6 +225,8 @@ impl VideoCapturer {
                     receiver.close();
                 }
             }
+
+            let _ = pipe.sync_all().await;
         }
     }
 }

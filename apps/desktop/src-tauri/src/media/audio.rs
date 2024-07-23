@@ -2,14 +2,14 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SizedSample, Stream, SupportedStreamConfig};
 use indexmap::IndexMap;
 use num_traits::ToBytes;
-use std::{future::Future, path::PathBuf};
+use std::{future::Future, path::PathBuf, sync::Arc};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
 
 use super::{Instant, SharedFlag, SharedInstant};
 use crate::utils;
 
-type SampleReceiver = mpsc::Receiver<Vec<u8>>;
+type SampleReceiver = mpsc::Receiver<Arc<Vec<u8>>>;
 
 pub struct AudioCapturer {
     device: Device,
@@ -103,6 +103,8 @@ impl AudioCapturer {
                     receiver.close();
                 }
             }
+
+            let _ = pipe.sync_all().await;
         }
     }
 
@@ -165,16 +167,19 @@ impl AudioCapturer {
 
                     let sample_size = std::mem::size_of::<T>();
                     let mut bytes = vec![0; data.len() * sample_size];
+                    let size = bytes.len();
                     for (dest, source) in bytes.chunks_exact_mut(sample_size).zip(data.iter()) {
                         dest.copy_from_slice(source.to_le_bytes().as_ref());
                     }
 
-                    match sender.try_send(bytes) {
+                    let sample_data = Arc::new(bytes);
+                    match sender.try_send(sample_data) {
                         Ok(_) => {
                             if let Ok(ref mut start_time_option) = first_frame_time_guard {
                                 if start_time_option.is_none() {
                                     **start_time_option = Some(Instant::now());
 
+                                    tracing::info!("Audio sample size: {size}");
                                     tracing::trace!("Audio start time captured");
                                 }
                             }
@@ -184,7 +189,7 @@ impl AudioCapturer {
                             tracing::error!("Channel buffer is full!");
                         }
                         _ => {
-                            tracing::info!("Recording has been stopped. Dropping data.")
+                            tracing::trace!("Recording has been stopped. Dropping data.")
                         }
                     }
                 },

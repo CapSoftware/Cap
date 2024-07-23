@@ -11,8 +11,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tracing::Level;
 
 use crate::{
+    app::config,
     recording::RecordingOptions,
     utils::{create_named_pipe, ffmpeg_path_as_str},
 };
@@ -59,7 +61,8 @@ pub struct MediaRecorder {
     // video_capturer: Option<VideoCapturer>,
     should_stop: SharedFlag,
     ffmpeg_process: Option<Child>,
-    ffmpeg_stdin: Option<Arc<Mutex<Option<ChildStdin>>>>,
+    // ffmpeg_stdin: Option<Arc<Mutex<Option<ChildStdin>>>>,
+    ffmpeg_stdin: Option<ChildStdin>,
     device_name: Option<String>,
     start_time: Option<Instant>,
     audio_file_path: Option<PathBuf>,
@@ -149,18 +152,27 @@ impl MediaRecorder {
 
         let mut ffmpeg_command = Command::new(ffmpeg_binary_path_str);
 
+        // Quiet ffmpeg output a bit
+        let log_level = config::logging_level();
+        if log_level == Level::DEBUG || log_level == Level::TRACE {
+            ffmpeg_command.args(["-nostats", "-hide_banner"]);
+        }
         if let Some((TimeOffsetTarget::Video, args)) = &time_offset {
             ffmpeg_command.args(args);
         }
 
+        let fps = VideoCapturer::FPS.to_string();
         ffmpeg_command
             // video in
             .args(["-f", "rawvideo", "-pix_fmt", "bgra"])
-            .args(["-s", &size, "-r", "30"])
+            .args(["-s", &size, "-r", &fps])
             .args(["-thread_queue_size", "4096", "-i"])
             .arg(&video_pipe_path)
             // video out
-            .args(["-vf", "fps=30,scale=in_range=full:out_range=limited"])
+            .args([
+                "-vf",
+                &format!("fps={fps},scale=in_range=full:out_range=limited"),
+            ])
             .args(["-c:v", "libx264", "-preset", "ultrafast"])
             .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
             .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
@@ -200,20 +212,11 @@ impl MediaRecorder {
 
         tracing::trace!("Starting FFmpeg process...");
 
-        tracing::trace!("Starting FFmpeg process...");
-
         let (ffmpeg_child, ffmpeg_stdin) = self
             .start_ffmpeg_process(ffmpeg_command)
             .await
             .map_err(|e| e.to_string())?;
         tracing::trace!("Ffmpeg process started");
-
-        if let Some(ffmpeg_stdin_mutex) = &self.ffmpeg_stdin {
-            let mut stdin_lock = ffmpeg_stdin_mutex.lock().await;
-            *stdin_lock = Some(ffmpeg_stdin);
-            drop(stdin_lock);
-            tracing::trace!("Ffmpeg stdin set");
-        }
 
         if self.audio_enabled {
             let capturer = self.audio_capturer.as_mut().unwrap();
@@ -226,6 +229,7 @@ impl MediaRecorder {
         self.audio_file_path = Some(audio_chunks_dir.to_path_buf());
         self.video_file_path = Some(video_chunks_dir.to_path_buf());
         self.ffmpeg_process = Some(ffmpeg_child);
+        self.ffmpeg_stdin = Some(ffmpeg_stdin);
         self.device_name = self.audio_capturer.as_ref().map(|c| c.device_name.clone());
 
         tracing::info!("Media recording successfully started");
@@ -256,19 +260,28 @@ impl MediaRecorder {
             tracing::info!("Video capturing stopped");
         }
 
-        if let Some(ref ffmpeg_stdin) = self.ffmpeg_stdin {
-            let mut stdin_guard = ffmpeg_stdin.lock().await;
-            tracing::debug!("Shutting down recording");
-            if let Some(mut stdin) = stdin_guard.take() {
-                if let Err(e) = stdin.write_all(b"q\n").await {
-                    tracing::error!("Failed to send 'q' to video FFmpeg process: {}", e);
-                }
-                let _ = stdin.shutdown().await.map_err(|e| e.to_string());
-            }
+        if let Some(ref mut stdin) = self.ffmpeg_stdin {
+            tracing::info!("Shutting down recording");
+            stdin.shutdown().await.map_err(|e| e.to_string())?;
         }
 
-        if let Some(process) = &mut self.ffmpeg_process {
-            let _ = process.kill().await.map_err(|e| e.to_string());
+        if let Some(mut process) = self.ffmpeg_process.take() {
+            tracing::info!("Writing remaining segments to disk...");
+            loop {
+                match process.try_wait() {
+                    Ok(Some(_)) => {
+                        tracing::info!("Successfully written all segments to disk");
+                        break;
+                    }
+                    Ok(None) => {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    }
+                    Err(error) => {
+                        tracing::error!("Couldn't check on FFmpeg process");
+                        return Err(error.to_string());
+                    }
+                }
+            }
         }
 
         tracing::info!("All recording stopped.");
@@ -312,8 +325,8 @@ async fn start_recording_process(
         tokio::spawn(async move {
             let mut process_reader = BufReader::new(process_stderr).lines();
             while let Ok(Some(line)) = process_reader.next_line().await {
-                // TODO: Collect this into one event. Custom implementation of Into<Stdio>?
-                tracing::error!("FFmpeg process STDERR: {}", line);
+                // TODO: Replace with ingesting the output of ffmpeg's -process flag and reserve this for actual errors?
+                tracing::info!("FFmpeg process: {}", line);
             }
         });
     }
