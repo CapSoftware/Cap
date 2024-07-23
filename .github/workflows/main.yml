@@ -50,6 +50,7 @@ jobs:
           echo "appVersion=${{ steps.get_version.outputs.appVersion }}" >> .env
           echo "NEXT_PUBLIC_ENVIRONMENT=production" >> .env
           echo "NEXT_PUBLIC_LOCAL_MODE=false" >> .env
+          echo "CAP_DESKTOP_SENTRY_URL=https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200" >> .env
 
       - name: Copy .env to apps/desktop
         run: cp .env apps/desktop/.env

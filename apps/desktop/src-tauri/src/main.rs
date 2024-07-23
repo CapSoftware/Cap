@@ -2,43 +2,41 @@
 
 use cpal::Devices;
 use regex::Regex;
+use sentry_tracing::EventFilter;
 use std::collections::LinkedList;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::vec;
 use tauri::{
-    CustomMenuItem,
-    Manager,
-    SystemTray,
-    SystemTrayEvent,
-    SystemTrayMenu,
-    SystemTraySubmenu,
-    Window,
+    CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu, Window,
 };
 use tauri_plugin_oauth::start;
-use tauri_plugin_positioner::{ Position, WindowExt };
+use tauri_plugin_positioner::{Position, WindowExt};
 use tokio::sync::Mutex;
+use tracing::Level;
+use tracing_subscriber::prelude::*;
 use window_shadows::set_shadow;
-use window_vibrancy::{ apply_blur, apply_vibrancy, NSVisualEffectMaterial };
+use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 
+mod app;
 mod media;
 mod recording;
 mod upload;
 mod utils;
 
 use media::enumerate_audio_devices;
-use recording::{ start_dual_recording, stop_all_recordings, RecordingState };
+use recording::{start_dual_recording, stop_all_recordings, RecordingState};
 use utils::has_screen_capture_access;
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
-    download::{ check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg },
+    download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
     paths::sidecar_dir,
     version::ffmpeg_version,
 };
 
-use winit::monitor::{ MonitorHandle, VideoMode };
+use winit::monitor::{MonitorHandle, VideoMode};
 
 macro_rules! generate_handler {
     ($($command:ident),*) => {
@@ -57,58 +55,90 @@ macro_rules! generate_handler {
 fn main() {
     let _ = fix_path_env::fix();
 
-    std::panic::set_hook(
-        Box::new(|info| {
-            eprintln!("Thread panicked: {:?}", info);
-        })
-    );
+    let context = tauri::generate_context!();
+    let rolling_log = app::get_log_file(&context);
+    let (log_writer, _log_guard) = tracing_appender::non_blocking(rolling_log);
+
+    let sentry_guard = sentry::init(sentry::ClientOptions {
+        dsn: app::config::sentry_dsn(),
+        release: sentry::release_name!(),
+        ..Default::default()
+    });
+    let maybe_sentry_subscriber =
+        sentry_guard
+            .is_enabled()
+            .then_some(
+                sentry_tracing::layer().event_filter(|metadata| match metadata.level() {
+                    &Level::WARN => EventFilter::Event,
+                    _ => EventFilter::Ignore,
+                }),
+            );
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stdout.with_max_level(app::config::logging_level()))
+                .pretty(),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(log_writer.with_max_level(Level::DEBUG))
+                .with_ansi(false),
+        )
+        .with(maybe_sentry_subscriber)
+        .init();
+
+    std::panic::set_hook(Box::new(app::panic_hook));
 
     fn handle_ffmpeg_installation() -> Result<(), String> {
         if ffmpeg_is_installed() {
-            println!("FFmpeg is already installed! 🎉");
+            tracing::info!("FFmpeg is already installed! 🎉");
             return Ok(());
         }
 
+        tracing::info!("FFmpeg not found. Attempting to install...");
         match check_latest_version() {
-            Ok(version) => println!("Latest available version: {}", version),
-            Err(e) => println!("Skipping version check due to error: {}", e.to_string()),
+            Ok(version) => tracing::debug!("Latest available version: {}", version),
+            Err(e) => tracing::debug!("Skipping version check due to error: {e}"),
         }
 
         let download_url = ffmpeg_download_url().map_err(|e| e.to_string())?;
         let destination = sidecar_dir().map_err(|e| e.to_string())?;
 
-        println!("Downloading from: {:?}", download_url);
-        let archive_path = download_ffmpeg_package(download_url, &destination).map_err(|e|
-            e.to_string()
-        )?;
-        println!("Downloaded package: {:?}", archive_path);
+        tracing::debug!("Downloading from: {:?}", download_url);
+        let archive_path =
+            download_ffmpeg_package(download_url, &destination).map_err(|e| e.to_string())?;
+        tracing::debug!("Downloaded package: {:?}", archive_path);
 
-        println!("Extracting...");
+        tracing::debug!("Extracting...");
         unpack_ffmpeg(&archive_path, &destination).map_err(|e| e.to_string())?;
 
         let version = ffmpeg_version().map_err(|e| e.to_string())?;
-        println!("FFmpeg version: {}", version);
 
-        println!("Done! 🏁");
+        tracing::info!("Done! Installed FFmpeg version {} 🏁", version);
         Ok(())
     }
 
-    handle_ffmpeg_installation().expect("Failed to install FFmpeg");
+    if let Err(error) = handle_ffmpeg_installation() {
+        tracing::error!(error);
+        // TODO: UI message instead
+        panic!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now")
+    };
 
     #[tauri::command]
     #[specta::specta]
     async fn start_server(window: Window) -> Result<u16, String> {
         start(move |url| {
             let _ = window.emit("redirect_uri", url);
-        }).map_err(|err| err.to_string())
+        })
+        .map_err(|err| err.to_string())
     }
 
     #[tauri::command]
     #[specta::specta]
     fn open_screen_capture_preferences() {
         #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("open")
+        std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
             .spawn()
             .expect("failed to open system preferences");
@@ -118,8 +148,7 @@ fn main() {
     #[specta::specta]
     fn open_mic_preferences() {
         #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("open")
+        std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
             .spawn()
             .expect("failed to open system preferences");
@@ -129,8 +158,7 @@ fn main() {
     #[specta::specta]
     fn open_camera_preferences() {
         #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("open")
+        std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
             .spawn()
             .expect("failed to open system preferences");
@@ -140,8 +168,7 @@ fn main() {
     #[specta::specta]
     fn reset_screen_permissions() {
         #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("tccutil")
+        std::process::Command::new("tccutil")
             .arg("reset")
             .arg("ScreenCapture")
             .arg("so.cap.desktop")
@@ -153,8 +180,7 @@ fn main() {
     #[specta::specta]
     fn reset_microphone_permissions() {
         #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("tccutil")
+        std::process::Command::new("tccutil")
             .arg("reset")
             .arg("Microphone")
             .arg("so.cap.desktop")
@@ -166,8 +192,7 @@ fn main() {
     #[specta::specta]
     fn reset_camera_permissions() {
         #[cfg(target_os = "macos")]
-        std::process::Command
-            ::new("tccutil")
+        std::process::Command::new("tccutil")
             .arg("reset")
             .arg("Camera")
             .arg("so.cap.desktop")
@@ -175,26 +200,25 @@ fn main() {
             .expect("failed to reset camera permissions");
     }
 
-    let _guard = sentry::init((
-        "https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200",
-        sentry::ClientOptions {
-            release: sentry::release_name!(),
-            ..Default::default()
-        },
-    ));
-
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
-    let monitor: MonitorHandle = event_loop.primary_monitor().expect("No primary monitor found");
+    let monitor: MonitorHandle = event_loop
+        .primary_monitor()
+        .expect("No primary monitor found");
     let video_modes: Vec<VideoMode> = monitor.video_modes().collect();
 
-    let max_mode = video_modes.iter().max_by_key(|mode| mode.size().width * mode.size().height);
+    let max_mode = video_modes
+        .iter()
+        .max_by_key(|mode| mode.size().width * mode.size().height);
 
-    let (max_width, max_height) = if let Some(max_mode) = max_mode {
-        println!("Maximum resolution: {:?}", max_mode.size());
-        (max_mode.size().width, max_mode.size().height)
-    } else {
-        println!("Failed to determine maximum resolution.");
-        (0, 0)
+    let (max_width, max_height) = match max_mode {
+        Some(max_mode) => {
+            tracing::debug!("Maximum resolution: {:?}", max_mode.size());
+            (max_mode.size().width, max_mode.size().height)
+        }
+        None => {
+            tracing::debug!("Failed to determine maximum resolution.");
+            (0, 0)
+        }
     };
 
     #[derive(serde::Deserialize, PartialEq)]
@@ -289,16 +313,16 @@ fn main() {
                                 };
 
                                 if let Err(e) = tray_handle.set_icon(tauri::Icon::Raw(icon_bytes)) {
-                                    eprintln!("Error while setting tray icon: {}", e);
+                                    tracing::warn!("Error while setting tray icon: {}", e);
                                 }
                             }
                             Err(e) => {
-                                eprintln!("Error while deserializing recording state from event payload: {}", e);
+                                tracing::warn!("Error while deserializing recording state from event payload: {}", e);
                             }
                         }
                     }
                     None => {
-                        eprintln!("Error while opening event payload");
+                        tracing::warn!("Error while opening event payload");
                     }
                 }
             });
@@ -459,6 +483,6 @@ fn main() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("Error while running tauri application");
 }
