@@ -29,24 +29,40 @@ export const Camera = () => {
 
     if (typeof navigator === "undefined") return;
 
-    navigator.mediaDevices
-      .getUserMedia(constraints)
-      .then((stream) => {
-        video.srcObject = stream;
-        video.play();
-        setIsLoading(false);
-      })
-      .catch((err) => {
-        console.error(err);
-      });
+    const initializeVideoStream = () => {
+      navigator.mediaDevices
+        .getUserMedia(constraints)
+        .then((stream) => {
+          video.srcObject = stream;
+          video.play();
+          setIsLoading(false);
+        })
+        .catch((err) => {
+          console.error(err);
+        });
+    }
+    initializeVideoStream();
 
-    return () => {
+    const onVisibilityChanged = () => {
+      if (!document.hidden) initializeVideoStream();
+      // if (!document.hidden) stop();
+      // else initializeVideoStream();
+    }
+
+    const stop = () => {
       if (video.srcObject) {
         const stream = video.srcObject as MediaStream;
         stream.getTracks().forEach((track) => {
           track.stop();
         });
       }
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChanged);
+
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibilityChanged);
     };
   }, [selectedVideoDevice]);
 
@@ -99,12 +115,8 @@ export const Camera = () => {
 
     tauriWindowImport.then(async ({ appWindow }) => {
       await emit("change-device", {
-        type: "video",
-        device: {
-          label: "None",
-          index: -1,
-          kind: "video",
-        },
+        type: "videoinput",
+        device: null,
       });
       appWindow.close();
     });

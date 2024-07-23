@@ -8,7 +8,7 @@ use std::str;
 use crate::recording::RecordingOptions;
 use crate::utils::ffmpeg_path_as_str;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum FileType {
     Video,
     Audio,
@@ -25,13 +25,14 @@ impl std::fmt::Display for FileType {
     }
 }
 
+#[tracing::instrument]
 pub async fn upload_file(
     options: Option<RecordingOptions>,
     file_path: PathBuf,
     file_type: FileType,
 ) -> Result<String, String> {
     if let Some(ref options) = options {
-        println!("Uploading video...");
+        tracing::info!("Uploading video...");
 
         let duration = get_video_duration(&file_path)
             .map_err(|e| format!("Failed to get video duration: {}", e))?;
@@ -48,7 +49,7 @@ pub async fn upload_file(
             options.user_id, options.video_id,
         );
 
-        let server_url_base: &'static str = dotenv_codegen::dotenv!("NEXT_PUBLIC_URL");
+        let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
         let server_url = format!("{}/api/upload/signed", server_url_base);
 
         let body = match file_type {
@@ -90,7 +91,7 @@ pub async fn upload_file(
             .await
             .map_err(|e| format!("Failed to read response from Next.js handler: {}", e))?;
 
-        println!("Server response: {}", server_response);
+        tracing::debug!("Server response: {}", server_response);
 
         // Deserialize the server response
         let presigned_post_data: JsonValue = serde_json::from_str(&server_response)
@@ -110,7 +111,7 @@ pub async fn upload_file(
             form = form.text(key.to_string(), value_str.to_owned());
         }
 
-        println!("Uploading file: {file_path:?}");
+        tracing::info!("Uploading file: {file_path:?}");
 
         let mime_type = match file_path.extension() {
             Some(ext) if ext == "aac" => "audio/aac",
@@ -133,13 +134,13 @@ pub async fn upload_file(
             .as_str()
             .ok_or("URL is missing or not a string")?;
 
-        println!("Uploading file to: {}", post_url);
+        tracing::info!("Uploading file to: {}", post_url);
 
         let response = client.post(post_url).multipart(form).send().await;
 
         match response {
             Ok(response) if response.status().is_success() => {
-                println!("File uploaded successfully");
+                tracing::info!("File uploaded successfully");
             }
             Ok(response) => {
                 let status = response.status();
@@ -147,9 +148,10 @@ pub async fn upload_file(
                     .text()
                     .await
                     .unwrap_or_else(|_| "<no response body>".to_string());
-                eprintln!(
+                tracing::error!(
                     "Failed to upload file. Status: {}. Body: {}",
-                    status, error_body
+                    status,
+                    error_body
                 );
                 return Err(format!(
                     "Failed to upload file. Status: {}. Body: {}",
@@ -161,11 +163,11 @@ pub async fn upload_file(
             }
         }
 
-        println!("Removing file after upload: {file_path:?}");
+        tracing::info!("Removing file after upload: {file_path:?}");
         let remove_result = tokio::fs::remove_file(&file_path).await;
         match &remove_result {
-            Ok(_) => println!("File removed successfully"),
-            Err(e) => println!("Failed to remove file after upload: {}", e),
+            Ok(_) => tracing::info!("File removed successfully"),
+            Err(e) => tracing::info!("Failed to remove file after upload: {}", e),
         }
         remove_result.map_err(|e| format!("Failed to remove file after upload: {}", e))?;
 
