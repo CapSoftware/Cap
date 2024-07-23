@@ -64,7 +64,6 @@ chrono = "0.4.33"
 dotenv_codegen = "0.15.0"
 byteorder = "1.4.3"
 regex = "1"
-capture = { path = "../../../crates/capture" }
 image = "0.24.9"
 sentry = "0.32.2"
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }

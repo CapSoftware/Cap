@@ -519,7 +519,6 @@ version = "0.0.0"
 dependencies = [
  "byteorder",
  "bytes",
- "capture",
  "chrono",
  "cocoa 0.25.0",
  "cpal",
