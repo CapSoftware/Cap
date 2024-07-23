@@ -521,6 +521,7 @@ dependencies = [
  "bytes",
  "capture",
  "chrono",
+ "cocoa 0.25.0",
  "cpal",
  "dotenv_codegen",
  "ffmpeg-sidecar",
@@ -528,6 +529,7 @@ dependencies = [
  "futures",
  "image",
  "nix 0.20.0",
+ "objc",
  "regex",
  "reqwest 0.11.27",
  "scap",
@@ -3997,7 +3999,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.5"
-source = "git+https://github.com/CapSoftware/scap#5ee8692ab32ebb92055f997f0b9eacfc14f4d230"
+source = "git+https://github.com/brendonovich/scap?branch=fix-timing#43012cea0178dea1378727eb019517d1bacfc689"
 dependencies = [
  "apple-sys-helmer-fork",
  "cocoa 0.25.0",

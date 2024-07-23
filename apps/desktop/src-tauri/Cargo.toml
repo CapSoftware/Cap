@@ -29,6 +29,7 @@ tauri = { version = "1.6.1", features = [
   "fs-copy-file",
   "fs-create-dir",
   "window-set-ignore-cursor-events",
+  "window-create",
   "window-unminimize",
   "window-minimize",
   "window-close",
@@ -72,7 +73,9 @@ nix = "0.20.0"
 bytes = "1.0"
 tauri-specta = { version = "1", features = ["javascript", "typescript"] }
 specta = "1"
-scap = { git = "https://github.com/CapSoftware/scap" }
+scap = { git = "https://github.com/brendonovich/scap", branch = "fix-timing" }
+objc = "0.2.7"
+cocoa = "0.25.0"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem

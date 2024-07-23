@@ -28,3 +28,4 @@ target
 *.sw?
 .turbo
 pnpm-lock.yaml
+.zed

@@ -8,7 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
@@ -47,6 +47,7 @@ pub struct RecordingOptions {
 #[tauri::command]
 #[specta::specta]
 pub async fn start_dual_recording(
+    app: AppHandle,
     state: State<'_, Arc<Mutex<RecordingState>>>,
     options: RecordingOptions,
 ) -> Result<(), String> {
@@ -77,6 +78,26 @@ pub async fn start_dual_recording(
         Some(options.audio_name.clone())
     };
 
+    let camera_target = app.get_window("camera").and_then(|window| {
+        let targets = scap::get_all_targets();
+
+        #[cfg(target_os = "macos")]
+        {
+            use cocoa::appkit::NSEvent;
+            let ns_win = window.ns_window().unwrap() as cocoa::base::id;
+            let number: i64 = unsafe { ns_win.windowNumber() };
+            return targets.into_iter().find(|t| match t {
+                scap::Target::Window(window) => window.raw_handle == number as u32,
+                _ => false,
+            });
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    });
+
     let media_recording_preparation = prepare_media_recording(
         &options,
         &screenshot_dir,
@@ -85,6 +106,7 @@ pub async fn start_dual_recording(
         audio_name,
         state_guard.max_screen_width,
         state_guard.max_screen_height,
+        camera_target,
     );
     let media_recording_result = media_recording_preparation
         .await
@@ -268,6 +290,7 @@ async fn prepare_media_recording(
     audio_name: Option<String>,
     max_screen_width: usize,
     max_screen_height: usize,
+    camera_target: Option<scap::Target>,
 ) -> Result<MediaRecorder, String> {
     let mut media_recorder = MediaRecorder::new();
     media_recorder
@@ -279,6 +302,7 @@ async fn prepare_media_recording(
             audio_name.as_ref().map(String::as_str),
             max_screen_width,
             max_screen_height,
+            camera_target,
         )
         .await?;
     Ok(media_recorder)
