@@ -159,6 +159,14 @@ fn main() {
             .expect("failed to reset camera permissions");
     }
 
+    #[tauri::command]
+    #[specta::specta]
+    fn close_webview(app_handle: tauri::AppHandle, label: String) -> bool {
+        app_handle
+            .get_window(&label)
+            .is_some_and(|window| window.close().is_ok())
+    }
+
     let _guard = sentry::init(("https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200", sentry::ClientOptions {
       release: sentry::release_name!(),
       ..Default::default()
@@ -225,6 +233,7 @@ fn main() {
             let handle = app.handle();
 
             if let Some(options_window) = app.get_window("main") {
+                options_window.open_devtools();
               let _ = options_window.move_window(Position::Center);
               #[cfg(target_os = "macos")]
               apply_vibrancy(&options_window, NSVisualEffectMaterial::MediumLight, None, Some(16.0)).expect("Unsupported platform! 'apply_vibrancy' is only supported on macOS");
@@ -338,7 +347,8 @@ fn main() {
             has_screen_capture_access,
             reset_screen_permissions,
             reset_microphone_permissions,
-            reset_camera_permissions
+            reset_camera_permissions,
+            close_webview
         ])
         .plugin(tauri_plugin_context_menu::init())
         .system_tray(tray)
