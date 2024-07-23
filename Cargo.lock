@@ -624,7 +624,7 @@ dependencies = [
  "capture",
  "chrono",
  "cpal",
- "dotenv_codegen",
+ "dotenvy_macro",
  "ffmpeg-sidecar",
  "fix-path-env",
  "futures",
@@ -634,6 +634,7 @@ dependencies = [
  "regex",
  "reqwest",
  "sentry",
+ "sentry-tracing 0.34.0",
  "serde",
  "serde_json",
  "specta",
@@ -646,6 +647,9 @@ dependencies = [
  "tauri-specta",
  "tokio",
  "tokio-util",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "urlencoding",
  "which",
  "window-shadows",
@@ -1237,29 +1241,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "dotenv"
-version = "0.15.0"
+name = "dotenvy"
+version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
-name = "dotenv_codegen"
-version = "0.15.0"
+name = "dotenvy_macro"
+version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56966279c10e4f8ee8c22123a15ed74e7c8150b658b26c619c53f4a56eb4a8aa"
+checksum = "cb0235d912a8c749f4e0c9f18ca253b4c28cfefc1d2518096016d6e3230b6424"
 dependencies = [
- "dotenv_codegen_implementation",
- "proc-macro-hack",
-]
-
-[[package]]
-name = "dotenv_codegen_implementation"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e737a3522cd45f6adc19b644ce43ef53e1e9045f2d2de425c1f468abd4cf33"
-dependencies = [
- "dotenv",
- "proc-macro-hack",
+ "dotenvy",
  "proc-macro2",
  "quote",
  "syn 1.0.109",
@@ -1454,9 +1447,11 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-sidecar"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5b56b7872b0cbc828e83043a82268b111e3648dab25f29079fce448648e572a"
+version = "1.1.0"
+source = "git+https://github.com/CapSoftware/ffmpeg-sidecar?branch=main#ccf93fc3fb0ed9d367d82db7061741bf5faecf5a"
+dependencies = [
+ "anyhow",
+]
 
 [[package]]
 name = "field-offset"
@@ -4160,10 +4155,10 @@ dependencies = [
  "reqwest",
  "sentry-backtrace",
  "sentry-contexts",
- "sentry-core",
+ "sentry-core 0.32.2",
  "sentry-debug-images",
  "sentry-panic",
- "sentry-tracing",
+ "sentry-tracing 0.32.2",
  "tokio",
  "ureq",
 ]
@@ -4177,7 +4172,7 @@ dependencies = [
  "backtrace",
  "once_cell",
  "regex",
- "sentry-core",
+ "sentry-core 0.32.2",
 ]
 
 [[package]]
@@ -4190,7 +4185,7 @@ dependencies = [
  "libc",
  "os_info",
  "rustc_version",
- "sentry-core",
+ "sentry-core 0.32.2",
  "uname",
 ]
 
@@ -4202,7 +4197,20 @@ checksum = "b1189f68d7e7e102ef7171adf75f83a59607fafd1a5eecc9dc06c026ff3bdec4"
 dependencies = [
  "once_cell",
  "rand 0.8.5",
- "sentry-types",
+ "sentry-types 0.32.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "sentry-core"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "161283cfe8e99c8f6f236a402b9ccf726b201f365988b5bb637ebca0abbd4a30"
+dependencies = [
+ "once_cell",
+ "rand 0.8.5",
+ "sentry-types 0.34.0",
  "serde",
  "serde_json",
 ]
@@ -4215,7 +4223,7 @@ checksum = "7b4d0a615e5eeca5699030620c119a094e04c14cf6b486ea1030460a544111a7"
 dependencies = [
  "findshlibs",
  "once_cell",
- "sentry-core",
+ "sentry-core 0.32.2",
 ]
 
 [[package]]
@@ -4225,7 +4233,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1c18d0b5fba195a4950f2f4c31023725c76f00aabb5840b7950479ece21b5ca"
 dependencies = [
  "sentry-backtrace",
- "sentry-core",
+ "sentry-core 0.32.2",
 ]
 
 [[package]]
@@ -4235,7 +4243,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3012699a9957d7f97047fd75d116e22d120668327db6e7c59824582e16e791b2"
 dependencies = [
  "sentry-backtrace",
- "sentry-core",
+ "sentry-core 0.32.2",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "sentry-tracing"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd3c5faf2103cd01eeda779ea439b68c4ee15adcdb16600836e97feafab362ec"
+dependencies = [
+ "sentry-core 0.34.0",
  "tracing-core",
  "tracing-subscriber",
 ]
@@ -4245,6 +4264,23 @@ name = "sentry-types"
 version = "0.32.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7173fd594569091f68a7c37a886e202f4d0c1db1e1fa1d18a051ba695b2e2ec"
+dependencies = [
+ "debugid",
+ "hex",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "sentry-types"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d68cdf6bc41b8ff3ae2a9c4671e97426dcdd154cc1d4b6b72813f285d6b163f"
 dependencies = [
  "debugid",
  "hex",
@@ -5402,6 +5438,18 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-appender"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3566e8ce28cc0a3fe42519fc80e6b4c943cc4c8cef275620eb8dac2d3d4e06cf"
+dependencies = [
+ "crossbeam-channel",
+ "thiserror",
+ "time",
+ "tracing-subscriber",
 ]
 
 [[package]]
