@@ -167,11 +167,6 @@ fn main() {
             .is_some_and(|window| window.close().is_ok())
     }
 
-    let _guard = sentry::init(("https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200", sentry::ClientOptions {
-      release: sentry::release_name!(),
-      ..Default::default()
-    }));
-
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
     let monitor: MonitorHandle = event_loop
         .primary_monitor()
