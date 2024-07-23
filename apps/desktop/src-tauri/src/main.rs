@@ -200,6 +200,14 @@ fn main() {
             .expect("failed to reset camera permissions");
     }
 
+    #[tauri::command]
+    #[specta::specta]
+    fn close_webview(app_handle: tauri::AppHandle, label: String) -> bool {
+        app_handle
+            .get_window(&label)
+            .is_some_and(|window| window.close().is_ok())
+    }
+
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
     let monitor: MonitorHandle = event_loop
         .primary_monitor()
@@ -401,21 +409,20 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(
-            generate_handler![
-                start_dual_recording,
-                stop_all_recordings,
-                enumerate_audio_devices,
-                start_server,
-                open_screen_capture_preferences,
-                open_mic_preferences,
-                open_camera_preferences,
-                has_screen_capture_access,
-                reset_screen_permissions,
-                reset_microphone_permissions,
-                reset_camera_permissions
-            ]
-        )
+        .invoke_handler(generate_handler![
+            start_dual_recording,
+            stop_all_recordings,
+            enumerate_audio_devices,
+            start_server,
+            open_screen_capture_preferences,
+            open_mic_preferences,
+            open_camera_preferences,
+            has_screen_capture_access,
+            reset_screen_permissions,
+            reset_microphone_permissions,
+            reset_camera_permissions,
+            close_webview
+        ])
         .plugin(tauri_plugin_context_menu::init())
         .system_tray(tray)
         .on_system_tray_event(move |app, event| {
