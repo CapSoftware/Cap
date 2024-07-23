@@ -6,7 +6,7 @@ macro_rules! generate_handler {
         #[cfg(debug_assertions)]
         tauri_specta::ts::export(
             specta::collect_types![$($command),*],
-            "../../src/utils/commands.ts"
+            "../src/utils/commands.ts"
         ).unwrap();
 
         tauri::generate_handler![$($command),*]

@@ -3,6 +3,7 @@ use cpal::{Device, SampleFormat, SizedSample, Stream, SupportedStreamConfig};
 use indexmap::IndexMap;
 use num_traits::ToBytes;
 use std::{future::Future, path::PathBuf};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
 
 use super::{Instant, SharedFlag, SharedInstant};
@@ -94,12 +95,13 @@ impl AudioCapturer {
             let mut pipe = File::create(destination).await.unwrap();
 
             while let Some(bytes) = receiver.recv().await {
-                if should_stop.get() {
-                    break;
-                }
                 pipe.write_all(&bytes)
                     .await
                     .expect("Failed to write audio data to FFmpeg stdin");
+
+                if should_stop.get() {
+                    receiver.close();
+                }
             }
         }
     }
@@ -107,7 +109,7 @@ impl AudioCapturer {
     pub fn stop(&mut self) -> Result<(), String> {
         if let Some(ref mut stream) = self.stream {
             stream.pause().map_err(|_| "Failed to pause stream")?;
-            tracing::info!("Audio recording paused.");
+            tracing::info!("Audio capturing stopped.");
             Ok(())
         } else {
             return Err("Original recording was not started".to_string());
@@ -167,15 +169,22 @@ impl AudioCapturer {
                         dest.copy_from_slice(source.to_le_bytes().as_ref());
                     }
 
-                    if sender.try_send(bytes).is_err() {
-                        tracing::warn!("Audio channel send error. Dropping data.");
-                    }
+                    match sender.try_send(bytes) {
+                        Ok(_) => {
+                            if let Ok(ref mut start_time_option) = first_frame_time_guard {
+                                if start_time_option.is_none() {
+                                    **start_time_option = Some(Instant::now());
 
-                    if let Ok(ref mut start_time_option) = first_frame_time_guard {
-                        if start_time_option.is_none() {
-                            **start_time_option = Some(Instant::now());
-
-                            tracing::trace!("Audio start time captured");
+                                    tracing::trace!("Audio start time captured");
+                                }
+                            }
+                        }
+                        Err(TrySendError::Full(_)) => {
+                            // TODO: Consider panicking? This should *never* happen
+                            tracing::error!("Channel buffer is full!");
+                        }
+                        _ => {
+                            tracing::info!("Recording has been stopped. Dropping data.")
                         }
                     }
                 },

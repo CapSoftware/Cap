@@ -9,6 +9,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
 
 use super::{Instant, RecordingOptions, SharedFlag, SharedInstant};
@@ -26,7 +27,7 @@ pub struct VideoCapturer {
 impl VideoCapturer {
     pub fn new(_width: usize, _height: usize, should_stop: SharedFlag) -> VideoCapturer {
         let mut capturer = Capturer::new(Options {
-            fps: 30,
+            fps: 60,
             target: None,
             show_cursor: true,
             show_highlight: true,
@@ -72,7 +73,7 @@ impl VideoCapturer {
 
             capturer.start_capture();
 
-            while !should_stop.get() {
+            loop {
                 let screenshot_path = screenshot_file_path.clone();
                 let options_clone = recording_options.clone();
 
@@ -138,17 +139,25 @@ impl VideoCapturer {
                             });
                         }
 
-                        if sender.try_send(frame.data).is_err() {
-                            tracing::warn!("Video channel send error. Dropping data.");
-                        }
+                        match sender.try_send(frame.data) {
+                            Ok(_) => {
+                                let mut first_frame_time_guard = start_time.try_lock();
 
-                        let mut first_frame_time_guard = start_time.try_lock();
+                                if let Ok(ref mut start_time_option) = first_frame_time_guard {
+                                    if start_time_option.is_none() {
+                                        **start_time_option = Some(Instant::now());
 
-                        if let Ok(ref mut start_time_option) = first_frame_time_guard {
-                            if start_time_option.is_none() {
-                                **start_time_option = Some(Instant::now());
-
-                                tracing::trace!("Video start time captured");
+                                        tracing::trace!("Video start time captured");
+                                    }
+                                }
+                            }
+                            Err(TrySendError::Full(_)) => {
+                                // TODO: Consider panicking? This should *never* happen
+                                tracing::error!("Channel buffer is full!");
+                            }
+                            _ => {
+                                tracing::info!("Recording has been stopped. Dropping data.");
+                                break;
                             }
                         }
                     }
@@ -174,12 +183,13 @@ impl VideoCapturer {
             let mut pipe = File::create(destination).await.unwrap();
 
             while let Some(bytes) = receiver.recv().await {
-                if should_stop.get() {
-                    break;
-                }
                 pipe.write_all(&bytes)
                     .await
                     .expect("Failed to write video data to FFmpeg stdin");
+
+                if should_stop.get() {
+                    receiver.close();
+                }
             }
         }
     }

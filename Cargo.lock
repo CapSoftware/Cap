@@ -4357,7 +4357,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.5"
-source = "git+https://github.com/CapSoftware/scap?rev=1b7c70df754ee9c2c4e040266f45d16354367bd7#1b7c70df754ee9c2c4e040266f45d16354367bd7"
+source = "git+https://github.com/CapSoftware/scap#69d2652c4cc3d44d3f7d3ef19a785044a878964a"
 dependencies = [
  "apple-sys-helmer-fork",
  "cocoa 0.25.0",

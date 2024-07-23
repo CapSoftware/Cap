@@ -10,6 +10,7 @@ use std::{
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use crate::{
     recording::RecordingOptions,
@@ -63,6 +64,8 @@ pub struct MediaRecorder {
     start_time: Option<Instant>,
     audio_file_path: Option<PathBuf>,
     video_file_path: Option<PathBuf>,
+    audio_pipe_task: Option<JoinHandle<()>>,
+    video_pipe_task: Option<JoinHandle<()>>,
 }
 
 impl MediaRecorder {
@@ -81,6 +84,10 @@ impl MediaRecorder {
         max_screen_width: usize,
         max_screen_height: usize,
     ) -> Result<(), String> {
+        if !scap::has_permission() {
+            scap::request_permission();
+        }
+
         let options_clone = options.clone();
         self.options = Some(options);
 
@@ -208,10 +215,10 @@ impl MediaRecorder {
 
         if self.audio_enabled {
             let capturer = self.audio_capturer.as_mut().unwrap();
-            tokio::spawn(capturer.collect_samples(audio_pipe_path));
+            self.audio_pipe_task = Some(tokio::spawn(capturer.collect_samples(audio_pipe_path)));
         }
 
-        tokio::spawn(video_capturer.collect_frames(video_pipe_path));
+        self.video_pipe_task = Some(tokio::spawn(video_capturer.collect_frames(video_pipe_path)));
 
         self.start_time = Some(Instant::now());
         self.audio_file_path = Some(audio_chunks_dir.to_path_buf());
@@ -224,49 +231,32 @@ impl MediaRecorder {
         Ok(())
     }
 
+    /// The order of operations in this function is important!! Letting the tasks
+    /// that pipe collected audio/video into FFmpeg gracefully shut down first allows
+    /// us to close the ffmpeg process (and kill the cpal stream) with impunity.
     #[tracing::instrument(skip(self))]
     pub async fn stop_media_recording(&mut self) -> Result<(), String> {
-        if let Some(start_time) = self.start_time {
-            let segment_duration = Duration::from_secs(3);
-            let recording_duration = start_time.elapsed();
-            let expected_segments = recording_duration.as_secs() / segment_duration.as_secs();
-            let expected_audio_segments = match self.audio_enabled {
-                true => expected_segments,
-                false => 0,
-            };
-            let audio_file_path = self
-                .audio_file_path
-                .as_ref()
-                .ok_or("Audio file path not set")?;
-            let video_file_path = self
-                .video_file_path
-                .as_ref()
-                .ok_or("Video file path not set")?;
-            let audio_segment_list_filename = audio_file_path.join("segment_list.txt");
-            let video_segment_list_filename = video_file_path.join("segment_list.txt");
+        self.should_stop.set(true);
 
-            loop {
-                let audio_segments =
-                    std::fs::read_to_string(&audio_segment_list_filename).unwrap_or_default();
-                let video_segments =
-                    std::fs::read_to_string(&video_segment_list_filename).unwrap_or_default();
-
-                let audio_segment_count = audio_segments.lines().count();
-                let video_segment_count = video_segments.lines().count();
-
-                if audio_segment_count >= (expected_audio_segments as usize)
-                    && video_segment_count >= (expected_segments as usize)
-                {
-                    tracing::info!("All segments generated");
-                    break;
-                }
-
-                tokio::time::sleep(Duration::from_millis(300)).await;
+        if self.audio_enabled {
+            if let Some(ref mut audio_task) = self.audio_pipe_task {
+                audio_task.await.map_err(|error| error.to_string())?;
+                tracing::info!("Audio recording stopped");
             }
+
+            if let Some(ref mut audio_capturer) = self.audio_capturer {
+                audio_capturer.stop()?;
+            }
+        }
+
+        if let Some(ref mut video_task) = self.video_pipe_task {
+            video_task.await.map_err(|error| error.to_string())?;
+            tracing::info!("Video capturing stopped");
         }
 
         if let Some(ref ffmpeg_stdin) = self.ffmpeg_stdin {
             let mut stdin_guard = ffmpeg_stdin.lock().await;
+            tracing::debug!("Shutting down recording");
             if let Some(mut stdin) = stdin_guard.take() {
                 if let Err(e) = stdin.write_all(b"q\n").await {
                     tracing::error!("Failed to send 'q' to video FFmpeg process: {}", e);
@@ -275,17 +265,11 @@ impl MediaRecorder {
             }
         }
 
-        self.should_stop.set(true);
-
-        if let Some(ref mut audio_capturer) = self.audio_capturer {
-            audio_capturer.stop()?;
-        }
-
         if let Some(process) = &mut self.ffmpeg_process {
             let _ = process.kill().await.map_err(|e| e.to_string());
         }
 
-        tracing::info!("Audio recording stopped.");
+        tracing::info!("All recording stopped.");
         Ok(())
     }
 
