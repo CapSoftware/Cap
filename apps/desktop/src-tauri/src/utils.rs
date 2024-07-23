@@ -41,3 +41,7 @@ pub fn create_named_pipe(path: &Path) -> Result<(), nix::Error> {
     unistd::mkfifo(path, stat::Mode::S_IRWXU)?;
     Ok(())
 }
+
+pub fn log_debug_error(error: impl std::fmt::Display) {
+    tracing::debug!("Error: {error}")
+}

@@ -63,6 +63,8 @@ chrono = "0.4.33"
 dotenvy_macro = "0.15.7"
 byteorder = "1.4.3"
 bytemuck = "1.14.3"
+num-traits = "0.2.19"
+indexmap = "2.2.6"
 regex = "1"
 # scap = { git = "https://github.com/CapSoftware/scap", rev = "1b7c70df754ee9c2c4e040266f45d16354367bd7" }
 capture = { path = "../../../crates/capture" }

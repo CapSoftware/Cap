@@ -10,7 +10,6 @@ use std::sync::{
 };
 use tauri::State;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
 use crate::app::config;
