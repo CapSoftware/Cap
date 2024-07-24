@@ -58,4 +58,8 @@ export function closeWebview(label: string) {
     return invoke()<boolean>("close_webview", { label })
 }
 
+export function setWebviewShadow(label: string, enable: boolean) {
+    return invoke()<boolean>("set_webview_shadow", { label,enable })
+}
+
 export type RecordingOptions = { user_id: string; video_id: string; screen_index: string; video_index: string; audio_name: string; aws_region: string; aws_bucket: string }

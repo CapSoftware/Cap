@@ -47,19 +47,15 @@ export const Camera = () => {
       if (!document.hidden) initializeVideoStream();
     }
 
-    const stop = () => {
+    document.addEventListener('visibilitychange', onVisibilityChanged);
+
+    return () => {
       if (video.srcObject) {
         const stream = video.srcObject as MediaStream;
         stream.getTracks().forEach((track) => {
           track.stop();
         });
       }
-    }
-
-    document.addEventListener('visibilitychange', onVisibilityChanged);
-
-    return () => {
-      stop();
       document.removeEventListener('visibilitychange', onVisibilityChanged);
     };
   }, [selectedVideoDevice]);

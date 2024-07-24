@@ -208,6 +208,14 @@ fn main() {
             .is_some_and(|window| window.close().is_ok())
     }
 
+    #[tauri::command]
+    #[specta::specta]
+    fn set_webview_shadow(app_handle: tauri::AppHandle, label: String, enable: bool) -> bool {
+        app_handle
+            .get_window(&label)
+            .is_some_and(|window| set_shadow(window, enable).is_ok())
+    }
+
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
     let monitor: MonitorHandle = event_loop
         .primary_monitor()
@@ -272,22 +280,22 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle();
 
-            if let Some(options_window) = app.get_window("main") {
-                let _ = options_window.move_window(Position::Center);
+            if let Some(main_window) = app.get_window("main") {
+                main_window.move_window(Position::Center).ok();
                 #[cfg(target_os = "macos")]
                 apply_vibrancy(
-                    &options_window,
+                    &main_window,
                     NSVisualEffectMaterial::MediumLight,
                     None,
                     Some(16.0)
                 ).expect("Unsupported platform! 'apply_vibrancy' is only supported on macOS");
 
                 #[cfg(target_os = "windows")]
-                apply_blur(&options_window, Some((255, 255, 255, 255))).expect(
+                apply_blur(&main_window, Some((255, 255, 255, 255))).expect(
                     "Unsupported platform! 'apply_blur' is only supported on Windows"
                 );
 
-                set_shadow(&options_window, true).expect("Unsupported platform!");
+                set_shadow(&main_window, true).expect("Unsupported platform!");
             }
 
             let data_directory = handle
@@ -421,7 +429,8 @@ fn main() {
             reset_screen_permissions,
             reset_microphone_permissions,
             reset_camera_permissions,
-            close_webview
+            close_webview,
+            set_webview_shadow
         ])
         .plugin(tauri_plugin_context_menu::init())
         .system_tray(tray)
