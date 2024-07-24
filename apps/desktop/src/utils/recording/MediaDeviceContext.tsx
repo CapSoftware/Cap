@@ -14,6 +14,7 @@ import {
   enumerateAndStoreDevices,
   initializeCameraWindow,
 } from "./utils";
+import { closeWebview } from "../commands";
 
 export type DeviceKind = "videoinput" | "audioinput";
 export interface Device {
@@ -122,32 +123,33 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         `${type === "videoinput" ? "video" : "audio"}_device_change`
       );
     }
+    
     if (type === "videoinput") {
-      tauriWindowImport.then(({ WebviewWindow }) => {
-        if (WebviewWindow.getByLabel("camera")) {
-          WebviewWindow.getByLabel("camera").close();
-        } else if (type === "videoinput" && device) {
-          initializeCameraWindow();
-        }
-      });
+      emit("_log", `Prev: ${selectedVideoDevice?.label}, Current: ${device?.label}`)
 
-      if (
-        (!device && selectedVideoDevice) ||
-        selectedVideoDevice?.index !== device?.index
-      ) {
+      if (device?.label !== selectedVideoDevice?.label) {
         setSelectedVideoDevice(device);
       }
     }
 
     if (type === "audioinput") {
-      if (
-        (!device && selectedAudioDevice) ||
-        selectedAudioDevice?.index !== device?.index
-      ) {
+      if (device?.label !== selectedAudioDevice?.label) {
         setSelectedAudioDevice(device);
       }
     }
   };
+
+  // TODO Remove
+  useEffect(() => {
+    let unlisten: () => unknown;
+    import("@tauri-apps/api/event").then(async ({listen}) => {
+      unlisten = await listen<string>("_log", (e) => console.log(`LOG: ${e.payload}`))
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    }
+  });
 
   useEffect(() => {
     let unlistenFnChangeDevice: any;

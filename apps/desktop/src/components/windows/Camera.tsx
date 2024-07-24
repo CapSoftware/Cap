@@ -45,8 +45,6 @@ export const Camera = () => {
 
     const onVisibilityChanged = () => {
       if (!document.hidden) initializeVideoStream();
-      // if (!document.hidden) stop();
-      // else initializeVideoStream();
     }
 
     const stop = () => {
@@ -110,14 +108,16 @@ export const Camera = () => {
     );
   };
 
-  const closeWindow = () => {
+  const closeWindow = (emitSetDevice = true) => {
     if (typeof window === "undefined") return;
 
     tauriWindowImport.then(async ({ appWindow }) => {
-      await emit("change-device", {
-        type: "videoinput",
-        device: null,
-      });
+      if (emitSetDevice) {
+        await emit("change-device", {
+          type: "videoinput",
+          device: null,
+        });
+      }
       appWindow.close();
     });
   };
