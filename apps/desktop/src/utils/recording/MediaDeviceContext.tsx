@@ -125,10 +125,15 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     }
     
     if (type === "videoinput") {
-      emit("_log", `Prev: ${selectedVideoDevice?.label}, Current: ${device?.label}`)
-
+      
       if (device?.label !== selectedVideoDevice?.label) {
+        const previous = selectedVideoDevice;        
         setSelectedVideoDevice(device);
+        if (!device) {
+          closeWebview("camera")
+        } else if (!previous && device) {
+          initializeCameraWindow();
+        }
       }
     }
 
@@ -138,18 +143,6 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
       }
     }
   };
-
-  // TODO Remove
-  useEffect(() => {
-    let unlisten: () => unknown;
-    import("@tauri-apps/api/event").then(async ({listen}) => {
-      unlisten = await listen<string>("_log", (e) => console.log(`LOG: ${e.payload}`))
-    });
-
-    return () => {
-      if (unlisten) unlisten();
-    }
-  });
 
   useEffect(() => {
     let unlistenFnChangeDevice: any;
