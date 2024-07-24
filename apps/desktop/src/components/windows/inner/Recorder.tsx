@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Device, useMediaDevices } from "@/utils/recording/MediaDeviceContext";
+import { Device, DeviceKind, useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
 import { Screen } from "@/components/icons/Screen";
@@ -22,6 +22,7 @@ import { openLinkInBrowser } from "@/utils/helpers";
 import * as commands from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
+import { ActionSelect } from "./ActionSelect";
 
 declare global {
   interface Window {
@@ -53,6 +54,12 @@ export const Recorder = () => {
   useEffect(() => {
     proCheckPromise.then((result) => setProCheck(Boolean(result)));
   }, [proCheckPromise]);
+
+  const createDeviceMenuOptions = (kind: DeviceKind) => [
+    { value: "none", label: "None" },
+    { value: "none", label: "Something that's a bit too long" },
+    ...devices.filter((device) => device.kind === "videoinput").map(({ label }) => ({ value: label, label }))
+  ]
 
   const handleContextClick = async (option: "video" | "audio") => {
     const { showMenu } = await import("tauri-plugin-context-menu");
@@ -433,8 +440,9 @@ export const Recorder = () => {
               <div>
                 <label className="text-sm font-medium">Webcam / Video</label>
                 <div className="space-y-2">
-                  <ActionButton
+                  <ActionSelect
                     width="full"
+                    options={createDeviceMenuOptions("videoinput")}
                     handler={() => handleContextClick("video")}
                     icon={<Video className="w-5 h-5" />}
                     label={
@@ -446,8 +454,9 @@ export const Recorder = () => {
                     recordingOption={true}
                     optionName="Video"
                   />
-                  <ActionButton
+                  <ActionSelect
                     width="full"
+                    options={createDeviceMenuOptions("audioinput")}
                     handler={() => handleContextClick("audio")}
                     icon={<Microphone className="w-5 h-5" />}
                     label={

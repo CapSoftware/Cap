@@ -278,7 +278,7 @@ fn main() {
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_positioner::init())
         .setup(move |app| {
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            // app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let handle = app.handle();
 
             if let Some(main_window) = app.get_window("main") {
