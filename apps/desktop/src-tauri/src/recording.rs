@@ -10,9 +10,9 @@ use std::sync::{
 };
 use tauri::State;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
+use crate::app::config;
 use crate::upload::{self, upload_file};
 
 use crate::media::MediaRecorder;
@@ -46,11 +46,12 @@ pub struct RecordingOptions {
 
 #[tauri::command]
 #[specta::specta]
+#[tracing::instrument(skip(state))]
 pub async fn start_dual_recording(
     state: State<'_, Arc<Mutex<RecordingState>>>,
     options: RecordingOptions,
 ) -> Result<(), String> {
-    println!("Starting screen recording...");
+    tracing::info!("Starting screen recording...");
     let mut state_guard = state.lock().await;
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
@@ -61,7 +62,7 @@ pub async fn start_dual_recording(
         .ok_or("Data directory is not set in the recording state".to_string())?
         .clone();
 
-    println!("data_dir: {:?}", data_dir);
+    tracing::debug!("data_dir: {:?}", data_dir);
 
     let screenshot_dir = data_dir.join("screenshots");
     let audio_chunks_dir = data_dir.join("chunks/audio");
@@ -96,12 +97,7 @@ pub async fn start_dual_recording(
     state_guard.video_uploading_finished = Arc::new(AtomicBool::new(false));
     state_guard.audio_uploading_finished = Arc::new(AtomicBool::new(false));
 
-    let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
-        "true" => true,
-        _ => false,
-    };
-
-    if !is_local_mode {
+    if !config::is_local_mode() {
         let video_upload = start_upload_loop(
             video_chunks_dir.clone(),
             options.clone(),
@@ -119,18 +115,18 @@ pub async fn start_dual_recording(
 
         drop(state_guard);
 
-        println!("Starting upload loops...");
+        tracing::info!("Starting upload loops...");
 
         match tokio::try_join!(video_upload, audio_upload) {
             Ok(_) => {
-                println!("Both upload loops completed successfully.");
+                tracing::info!("Both upload loops completed successfully.");
             }
             Err(e) => {
-                eprintln!("An error occurred: {}", e);
+                tracing::error!("An error occurred: {}", e);
             }
         }
     } else {
-        println!("Skipping upload loops due to NEXT_PUBLIC_LOCAL_MODE being set to 'true'.");
+        tracing::info!("Skipping upload loops due to NEXT_PUBLIC_LOCAL_MODE being set to 'true'.");
     }
 
     Ok(())
@@ -143,33 +139,26 @@ pub async fn stop_all_recordings(
 ) -> Result<(), String> {
     let mut guard = state.lock().await;
 
-    println!("Stopping media recording...");
-
-    guard.shutdown_flag.store(true, Ordering::SeqCst);
-
     if let Some(mut media_process) = guard.media_process.take() {
-        println!("Stopping media recording...");
+        tracing::info!("Stopping media recording...");
         media_process
             .stop_media_recording()
             .await
             .expect("Failed to stop media recording");
     }
 
-    let is_local_mode = match dotenv_codegen::dotenv!("NEXT_PUBLIC_LOCAL_MODE") {
-        "true" => true,
-        _ => false,
-    };
+    guard.shutdown_flag.store(true, Ordering::SeqCst);
 
-    if !is_local_mode {
+    if !config::is_local_mode() {
         while !guard.video_uploading_finished.load(Ordering::SeqCst)
             || !guard.audio_uploading_finished.load(Ordering::SeqCst)
         {
-            println!("Waiting for uploads to finish...");
+            tracing::debug!("Waiting for uploads to finish...");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
-    println!("All recordings and uploads stopped.");
+    tracing::info!("All recordings and uploads stopped.");
 
     Ok(())
 }
@@ -226,7 +215,7 @@ async fn start_upload_loop(
             if segment_path.is_file() {
                 let options_clone = options.clone();
                 upload_tasks.push(tokio::spawn(async move {
-                    println!("Uploading video for {file_type}: {segment_path:?}");
+                    tracing::debug!("Uploading video for {file_type}: {segment_path:?}");
                     upload_file(Some(options_clone), segment_path, file_type)
                         .await
                         .map(|_| ())

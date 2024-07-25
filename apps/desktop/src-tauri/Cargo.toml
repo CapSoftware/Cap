@@ -60,12 +60,14 @@ tauri-plugin-deep-link = { git = "https://github.com/FabianLars/tauri-plugin-dee
 window-vibrancy = "0.4.3"
 window-shadows = "0.2.2"
 chrono = "0.4.33"
-dotenv_codegen = "0.15.0"
+dotenvy_macro = "0.15.7"
 byteorder = "1.4.3"
 bytemuck = "1.14.3"
+num-traits = "0.2.19"
+indexmap = "2.2.6"
 regex = "1"
-capture = { path = "../../../crates/capture" }
-image = "0.24.9"
+scap = { git = "https://github.com/CapSoftware/scap" }
+image = { version = "0.24.9", features = ["jpeg", "png", "webp"] }
 sentry = "0.32.2"
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 winit = "0.29.15"
@@ -75,6 +77,10 @@ urlencoding = "2.1.2"
 bytes = "1.0"
 tauri-specta = { version = "1", features = ["javascript", "typescript"] }
 specta = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tracing-appender = "0.2"
+sentry-tracing = "0.34.0"
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
