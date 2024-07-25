@@ -1,8 +1,11 @@
 import { redirect } from "next/navigation";
 import { Record } from "./Record";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 export const revalidate = 0;
+
+const client = new QueryClient();
 
 export default async function RecordPage() {
   const user = await getCurrentUser();
@@ -11,5 +14,9 @@ export default async function RecordPage() {
     redirect("/login");
   }
 
-  return <Record user={user} />;
+  return (
+    <QueryClientProvider client={client}>
+      <Record user={user} />
+    </QueryClientProvider>
+  );
 }
