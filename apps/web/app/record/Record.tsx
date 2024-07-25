@@ -121,10 +121,6 @@ export const Record = ({
 }) => {
   const [ffmpeg] = useState(() => new FFmpeg());
   const [isLoading, setIsLoading] = useState(true);
-  const [currentStoppingMessage, setCurrentStoppingMessage] =
-    useState("Stopping Recording");
-
-  // const [recordingState, setRecordingState] = useState<RecordingState>("idle");
 
   const devices = useQuery(devicesQuery).data;
   const [audioDeviceId, setAudioDeviceId] = useState<string>();
@@ -562,7 +558,7 @@ export const Record = ({
                 ? "Starting..."
                 : state.status === "recording"
                 ? `Stop - ${recordingTime}`
-                : currentStoppingMessage}
+                : state.message}
             </Button>
           </div>
         </div>
