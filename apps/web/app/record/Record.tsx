@@ -1,10 +1,10 @@
 "use client";
 
 import {
+  keepPreviousData,
   QueryClient,
   QueryClientProvider,
   queryOptions,
-  skipToken,
   useQuery,
 } from "@tanstack/react-query";
 import {
@@ -33,32 +33,6 @@ import {
 import { ActionButton } from "./_components/ActionButton";
 import { useRecorder } from "./useRecorder";
 import { flushSync } from "react-dom";
-
-const devicesQuery = queryOptions({
-  queryKey: ["devices"],
-  queryFn: async () => {
-    try {
-      await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: {
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-      });
-      const devices = await navigator.mediaDevices.enumerateDevices();
-
-      return {
-        audio: devices.filter((device) => device.kind === "audioinput"),
-        video: devices.filter((device) => device.kind === "videoinput"),
-      };
-    } catch (error) {
-      console.error("Error accessing media devices:", error);
-    }
-
-    return { audio: [], video: [] };
-  },
-  initialData: { audio: [], video: [] },
-});
 
 const client = new QueryClient({
   defaultOptions: {
@@ -95,9 +69,9 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
   const videoContainerRef = useRef<HTMLDivElement>(null);
 
   const showScreen = useRef(false);
-
   const screen = useQuery({
     queryKey: ["screen"],
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       if (screen.data)
         for (const track of screen.data.stream.getTracks()) {
@@ -120,6 +94,7 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
   });
 
   const webcamStream = useQuery({
+    placeholderData: keepPreviousData,
     queryKey: [
       "webcamStream",
       {
@@ -148,9 +123,9 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
 
   useEffect(() => {
     if (screenPreviewRef.current)
-      screenPreviewRef.current.srcObject = screen.data?.stream;
+      screenPreviewRef.current.srcObject = screen.data?.stream ?? null;
     if (webcamPreviewRef.current)
-      webcamPreviewRef.current.srcObject = webcamStream.data;
+      webcamPreviewRef.current.srcObject = webcamStream.data ?? null;
   }, [screen.data?.stream, webcamStream.data]);
 
   const videoElement = screen.data?.videoElement;
@@ -177,7 +152,7 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
   const stopScreenCapture = () => {
     showScreen.current = false;
 
-    screen.refetch();
+    screen.refetch({ cancelRefetch: false });
   };
 
   async function startScreenCapture() {
@@ -185,14 +160,15 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
 
     await screen.refetch({ cancelRefetch: false });
 
-    await new Promise((res) => setTimeout(res, 1));
-
-    screenRnd.setStyle({
-      x: 0,
-      y: 0,
-      width: "100%",
-      height: "100%",
+    flushSync(() => {
+      screenRnd.setStyle({
+        x: 0,
+        y: 0,
+        width: "100%",
+        height: "100%",
+      });
     });
+
     webcamRnd.setStyle(
       getWebcamDefaultStyles(videoContainerRef.current!, "small")
     );
@@ -225,26 +201,6 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
   useLocalStoragePersist("selectedVideoDevice", webcamDeviceId);
   useLocalStoragePersist("screenStream", screen.data ? "true" : undefined);
 
-  const recordingTime = useRecordingTimeFormat(
-    recorder.state.status === "recording" ? recorder.state.seconds : 0
-  );
-
-  // useEffect(() => {
-  //   const audio = new Audio("/sample-9s.mp3");
-  //   audio.loop = true;
-  //   audio.volume = 1;
-
-  //   const playAudio = () => {
-  //     audio.play();
-  //     window.removeEventListener("mousemove", playAudio);
-  //   };
-
-  //   window.addEventListener("mousemove", playAudio);
-
-  //   return () => {
-  //     window.removeEventListener("mousemove", playAudio);
-  //   };
-  // }, []);
   if (recorder.isLoading) {
     return (
       <div className="w-full h-screen flex items-center justify-center">
@@ -313,13 +269,17 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
                 recorder.state.status === "stopping"
               }
             >
-              {recorder.state.status === "idle"
-                ? "Start Recording"
-                : recorder.state.status === "starting"
-                ? "Starting..."
-                : recorder.state.status === "recording"
-                ? `Stop - ${recordingTime}`
-                : recorder.state.message}
+              {recorder.state.status === "idle" ? (
+                "Start Recording"
+              ) : recorder.state.status === "starting" ? (
+                "Starting..."
+              ) : recorder.state.status === "recording" ? (
+                <>
+                  Stop - <RecordingTimeText seconds={recorder.state.seconds} />
+                </>
+              ) : (
+                recorder.state.message
+              )}
             </Button>
           </div>
         </div>
@@ -379,6 +339,7 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
               {webcamStream && webcamDevice !== undefined && (
                 <Rnd
                   {...webcamRnd.props}
+                  default={webcamRnd.styles}
                   id="rndPreview"
                   className="absolute webcam-rnd rnd group hover:outline outline-2 outline-primary"
                   lockAspectRatio={true}
@@ -519,6 +480,7 @@ function usePreviewRnd(
     height: number | string;
   }
 ) {
+  const [isDragging, setIsDragging] = useState(false);
   const [styles, setStyle] = useState(defaultStyles);
   const [isCenteredVertically, setIsCenteredVertically] = useState(false);
   const [isCenteredHorizontally, setIsCenteredHorizontally] = useState(false);
@@ -537,8 +499,9 @@ function usePreviewRnd(
         bounds: "parent",
         resizeHandleStyles: rndHandleStyles,
         resizeHandleClasses,
-        default: styles,
+        // default: styles,
         onDrag: () => {
+          setIsDragging(true);
           const videoContainer = containerRef.current;
           const preview = previewRef.current;
 
@@ -550,6 +513,8 @@ function usePreviewRnd(
           setIsCenteredHorizontally(isCentered.horizontally);
         },
         onDragStop: (_e, d) => {
+          setIsDragging(false);
+
           const videoContainer = containerRef.current;
           const preview = previewRef.current;
 
@@ -585,7 +550,12 @@ function usePreviewRnd(
     [styles, previewRef.current, containerRef.current]
   );
 
-  return { props, setStyle, isCenteredVertically, isCenteredHorizontally };
+  return {
+    props,
+    setStyle,
+    isCenteredVertically: isCenteredVertically && isDragging,
+    isCenteredHorizontally: isCenteredHorizontally && isDragging,
+  };
 }
 
 function elementIsCentered(element: HTMLElement, container: HTMLElement) {
@@ -682,6 +652,32 @@ function getWebcamDefaultStyles(
   };
 }
 
+const devicesQuery = queryOptions({
+  queryKey: ["devices"],
+  queryFn: async () => {
+    try {
+      await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: {
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      });
+      const devices = await navigator.mediaDevices.enumerateDevices();
+
+      return {
+        audio: devices.filter((device) => device.kind === "audioinput"),
+        video: devices.filter((device) => device.kind === "videoinput"),
+      };
+    } catch (error) {
+      console.error("Error accessing media devices:", error);
+    }
+
+    return { audio: [], video: [] };
+  },
+  initialData: { audio: [], video: [] },
+});
+
 const WEBCAM_DEFAULT_STYLE = {
   x: 16,
   y: 16,
@@ -734,6 +730,12 @@ const rndHandleStyles = {
     boxShadow: "0 2px 4px rgba(0, 0, 0, 0.1)",
   },
 };
+
+function RecordingTimeText({ seconds }: { seconds: number }) {
+  const time = useRecordingTimeFormat(seconds);
+
+  return <>{time}</>;
+}
 
 function useRecordingTimeFormat(seconds: number) {
   return useMemo(() => {
