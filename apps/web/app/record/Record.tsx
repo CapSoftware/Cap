@@ -160,6 +160,7 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
 
     await screen.refetch({ cancelRefetch: false });
 
+    // need to make sure screen size has rendered before setting webcam styles
     flushSync(() => {
       screenRnd.setStyle({
         x: 0,
