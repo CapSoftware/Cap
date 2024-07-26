@@ -1,6 +1,11 @@
 "use client";
 
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+  useQuery,
+} from "@tanstack/react-query";
 import {
   useState,
   useEffect,
@@ -8,13 +13,16 @@ import {
   type SetStateAction,
   type Dispatch,
   useMemo,
+  useCallback,
+  ComponentProps,
+  RefObject,
 } from "react";
 import { Store } from "@tanstack/store";
 import { useStore } from "@tanstack/react-store";
 
 import type { users } from "@cap/database/schema";
 import { Mic, Video, Monitor, ArrowLeft } from "lucide-react";
-import { type DraggableData, Rnd } from "react-rnd";
+import { type DraggableData, HandleClasses, Rnd } from "react-rnd";
 import type { DraggableEvent } from "react-draggable";
 import {
   Button,
@@ -109,15 +117,24 @@ const devicesQuery = queryOptions({
   initialData: { audio: [], video: [] },
 });
 
-type State<T> = ReturnType<typeof useState<T>>;
-
 type FullStore = RecorderStore | { status: "idle" } | { status: "starting" };
 
+const client = new QueryClient();
+
+export function Record() {
+  return (
+    <QueryClientProvider client={client}>
+      <Component />
+    </QueryClientProvider>
+  );
+}
+
+const CENTERED_THRESHOLD = 15;
+
 // million-ignore
-export const Record = ({
-  user,
-}: {
-  user: typeof users.$inferSelect | null;
+const Component = ({}: // user,
+{
+  // user: typeof users.$inferSelect | null;
 }) => {
   const [ffmpeg] = useState(() => new FFmpeg());
   const [isLoading, setIsLoading] = useState(true);
@@ -130,32 +147,39 @@ export const Record = ({
 
   const screenPreviewRef = useRef<HTMLVideoElement>(null);
   const webcamPreviewRef = useRef<HTMLVideoElement>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
 
-  const [screenStream, setScreenStream] = interceptSetter(
-    useState<MediaStream | null>(null),
-    (value) => {
-      if (screenPreviewRef.current) screenPreviewRef.current.srcObject = value;
-    }
-  );
-  const [videoStream, setVideoStream] = interceptSetter(
-    useState<MediaStream | null>(null),
-    (stream) => {
-      if (webcamPreviewRef.current) webcamPreviewRef.current.srcObject = stream;
-    }
-  );
+  const [screen, setScreen] = useState<{
+    videoElement: HTMLVideoElement;
+    stream: MediaStream;
+  } | null>(null);
+  const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
 
-  const [aspectRatio, setAspectRatio] = useState(1.7777777778);
-  const [webcamStyleSettings, setWebcamStyleSettings] = useState({
+  useEffect(() => {
+    if (screenPreviewRef.current)
+      screenPreviewRef.current.srcObject = screen?.stream ?? null;
+    if (webcamPreviewRef.current)
+      webcamPreviewRef.current.srcObject = webcamStream;
+  }, [screen?.stream, webcamStream]);
+
+  const aspectRatio = useMemo(() => {
+    if (screen?.videoElement)
+      return screen?.videoElement.videoWidth / screen?.videoElement.videoHeight;
+    return 16 / 9;
+  }, [screen?.videoElement]);
+
+  const webcamRnd = usePreviewRnd(webcamPreviewRef, videoContainerRef, {
     x: 16,
     y: 16,
     width: 180,
     height: 180,
   });
-  const [screenStyleSettings, setScreenStyleSettings] = useState({
+
+  const screenRnd = usePreviewRnd(screenPreviewRef, videoContainerRef, {
     x: 0,
     y: 0,
-    width: "100%" as any,
-    height: "100%" as any,
+    width: "100%",
+    height: "100%",
   });
 
   const [isCenteredHorizontally, setIsCenteredHorizontally] = useState(false);
@@ -187,276 +211,98 @@ export const Record = ({
     loadFFmpeg();
   }, [ffmpeg]);
 
-  const startScreenCapture = async () => {
-    try {
-      const displayMediaOptions = {
-        audio: false,
-        surfaceSwitching: "exclude",
-        selfBrowserSurface: "exclude",
-        systemAudio: "exclude",
-      };
-
-      const stream = await navigator.mediaDevices.getDisplayMedia(
-        displayMediaOptions
-      );
-      if (stream)
-        for (const track of stream.getTracks()) {
-          track.onended = async () => {
-            if (recorder) await recorder.stop();
-          };
-        }
-
-      const videoElement = document.createElement("video");
-      videoElement.srcObject = stream;
-
-      return new Promise((resolve) => {
-        videoElement.onloadedmetadata = () => {
-          const { videoWidth, videoHeight } = videoElement;
-          const aspectRatio = videoWidth / videoHeight;
-          setAspectRatio(aspectRatio);
-          setScreenStream(stream);
-          console.log("videoWidth", videoWidth);
-          console.log("videoHeight", videoHeight);
-          console.log("aspectRatio", aspectRatio);
-          setScreenStyleSettings({
-            x: 0,
-            y: 0,
-            width: "100%",
-            height: "100%",
-          });
-          if (videoDeviceId !== undefined) {
-            startVideoCapture(videoDeviceId, "small");
-          }
-          resolve({ width: videoWidth, height: videoHeight });
-        };
-      });
-    } catch (error) {
-      console.error("Error capturing screen:", error);
-    }
-  };
-
-  const startVideoCapture = async (
-    deviceId?: string,
-    microphoneId?: string,
-    placement?: "small" | "large"
-  ) => {
-    try {
-      const constraints: MediaStreamConstraints = {
-        video: deviceId
-          ? { deviceId, width: { ideal: 1920 }, height: { ideal: 1080 } }
-          : { width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: microphoneId
-          ? { deviceId: microphoneId }
-          : audioDeviceId
-          ? { deviceId: audioDeviceId }
-          : false,
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log("deviceId: ", deviceId);
-      console.log("finding video devices: ", devices.video);
-      console.log("found: ", videoDevice);
-      setVideoStream(stream);
-
-      const videoContainer = document.querySelector(
-        ".video-container"
-      ) as HTMLElement;
-
-      if (videoContainer === null) {
-        console.error("Video container dimensions not found");
-        setTimeout(startVideoCapture, 1000);
-        return;
-      }
-
-      const videoContainerWidth = videoContainer.clientWidth;
-      const videoContainerHeight = videoContainer.clientHeight;
-
-      if (placement === "large") {
-        setWebcamStyleSettings({
-          x: (videoContainerWidth - videoContainerWidth / 2) / 2,
-          y: (videoContainerHeight - videoContainerWidth / 2) / 2,
-          width: videoContainerWidth / 2,
-          height: videoContainerWidth / 2,
-        });
-      } else if (placement === "small") {
-        const webcamWidth = 180;
-
-        setWebcamStyleSettings({
-          x: 16,
-          y: videoContainer.clientHeight - 16 - webcamWidth,
-          width: webcamWidth,
-          height: webcamWidth,
-        });
-      }
-    } catch (error) {
-      console.error("Error capturing video:", error);
-    }
-  };
-
   const stopScreenCapture = () => {
-    if (screenStream) {
-      screenStream.getTracks().forEach((track) => track.stop());
-      setScreenStream(null);
+    if (screen) {
+      for (const track of screen.stream.getTracks()) {
+        track.stop();
+      }
+      setScreen(null);
       stopVideoCapture();
     }
   };
 
   const stopVideoCapture = () => {
-    if (videoStream) {
-      videoStream.getTracks().forEach((track) => track.stop());
-      setVideoStream(null);
+    if (webcamStream) {
+      for (const track of webcamStream.getTracks()) {
+        track.stop();
+      }
+      setWebcamStream(null);
     }
   };
 
-  const makeOnRndDragStop =
-    (previewType: "webcam" | "screen") =>
-    (_e: DraggableEvent, d: DraggableData) => {
-      const videoContainer = document.querySelector(".video-container");
-      const preview = document.getElementById(
-        previewType === "webcam" ? "webcamPreview" : "screenPreview"
+  async function startWebcamCapture(args: {
+    deviceId?: string;
+    microphoneId?: string;
+    placement?: "small" | "large";
+  }) {
+    const stream = await getWebcamStream(args);
+    if (!stream) return;
+
+    setWebcamStream(stream);
+
+    if (args.placement)
+      webcamRnd.setStyle(
+        getWebcamDefaultStyles(videoContainerRef.current!, args.placement)
       );
+  }
 
-      if (videoContainer && preview) {
-        const containerRect = videoContainer.getBoundingClientRect();
-        const previewRect = preview.getBoundingClientRect();
+  async function startScreenCapture() {
+    const result = await getScreenStream();
+    if (!result) return;
 
-        const containerCenterX = containerRect.left + containerRect.width / 2;
-        const containerCenterY = containerRect.top + containerRect.height / 2;
+    const { videoElement, stream } = result;
 
-        const previewCenterX = previewRect.left + previewRect.width / 2;
-        const previewCenterY = previewRect.top + previewRect.height / 2;
+    for (const track of stream.getTracks()) {
+      track.onended = async () => {
+        if (recorder) await recorder.stop();
+      };
+    }
 
-        const thresholdX = 15;
-        const thresholdY = 15;
+    setScreen({ videoElement, stream });
+    screenRnd.setStyle({
+      x: 0,
+      y: 0,
+      width: "100%",
+      height: "100%",
+    });
 
-        const videoContainerWidth = videoContainer.clientWidth;
-        const videoContainerHeight = videoContainer.clientHeight;
+    startWebcamCapture({
+      deviceId: videoDeviceId,
+      microphoneId: audioDeviceId,
+      placement: "small",
+    });
+  }
 
-        if (Math.abs(previewCenterX - containerCenterX) <= thresholdX) {
-          if (previewType === "webcam") {
-            setWebcamStyleSettings((prevSettings) => ({
-              ...prevSettings,
-              x: (videoContainerWidth - prevSettings.width) / 2,
-            }));
-          } else if (previewType === "screen") {
-            setScreenStyleSettings((prevSettings) => ({
-              ...prevSettings,
-              x: (videoContainerWidth - prevSettings.width) / 2,
-            }));
-          }
+  const [storedState] = useState(() => ({
+    audioDevice: localStorage.getItem("selectedAudioDevice"),
+    videoDevice: localStorage.getItem("selectedVideoDevice"),
+    screenStream: localStorage.getItem("screenStream"),
+  }));
 
-          setIsCenteredHorizontally(true);
-        } else {
-          if (previewType === "webcam") {
-            setWebcamStyleSettings((prevSettings) => ({
-              ...prevSettings,
-              x: d.x,
-            }));
-          } else if (previewType === "screen") {
-            setScreenStyleSettings((prevSettings) => ({
-              ...prevSettings,
-              x: d.x,
-            }));
-          }
+  // callback ref used to ensure that 1. videoContainerRef exists and 2. that it only fires once
+  const onVideoContainerMounted = useCallback((ref: HTMLDivElement) => {
+    (videoContainerRef as any).current = ref;
 
-          setIsCenteredHorizontally(false);
-        }
+    if (storedState.audioDevice) setAudioDeviceId(storedState.audioDevice);
+    if (storedState.videoDevice) setVideoDeviceId(storedState.videoDevice);
 
-        if (Math.abs(previewCenterY - containerCenterY) <= thresholdY) {
-          if (previewType === "webcam") {
-            setWebcamStyleSettings((prevSettings) => ({
-              ...prevSettings,
-              y: (videoContainerHeight - prevSettings.height) / 2,
-            }));
-          } else if (previewType === "screen") {
-            setScreenStyleSettings((prevSettings) => ({
-              ...prevSettings,
-              y: (videoContainerHeight - prevSettings.height) / 2,
-            }));
-          }
-
-          setIsCenteredVertically(true);
-        } else {
-          if (previewType === "webcam") {
-            setWebcamStyleSettings((prevSettings) => ({
-              ...prevSettings,
-              y: d.y,
-            }));
-          } else if (previewType === "screen") {
-            setScreenStyleSettings((prevSettings) => ({
-              ...prevSettings,
-              y: d.y,
-            }));
-          }
-
-          setIsCenteredVertically(false);
-        }
-      }
-    };
-
-  const makeOnRndDrag =
-    (previewType: "webcam" | "screen") =>
-    (/* e : DraggableEvent, d: DraggableData */) => {
-      const videoContainer = document.querySelector(".video-container");
-      const preview = document.getElementById(
-        previewType === "webcam" ? "webcamPreview" : "screenPreview"
-      );
-
-      if (videoContainer && preview) {
-        const containerRect = videoContainer.getBoundingClientRect();
-        const previewRect = preview.getBoundingClientRect();
-
-        const containerCenterX = containerRect.left + containerRect.width / 2;
-        const containerCenterY = containerRect.top + containerRect.height / 2;
-
-        const previewCenterX = previewRect.left + previewRect.width / 2;
-        const previewCenterY = previewRect.top + previewRect.height / 2;
-
-        const thresholdX = 15;
-        const thresholdY = 15;
-
-        if (Math.abs(previewCenterY - containerCenterY) <= thresholdY) {
-          setIsCenteredVertically(true);
-        } else {
-          setIsCenteredVertically(false);
-        }
-
-        if (Math.abs(previewCenterX - containerCenterX) <= thresholdX) {
-          setIsCenteredHorizontally(true);
-        } else {
-          setIsCenteredHorizontally(false);
-        }
-      }
-    };
+    startWebcamCapture({
+      deviceId: storedState.videoDevice ?? undefined,
+      microphoneId: storedState.audioDevice ?? undefined,
+      placement: screen === null ? "large" : "small",
+    });
+    if (storedState.screenStream === "true") {
+      startScreenCapture();
+    }
+  }, []);
 
   useLocalStoragePersist("selectedAudioDevice", audioDeviceId);
   useLocalStoragePersist("selectedVideoDevice", videoDeviceId);
-  useLocalStoragePersist("screenStream", screenStream ? "true" : undefined);
+  useLocalStoragePersist("screenStream", screen ? "true" : undefined);
 
-  const seconds = state.status === "recording" ? state.seconds : 0;
-
-  const recordingTime = useMemo(() => {
-    const minutes = Math.floor(seconds / 60);
-    const formattedSeconds =
-      seconds % 60 < 10 ? `0${seconds % 60}` : seconds % 60;
-    return `${minutes}:${formattedSeconds}`;
-  }, [seconds]);
-
-  useEffect(() => {
-    const storedAudioDevice = localStorage.getItem("selectedAudioDevice");
-    const storedVideoDevice = localStorage.getItem("selectedVideoDevice");
-    const storedScreenStream = localStorage.getItem("screenStream");
-
-    if (storedAudioDevice) setAudioDeviceId(storedAudioDevice);
-    if (storedVideoDevice) setVideoDeviceId(storedVideoDevice);
-
-    startVideoCapture(
-      storedVideoDevice ?? undefined,
-      storedAudioDevice ?? undefined,
-      screenStream === null ? "large" : "small"
-    );
-    if (storedScreenStream === "true") startScreenCapture();
-  }, [devices]);
+  const recordingTime = useRecordingTimeFormat(
+    state.status === "recording" ? state.seconds : 0
+  );
 
   // useEffect(() => {
   //   const audio = new Audio("/sample-9s.mp3");
@@ -482,6 +328,8 @@ export const Record = ({
     );
   }
 
+  // console.log({ screen, webcamStream });
+
   return (
     <div className="w-full h-full min-h-screen h mx-auto flex items-center justify-center">
       <div className="max-w-[1280px] wrapper p-8 space-y-6">
@@ -503,9 +351,10 @@ export const Record = ({
             </a>
           </div>
           <div className="col-span-4 flex items-center justify-center">
-            {isUserOnProPlan({
-              subscriptionStatus: user?.stripeSubscriptionStatus as string,
-            }) ? (
+            {false ? (
+              // isUserOnProPlan({
+              //   subscriptionStatus: user?.stripeSubscriptionStatus as string,
+              // }
               <p className="text-sm text-gray-600">No recording limit</p>
             ) : (
               <div>
@@ -528,7 +377,7 @@ export const Record = ({
               onClick={async () => {
                 if (recorder !== null) await recorder.stop();
                 else if (state.status === "idle") {
-                  if (!screenStream) {
+                  if (!screen) {
                     toast.error(
                       "No screen capture source selected, plesae select a screen source."
                     );
@@ -538,7 +387,15 @@ export const Record = ({
 
                   store.setState(() => ({ status: "starting" }));
 
-                  createRecorder(videoDevice, videoStream, audioDevice, ffmpeg)
+                  createRecorder(
+                    videoDevice,
+                    webcamStream,
+                    audioDevice,
+                    ffmpeg,
+                    videoContainerRef.current!,
+                    screenPreviewRef.current ?? undefined,
+                    webcamPreviewRef.current ?? undefined
+                  )
                     .then((recorder) => {
                       setRecorder(recorder);
                     })
@@ -565,13 +422,14 @@ export const Record = ({
         <div className="h-full flex-grow">
           <div className="w-full h-full top-0 left-0 h-full flex flex-col items-center justify-center">
             <div
+              ref={onVideoContainerMounted}
               style={{
                 aspectRatio: aspectRatio,
                 maxWidth: "100%",
               }}
               className="video-container bg-black relative w-full mx-auto border-2 border-gray-200 rounded-xl overflow-hidden shadow-xl"
             >
-              {!screenStream && (
+              {!screen && !webcamStream && (
                 <div
                   className="absolute top-1/2 left-1/2 -translate-y-1/2 -translate-x-1/2 w-full h-full flex items-center justify-center"
                   style={{ zIndex: 999 }}
@@ -587,52 +445,22 @@ export const Record = ({
                   </div>
                 </div>
               )}
-              {isCenteredHorizontally && (
+              {(screenRnd.isCenteredHorizontally ||
+                webcamRnd.isCenteredHorizontally) && (
                 <div
                   className="crosshair absolute top-0 left-1/2 transform -translate-x-1/2 w-0.5 h-full bg-red-500"
                   style={{ zIndex: 999 }}
                 />
               )}
-              {isCenteredVertically && (
+              {(screenRnd.isCenteredVertically ||
+                webcamRnd.isCenteredVertically) && (
                 <div
                   className="crosshair absolute top-1/2 left-0 transform -translate-y-1/2 w-full h-0.5 bg-red-500"
                   style={{ zIndex: 999 }}
                 />
               )}
-              {screenStream && (
-                <Rnd
-                  position={{
-                    x: screenStyleSettings.x,
-                    y: screenStyleSettings.y,
-                  }}
-                  size={{
-                    width: screenStyleSettings.width,
-                    height: screenStyleSettings.height,
-                  }}
-                  bounds="parent"
-                  className="absolute rnd group"
-                  resizeHandleStyles={defaultRndHandeStyles}
-                  resizeHandleClasses={{
-                    bottomRight: "resize-handle",
-                    bottomLeft: "resize-handle",
-                    bottom: "resize-handle",
-                    right: "resize-handle",
-                    left: "resize-handle",
-                    top: "resize-handle",
-                    topLeft: "resize-handle",
-                    topRight: "resize-handle",
-                  }}
-                  onDrag={makeOnRndDrag("screen")}
-                  onDragStop={makeOnRndDragStop("screen")}
-                  onResizeStop={(e, direction, ref, delta, position) => {
-                    setScreenStyleSettings({
-                      width: ref.offsetWidth,
-                      height: ref.offsetHeight,
-                      x: position.x,
-                      y: position.y,
-                    });
-                  }}
-                >
+              {screen && (
+                <Rnd {...screenRnd.props} className="absolute rnd group">
                   <div className="w-full h-full group-hover:outline outline-2 outline-primary rounded-xl">
                     <video
                       id="screenPreview"
@@ -644,42 +472,12 @@ export const Record = ({
                   </div>
                 </Rnd>
               )}
-              {videoStream && videoDevice !== undefined && (
+              {webcamStream && videoDevice !== undefined && (
                 <Rnd
+                  {...webcamRnd.props}
                   id="rndPreview"
-                  position={{
-                    x: webcamStyleSettings.x,
-                    y: webcamStyleSettings.y,
-                  }}
-                  size={{
-                    width: webcamStyleSettings.width,
-                    height: webcamStyleSettings.height,
-                  }}
-                  default={webcamStyleSettings}
-                  bounds="parent"
                   className="absolute webcam-rnd rnd group hover:outline outline-2 outline-primary"
                   lockAspectRatio={true}
-                  resizeHandleStyles={defaultRndHandeStyles}
-                  resizeHandleClasses={{
-                    bottomRight: "resize-handle",
-                    bottomLeft: "resize-handle",
-                    bottom: "resize-handle",
-                    right: "resize-handle",
-                    left: "resize-handle",
-                    top: "resize-handle",
-                    topLeft: "resize-handle",
-                    topRight: "resize-handle",
-                  }}
-                  onDrag={makeOnRndDrag("webcam")}
-                  onDragStop={makeOnRndDragStop("webcam")}
-                  onResizeStop={(e, direction, ref, delta, position) => {
-                    setWebcamStyleSettings({
-                      width: ref.offsetWidth,
-                      height: ref.offsetHeight,
-                      x: position.x,
-                      y: position.y,
-                    });
-                  }}
                 >
                   <div className="w-full h-full rounded-full overflow-hidden group-hover:outline outline-2 outline-primary">
                     <video
@@ -703,11 +501,12 @@ export const Record = ({
                   Screen / Window
                 </p>
                 <ActionButton
-                  handler={() => {
-                    screenStream ? stopScreenCapture() : startScreenCapture();
+                  handler={async () => {
+                    if (screen) stopScreenCapture();
+                    else startScreenCapture();
                   }}
                   icon={<Monitor className="w-5 h-5" />}
-                  label={screenStream ? "Hide display" : "Select display"}
+                  label={screen ? "Hide display" : "Select display"}
                   active={true}
                 />
               </div>
@@ -729,11 +528,11 @@ export const Record = ({
                       key={device.deviceId}
                       onSelect={() => {
                         setVideoDeviceId(device.deviceId);
-                        startVideoCapture(
-                          device.deviceId,
-                          audioDeviceId,
-                          "small"
-                        );
+                        startWebcamCapture({
+                          deviceId: device.deviceId,
+                          microphoneId: audioDeviceId,
+                          placement: "small",
+                        });
                       }}
                     >
                       {device.label}
@@ -767,11 +566,11 @@ export const Record = ({
                       key={device.deviceId}
                       onSelect={() => {
                         setAudioDeviceId(device.deviceId);
-                        startVideoCapture(
-                          videoDeviceId,
-                          device.deviceId,
-                          "small"
-                        );
+                        startWebcamCapture({
+                          deviceId: videoDeviceId,
+                          microphoneId: device.deviceId,
+                          placement: "small",
+                        });
                       }}
                     >
                       {device.label}
@@ -794,7 +593,115 @@ export const Record = ({
   );
 };
 
-const uploadSegment = async ({
+const resizeHandleClasses: HandleClasses = {
+  bottomRight: "resize-handle",
+  bottomLeft: "resize-handle",
+  bottom: "resize-handle",
+  right: "resize-handle",
+  left: "resize-handle",
+  top: "resize-handle",
+  topLeft: "resize-handle",
+  topRight: "resize-handle",
+};
+
+function usePreviewRnd(
+  previewRef: RefObject<HTMLVideoElement>,
+  containerRef: RefObject<HTMLDivElement>,
+  defaultStyles: {
+    x: number;
+    y: number;
+    width: number | string;
+    height: number | string;
+  }
+) {
+  const [styles, setStyle] = useState(defaultStyles);
+  const [isCenteredVertically, setIsCenteredVertically] = useState(false);
+  const [isCenteredHorizontally, setIsCenteredHorizontally] = useState(false);
+
+  const props = useMemo(
+    () =>
+      ({
+        position: {
+          x: styles.x,
+          y: styles.y,
+        },
+        size: {
+          width: styles.width,
+          height: styles.height,
+        },
+        bounds: "parent",
+        resizeHandleStyles: rndHandleStyles,
+        resizeHandleClasses,
+        default: styles,
+        onDrag: () => {
+          const videoContainer = containerRef.current;
+          const preview = previewRef.current;
+
+          if (!videoContainer || !preview) return;
+
+          const isCentered = elementIsCentered(preview, videoContainer);
+
+          setIsCenteredVertically(isCentered.vertically);
+          setIsCenteredHorizontally(isCentered.horizontally);
+        },
+        onDragStop: (_e, d) => {
+          const videoContainer = containerRef.current;
+          const preview = previewRef.current;
+
+          if (!videoContainer || !preview) return;
+
+          const isCentered = elementIsCentered(preview, videoContainer);
+
+          const videoContainerWidth = videoContainer.clientWidth;
+          const videoContainerHeight = videoContainer.clientHeight;
+
+          setIsCenteredHorizontally(isCentered.horizontally);
+          setIsCenteredVertically(isCentered.vertically);
+
+          setStyle((prevSettings) => ({
+            ...prevSettings,
+            x: isCentered.horizontally
+              ? (videoContainerWidth - (prevSettings.width as number)) / 2
+              : d.x,
+            y: isCentered.vertically
+              ? (videoContainerHeight - (prevSettings.height as number)) / 2
+              : d.y,
+          }));
+        },
+        onResizeStop: (_e, _direction, ref, _delta, position) => {
+          setStyle({
+            width: ref.offsetWidth,
+            height: ref.offsetHeight,
+            x: position.x,
+            y: position.y,
+          });
+        },
+      } satisfies ComponentProps<typeof Rnd>),
+    [styles, previewRef.current, containerRef.current]
+  );
+
+  return { props, setStyle, isCenteredVertically, isCenteredHorizontally };
+}
+
+function elementIsCentered(element: HTMLElement, container: HTMLElement) {
+  const containerRect = container.getBoundingClientRect();
+  const previewRect = element.getBoundingClientRect();
+
+  const containerCenterX = containerRect.left + containerRect.width / 2;
+  const containerCenterY = containerRect.top + containerRect.height / 2;
+
+  const previewCenterX = previewRect.left + previewRect.width / 2;
+  const previewCenterY = previewRect.top + previewRect.height / 2;
+
+  return {
+    vertically:
+      Math.abs(previewCenterY - containerCenterY) <= CENTERED_THRESHOLD,
+    horizontally:
+      Math.abs(previewCenterX - containerCenterX) <= CENTERED_THRESHOLD,
+  };
+}
+
+async function uploadSegment({
   file,
   filename,
   videoId,
@@ -804,7 +711,7 @@ const uploadSegment = async ({
   filename: string;
   videoId: string;
   duration?: string;
-}) => {
+}) {
   const formData = new FormData();
   formData.append("filename", filename);
   formData.append("videoId", videoId);
@@ -824,7 +731,7 @@ const uploadSegment = async ({
     method: "POST",
     body: formData,
   });
-};
+}
 
 async function muxSegment({
   data,
@@ -1053,7 +960,10 @@ async function createRecorder(
   videoDevice: MediaDeviceInfo | undefined,
   videoStream: MediaStream | null,
   audioDevice: MediaDeviceInfo | undefined,
-  ffmpeg: FFmpeg
+  ffmpeg: FFmpeg,
+  videoContainer: HTMLElement,
+  screenPreview?: HTMLVideoElement,
+  webcamPreview?: HTMLVideoElement
 ) {
   const res = await fetch(
     `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create`,
@@ -1099,16 +1009,6 @@ async function createRecorder(
     newWebcamHeight: number,
     offsetX: number,
     offsetY: number;
-
-  const videoContainer = document.querySelector(
-    ".video-container"
-  ) as HTMLElement;
-  const screenPreview = document.getElementById(
-    "screenPreview"
-  ) as HTMLVideoElement;
-  const webcamPreview = document.getElementById(
-    "webcamPreview"
-  ) as HTMLVideoElement;
 
   // Set canvas dimensions to video container dimensions
   canvas.width = videoContainer.clientWidth;
@@ -1374,6 +1274,82 @@ async function createRecorder(
   };
 }
 
+async function getScreenStream() {
+  try {
+    const displayMediaOptions = {
+      audio: false,
+      surfaceSwitching: "exclude",
+      selfBrowserSurface: "exclude",
+      systemAudio: "exclude",
+    };
+
+    const stream = await navigator.mediaDevices.getDisplayMedia(
+      displayMediaOptions
+    );
+
+    const videoElement = document.createElement("video");
+    videoElement.srcObject = stream;
+
+    return await new Promise<{
+      videoElement: HTMLVideoElement;
+      stream: MediaStream;
+    }>((resolve) => {
+      videoElement.onloadedmetadata = () => {
+        resolve({ videoElement, stream });
+      };
+    });
+  } catch (error) {
+    console.error("Error capturing screen:", error);
+  }
+}
+
+async function getWebcamStream(args: {
+  deviceId?: string;
+  microphoneId?: string;
+}) {
+  try {
+    const constraints: MediaStreamConstraints = {
+      video: args.deviceId
+        ? {
+            deviceId: args.deviceId,
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          }
+        : { width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: args.microphoneId ? { deviceId: args.microphoneId } : false,
+    };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+    return stream;
+  } catch (error) {
+    console.error("Error getting webcam stream:", error);
+  }
+}
+
+function getWebcamDefaultStyles(
+  { clientWidth, clientHeight }: HTMLDivElement,
+  placement: "small" | "large"
+) {
+  if (placement === "large") {
+    return {
+      x: (clientWidth - clientWidth / 2) / 2,
+      y: (clientHeight - clientWidth / 2) / 2,
+      width: clientWidth / 2,
+      height: clientWidth / 2,
+    };
+  }
+
+  const webcamWidth = 180;
+
+  return {
+    x: 16,
+    y: clientHeight - 16 - webcamWidth,
+    width: webcamWidth,
+    height: webcamWidth,
+  };
+}
+
 type Recorder = Awaited<ReturnType<typeof createRecorder>>;
 type RecorderStore =
   | { status: "recording"; seconds: number }
@@ -1381,7 +1357,7 @@ type RecorderStore =
 
 const STOPPING_MESSAGES = ["Processing video", "Almost done", "Finishing up"];
 
-const defaultRndHandeStyles = {
+const rndHandleStyles = {
   topLeft: {
     width: "16px",
     height: "16px",
@@ -1420,34 +1396,18 @@ const defaultRndHandeStyles = {
   },
 };
 
+function useRecordingTimeFormat(seconds: number) {
+  return useMemo(() => {
+    const minutes = Math.floor(seconds / 60);
+    const formattedSeconds =
+      seconds % 60 < 10 ? `0${seconds % 60}` : seconds % 60;
+    return `${minutes}:${formattedSeconds}`;
+  }, [seconds]);
+}
+
 function useLocalStoragePersist(key: string, value?: string) {
   useEffect(() => {
     if (value) localStorage.setItem(key, value);
     else localStorage.removeItem(key);
   }, [key, value]);
-}
-
-function interceptSetter<S extends State<any>>(
-  [get, _set]: S,
-  _cb: (
-    v: S extends [infer T, Dispatch<SetStateAction<any>>] ? T : never
-  ) => void
-) {
-  const cbRef = useRef(_cb);
-  cbRef.current = _cb;
-
-  const { current: set } = useRef<typeof _set>((action) => {
-    _set((prev: any) => {
-      if (typeof action === "function") {
-        const ret = action(prev);
-        cbRef.current(ret);
-        return ret;
-      }
-
-      cbRef.current(action);
-      return action;
-    });
-  });
-
-  return [get, set] as S;
 }
