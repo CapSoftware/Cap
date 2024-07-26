@@ -5,11 +5,11 @@ import { getCurrentUser } from "@cap/database/auth/session";
 export const revalidate = 0;
 
 export default async function RecordPage() {
-  // const user = await getCurrentUser();
+  const user = await getCurrentUser();
 
-  // if (!user) {
-  //   redirect("/login");
-  // }
+  if (!user) {
+    redirect("/login");
+  }
 
-  return <Record /*user={user}*/ />;
+  return <Record user={user} />;
 }
