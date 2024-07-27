@@ -56,64 +56,24 @@ export const Recorder = () => {
   }, [proCheckPromise]);
 
   const createDeviceMenuOptions = (kind: DeviceKind) => [
-    { value: "none", label: "None" },
-    { value: "none", label: "Something that's a bit too long" },
-    ...devices.filter((device) => device.kind === "videoinput").map(({ label }) => ({ value: label, label }))
+    { value: "_", label: kind === "videoinput" ? "Select Camera" : "Select Microphone", disabled: true },
+    { value: "none", label: `No ${kind === "videoinput" ? "Video" : "Audio"}` },
+    ...devices.filter((device) => device.kind === kind).map(({ label }) => ({ value: label, label }))
   ]
 
-  const handleContextClick = async (option: "video" | "audio") => {
-    const { showMenu } = await import("tauri-plugin-context-menu");
-    const deviceKind = option === "video" ? "videoinput" : "audioinput";
-    const isSelected = (device: Device | null) => {
-      if (device === null) {
-        return deviceKind === "videoinput"
-          ? selectedVideoDevice === null
-          : selectedAudioDevice === null;
-      }
+  const handleSelectInputDevice = async (kind: DeviceKind, label: string) => {
+    console.log(`Set ${kind} to ${label}`)
+    let device: Device | null = null;
+    if (label !== "none") {
+      const matched = devices.filter((device) => device.kind === kind && device.label === label);
+      if (matched.length !== 1) return;
+      device = matched[0];
+    }
+    console.log(`Device found with label ${device?.label} (${device?.index})`)
 
-      return deviceKind === "videoinput"
-        ? device.index === selectedVideoDevice?.index
-        : device.index === selectedAudioDevice?.index;
-    };
-    const select = async (device: Device | null) => {
-      // if (isSelected(device)) {
-      //   return
-      // }
-      emit("change-device", { type: deviceKind, device: device }).catch(
-        (error) => {
-          console.log("Failed to emit change-device event:", error);
-        }
-      );
-    };
-
-    const devicesOfKind = devices.filter(
-      (device) => device.kind === deviceKind
-    );
-
-    const menuItems = [
-      {
-        label: "None",
-        checked: isSelected(null),
-        event: async () => select(null),
-      },
-      ...devicesOfKind.map((device) => ({
-        label: device.label,
-        checked: isSelected(device),
-        event: async () => select(device),
-      })),
-    ];
-
-    await showMenu({
-      items: [...menuItems],
-      ...(devicesOfKind.length === 0 && {
-        items: [
-          {
-            label: "Nothing found.",
-          },
-        ],
-      }),
-    });
-  };
+    emit("change-device", { type: kind, device: device })
+      .catch((error) => console.log("Failed to emit change-device event:", error));
+  }
 
   const prepareVideoData = async () => {
     const session = JSON.parse(localStorage.getItem("session"));
@@ -441,32 +401,23 @@ export const Recorder = () => {
                 <label className="text-sm font-medium">Webcam / Video</label>
                 <div className="space-y-2">
                   <ActionSelect
-                    width="full"
                     options={createDeviceMenuOptions("videoinput")}
-                    handler={() => handleContextClick("video")}
-                    icon={<Video className="w-5 h-5" />}
-                    label={
-                      devices.length === 0
-                        ? "Video"
-                        : selectedVideoDevice?.label || "None"
-                    }
-                    active={selectedVideoDevice !== null}
-                    recordingOption={true}
-                    optionName="Video"
+                    showStatus={true}
+                    status={selectedVideoDevice === null ? "off" : "on"}
+                    iconEnabled={<Video className="w-5 h-5" />}
+                    selectedValue={selectedVideoDevice?.label}
+                    onSelect={(value) => handleSelectInputDevice("videoinput", value as string)}
                   />
                   <ActionSelect
-                    width="full"
                     options={createDeviceMenuOptions("audioinput")}
-                    handler={() => handleContextClick("audio")}
-                    icon={<Microphone className="w-5 h-5" />}
-                    label={
-                      devices.length === 0
-                        ? "Mic"
-                        : selectedAudioDevice?.label || "None"
-                    }
-                    active={selectedAudioDevice !== null}
-                    recordingOption={true}
-                    optionName="Audio"
+                    onStatusClick={() => {
+                      console.log(`Clicked!`);
+                    }}
+                    showStatus={true}
+                    status={selectedAudioDevice === null ? "off" : "on"}
+                    iconEnabled={<Microphone className="w-5 h-5" />}
+                    selectedValue={selectedAudioDevice?.label}
+                    onSelect={(value) => handleSelectInputDevice("audioinput", value as string)}
                   />
                 </div>
               </div>
