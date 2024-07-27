@@ -16,20 +16,20 @@ const headless = true;
 
 const webServer = [
   {
-    command: 'npm run dev --prefix apps/web',
+    command: 'pnpm run dev',
     port: 3000,
     timeout: 60000,
     reuseExistingServer: true,
   },
   {
-    command: 'npm run dev --prefix apps/embed',
-    port: 3003,
+    command: 'pnpm run dev',
+    port: 3002,
     timeout: 60000,
     reuseExistingServer: true,
   },
   {
-    command: 'npm run dev --prefix apps/tasks',
-    port: 3002,
+    command: 'pnpm run dev',
+    port: 3003,
     timeout: 60000,
     reuseExistingServer: true,
   },
@@ -73,8 +73,8 @@ const config: PlaywrightTestConfig = {
       use: DEFAULT_CHROMIUM,
     },
     {
-      name: 'embed',
-      testDir: './apps/embed/tests',
+      name: 'desktop',
+      testDir: './apps/desktop/tests',
       testMatch: /.*\.e2e\.tsx?/,
       use: {
         ...devices['Desktop Chrome'],
