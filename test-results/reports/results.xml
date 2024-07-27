@@ -1,0 +1,20 @@
+<testsuites id="" name="" tests="5" failures="0" skipped="0" errors="0" time="15.579580000000002">
+<testsuite name="apps\web\tests\web.test1.e2e.ts" timestamp="2024-07-27T11:25:26.165Z" hostname="web" tests="1" failures="0" skipped="0" time="12.084" errors="0">
+<testcase name="test1" classname="apps\web\tests\web.test1.e2e.ts" time="12.084">
+</testcase>
+</testsuite>
+<testsuite name="apps\desktop\tests\desktop.test1.e2e.ts" timestamp="2024-07-27T11:25:26.165Z" hostname="desktop" tests="1" failures="0" skipped="0" time="9.583" errors="0">
+<testcase name="test" classname="apps\desktop\tests\desktop.test1.e2e.ts" time="9.583">
+</testcase>
+</testsuite>
+<testsuite name="apps\tasks\tests\api.test.e2e.ts" timestamp="2024-07-27T11:25:26.165Z" hostname="tasks" tests="1" failures="0" skipped="0" time="0.494" errors="0">
+<testcase name="GET /api/v1 › responds with a json message" classname="apps\tasks\tests\api.test.e2e.ts" time="0.494">
+</testcase>
+</testsuite>
+<testsuite name="apps\tasks\tests\app.test.e2e.ts" timestamp="2024-07-27T11:25:26.165Z" hostname="tasks" tests="2" failures="0" skipped="0" time="0.945" errors="0">
+<testcase name="API Endpoints › responds with a not found message for unknown route" classname="apps\tasks\tests\app.test.e2e.ts" time="0.461">
+</testcase>
+<testcase name="API Endpoints › responds with a json message at root" classname="apps\tasks\tests\app.test.e2e.ts" time="0.484">
+</testcase>
+</testsuite>
+</testsuites>
