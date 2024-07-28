@@ -1,7 +1,7 @@
 "use client";
 
-import React, { use, useEffect, useRef, useState } from "react";
-import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
+import React, { useEffect, useRef, useState } from "react";
+import { Device, useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { CloseX } from "@/components/icons/CloseX";
 import { Flip } from "@/components/icons/Flip";
 import { emit } from "@tauri-apps/api/event";
@@ -12,7 +12,7 @@ import { Squircle } from "../icons/Squircle";
 export const Camera = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { selectedVideoDevice } = useMediaDevices();
+  const { selectedVideoDevice, devices } = useMediaDevices();
   const [isLoading, setIsLoading] = useState(true);
   const tauriWindowImport = import("@tauri-apps/api/window");
   const [cameraMirrored, setCameraMirrored] = useState(
@@ -138,9 +138,52 @@ export const Camera = () => {
     else return "4rem";
   };
 
+  const handleContextMenu = async () => {
+    const { showMenu } = await import("tauri-plugin-context-menu");
+    const videoDevices = devices.filter((device) => device.kind === "videoinput");
+
+    const select = async (device: Device | null) => {
+      emit("change-device", { type: "videoinput", device: device })
+        .catch((error) => console.log("Failed to emit change-device event:", error));
+    };
+    
+    const menuItems = [
+      {
+        label: "Select Video:",
+        disabled: true,
+      },
+      ...videoDevices.map((device) => ({
+        label: device.label,
+        checked: selectedVideoDevice.index === device.index,
+        event: async () => select(device),
+      })),
+      {
+        is_separator: true,
+      },
+      {
+        label: "Close Overlay",
+        checked: selectedVideoDevice === null,
+        event: async () => select(null),
+      },
+    ];
+
+    await showMenu({
+      items: [...menuItems],
+      ...(videoDevices.length === 0 && {
+        items: [
+          { label: "Nothing found." },
+        ],
+      }),
+    });
+  }
+
   return (
     <div
       data-tauri-drag-region
+      onContextMenu={(e) => {
+        e.preventDefault();
+        handleContextMenu();
+      }}
       className="cursor-move group w-full h-full bg-gray-200 m-0 p-0 relative overflow-hidden flex items-center justify-center outline-none focus:outline-none border-2 border-sm border-gray-300"
       style={{ borderRadius: getOverlayBorderRadius() }}
     >
