@@ -54,10 +54,6 @@ export function resetCameraPermissions() {
     return invoke()<null>("reset_camera_permissions")
 }
 
-export function closeWebview(label: string) {
-    return invoke()<boolean>("close_webview", { label })
-}
-
 export function setWebviewShadow(label: string, enable: boolean) {
     return invoke()<boolean>("set_webview_shadow", { label,enable })
 }
