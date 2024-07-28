@@ -66,3 +66,26 @@ export const savePermissions = async (permission: string, value: boolean) => {
     console.error("Failed to save permissions:", error);
   }
 };
+
+export const createDeeplinkCommands = (handlers: Record<string, (params: URLSearchParams) => void>) => {
+  return (request: string) => {
+    // Likely running in Development, ignore
+    if (request === "") {
+      return;
+    }
+
+    try {
+      const url = new URL(request);
+      const commandLiteral = url.hostname;
+      const params = url.searchParams;
+      
+      if (commandLiteral in handlers) {
+        handlers[commandLiteral](params);
+      } else {
+        throw Error(`Invalid command literal ${commandLiteral}`);
+      }
+    } catch (error: unknown) {
+      console.error(`Deeplink process error: ${request}`, error);
+    }
+  };
+}
