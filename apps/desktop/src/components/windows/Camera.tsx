@@ -78,18 +78,14 @@ export const Camera = () => {
     }
   };
 
-  const setWindowShape = async (shape: "circle" | "square") => {
-
-  }
-
   const setWindowSize = async (type: "sm" | "lg") => {
     if (typeof window === "undefined") return;
 
     tauriWindowImport.then(
       ({ currentMonitor, appWindow, LogicalSize, LogicalPosition }) => {
         currentMonitor().then((monitor) => {
-          const windowWidth = type === "sm" ? 230 : 400;
-          const windowHeight = type === "sm" ? 230 : 400;
+          const windowWidth = type === "sm" ? 240 : 410;
+          const windowHeight = type === "sm" ? 240 : 410;
 
           if (monitor && monitor.size) {
             const scalingFactor = monitor.scaleFactor;
@@ -139,13 +135,13 @@ export const Camera = () => {
   const getOverlayBorderRadius= () => {
     if (overlayShape === "round") return "9999px";
     if (overlaySize === "sm") return "3rem";
-    else return "2.5rem";
+    else return "4rem";
   };
 
   return (
     <div
       data-tauri-drag-region
-      className="cursor-move group w-full h-full bg-gray-200 m-0 p-0 relative overflow-hidden flex items-center justify-center border-none outline-none focus:outline-none"
+      className="cursor-move group w-full h-full bg-gray-200 m-0 p-0 relative overflow-hidden flex items-center justify-center outline-none focus:outline-none border-2 border-sm border-gray-300"
       style={{ borderRadius: getOverlayBorderRadius() }}
     >
       {isLoading && (
@@ -177,7 +173,7 @@ export const Camera = () => {
           </svg>
         </div>
       )}
-      <div className="opacity-0 group-hover:opacity-100 absolute top-5 left-1/2 transform -translate-x-1/2 bg-gray-800 rounded-xl z-20 grid grid-cols-4 overflow-hidden transition-opacity">
+      <div className="opacity-0 group-hover:opacity-100 absolute top-5 left-1/2 transform -translate-x-1/2 bg-gray-800 bg-opacity-75 backdrop-blur-sm rounded-xl z-20 grid grid-cols-4 overflow-hidden transition-opacity">
         <div
           onClick={() => {
             closeWindow();
