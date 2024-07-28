@@ -1,8 +1,8 @@
 use regex::Regex;
 use reqwest;
 use serde_json::Value as JsonValue;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::{ Path, PathBuf };
+use std::process::{ Command, Output };
 use std::str;
 
 use crate::recording::RecordingOptions;
@@ -29,13 +29,14 @@ impl std::fmt::Display for FileType {
 pub async fn upload_file(
     options: Option<RecordingOptions>,
     file_path: PathBuf,
-    file_type: FileType,
+    file_type: FileType
 ) -> Result<String, String> {
     if let Some(ref options) = options {
         tracing::info!("Uploading video...");
 
-        let duration = get_video_duration(&file_path)
-            .map_err(|e| format!("Failed to get video duration: {}", e))?;
+        let duration = get_video_duration(&file_path).map_err(|e|
+            format!("Failed to get video duration: {}", e)
+        )?;
         let duration_str = duration.to_string();
 
         let file_name = Path::new(&file_path)
@@ -44,18 +45,16 @@ pub async fn upload_file(
             .ok_or("Invalid file path")?
             .to_string();
 
-        let file_key = format!(
-            "{}/{}/{file_type}/{file_name}",
-            options.user_id, options.video_id,
-        );
+        let file_key = format!("{}/{}/{file_type}/{file_name}", options.user_id, options.video_id);
 
         let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
         let server_url = format!("{}/api/upload/signed", server_url_base);
 
         let body = match file_type {
             FileType::Video => {
-                let (codec_name, width, height, frame_rate, bit_rate) = log_video_info(&file_path)
-                    .map_err(|e| format!("Failed to log video info: {}", e))?;
+                let (codec_name, width, height, frame_rate, bit_rate) = log_video_info(
+                    &file_path
+                ).map_err(|e| format!("Failed to log video info: {}", e))?;
 
                 serde_json::json!({
                     "userId": options.user_id,
@@ -84,17 +83,16 @@ pub async fn upload_file(
         let server_response = client
             .post(server_url)
             .json(&body)
-            .send()
-            .await
+            .send().await
             .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?
-            .text()
-            .await
+            .text().await
             .map_err(|e| format!("Failed to read response from Next.js handler: {}", e))?;
 
-        tracing::debug!("Server response: {}", server_response);
+        tracing::info!("Server response: {}", server_response);
 
         // Deserialize the server response
-        let presigned_post_data: JsonValue = serde_json::from_str(&server_response)
+        let presigned_post_data: JsonValue = serde_json
+            ::from_str(&server_response)
             .map_err(|e| format!("Failed to deserialize server response: {}", e))?;
 
         // Construct the multipart form for the file upload
@@ -120,10 +118,11 @@ pub async fn upload_file(
             _ => "video/mp2t",
         };
 
-        let file_bytes = tokio::fs::read(&file_path)
-            .await
+        let file_bytes = tokio::fs
+            ::read(&file_path).await
             .map_err(|e| format!("Failed to read file: {}", e))?;
-        let file_part = reqwest::multipart::Part::bytes(file_bytes)
+        let file_part = reqwest::multipart::Part
+            ::bytes(file_bytes)
             .file_name(file_name.clone())
             .mime_str(mime_type)
             .map_err(|e| format!("Error setting MIME type: {}", e))?;
@@ -145,18 +144,12 @@ pub async fn upload_file(
             Ok(response) => {
                 let status = response.status();
                 let error_body = response
-                    .text()
-                    .await
+                    .text().await
                     .unwrap_or_else(|_| "<no response body>".to_string());
-                tracing::error!(
-                    "Failed to upload file. Status: {}. Body: {}",
-                    status,
-                    error_body
+                tracing::error!("Failed to upload file. Status: {}. Body: {}", status, error_body);
+                return Err(
+                    format!("Failed to upload file. Status: {}. Body: {}", status, error_body)
                 );
-                return Err(format!(
-                    "Failed to upload file. Status: {}. Body: {}",
-                    status, error_body
-                ));
             }
             Err(e) => {
                 return Err(format!("Failed to send upload file request: {}", e));
@@ -180,10 +173,7 @@ pub async fn upload_file(
 pub fn get_video_duration(file_path: &Path) -> Result<f64, std::io::Error> {
     let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
 
-    let output = Command::new(ffmpeg_binary_path_str)
-        .arg("-i")
-        .arg(file_path)
-        .output()?;
+    let output = Command::new(ffmpeg_binary_path_str).arg("-i").arg(file_path).output()?;
 
     let output_str = str::from_utf8(&output.stderr).unwrap();
     let duration_regex = Regex::new(r"Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})").unwrap();
@@ -199,7 +189,12 @@ pub fn get_video_duration(file_path: &Path) -> Result<f64, std::io::Error> {
 }
 
 fn log_video_info(file_path: &Path) -> Result<(String, String, String, String, String), String> {
-    let output: Output = Command::new("ffprobe")
+    let ffprobe_binary_path_str = ffmpeg_path_as_str()
+        .unwrap()
+        .replace("ffmpeg", "ffprobe")
+        .to_owned();
+
+    let output: Output = Command::new(ffprobe_binary_path_str)
         .arg("-v")
         .arg("error")
         .arg("-show_entries")
@@ -211,10 +206,12 @@ fn log_video_info(file_path: &Path) -> Result<(String, String, String, String, S
         .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
 
     if !output.status.success() {
-        return Err(format!(
-            "ffprobe exited with non-zero status: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        return Err(
+            format!(
+                "ffprobe exited with non-zero status: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        );
     }
 
     let info = String::from_utf8_lossy(&output.stdout);
