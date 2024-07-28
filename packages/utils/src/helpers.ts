@@ -16,7 +16,7 @@ export const uuidFormat = (uuid: string) => {
 export const CAP_LOGO_URL =
   "https://raw.githubusercontent.com/CapSoftware/cap/main/app-icon.png";
 
-export const saveLatestVideoId = async (videoId: string) => {
+export const saveLatestVideoId = (videoId: string) => {
   try {
     if (typeof navigator !== "undefined" && typeof window !== "undefined") {
       window.localStorage.setItem("latestVideoId", videoId);
