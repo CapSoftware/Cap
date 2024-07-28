@@ -1,9 +1,9 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.2.7",
+  "version": "0.2.8",
   "scripts": {
-    "dev": "RUST_BACKTRACE=1 tauri dev",
+    "dev": "tauri dev",
     "build": "tsc && next build",
     "tauri": "tauri"
   },
