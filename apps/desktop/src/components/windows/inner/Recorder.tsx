@@ -52,38 +52,29 @@ export const Recorder = () => {
   const proCheckPromise = isUserPro();
   const [proCheck, setProCheck] = useState<boolean>(false);
   const [limitReached, setLimitReached] = useState(false);
+  const [lastSelectedAudioDevice, setLastSelectedAudioDevice] = useState<Device | null>(null);
+  const [lastSelectedVideoDevice, setLastSelectedVideoDevice] = useState<Device | null>(null);
 
   useEffect(() => {
     proCheckPromise.then((result) => setProCheck(Boolean(result)));
   }, [proCheckPromise]);
 
   const createDeviceMenuOptions = (kind: DeviceKind) => [
-    { value: "_", label: kind === "videoinput" ? "Select Camera" : "Select Microphone", disabled: true },
+    { value: "_", label: `Select ${kind === "videoinput" ? "Video" : "Microphone"}`, disabled: true },
     { value: "none", label: `No ${kind === "videoinput" ? "Video" : "Audio"}` },
     ...devices.filter((device) => device.kind === kind).map(({ label }) => ({ value: label, label }))
   ]
 
   const handleSelectInputDevice = async (kind: DeviceKind, label: string) => {
-    console.log(`Set ${kind} to ${label}`)
-    
     let device: Device | null = null;
-    if (
-      kind === "audioinput" && selectedAudioDevice?.label === label ||
-      kind === "videoinput" && selectedVideoDevice?.label === label
-    ) {
-      return;
-    }
-
-    if (label !== "none") {
-      const matched = devices.filter((device) => device.kind === kind && device.label === label);
-      if (matched.length !== 1) return;
-      device = matched[0];
-    }
-    console.log(`Device found with label ${device?.label} (${device?.index})`)
-
-    emit("change-device", { type: kind, device: device })
-      .catch((error) => console.log("Failed to emit change-device event:", error));
+    if (label !== "none")
+      device = devices.find((device) => device.kind === kind && device.label === label) || null;
+    selectDevice(kind, device);
   }
+
+  const selectDevice = (kind: DeviceKind, device: Device | null) => emit(
+    "change-device", { type: kind, device: device }
+  ).catch((error) => console.log("Failed to emit change-device event:", error));
 
   const prepareVideoData = async () => {
     const session = JSON.parse(localStorage.getItem("session"));
@@ -412,6 +403,10 @@ export const Recorder = () => {
                 <div className="space-y-2">
                   <ActionSelect
                     options={createDeviceMenuOptions("videoinput")}
+                    onStatusClick={(status) => {
+                      setLastSelectedVideoDevice(selectedVideoDevice);
+                      selectDevice("videoinput", status === "on" ? null : lastSelectedVideoDevice);
+                    }}
                     showStatus={true}
                     status={selectedVideoDevice === null ? "off" : "on"}
                     iconEnabled={<Video className="w-5 h-5" />}
@@ -421,8 +416,9 @@ export const Recorder = () => {
                   />
                   <ActionSelect
                     options={createDeviceMenuOptions("audioinput")}
-                    onStatusClick={() => {
-                      console.log(`Clicked!`);
+                    onStatusClick={(status) => {
+                      setLastSelectedAudioDevice(selectedAudioDevice);
+                      selectDevice("audioinput", status === "on" ? null : lastSelectedAudioDevice);
                     }}
                     showStatus={true}
                     status={selectedAudioDevice === null ? "off" : "on"}

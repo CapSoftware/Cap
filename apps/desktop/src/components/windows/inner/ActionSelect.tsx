@@ -23,7 +23,7 @@ export const ActionSelect = ({
   options: { value: string | number; label: string; disabled?: boolean }[];
   selectedValue?: string | number;
   onSelect: (value: string | number) => void;
-  onStatusClick?: () => void;
+  onStatusClick?: (currentStatus: "on" | "off") => void;
 }) => (
   <div className={`flex-grow ${width === "full" ? "w-full" : "w-auto"}`}>
     <div
@@ -48,10 +48,10 @@ export const ActionSelect = ({
       </div>
       {showStatus && (
         <div
-          className={onStatusClick ? "" : ""}
+          // className={onStatusClick ? "hover:cursor-auto" : ""}
           onClick={(e) => {
             e.stopPropagation();
-            onStatusClick?.();
+            onStatusClick?.(status);
           }}
         >
           <span
