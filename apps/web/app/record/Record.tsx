@@ -83,13 +83,11 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
       const result = await getScreenStream();
       if (!result) return null;
 
-      const { videoElement, stream } = result;
-
-      for (const track of stream.getTracks()) {
+      for (const track of result.stream.getTracks()) {
         track.onended = () => recorder.stop();
       }
 
-      return { videoElement, stream };
+      return result;
     },
   });
 
@@ -109,13 +107,10 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
           track.stop();
         }
 
-      console.log({ deviceId, skip });
       if (skip) return null;
 
       const stream = await getWebcamStream({ deviceId, microphoneId });
       if (!stream) return null;
-
-      console.log(stream);
 
       return stream;
     },
