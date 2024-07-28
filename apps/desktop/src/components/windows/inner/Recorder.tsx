@@ -23,6 +23,8 @@ import * as commands from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { ActionSelect } from "./ActionSelect";
+import { VideoOff } from "@/components/icons/VideoOff";
+import { MicrophoneOff } from "@/components/icons/MicrophoneOff";
 
 declare global {
   interface Window {
@@ -63,7 +65,15 @@ export const Recorder = () => {
 
   const handleSelectInputDevice = async (kind: DeviceKind, label: string) => {
     console.log(`Set ${kind} to ${label}`)
+    
     let device: Device | null = null;
+    if (
+      kind === "audioinput" && selectedAudioDevice?.label === label ||
+      kind === "videoinput" && selectedVideoDevice?.label === label
+    ) {
+      return;
+    }
+
     if (label !== "none") {
       const matched = devices.filter((device) => device.kind === kind && device.label === label);
       if (matched.length !== 1) return;
@@ -405,6 +415,7 @@ export const Recorder = () => {
                     showStatus={true}
                     status={selectedVideoDevice === null ? "off" : "on"}
                     iconEnabled={<Video className="w-5 h-5" />}
+                    iconDisabled={<VideoOff className="w-5 h-5" />}
                     selectedValue={selectedVideoDevice?.label}
                     onSelect={(value) => handleSelectInputDevice("videoinput", value as string)}
                   />
@@ -416,6 +427,7 @@ export const Recorder = () => {
                     showStatus={true}
                     status={selectedAudioDevice === null ? "off" : "on"}
                     iconEnabled={<Microphone className="w-5 h-5" />}
+                    iconDisabled={<MicrophoneOff className="w-5 h-5" />}
                     selectedValue={selectedAudioDevice?.label}
                     onSelect={(value) => handleSelectInputDevice("audioinput", value as string)}
                   />
