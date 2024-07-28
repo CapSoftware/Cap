@@ -1,6 +1,73 @@
+use capture::{Capturer, Display};
 use ffmpeg_sidecar::paths::sidecar_dir;
+use std::io::ErrorKind::WouldBlock;
+use std::panic;
 use std::path::Path;
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
+
+#[tauri::command]
+#[specta::specta]
+pub fn has_screen_capture_access() -> bool {
+    let display = match Display::primary() {
+        Ok(display) => display,
+        Err(_) => return false,
+    };
+
+    let width = display.width();
+    let height = display.height();
+    let one_second = Duration::new(1, 0);
+    let one_frame = one_second / 60;
+
+    tracing::debug!("width: {}", width);
+    tracing::debug!("height: {}", height);
+
+    let result = panic::catch_unwind(|| {
+        let mut capturer = match Capturer::new(display, width, height) {
+            Ok(capturer) => {
+                tracing::debug!("Capturer created");
+                capturer
+            }
+            Err(e) => {
+                tracing::error!("Capturer not created: {}", e);
+                return false;
+            }
+        };
+
+        let start = Instant::now();
+
+        loop {
+            if start.elapsed() > Duration::from_secs(2) {
+                tracing::debug!("Loop exited");
+                return false;
+            }
+
+            match capturer.frame() {
+                Ok(_frame) => {
+                    tracing::debug!("Frame captured");
+                    return true;
+                }
+                Err(error) => {
+                    if error.kind() == WouldBlock {
+                        thread::sleep(one_frame);
+                        continue;
+                    } else {
+                        tracing::error!("Error: {}", error);
+                        return false;
+                    }
+                }
+            };
+        }
+    });
+
+    tracing::debug!("Result: {:?}", result);
+
+    match result {
+        Ok(val) => val,
+        Err(_) => false,
+    }
+}
 
 pub fn run_command(command: &str, args: Vec<&str>) -> Result<(String, String), String> {
     let output = Command::new(command)
@@ -40,8 +107,4 @@ pub fn create_named_pipe(path: &Path) -> Result<(), nix::Error> {
     use nix::unistd;
     unistd::mkfifo(path, stat::Mode::S_IRWXU)?;
     Ok(())
-}
-
-pub fn log_debug_error(error: impl std::fmt::Display) {
-    tracing::debug!("Error: {error}")
 }
