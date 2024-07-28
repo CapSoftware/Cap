@@ -94,7 +94,6 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
             (device) => device.kind === "videoinput" && device.label === storedVideoDevice
           );
         }
-        console.log(`Set stored ${storedVideoDevice} for audio`);
         setSelectedVideoDevice(videoDevice);
       }
 
@@ -106,23 +105,8 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
             (device) => device.kind === "audioinput" && device.label === storedAudioDevice
           );
         }
-        console.log(`Set stored ${storedAudioDevice} for video`);
-        
         setSelectedAudioDevice(audioDevice);
       }
-
-      // if (!selectedVideoDevice) {
-      //   const videoInput = formattedDevices.find(
-      //     (device) => device.kind === "videoinput"
-      //   );
-      //   setSelectedVideoDevice(videoInput || null);
-      // }
-      // if (!selectedAudioDevice) {
-      //   const audioInput = formattedDevices.find(
-      //     (device) => device.kind === "audioinput"
-      //   );
-      //   setSelectedAudioDevice(audioInput || null);
-      // }
     } catch (error) {
       console.error("Failed to get media devices:", error);
     }
