@@ -1,0 +1,11 @@
+[package]
+name = "capture"
+description = "Bindings for cross-platform screen capture."
+version = "0.0.1"
+
+[dependencies]
+block = "0.1.6"
+cfg-if = "1.0.0"
+libc = "0.2.153"
+winapi = "0.3.9"
+core-foundation = "0.9.4"

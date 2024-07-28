@@ -10,6 +10,7 @@ use std::sync::{
 };
 use tauri::State;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
 use crate::app::config;
@@ -139,6 +140,10 @@ pub async fn stop_all_recordings(
 ) -> Result<(), String> {
     let mut guard = state.lock().await;
 
+    tracing::info!("Stopping media recording...");
+
+    guard.shutdown_flag.store(true, Ordering::SeqCst);
+
     if let Some(mut media_process) = guard.media_process.take() {
         tracing::info!("Stopping media recording...");
         media_process
@@ -146,8 +151,6 @@ pub async fn stop_all_recordings(
             .await
             .expect("Failed to stop media recording");
     }
-
-    guard.shutdown_flag.store(true, Ordering::SeqCst);
 
     if !config::is_local_mode() {
         while !guard.video_uploading_finished.load(Ordering::SeqCst)
