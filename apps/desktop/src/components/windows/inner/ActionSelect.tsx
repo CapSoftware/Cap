@@ -35,7 +35,7 @@ export const ActionSelect = ({
       <div className="flex items-center min-w-0 flex-grow h-full">
         <span className="flex-shrink-0 mr-2">{status === "off" && iconDisabled ? iconDisabled : iconEnabled}</span>
         <select
-          className="bg-transparent border-none focus:outline-none appearance-none w-full min-w-0 cursor-pointer h-full truncate"
+          className="bg-transparent border-none appearance-none w-full min-w-0 cursor-pointer h-full truncate"
           value={selectedValue || -1}
           onChange={(e) => onSelect(e.target.value)}
         >
@@ -48,7 +48,7 @@ export const ActionSelect = ({
       </div>
       {showStatus && (
         <div
-          // className={onStatusClick ? "hover:cursor-auto" : ""}
+          className={onStatusClick ? "transition-transform active:scale-95" : ""}
           onClick={(e) => {
             e.stopPropagation();
             onStatusClick?.(status);
