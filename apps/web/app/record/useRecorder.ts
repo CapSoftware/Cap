@@ -6,7 +6,7 @@ import type { FileData } from "@ffmpeg/ffmpeg/dist/esm/types";
 import { fetchFile } from "@ffmpeg/util";
 import { useStore } from "@tanstack/react-store";
 import { Store } from "@tanstack/store";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 const STOPPING_MESSAGES = ["Processing video", "Almost done", "Finishing up"];
@@ -588,6 +588,8 @@ export function useRecorder() {
   const [ffmpeg] = useState(() => new FFmpeg());
   const [isLoading, setIsLoading] = useState(true);
   const [recorder, setRecorder] = useState<Recorder | null>(null);
+  const recorderRef = useRef(recorder);
+  recorderRef.current = recorder;
 
   useEffect(() => {
     const loadFFmpeg = async () => {
@@ -651,11 +653,9 @@ export function useRecorder() {
         });
     },
     stop() {
-      if (recorder !== null) {
-        recorder.stop().finally(() => {
-          setRecorder(null);
-        });
-      }
+      recorderRef.current?.stop().finally(() => {
+        setRecorder(null);
+      });
     },
   };
 }
