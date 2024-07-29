@@ -115,6 +115,12 @@ export default function CameraPage() {
         }
       });
     }
+    commands.closeWebview("camera").then(() => {
+      if (isSignedIn && !cameraWindowOpen && permissions.confirmed === true) {
+        initializeCameraWindow();
+        setCameraWindowOpen(true);
+      }
+    });
   }, [isSignedIn, cameraWindowOpen, permissions.confirmed]);
 
   if (process.env.NEXT_PUBLIC_LOCAL_MODE === "true") {

@@ -7,8 +7,6 @@ use std::{
 use tauri::{Assets, Context};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 
-#[macro_use]
-pub mod commands;
 pub mod config;
 
 pub fn panic_hook(info: &PanicInfo) {

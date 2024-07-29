@@ -1,14 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use cpal::Devices;
 use regex::Regex;
 use sentry_tracing::EventFilter;
+use std::collections::LinkedList;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::vec;
 use tauri::{
-    CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu,
+    CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu, Window,
 };
+use tauri_plugin_oauth::start;
 use tauri_plugin_positioner::{Position, WindowExt};
 use tokio::sync::Mutex;
 use tracing::Level;
@@ -16,16 +19,15 @@ use tracing_subscriber::prelude::*;
 use window_shadows::set_shadow;
 use window_vibrancy::{apply_blur, apply_vibrancy, NSVisualEffectMaterial};
 
-#[macro_use]
 mod app;
 mod media;
 mod recording;
 mod upload;
 mod utils;
 
-use app::commands::*;
 use media::enumerate_audio_devices;
 use recording::{start_dual_recording, stop_all_recordings, RecordingState};
+use utils::has_screen_capture_access;
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
@@ -35,6 +37,20 @@ use ffmpeg_sidecar::{
 };
 
 use winit::monitor::{MonitorHandle, VideoMode};
+
+macro_rules! generate_handler {
+    ($($command:ident),*) => {
+        {
+    #[cfg(debug_assertions)]
+    tauri_specta::ts::export(
+      specta::collect_types![$($command),*],
+      "../src/utils/commands.ts"
+    ).unwrap();
+
+    tauri::generate_handler![$($command),*]
+        }
+    };
+}
 
 fn main() {
     let _ = fix_path_env::fix();
