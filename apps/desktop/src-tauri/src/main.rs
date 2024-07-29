@@ -109,14 +109,6 @@ fn main() {
         panic!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now")
     };
 
-    #[tauri::command]
-    #[specta::specta]
-    fn set_webview_shadow(app_handle: tauri::AppHandle, label: String, enable: bool) -> bool {
-        app_handle
-            .get_window(&label)
-            .is_some_and(|window| set_shadow(window, enable).is_ok())
-    }
-
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
     let monitor: MonitorHandle = event_loop
         .primary_monitor()
@@ -179,11 +171,10 @@ fn main() {
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_positioner::init())
         .setup(move |app| {
-            // app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let handle = app.handle();
 
             if let Some(main_window) = app.get_window("main") {
-                main_window.move_window(Position::Center).ok();
+                let _ = main_window.move_window(Position::Center);
                 #[cfg(target_os = "macos")]
                 apply_vibrancy(
                     &main_window,
@@ -331,9 +322,10 @@ fn main() {
                 has_screen_capture_access,
                 reset_screen_permissions,
                 reset_microphone_permissions,
-                reset_camera_permissions
-            ],
-            set_webview_shadow
+                reset_camera_permissions,
+                close_webview,
+                set_webview_shadow
+            ]
         )
         .plugin(tauri_plugin_context_menu::init())
         .system_tray(tray)
