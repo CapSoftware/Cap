@@ -21,7 +21,9 @@ export const Camera = () => {
     : "false"
   );
   const [overlaySize, setOverlaySize] = useState<"sm" | "lg">("sm");
-  const [overlayShape, setOverlayShape] = useState<"round" | "square">("round");
+  const [overlayShape, setOverlayShape] = useState<"round" | "square">(
+    localStorage.getItem("cameraOverlayShape") as "round" | "square" || "round"
+  );
 
   useEffect(() => {
     if (!videoRef.current || !selectedVideoDevice) return;
@@ -64,6 +66,8 @@ export const Camera = () => {
       document.removeEventListener('visibilitychange', onVisibilityChanged);
     };
   }, [selectedVideoDevice]);
+
+  useEffect(() => localStorage.setItem("cameraOverlayShape", overlayShape), [overlayShape]);
 
   const mirrorCamera = () => {
     if (videoRef.current) {

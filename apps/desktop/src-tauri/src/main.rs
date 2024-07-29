@@ -125,97 +125,6 @@ fn main() {
         panic!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now")
     };
 
-    #[tauri::command]
-    #[specta::specta]
-    async fn start_server(window: Window) -> Result<u16, String> {
-        start(move |url| {
-            let _ = window.emit("redirect_uri", url);
-        })
-        .map_err(|err| err.to_string())
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn open_screen_capture_preferences() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
-            .spawn()
-            .expect("failed to open system preferences");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn open_mic_preferences() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
-            .spawn()
-            .expect("failed to open system preferences");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn open_camera_preferences() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
-            .spawn()
-            .expect("failed to open system preferences");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn reset_screen_permissions() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("tccutil")
-            .arg("reset")
-            .arg("ScreenCapture")
-            .arg("so.cap.desktop")
-            .spawn()
-            .expect("failed to reset screen permissions");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn reset_microphone_permissions() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("tccutil")
-            .arg("reset")
-            .arg("Microphone")
-            .arg("so.cap.desktop")
-            .spawn()
-            .expect("failed to reset microphone permissions");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn reset_camera_permissions() {
-        #[cfg(target_os = "macos")]
-        std::process::Command::new("tccutil")
-            .arg("reset")
-            .arg("Camera")
-            .arg("so.cap.desktop")
-            .spawn()
-            .expect("failed to reset camera permissions");
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn close_webview(app_handle: tauri::AppHandle, label: String) -> bool {
-        app_handle
-            .get_window(&label)
-            .is_some_and(|window| window.close().is_ok())
-    }
-
-    #[tauri::command]
-    #[specta::specta]
-    fn set_webview_shadow(app_handle: tauri::AppHandle, label: String, enable: bool) -> bool {
-        app_handle
-            .get_window(&label)
-            .is_some_and(|window| set_shadow(window, enable).is_ok())
-    }
-
     let event_loop = winit::event_loop::EventLoop::new().expect("Failed to create event loop");
     let monitor: MonitorHandle = event_loop
         .primary_monitor()
@@ -278,11 +187,10 @@ fn main() {
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_positioner::init())
         .setup(move |app| {
-            // app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let handle = app.handle();
 
             if let Some(main_window) = app.get_window("main") {
-                main_window.move_window(Position::Center).ok();
+                let _ = main_window.move_window(Position::Center);
                 #[cfg(target_os = "macos")]
                 apply_vibrancy(
                     &main_window,
@@ -418,21 +326,23 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(generate_handler![
-            start_dual_recording,
-            stop_all_recordings,
-            enumerate_audio_devices,
-            start_server,
-            open_screen_capture_preferences,
-            open_mic_preferences,
-            open_camera_preferences,
-            has_screen_capture_access,
-            reset_screen_permissions,
-            reset_microphone_permissions,
-            reset_camera_permissions,
-            close_webview,
-            set_webview_shadow
-        ])
+        .invoke_handler(
+            generate_handler![
+                start_dual_recording,
+                stop_all_recordings,
+                enumerate_audio_devices,
+                start_server,
+                open_screen_capture_preferences,
+                open_mic_preferences,
+                open_camera_preferences,
+                has_screen_capture_access,
+                reset_screen_permissions,
+                reset_microphone_permissions,
+                reset_camera_permissions,
+                close_webview,
+                set_webview_shadow
+            ]
+        )
         .plugin(tauri_plugin_context_menu::init())
         .system_tray(tray)
         .on_system_tray_event(move |app, event| {

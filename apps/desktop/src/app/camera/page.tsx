@@ -10,7 +10,7 @@ export default function CameraPage() {
       id="app"
       style={{
         border: "none",
-        background: "none !important",
+        background: "none",
         outline: "none",
         boxShadow: "none",
       }}
