@@ -350,6 +350,15 @@ importers:
       '@stripe/stripe-js':
         specifier: ^3.3.0
         version: 3.3.0
+      '@tanstack/react-query':
+        specifier: ^5.51.11
+        version: 5.51.11(react@18.2.0)
+      '@tanstack/react-store':
+        specifier: ^0.5.5
+        version: 0.5.5(react-dom@18.2.0)(react@18.2.0)
+      '@tanstack/store':
+        specifier: ^0.5.5
+        version: 0.5.5
       aws-sdk:
         specifier: ^2.1530.0
         version: 2.1538.0
@@ -6845,6 +6854,31 @@ packages:
       tailwindcss: 3.4.1
     dev: false
 
+  /@tanstack/query-core@5.51.9:
+    resolution: {integrity: sha512-HsAwaY5J19MD18ykZDS3aVVh+bAt0i7m6uQlFC2b77DLV9djo+xEN7MWQAQQTR8IM+7r/zbozTQ7P0xr0bHuew==}
+    dev: false
+
+  /@tanstack/react-query@5.51.11(react@18.2.0):
+    resolution: {integrity: sha512-4Kq2x0XpDlpvSnaLG+8pHNH60zEc3mBvb3B2tOMDjcPCi/o+Du3p/9qpPLwJOTliVxxPJAP27fuIhLrsRdCr7A==}
+    peerDependencies:
+      react: ^18.0.0
+    dependencies:
+      '@tanstack/query-core': 5.51.9
+      react: 18.2.0
+    dev: false
+
+  /@tanstack/react-store@0.5.5(react-dom@18.2.0)(react@18.2.0):
+    resolution: {integrity: sha512-1orYXGatBqXCYKuroFwV8Ll/6aDa5E3pU6RR4h7RvRk7TmxF1+zLCsWALZaeijXkySNMGmvawSbUXRypivg2XA==}
+    peerDependencies:
+      react: ^17.0.0 || ^18.0.0
+      react-dom: ^17.0.0 || ^18.0.0
+    dependencies:
+      '@tanstack/store': 0.5.5
+      react: 18.2.0
+      react-dom: 18.2.0(react@18.2.0)
+      use-sync-external-store: 1.2.2(react@18.2.0)
+    dev: false
+
   /@tanstack/react-virtual@3.0.2(react-dom@18.2.0)(react@18.2.0):
     resolution: {integrity: sha512-9XbRLPKgnhMwwmuQMnJMv+5a9sitGNCSEtf/AZXzmJdesYk7XsjYHaEDny+IrJzvPNwZliIIDwCRiaUqR3zzCA==}
     peerDependencies:
@@ -6854,6 +6888,10 @@ packages:
       '@tanstack/virtual-core': 3.0.0
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
+    dev: false
+
+  /@tanstack/store@0.5.5:
+    resolution: {integrity: sha512-EOSrgdDAJExbvRZEQ/Xhh9iZchXpMN+ga1Bnk8Nmygzs8TfiE6hbzThF+Pr2G19uHL6+DTDTHhJ8VQiOd7l4tA==}
     dev: false
 
   /@tanstack/virtual-core@3.0.0:
@@ -16050,6 +16088,14 @@ packages:
       detect-node-es: 1.1.0
       react: 18.2.0
       tslib: 2.6.2
+    dev: false
+
+  /use-sync-external-store@1.2.2(react@18.2.0):
+    resolution: {integrity: sha512-PElTlVMwpblvbNqQ82d2n6RjStvdSoNe9FG28kNfz3WiXilJm4DdNkEzRhCZuIDwY8U08WVihhGR5iRqAwfDiw==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0
+    dependencies:
+      react: 18.2.0
     dev: false
 
   /utf-8-validate@5.0.10:
