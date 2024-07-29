@@ -78,8 +78,8 @@ export const Camera = () => {
     tauriWindowImport.then(
       ({ currentMonitor, appWindow, LogicalSize, LogicalPosition }) => {
         currentMonitor().then((monitor) => {
-          const windowWidth = type === "sm" ? 240 : 410;
-          const windowHeight = type === "sm" ? 240 : 410;
+          const windowWidth = type === "sm" ? 230 : 400;
+          const windowHeight = type === "sm" ? 230 : 400;
 
           if (monitor && monitor.size) {
             const scalingFactor = monitor.scaleFactor;
