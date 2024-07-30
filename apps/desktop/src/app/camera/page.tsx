@@ -10,8 +10,8 @@ export default function CameraPage() {
       id="app"
       data-tauri-drag-region
       style={{
-        borderRadius: "50%",
-        background: "none !important",
+        border: "none",
+        background: "none",
         outline: "none",
         boxShadow: "none",
       }}

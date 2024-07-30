@@ -322,7 +322,9 @@ fn main() {
                 has_screen_capture_access,
                 reset_screen_permissions,
                 reset_microphone_permissions,
-                reset_camera_permissions
+                reset_camera_permissions,
+                close_webview,
+                set_webview_shadow
             ]
         )
         .plugin(tauri_plugin_context_menu::init())

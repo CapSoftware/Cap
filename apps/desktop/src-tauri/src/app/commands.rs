@@ -1,4 +1,4 @@
-use tauri::Window;
+use tauri::{Manager, Window};
 use tauri_plugin_oauth::start;
 
 macro_rules! generate_handler {
@@ -92,4 +92,20 @@ pub fn reset_camera_permissions() {
         .arg("so.cap.desktop")
         .spawn()
         .expect("failed to reset camera permissions");
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn close_webview(app_handle: tauri::AppHandle, label: String) -> bool {
+    app_handle
+        .get_window(&label)
+        .is_some_and(|window| window.close().is_ok())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_webview_shadow(app_handle: tauri::AppHandle, label: String, enable: bool) -> bool {
+    app_handle
+        .get_window(&label)
+        .is_some_and(|window| window_shadows::set_shadow(window, enable).is_ok())
 }

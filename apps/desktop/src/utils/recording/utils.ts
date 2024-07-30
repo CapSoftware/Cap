@@ -80,6 +80,8 @@ export const initializeCameraWindow = async () => {
             decorations: false,
             alwaysOnTop: true,
             center: false,
+          }).once("tauri://created", () => {
+            commands.setWebviewShadow("camera", false);
           });
         }
       }
