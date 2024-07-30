@@ -22,10 +22,14 @@ export const Camera = () => {
   );
   const [overlaySize, setOverlaySize] = useState<"sm" | "lg">("sm");
   const [overlayShape, setOverlayShape] = useState<"round" | "square">(
-    localStorage.getItem("cameraOverlayShape") as "round" | "square" || "round"
+    (localStorage.getItem("cameraOverlayShape") as "round" | "square") ||
+      "round"
   );
 
-  useEffect(() => localStorage.setItem("cameraOverlayShape", overlayShape), [overlayShape]);
+  useEffect(
+    () => localStorage.setItem("cameraOverlayShape", overlayShape),
+    [overlayShape]
+  );
 
   useEffect(() => {
     if (!videoRef.current || !selectedVideoDevice) return;
@@ -126,7 +130,7 @@ export const Camera = () => {
     }
   }, []);
 
-  const getOverlayBorderRadius= () => {
+  const getOverlayBorderRadius = () => {
     if (overlayShape === "round") return "9999px";
     if (overlaySize === "sm") return "3rem";
     else return "4rem";
@@ -134,13 +138,16 @@ export const Camera = () => {
 
   const handleContextMenu = async () => {
     const { showMenu } = await import("tauri-plugin-context-menu");
-    const videoDevices = devices.filter((device) => device.kind === "videoinput");
+    const videoDevices = devices.filter(
+      (device) => device.kind === "videoinput"
+    );
 
     const select = async (device: Device | null) => {
-      emit("change-device", { type: "videoinput", device: device })
-        .catch((error) => console.log("Failed to emit change-device event:", error));
+      emit("change-device", { type: "videoinput", device: device }).catch(
+        (error) => console.log("Failed to emit change-device event:", error)
+      );
     };
-    
+
     const menuItems = [
       {
         label: "Select Video:",
@@ -155,6 +162,14 @@ export const Camera = () => {
         is_separator: true,
       },
       {
+        label: "Refresh Overlay",
+        event: async () => {
+          if (typeof window !== "undefined") {
+            window.location.reload();
+          }
+        },
+      },
+      {
         label: "Close Overlay",
         checked: selectedVideoDevice === null,
         event: async () => select(null),
@@ -164,12 +179,10 @@ export const Camera = () => {
     await showMenu({
       items: [...menuItems],
       ...(videoDevices.length === 0 && {
-        items: [
-          { label: "Nothing found." },
-        ],
+        items: [{ label: "Nothing found." }],
       }),
     });
-  }
+  };
 
   return (
     <div
@@ -228,8 +241,12 @@ export const Camera = () => {
           className="h-full flex items-center justify-center p-2 hover:bg-gray-900"
         >
           <div>
-            {overlaySize === "sm" && <Expand className="w-5 h-5 stroke-gray-200" />}
-            {overlaySize === "lg" && <Minimize className="w-5 h-5 stroke-gray-200" />}
+            {overlaySize === "sm" && (
+              <Expand className="w-5 h-5 stroke-gray-200" />
+            )}
+            {overlaySize === "lg" && (
+              <Minimize className="w-5 h-5 stroke-gray-200" />
+            )}
           </div>
         </div>
         <div
@@ -238,8 +255,14 @@ export const Camera = () => {
           }}
           className="h-full flex items-center justify-center p-2 hover:bg-gray-900"
         >
-          {overlayShape === "round" && <div><Squircle className="w-5 h-5 stroke-gray-200" /></div>}
-          {overlayShape === "square" && <span className="w-3 h-3 bg-gray-200 rounded-full"></span>}
+          {overlayShape === "round" && (
+            <div>
+              <Squircle className="w-5 h-5 stroke-gray-200" />
+            </div>
+          )}
+          {overlayShape === "square" && (
+            <span className="w-3 h-3 bg-gray-200 rounded-full"></span>
+          )}
         </div>
         <div
           onClick={mirrorCamera}
@@ -259,7 +282,9 @@ export const Camera = () => {
         autoPlay
         playsInline
         muted
-        className={"absolute top-0 left-0 w-full h-full object-cover pointer-events-none"}
+        className={
+          "absolute top-0 left-0 w-full h-full object-cover pointer-events-none"
+        }
         style={{ borderRadius: getOverlayBorderRadius() }}
       />
     </div>
