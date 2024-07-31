@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Device, DeviceKind, useMediaDevices } from "@/utils/recording/MediaDeviceContext";
+import {
+  Device,
+  DeviceKind,
+  useMediaDevices,
+} from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
 import { Microphone } from "@/components/icons/Microphone";
 import { Screen } from "@/components/icons/Screen";
@@ -53,35 +57,47 @@ export const Recorder = () => {
   const proCheckPromise = isUserPro();
   const [proCheck, setProCheck] = useState<boolean>(false);
   const [limitReached, setLimitReached] = useState(false);
-  const [lastSelectedAudioDevice, setLastSelectedAudioDevice] = useState<Device | null>(null);
-  const [lastSelectedVideoDevice, setLastSelectedVideoDevice] = useState<Device | null>(null);
+  const [lastSelectedAudioDevice, setLastSelectedAudioDevice] =
+    useState<Device | null>(null);
+  const [lastSelectedVideoDevice, setLastSelectedVideoDevice] =
+    useState<Device | null>(null);
 
   useEffect(() => {
     proCheckPromise.then((result) => setProCheck(Boolean(result)));
   }, [proCheckPromise]);
 
-  const selectDevice = (kind: DeviceKind, device: Device | null) => emit(
-    "change-device", { type: kind, device: device }
-  ).catch((error) => console.log("Failed to emit change-device event:", error));
-  
+  const selectDevice = (kind: DeviceKind, device: Device | null) =>
+    emit("change-device", { type: kind, device: device }).catch((error) =>
+      console.log("Failed to emit change-device event:", error)
+    );
+
   const createDeviceMenuOptions = (kind: DeviceKind) => [
-    { value: "_", label: `Select ${kind === "videoinput" ? "Video" : "Microphone"}`, disabled: true },
+    {
+      value: "_",
+      label: `Select ${kind === "videoinput" ? "Video" : "Microphone"}`,
+      disabled: true,
+    },
     { value: "none", label: `No ${kind === "videoinput" ? "Video" : "Audio"}` },
-    ...devices.filter((device) => device.kind === kind).map(({ label }) => ({ value: label, label }))
-  ]
+    ...devices
+      .filter((device) => device.kind === kind)
+      .map(({ label }) => ({ value: label, label })),
+  ];
 
   const handleSelectInputDevice = async (kind: DeviceKind, label: string) => {
     let device: Device | null = null;
     if (label !== "none")
-      device = devices.find((device) => device.kind === kind && device.label === label) || null;
+      device =
+        devices.find(
+          (device) => device.kind === kind && device.label === label
+        ) || null;
     selectDevice(kind, device);
-  }
+  };
 
   const prepareVideoData = async () => {
     const session = JSON.parse(localStorage.getItem("session"));
     const token = session?.token;
     const res = await authFetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create?origin=${window.location.origin}`,
+      `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create?origin=${window.location.origin}&recordingMode=hls`,
       {
         method: "GET",
         credentials: "include",
@@ -194,6 +210,7 @@ export const Recorder = () => {
 
   const handleStartAllRecordings = async () => {
     try {
+      console.log("bruh");
       setStartingRecording(true);
       const videoData =
         process.env.NEXT_PUBLIC_LOCAL_MODE &&
@@ -250,8 +267,8 @@ export const Recorder = () => {
 
       const url =
         process.env.NEXT_PUBLIC_ENVIRONMENT === "development"
-          ? `${process.env.NEXT_PUBLIC_URL}/s/${await getLatestVideoId()}`
-          : `https://cap.link/${await getLatestVideoId()}`;
+          ? `${process.env.NEXT_PUBLIC_URL}/s/${getLatestVideoId()}`
+          : `https://cap.link/${getLatestVideoId()}`;
 
       const audio = new Audio("/recording-end.mp3");
       await audio.play();
@@ -406,27 +423,37 @@ export const Recorder = () => {
                     options={createDeviceMenuOptions("videoinput")}
                     onStatusClick={(status) => {
                       setLastSelectedVideoDevice(selectedVideoDevice);
-                      selectDevice("videoinput", status === "on" ? null : lastSelectedVideoDevice);
+                      selectDevice(
+                        "videoinput",
+                        status === "on" ? null : lastSelectedVideoDevice
+                      );
                     }}
                     showStatus={true}
                     status={selectedVideoDevice === null ? "off" : "on"}
                     iconEnabled={<Video className="w-5 h-5" />}
                     iconDisabled={<VideoOff className="w-5 h-5" />}
                     selectedValue={selectedVideoDevice?.label}
-                    onSelect={(value) => handleSelectInputDevice("videoinput", value as string)}
+                    onSelect={(value) =>
+                      handleSelectInputDevice("videoinput", value as string)
+                    }
                   />
                   <ActionSelect
                     options={createDeviceMenuOptions("audioinput")}
                     onStatusClick={(status) => {
                       setLastSelectedAudioDevice(selectedAudioDevice);
-                      selectDevice("audioinput", status === "on" ? null : lastSelectedAudioDevice);
+                      selectDevice(
+                        "audioinput",
+                        status === "on" ? null : lastSelectedAudioDevice
+                      );
                     }}
                     showStatus={true}
                     status={selectedAudioDevice === null ? "off" : "on"}
                     iconEnabled={<Microphone className="w-5 h-5" />}
                     iconDisabled={<MicrophoneOff className="w-5 h-5" />}
                     selectedValue={selectedAudioDevice?.label}
-                    onSelect={(value) => handleSelectInputDevice("audioinput", value as string)}
+                    onSelect={(value) =>
+                      handleSelectInputDevice("audioinput", value as string)
+                    }
                   />
                 </div>
               </div>

@@ -54,6 +54,7 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
+  const recordingMode: "hls" | null = params.get("recordingMode") as any;
 
   console.log("cookies:", cookies().getAll());
 
@@ -86,6 +87,13 @@ export async function GET(req: NextRequest) {
     ownerId: user.id,
     awsRegion: awsRegion,
     awsBucket: awsBucket,
+    source:
+      recordingMode === "hls"
+        ? {
+            type: "local",
+            HLSPlaylistS3Path: `${user.id}/${id}/m3u8/stream.m3u8`,
+          }
+        : undefined,
   });
 
   if (

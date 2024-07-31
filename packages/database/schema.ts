@@ -11,6 +11,7 @@ import {
   uniqueIndex,
   varchar,
   float,
+  mysqlEnum,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
 import { nanoIdLength } from "./helpers";
@@ -154,6 +155,12 @@ export const videos = mysqlTable(
     transcriptionStatus: varchar("transcriptionStatus", { length: 255 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    source: json("source")
+      .$type<
+        { type: "MediaConvert" } | { type: "local"; HLSPlaylistS3Path?: string }
+      >()
+      .notNull()
+      .default({ type: "MediaConvert" }),
   },
   (table) => ({
     idIndex: index("id_idx").on(table.id),

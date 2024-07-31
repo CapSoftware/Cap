@@ -324,6 +324,21 @@ export const ShareVideo = ({
     );
   }
 
+  let videoSrc: string;
+
+  if (
+    // v.cap.so is only available in prod
+    process.env.NODE_ENV === "development" ||
+    ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
+      data.source.type === "MediaConvert")
+  ) {
+    videoSrc = `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
+  } else if (data.source.type === "MediaConvert") {
+    videoSrc = `https://v.cap.so/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
+  } else {
+    videoSrc = `https://v.cap.so/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
+  }
+
   return (
     <div
       className="relative flex h-full w-full overflow-hidden shadow-lg rounded-lg group"
@@ -369,14 +384,7 @@ export const ShareVideo = ({
             </div>
           </div>
         )}
-        <VideoPlayer
-          ref={videoRef}
-          videoSrc={
-            data.skipProcessing === true || data.jobStatus !== "COMPLETE"
-              ? `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`
-              : `https://v.cap.so/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`
-          }
-        />
+        <VideoPlayer ref={videoRef} videoSrc={videoSrc} />
       </div>
       <div className="absolute bottom-0 z-20 w-full text-white bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-all">
         <div

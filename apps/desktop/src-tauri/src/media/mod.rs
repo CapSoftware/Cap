@@ -65,8 +65,7 @@ pub struct MediaRecorder {
     ffmpeg_stdin: Option<ChildStdin>,
     device_name: Option<String>,
     start_time: Option<Instant>,
-    audio_file_path: Option<PathBuf>,
-    video_file_path: Option<PathBuf>,
+    chunks_dir: PathBuf,
     audio_pipe_task: Option<JoinHandle<()>>,
     video_pipe_task: Option<JoinHandle<()>>,
 }
@@ -81,8 +80,7 @@ impl MediaRecorder {
         &mut self,
         options: RecordingOptions,
         screenshot_dir: &Path,
-        audio_chunks_dir: &Path,
-        video_chunks_dir: &Path,
+        recording_dir: &Path,
         custom_device: Option<&str>,
         max_screen_width: usize,
         max_screen_height: usize,
@@ -126,17 +124,15 @@ impl MediaRecorder {
         video_capturer.start(video_start_time.clone(), screenshot_dir, options_clone);
 
         tracing::info!("Starting audio recording and processing...");
-        let audio_chunk_pattern = audio_chunks_dir.join("audio_recording_%03d.aac");
-        let video_chunk_pattern = video_chunks_dir.join("video_recording_%03d.ts");
-        let audio_segment_list_filename = audio_chunks_dir.join("segment_list.txt");
-        let video_segment_list_filename = video_chunks_dir.join("segment_list.txt");
+        let segment_pattern_path = recording_dir.join("segment_%03d.ts");
+        let playlist_path = recording_dir.join("stream.m3u8");
 
-        let video_pipe_path = video_chunks_dir.join("pipe.pipe");
+        let video_pipe_path = recording_dir.join("video.pipe");
 
         std::fs::remove_file(&video_pipe_path).ok();
         create_named_pipe(&video_pipe_path).map_err(|e| e.to_string())?;
 
-        let audio_pipe_path = audio_chunks_dir.join("pipe.pipe");
+        let audio_pipe_path = recording_dir.join("audio.pipe");
 
         std::fs::remove_file(&audio_pipe_path).ok();
         create_named_pipe(&audio_pipe_path).map_err(|e| e.to_string())?;
@@ -167,21 +163,7 @@ impl MediaRecorder {
             .args(["-f", "rawvideo", "-pix_fmt", "bgra"])
             .args(["-s", &size, "-r", &fps])
             .args(["-thread_queue_size", "4096", "-i"])
-            .arg(&video_pipe_path)
-            // video out
-            .args([
-                "-vf",
-                &format!("fps={fps},scale=in_range=full:out_range=limited"),
-            ])
-            .args(["-c:v", "libx264", "-preset", "ultrafast"])
-            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-            .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
-            .args(["-f", "segment", "-movflags", "frag_keyframe+empty_moov"])
-            .args(["-reset_timestamps", "1", "-an"])
-            .args(["-segment_time", "3"])
-            .args(["-segment_format", "ts"])
-            .args(["-segment_time_delta", "0.01", "-segment_list"])
-            .args([&video_segment_list_filename, &video_chunk_pattern]);
+            .arg(&video_pipe_path);
 
         if self.audio_enabled {
             if let Some((TimeOffsetTarget::Audio, args)) = &time_offset {
@@ -197,18 +179,45 @@ impl MediaRecorder {
                 // audio in
                 .args(["-f", sample_format, "-ar", &sample_rate_str])
                 .args(["-ac", &channels_str, "-thread_queue_size", "4096", "-i"])
-                .arg(&audio_pipe_path)
-                // out
+                .arg(&audio_pipe_path);
+            // out
+            // .args(["-f", "hls", "-async", "1"])
+            // .args(["-segment_time", "3", "-segment_time_delta", "0.01"])
+            // .args(["-reset_timestamps", "1", "-vn", "-segment_list"])
+            // .args([&audio_segment_list_filename, &audio_chunk_pattern]);
+        }
+
+        ffmpeg_command
+            .args(["-f", "hls"])
+            .args(["-hls_time", "5", "-hls_playlist_type", "vod"])
+            .args(["-hls_flags", "independent_segments"])
+            .args(["-master_pl_name", "master.m3u8"])
+            .args(["-hls_segment_type", "mpegts"])
+            .arg("-hls_segment_filename")
+            .arg(&segment_pattern_path)
+            // video
+            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
+            .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
+            .args(["-movflags", "frag_keyframe+empty_moov"])
+            .args([
+                "-vf",
+                &format!("fps={fps},scale=in_range=full:out_range=limited"),
+            ]);
+
+        if self.audio_enabled {
+            ffmpeg_command
+                // audio
+                .args(["-codec:a", "aac", "-b:a", "128k", "-async", "1"])
                 .args([
                     "-af",
                     "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
-                ])
-                .args(["-codec:a", "aac", "-b:a", "128k"])
-                .args(["-async", "1", "-f", "segment"])
-                .args(["-segment_time", "3", "-segment_time_delta", "0.01"])
-                .args(["-reset_timestamps", "1", "-vn", "-segment_list"])
-                .args([&audio_segment_list_filename, &audio_chunk_pattern]);
+                ]);
+        } else {
+            ffmpeg_command.args(["-an"]);
         }
+
+        ffmpeg_command.arg(&playlist_path);
 
         tracing::trace!("Starting FFmpeg process...");
 
@@ -226,8 +235,7 @@ impl MediaRecorder {
         self.video_pipe_task = Some(tokio::spawn(video_capturer.collect_frames(video_pipe_path)));
 
         self.start_time = Some(Instant::now());
-        self.audio_file_path = Some(audio_chunks_dir.to_path_buf());
-        self.video_file_path = Some(video_chunks_dir.to_path_buf());
+        self.chunks_dir = recording_dir.to_path_buf();
         self.ffmpeg_process = Some(ffmpeg_child);
         self.ffmpeg_stdin = Some(ffmpeg_stdin);
         self.device_name = self.audio_capturer.as_ref().map(|c| c.device_name.clone());

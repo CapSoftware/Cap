@@ -26,7 +26,7 @@ export const saveLatestVideoId = (videoId: string) => {
   }
 };
 
-export const getLatestVideoId = async () => {
+export const getLatestVideoId = () => {
   if (typeof navigator !== "undefined" && typeof window !== "undefined") {
     return window.localStorage.getItem("latestVideoId") || "";
   }
