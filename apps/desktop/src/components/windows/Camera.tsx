@@ -22,12 +22,16 @@ export const Camera = () => {
   );
   const [overlaySize, setOverlaySize] = useState<"sm" | "lg">("sm");
   const [overlayShape, setOverlayShape] = useState<"round" | "square">(
-    (localStorage.getItem("cameraOverlayShape") as "round" | "square") ||
-      "round"
+    typeof localStorage !== "undefined"
+      ? (localStorage.getItem("cameraOverlayShape") as "round" | "square") ||
+          "round"
+      : "round"
   );
 
   useEffect(
-    () => localStorage.setItem("cameraOverlayShape", overlayShape),
+    () =>
+      typeof localStorage !== "undefined" &&
+      localStorage.setItem("cameraOverlayShape", overlayShape),
     [overlayShape]
   );
 
