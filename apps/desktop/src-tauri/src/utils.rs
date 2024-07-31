@@ -35,10 +35,39 @@ pub fn ffmpeg_path_as_str() -> Result<String, String> {
     }
 }
 
-pub fn create_named_pipe(path: &Path) -> Result<(), nix::Error> {
+#[cfg(unix)]
+pub fn create_named_pipe(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     use nix::sys::stat;
     use nix::unistd;
     unistd::mkfifo(path, stat::Mode::S_IRWXU)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+pub fn create_named_pipe(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::null_mut;
+    use winapi::um::namedpipeapi::CreateNamedPipeW; // Corrected import
+    use winapi::um::winbase::{PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE, PIPE_READMODE_BYTE, PIPE_WAIT};
+
+    let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let handle = unsafe {
+        CreateNamedPipeW(
+            path_wide.as_ptr(),
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1,
+            4096,
+            4096,
+            0,
+            null_mut(),
+        )
+    };
+
+    if handle == winapi::um::handleapi::INVALID_HANDLE_VALUE {
+        return Err("Failed to create named pipe".into());
+    }
+
     Ok(())
 }
 
