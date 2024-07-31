@@ -755,6 +755,7 @@ dependencies = [
  "tracing-subscriber",
  "urlencoding",
  "which",
+ "winapi",
  "window-shadows",
  "window-vibrancy",
  "winit",

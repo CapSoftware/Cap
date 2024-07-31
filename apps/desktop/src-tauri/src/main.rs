@@ -161,11 +161,17 @@ fn main() {
             .add_item(CustomMenuItem::new("quit".to_string(), "Quit").accelerator("CmdOrControl+Q"))
     }
 
+    #[cfg(target_os = "macos")]
     let tray = SystemTray::new()
         .with_menu(create_tray_menu(None))
         .with_menu_on_left_click(false)
         .with_title("Cap");
-
+    
+    #[cfg(target_os = "windows")]
+    let tray = SystemTray::new()
+        .with_menu(create_tray_menu(None))
+        .with_id("Cap");
+    
     tauri::Builder
         ::default()
         .plugin(tauri_plugin_oauth::init())

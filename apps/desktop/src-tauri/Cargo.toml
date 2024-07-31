@@ -82,6 +82,9 @@ tracing-subscriber = "0.3"
 tracing-appender = "0.2"
 sentry-tracing = "0.34.0"
 
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["fileapi", "winbase", "winnt", "handleapi"] }
+
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!
