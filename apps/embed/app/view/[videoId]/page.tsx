@@ -60,7 +60,11 @@ export default async function ShareVideoPage(props: Props) {
 
   const video = query[0];
 
-  if (video.jobId === null && video.skipProcessing === false) {
+  if (
+    video.jobId === null &&
+    video.skipProcessing === false &&
+    video.source.type === "MediaConvert"
+  ) {
     const res = await fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/create?videoId=${videoId}&userId=${video.ownerId}`,
       {
@@ -84,7 +88,11 @@ export default async function ShareVideoPage(props: Props) {
     );
   }
 
-  if (video.jobStatus !== "COMPLETE" && video.skipProcessing === false) {
+  if (
+    video.jobStatus !== "COMPLETE" &&
+    video.skipProcessing === false &&
+    video.source.type === "MediaConvert"
+  ) {
     fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/status?videoId=${videoId}&userId=${video.ownerId}`,
       {

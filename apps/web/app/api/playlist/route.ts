@@ -81,6 +81,62 @@ export async function GET(request: NextRequest) {
   const audioPrefix = `${userId}/${videoId}/audio/`;
 
   try {
+    const s3Client = new S3Client({
+      region: process.env.CAP_AWS_REGION || "",
+      credentials: {
+        accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
+        secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
+      },
+    });
+
+    if (video.source.type === "local") {
+      const objects = await s3Client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: `${userId}/${videoId}/combined-source`,
+        })
+      );
+
+      const segments = (objects.Contents || []).filter((s) =>
+        s.Key?.endsWith(".ts")
+      );
+
+      const chunksUrls = await Promise.all(
+        segments.map(async (object) => {
+          const url = await getSignedUrl(
+            s3Client,
+            new GetObjectCommand({
+              Bucket: bucket,
+              Key: object.Key,
+            }),
+            { expiresIn: 3600 }
+          );
+          const metadata = await s3Client.send(
+            new HeadObjectCommand({
+              Bucket: bucket,
+              Key: object.Key,
+            })
+          );
+
+          return {
+            url: url,
+            duration: metadata?.Metadata?.duration ?? "",
+            bandwidth: metadata?.Metadata?.bandwidth ?? "",
+            resolution: metadata?.Metadata?.resolution ?? "",
+            videoCodec: metadata?.Metadata?.videocodec ?? "",
+            audioCodec: metadata?.Metadata?.audiocodec ?? "",
+          };
+        })
+      );
+
+      const generatedPlaylist = generateM3U8Playlist(chunksUrls);
+
+      return new Response(generatedPlaylist, {
+        status: 200,
+        headers: getHeaders(origin),
+      });
+    }
+
     // Handle screen, video, and now audio types
     let objectsCommand, prefix;
     switch (videoType) {
@@ -102,14 +158,6 @@ export async function GET(request: NextRequest) {
           }
         );
     }
-
-    const s3Client = new S3Client({
-      region: process.env.CAP_AWS_REGION || "",
-      credentials: {
-        accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-        secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
-      },
-    });
 
     if (prefix === null) {
       const videoSegmentCommand = new ListObjectsV2Command({

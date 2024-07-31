@@ -46,6 +46,8 @@ export async function POST(request: NextRequest) {
       ? "video/mp4"
       : fileKey.endsWith(".mp3")
       ? "audio/mpeg"
+      : fileKey.endsWith(".m3u8")
+      ? "application/x-mpegURL"
       : "video/mp2t";
 
     const Fields = {

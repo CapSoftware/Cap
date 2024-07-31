@@ -406,9 +406,13 @@ export const ShareVideo = ({
         <VideoPlayer
           ref={videoRef}
           videoSrc={
-            data.skipProcessing === true || data.jobStatus !== "COMPLETE"
+            data.skipProcessing === true ||
+            (data.jobStatus !== "COMPLETE" &&
+              data.source.type === "MediaConvert")
               ? `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`
-              : `https://v.cap.so/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`
+              : data.source.type === "MediaConvert"
+              ? `https://v.cap.so/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`
+              : `https://v.cap.so/${data.ownerId}/${data.id}/combined-source/stream.m3u8`
           }
         />
       </div>

@@ -134,7 +134,7 @@ export const playlistToMp4 = async (
   return mp4Blob;
 };
 
-export async function generateM3U8Playlist(
+export function generateM3U8Playlist(
   urls: {
     url: string;
     duration: string;

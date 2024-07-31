@@ -10,7 +10,7 @@ use tauri::{
     CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTraySubmenu,
 };
 use tauri_plugin_positioner::{Position, WindowExt};
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tracing::Level;
 use tracing_subscriber::prelude::*;
 use window_shadows::set_shadow;
@@ -201,13 +201,10 @@ fn main() {
                 .path_resolver()
                 .app_data_dir()
                 .unwrap_or_else(|| PathBuf::new());
+
             let recording_state = RecordingState {
-                media_process: None,
-                recording_options: None,
-                shutdown_flag: Arc::new(AtomicBool::new(false)),
-                video_uploading_finished: Arc::new(AtomicBool::new(false)),
-                audio_uploading_finished: Arc::new(AtomicBool::new(false)),
-                data_dir: Some(data_directory),
+            active_recording: None,
+                data_dir: data_directory,
                 max_screen_width: max_width as usize,
                 max_screen_height: max_height as usize,
             };
