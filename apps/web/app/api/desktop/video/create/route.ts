@@ -87,13 +87,7 @@ export async function GET(req: NextRequest) {
     ownerId: user.id,
     awsRegion: awsRegion,
     awsBucket: awsBucket,
-    source:
-      recordingMode === "hls"
-        ? {
-            type: "local",
-            HLSPlaylistS3Path: `${user.id}/${id}/m3u8/stream.m3u8`,
-          }
-        : undefined,
+    source: recordingMode === "hls" ? { type: "local" } : undefined,
   });
 
   if (

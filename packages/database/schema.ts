@@ -156,9 +156,7 @@ export const videos = mysqlTable(
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     source: json("source")
-      .$type<
-        { type: "MediaConvert" } | { type: "local"; HLSPlaylistS3Path?: string }
-      >()
+      .$type<{ type: "MediaConvert" } | { type: "local" }>()
       .notNull()
       .default({ type: "MediaConvert" }),
   },
