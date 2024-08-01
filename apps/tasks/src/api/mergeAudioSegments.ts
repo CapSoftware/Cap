@@ -30,6 +30,7 @@ router.post<{}>("/", async (req, res) => {
   }
 
   command
+    .audioCodec("libmp3lame")
     .on("error", (err: any) => {
       console.log("An error occurred: " + err.message);
     })

@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
     .where(eq(videos.id, videoId));
 
   const bucket = process.env.CAP_AWS_BUCKET || "";
-  const audioPrefix = `${userId}/${videoId}/audio/`;
+  const filePrefix = `${userId}/${videoId}/combined-source/`;
 
   const s3Client = new S3Client({
     region: process.env.CAP_AWS_REGION || "",
@@ -110,12 +110,12 @@ export async function GET(request: NextRequest) {
   try {
     const audioSegmentCommand = new ListObjectsV2Command({
       Bucket: bucket,
-      Prefix: audioPrefix,
+      Prefix: filePrefix,
     });
 
     const objects = await s3Client.send(audioSegmentCommand);
 
-    const audioFiles = await Promise.all(
+    const files = await Promise.all(
       (objects.Contents || []).map(async (object) => {
         const presignedUrl = await getSignedUrl(
           s3Client,
@@ -133,7 +133,7 @@ export async function GET(request: NextRequest) {
       s3Client,
       new PutObjectCommand({
         Bucket: bucket,
-        Key: `${userId}/${videoId}/merged/audio.mp3`,
+        Key: `${userId}/${videoId}/generated/all-audio.mp3`,
       })
     );
 
@@ -146,7 +146,7 @@ export async function GET(request: NextRequest) {
         },
         body: JSON.stringify({
           videoId,
-          segments: audioFiles,
+          segments: files,
           uploadUrl,
         }),
       }
@@ -160,7 +160,7 @@ export async function GET(request: NextRequest) {
       s3Client,
       new GetObjectCommand({
         Bucket: bucket,
-        Key: `${userId}/${videoId}/merged/audio.mp3`,
+        Key: `${userId}/${videoId}/generated/all-audio.mp3`,
       })
     );
 
