@@ -7,6 +7,10 @@ export async function GET(req: NextRequest) {
   const searchParams = req.nextUrl.searchParams;
   const session = await getServerSession(authOptions);
   const port = searchParams.get("port") || "";
+  const secret =
+    process.env.NODE_ENV === "development"
+      ? process.env.NEXTAUTH_SECRET_DEV
+      : process.env.NEXTAUTH_SECRET;
 
   if (!session) {
     return Response.redirect(
@@ -25,7 +29,7 @@ export async function GET(req: NextRequest) {
 
   const decodedToken = await decode({
     token: tokenValue,
-    secret: process.env.NEXTAUTH_SECRET as string,
+    secret: secret as string,
   });
 
   if (!decodedToken) {
@@ -33,8 +37,6 @@ export async function GET(req: NextRequest) {
       `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?port=${port}`
     );
   }
-
-  console.log("decodedToken: ", decodedToken);
 
   const returnUrl = new URL(
     `http://localhost:${port}?token=${tokenValue}&expires=${decodedToken?.exp}`

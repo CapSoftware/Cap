@@ -14,6 +14,7 @@ import {
   enumerateAndStoreDevices,
   initializeCameraWindow,
 } from "./utils";
+import { closeWebview } from "../commands";
 
 export type DeviceKind = "videoinput" | "audioinput";
 export interface Device {
@@ -87,16 +88,25 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
       // Automatically select the first available devices if not already selected
       if (!selectedVideoDevice) {
-        const videoInput = formattedDevices.find(
-          (device) => device.kind === "videoinput"
-        );
-        setSelectedVideoDevice(videoInput || null);
+        const storedVideoDevice = localStorage.getItem("selected-videoinput");
+        let videoDevice: Device | null = null;
+        if (storedVideoDevice && storedVideoDevice !== "none") {
+          videoDevice = formattedDevices.find(
+            (device) => device.kind === "videoinput" && device.label === storedVideoDevice
+          );
+        }
+        setSelectedVideoDevice(videoDevice);
       }
+
       if (!selectedAudioDevice) {
-        const audioInput = formattedDevices.find(
-          (device) => device.kind === "audioinput"
-        );
-        setSelectedAudioDevice(audioInput || null);
+        const storedAudioDevice = localStorage.getItem("selected-audioinput");
+        let audioDevice: Device | null = null;
+        if (storedAudioDevice && storedAudioDevice !== "none") {
+          audioDevice = formattedDevices.find(
+            (device) => device.kind === "audioinput" && device.label === storedAudioDevice
+          );
+        }
+        setSelectedAudioDevice(audioDevice);
       }
     } catch (error) {
       console.error("Failed to get media devices:", error);
@@ -110,8 +120,8 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     }
   }, []);
 
-  const updateSelectedDevice = (type: DeviceKind, device: Device | null) => {
-    if (!type) {
+  const updateSelectedDevice = (kind: DeviceKind, device: Device | null) => {
+    if (!kind) {
       return;
     }
 
@@ -119,32 +129,26 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
     if (window.fathom !== undefined) {
       window.fathom.trackEvent(
-        `${type === "videoinput" ? "video" : "audio"}_device_change`
+        `${kind === "videoinput" ? "video" : "audio"}_device_change`
       );
     }
-    if (type === "videoinput") {
-      tauriWindowImport.then(({ WebviewWindow }) => {
-        if (WebviewWindow.getByLabel("camera")) {
-          WebviewWindow.getByLabel("camera").close();
-        } else if (type === "videoinput" && device) {
+    if (kind === "videoinput") {
+      if (device?.label !== selectedVideoDevice?.label) {
+        const previous = selectedVideoDevice;
+        setSelectedVideoDevice(device);
+        localStorage.setItem("selected-videoinput", device?.label || "none");
+        if (!device) {
+          closeWebview("camera");
+        } else if (!previous && device) {
           initializeCameraWindow();
         }
-      });
-
-      if (
-        (!device && selectedVideoDevice) ||
-        selectedVideoDevice?.index !== device?.index
-      ) {
-        setSelectedVideoDevice(device);
       }
     }
 
-    if (type === "audioinput") {
-      if (
-        (!device && selectedAudioDevice) ||
-        selectedAudioDevice?.index !== device?.index
-      ) {
+    if (kind === "audioinput") {
+      if (device?.label !== selectedAudioDevice?.label) {
         setSelectedAudioDevice(device);
+        localStorage.setItem("selected-audioinput", device?.label || "none");
       }
     }
   };

@@ -1,6 +1,6 @@
 {
   "name": "embed",
-  "version": "0.2.7",
+  "version": "0.2.9",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3003",
