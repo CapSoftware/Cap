@@ -169,7 +169,7 @@ fn main() {
     //     .with_menu(create_tray_menu(None))
     //     .with_id("Cap");
 
-    let mut specta_builder = Builder::<tauri::Wry>::new().commands(collect_commands![
+    let specta_builder = Builder::<tauri::Wry>::new().commands(collect_commands![
         start_dual_recording,
         stop_all_recordings,
         enumerate_audio_devices,
@@ -186,7 +186,7 @@ fn main() {
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds
     specta_builder
-        .export(Typescript::default(), "../src/bindings.ts")
+        .export(Typescript::default(), "../src/utils/commands.ts")
         .expect("Failed to export typescript bindings");
 
     tauri::Builder::default()
