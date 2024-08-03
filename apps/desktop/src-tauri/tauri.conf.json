@@ -50,7 +50,11 @@
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": false,
-        "center": true
+        "center": true,
+        "windowEffects": {
+          "effects": ["underWindowBackground", "mica"],
+          "radius": 16.0
+        }
       }
     ],
     "security": {
