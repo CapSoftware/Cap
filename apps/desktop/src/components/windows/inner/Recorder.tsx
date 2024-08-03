@@ -142,8 +142,8 @@ export const Recorder = () => {
           handleStopAllRecordings();
         }
 
-        tauriWindow.then(({ getCurrent }) => {
-          const currentWindow = getCurrent();
+        tauriWindow.then(({ getCurrentWindow }) => {
+          const currentWindow = getCurrentWindow();
           if (!currentWindow.isVisible) {
             currentWindow.show();
           }
@@ -181,8 +181,8 @@ export const Recorder = () => {
     if (window.fathom !== undefined) {
       window.fathom.trackEvent("start_recording");
     }
-    tauriWindow.then(({ getAll }) => {
-      getAll().forEach((window) => {
+    tauriWindow.then(({ getAllWindows }) => {
+      getAllWindows().forEach((window) => {
         if (window.label !== "camera") {
           window.minimize();
         }
@@ -241,9 +241,10 @@ export const Recorder = () => {
     setStoppingRecording(true);
 
     try {
-      tauriWindow.then(({ WebviewWindow }) => {
-        const main = WebviewWindow.getByLabel("main");
+      tauriWindow.then(({ Window }) => {
+        const main = Window.getByLabel("main");
         if (main?.isMinimized()) main.unminimize();
+
       });
     } catch (error) {
       console.error("Error unminimizing main window:", error);
@@ -344,8 +345,8 @@ export const Recorder = () => {
         const seconds = Math.floor((Date.now() - startTime) / 1000);
         if (seconds >= 300) {
           setLimitReached(true);
-          tauriWindow.then(({ getCurrent }) => {
-            const currentWindow = getCurrent();
+          tauriWindow.then(({ getCurrentWindow }) => {
+            const currentWindow = getCurrentWindow();
             if (currentWindow.isMinimized()) {
               currentWindow.unminimize();
               toast.error(
