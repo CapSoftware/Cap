@@ -45,8 +45,8 @@ importers:
         specifier: ^2.0.0-rc.0
         version: 2.0.0-rc.0
       '@tauri-apps/plugin-global-shortcut':
-        specifier: workspace:*
-        version: link:../../crates/tauri-plugin-global-shortcut
+        specifier: 2.0.0-rc.0
+        version: 2.0.0-rc.0
       '@tensorflow-models/body-pix':
         specifier: ^2.2.1
         version: 2.2.1(@tensorflow/tfjs-backend-webgl@4.20.0)(@tensorflow/tfjs-converter@4.20.0)(@tensorflow/tfjs-core@4.20.0)
@@ -92,12 +92,6 @@ importers:
       tailwindcss:
         specifier: ^3.3.4
         version: 3.4.1
-      tauri-plugin-context-menu:
-        specifier: ^0.5.0
-        version: 0.5.0
-      tauri-plugin-positioner-api:
-        specifier: ^0.2.7
-        version: 0.2.7
     devDependencies:
       '@tauri-apps/cli':
         specifier: 2.0.0-rc.0
@@ -7278,6 +7272,12 @@ packages:
       '@tauri-apps/cli-win32-ia32-msvc': 2.0.0-rc.0
       '@tauri-apps/cli-win32-x64-msvc': 2.0.0-rc.0
     dev: true
+
+  /@tauri-apps/plugin-global-shortcut@2.0.0-rc.0:
+    resolution: {integrity: sha512-rcefV4AG+vnbTtGc07hDn4Uj8u//NpuqHVg1CShACyiCS0q2sZrDVC3qPN3RGhzQyeIOPq4bY1kQRHODffKXZA==}
+    dependencies:
+      '@tauri-apps/api': 2.0.0-rc.0
+    dev: false
 
   /@tensorflow-models/body-pix@2.2.1(@tensorflow/tfjs-backend-webgl@4.20.0)(@tensorflow/tfjs-converter@4.20.0)(@tensorflow/tfjs-core@4.20.0):
     resolution: {integrity: sha512-JeZHcpVMR0mW2znmF0FpZ0f7zpSY7c6+A7FBOmcIyZupTkXmG3MwGGqFPsVjRBwfqaKa4qYCJd7Svqo6rMzJYw==}
@@ -16015,11 +16015,13 @@ packages:
     resolution: {integrity: sha512-CkAjSyxLx26hTXabG5Unbv+GWeH0XYNQB3zTqRxHpp257mWX8I4oASp8YF5T3zxFQEK++ZHqMZHpLrQ3usShRQ==}
     dependencies:
       '@tauri-apps/api': 1.6.0
+    dev: true
 
   /tauri-plugin-positioner-api@0.2.7:
     resolution: {integrity: sha512-jwqRHo59UU3aJbffEFkWVhBorjQg1WNeDa4W4eWVnaTqLals+/fqgHdNwTGzG1+LLdaJSS2FUy4XSwEDAWvERQ==}
     dependencies:
       '@tauri-apps/api': 1.6.0
+    dev: true
 
   /test-exclude@6.0.0:
     resolution: {integrity: sha512-cAGWPIyOHU6zlmg88jwm7VRyXnMN7iV68OGAbYDk/Mh/xC/pzVPlQtY6ngoIH/5/tciuhGfvESU8GrHrcxD56w==}
