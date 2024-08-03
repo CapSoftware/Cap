@@ -209,9 +209,10 @@ fn main() {
                         .make_transparent()
                         .expect("Failed to set transparency on main webview");
 
+                    let win_clone = main_window.clone();
                     main_window.on_window_event(move |event| match event {
                         tauri::WindowEvent::ThemeChanged(_theme) => {
-                            let _ = main_window.set_traffic_lights_inset(inset_x, inset_y);
+                            let _ = win_clone.set_traffic_lights_inset(inset_x, inset_y);
                         }
                         _ => {}
                     })
