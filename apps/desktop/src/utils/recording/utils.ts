@@ -1,6 +1,6 @@
 "use client";
 
-import * as commands from "@/utils/commands";
+import { commands } from "@/utils/commands";
 
 export const enumerateAndStoreDevices = async () => {
   if (typeof navigator !== "undefined" && typeof window !== "undefined") {

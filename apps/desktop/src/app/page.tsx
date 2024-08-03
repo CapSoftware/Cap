@@ -12,7 +12,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import toast from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
-import * as commands from "@/utils/commands";
+import { commands } from "@/utils/commands";
 
 export const dynamic = "force-static";
 

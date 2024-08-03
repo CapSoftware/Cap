@@ -28,7 +28,7 @@ import {
   isUserPro,
 } from "@cap/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
-import * as commands from "@/utils/commands";
+import { commands } from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 

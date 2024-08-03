@@ -45,6 +45,9 @@ importers:
         specifier: ^2.0.0-rc.0
         version: 2.0.0-rc.0
       '@tauri-apps/plugin-global-shortcut':
+        specifier: ^2.0.0-rc.0
+        version: 2.0.0-rc.0
+      '@tauri-apps/plugin-shell':
         specifier: 2.0.0-rc.0
         version: 2.0.0-rc.0
       '@tensorflow-models/body-pix':
@@ -486,19 +489,6 @@ importers:
       typescript:
         specifier: ^5.3.2
         version: 5.3.3
-
-  crates/tauri-plugin-global-shortcut:
-    dependencies:
-      '@tauri-apps/api':
-        specifier: 1.6.0
-        version: 1.6.0
-    devDependencies:
-      tsconfig:
-        specifier: workspace:*
-        version: link:../../packages/tsconfig
-      typescript:
-        specifier: ^5.3.2
-        version: 5.4.5
 
   packages/config:
     dependencies:
@@ -7053,6 +7043,7 @@ packages:
   /@tauri-apps/api@1.6.0:
     resolution: {integrity: sha512-rqI++FWClU5I2UBp4HXFvl+sBWkdigBkxnpJDQUWttNyG7IZP4FwQGhTNL5EOw0vI8i6eSAJ5frLqO7n7jbJdg==}
     engines: {node: '>= 14.6.0', npm: '>= 6.6.0', yarn: '>= 1.19.1'}
+    dev: true
 
   /@tauri-apps/api@2.0.0-rc.0:
     resolution: {integrity: sha512-v454Qs3REHc3Za59U+/eSmBsdmF+3NE5+76+lFDaitVqN4ZglDHENDaMARYKGJVZuxiSkzyqG0SeG7lLQjVkPA==}
@@ -7275,6 +7266,12 @@ packages:
 
   /@tauri-apps/plugin-global-shortcut@2.0.0-rc.0:
     resolution: {integrity: sha512-rcefV4AG+vnbTtGc07hDn4Uj8u//NpuqHVg1CShACyiCS0q2sZrDVC3qPN3RGhzQyeIOPq4bY1kQRHODffKXZA==}
+    dependencies:
+      '@tauri-apps/api': 2.0.0-rc.0
+    dev: false
+
+  /@tauri-apps/plugin-shell@2.0.0-rc.0:
+    resolution: {integrity: sha512-bhUcQcrqZoK8H1DFXapr5r1Z75oh6Kd5Tltz97XpZFLREEqp+KhN2Fvyh8r/fKAyenYsTYUIsDsyGdjdueuF9g==}
     dependencies:
       '@tauri-apps/api': 2.0.0-rc.0
     dev: false

@@ -15,6 +15,7 @@
     "@sentry/nextjs": "^7.105.0",
     "@tauri-apps/api": "^2.0.0-rc.0",
     "@tauri-apps/plugin-global-shortcut": "^2.0.0-rc.0",
+    "@tauri-apps/plugin-shell": "2.0.0-rc.0",
     "@tensorflow-models/body-pix": "^2.2.1",
     "@tensorflow/tfjs": "^4.17.0",
     "autoprefixer": "^10.4.16",

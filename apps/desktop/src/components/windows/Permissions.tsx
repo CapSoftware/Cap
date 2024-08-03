@@ -3,7 +3,7 @@
 import { Button, LogoBadge } from "@cap/ui";
 import { useEffect, useState } from "react";
 import { savePermissions, getPermissions } from "@/utils/helpers";
-import * as commands from "@/utils/commands";
+import { commands } from "@/utils/commands";
 import { invoke } from "@tauri-apps/api/core";
 
 export const Permissions = () => {

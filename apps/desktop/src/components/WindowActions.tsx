@@ -1,12 +1,12 @@
 "use client";
 
-import { exit } from "@tauri-apps/plugin-process";
+// import {  } from "@tauri-apps/api";
 import { Home } from "@/components/icons/Home";
 import { openLinkInBrowser } from "@/utils/helpers";
 
 export const WindowActions = () => {
   const actionButtonBase = "w-3 h-3 bg-gray-500 rounded-full m-0 p-0 block";
-  const tauriWindow = import("@tauri-apps/api/window");
+  const tauriWindow = import("@tauri-apps/api/webviewWindow");
 
   return (
     <div className="w-full flex items-center -mt-3 z-20 absolute top-5">
@@ -18,7 +18,7 @@ export const WindowActions = () => {
                 if (window.fathom !== undefined) {
                   window.fathom.trackEvent("exit_clicked");
                 }
-                await exit();
+                // await close();
               }}
               className={`bg-red-500 hover:bg-red-700 transition-all ${actionButtonBase}`}
             ></button>
