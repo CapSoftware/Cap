@@ -14,7 +14,8 @@ import {
   enumerateAndStoreDevices,
   initializeCameraWindow,
 } from "./utils";
-import { closeWebview } from "../commands";
+import { commands } from "../commands";
+import { setTrayMenu } from "../tray";
 
 export type DeviceKind = "videoinput" | "audioinput";
 export interface Device {
@@ -138,7 +139,7 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         setSelectedVideoDevice(device);
         localStorage.setItem("selected-videoinput", device?.label || "none");
         if (!device) {
-          closeWebview("camera");
+          commands.closeWebview("camera");
         } else if (!previous && device) {
           initializeCameraWindow();
         }
@@ -155,8 +156,6 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
   useEffect(() => {
     let unlistenFnChangeDevice: any;
-    let unlistenFnTraySetDevice: any;
-
     const setupListeners = async () => {
       try {
         unlistenFnChangeDevice = await listen<{
@@ -171,41 +170,16 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
       } catch (error) {
         console.error("Error setting up change-device listener:", error);
       }
-
-      try {
-        unlistenFnTraySetDevice = await listen<{
-          type: string;
-          id: string | null;
-        }>("tray-set-device-id", (event) => {
-          const id = event.payload.id;
-          const kind = event.payload.type as DeviceKind;
-          const newDevice = id
-            ? devices.find((device) => kind === device.kind && id === device.id)
-            : null;
-          updateSelectedDevice(kind, newDevice);
-        });
-      } catch (error) {
-        console.error("Error setting up tray-set-device-id listener:", error);
-      }
     };
 
     setupListeners();
 
     if (devices.length !== 0) {
-      emit("media-devices-set", {
-        mediaDevices: [...(devices as Omit<Device, "index">[])],
-        selectedVideo: selectedVideoDevice,
-        selectedAudio: selectedAudioDevice,
-      });
+      setTrayMenu(devices, selectedAudioDevice, selectedVideoDevice);
     }
-
+    
     return () => {
-      if (unlistenFnChangeDevice) {
-        unlistenFnChangeDevice();
-      }
-      if (unlistenFnTraySetDevice) {
-        unlistenFnTraySetDevice();
-      }
+      unlistenFnChangeDevice?.();
     };
   }, [selectedVideoDevice, selectedAudioDevice]);
 

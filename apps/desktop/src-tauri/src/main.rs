@@ -1,8 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use regex::Regex;
 use sentry_tracing::EventFilter;
-use serde::{Deserialize, Serialize};
 use specta_typescript::Typescript;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,7 +8,7 @@ use std::vec;
 use tauri::Manager;
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::{collect_commands, Builder};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::Mutex;
 use tracing::Level;
 use tracing_subscriber::prelude::*;
 
@@ -128,48 +126,6 @@ fn main() {
         }
     };
 
-    #[derive(serde::Deserialize, PartialEq)]
-    enum DeviceKind {
-        #[serde(alias = "videoinput")]
-        Video,
-        #[serde(alias = "audioinput")]
-        Audio,
-    }
-
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct MediaDevice {
-        id: String,
-        kind: DeviceKind,
-        label: String,
-    }
-
-    // fn create_tray_menu(submenus: Option<Vec<SystemTraySubmenu>>) -> SystemTrayMenu {
-    //     let mut tray_menu = SystemTrayMenu::new();
-
-    //     if let Some(items) = submenus {
-    //         for submenu in items {
-    //             tray_menu = tray_menu.add_submenu(submenu);
-    //         }
-    //         tray_menu = tray_menu.add_native_item(tauri::SystemTrayMenuItem::Separator);
-    //     }
-
-    //     tray_menu
-    //         .add_item(CustomMenuItem::new("show-window".to_string(), "Show Cap"))
-    //         .add_item(CustomMenuItem::new("quit".to_string(), "Quit").accelerator("CmdOrControl+Q"))
-    // }
-
-    // #[cfg(target_os = "macos")]
-    // let tray = SystemTray::new()
-    //     .with_menu(create_tray_menu(None))
-    //     .with_menu_on_left_click(false)
-    //     .with_title("Cap");
-
-    // #[cfg(target_os = "windows")]
-    // let tray = SystemTray::new()
-    //     .with_menu(create_tray_menu(None))
-    //     .with_id("Cap");
-
     let specta_builder = Builder::<tauri::Wry>::new().commands(collect_commands![
         start_dual_recording,
         stop_all_recordings,
@@ -260,150 +216,9 @@ fn main() {
             //         }
             //     }
             // });
-
-            // let tray_handle = app.tray_handle();
-            // app.listen_global("media-devices-set", move |event| {
-            //     #[derive(serde::Deserialize)]
-            //     #[serde(rename_all = "camelCase")]
-            //     struct Payload {
-            //         media_devices: Vec<MediaDevice>,
-            //         selected_video: Option<MediaDevice>,
-            //         selected_audio: Option<MediaDevice>,
-            //     }
-            //     let payload: Payload = serde_json
-            //         ::from_str(event.payload().expect("Error wile openning event payload"))
-            //         .expect("Error while deserializing media devices from event payload");
-
-            //     fn create_submenu_items(
-            //         devices: &Vec<MediaDevice>,
-            //         selected_device: &Option<MediaDevice>,
-            //         kind: DeviceKind
-            //     ) -> SystemTrayMenu {
-            //         let id_prefix = if kind == DeviceKind::Video { "video" } else { "audio" };
-            //         let mut none_item = CustomMenuItem::new(
-            //             format!("in_{}_none", id_prefix),
-            //             "None"
-            //         );
-            //         if selected_device.is_none() {
-            //             none_item = none_item.selected();
-            //         }
-            //         let initial = SystemTrayMenu::new().add_item(none_item);
-            //         devices
-            //             .iter()
-            //             .filter(|device| device.kind == kind)
-            //             .fold(initial, |tray_items, device| {
-            //                 let mut menu_item = CustomMenuItem::new(
-            //                     format!("in_{}_{}", id_prefix, device.id),
-            //                     &device.label
-            //                 );
-
-            //                 if let Some(selected) = selected_device {
-            //                     if selected.label == device.label {
-            //                         menu_item = menu_item.selected();
-            //                     }
-            //                 }
-
-            //                 tray_items.add_item(menu_item)
-            //             })
-            //     }
-
-            //     let new_menu = create_tray_menu(
-            //         Some(
-            //             vec![
-            //                 SystemTraySubmenu::new(
-            //                     "Camera",
-            //                     create_submenu_items(
-            //                         &payload.media_devices,
-            //                         &payload.selected_video,
-            //                         DeviceKind::Video
-            //                     )
-            //                 ),
-            //                 SystemTraySubmenu::new(
-            //                     "Microphone",
-            //                     create_submenu_items(
-            //                         &payload.media_devices,
-            //                         &payload.selected_audio,
-            //                         DeviceKind::Audio
-            //                     )
-            //                 )
-            //             ]
-            //         )
-            //     );
-
-            //     tray_handle.set_menu(new_menu).expect("Error while updating the tray menu items");
-            // });
-
             Ok(())
         })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        // .system_tray(tray)
-        // .on_system_tray_event(move |app, event| match event {
-        //     SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
-        //         "show-window" => {
-        //             let window = app
-        //                 .get_window("main")
-        //                 .expect("Error while trying to get the main window.");
-        //             window
-        //                 .show()
-        //                 .expect("Error while trying to show main window");
-        //             if !window.is_focused().unwrap_or(false) {
-        //                 window
-        //                     .set_focus()
-        //                     .expect("Error while trying to set focus on main window");
-        //             }
-        //             if window.is_minimized().unwrap_or(false) {
-        //                 window
-        //                     .unminimize()
-        //                     .expect("Error while trying to unminimize main window");
-        //             }
-        //         }
-        //         "quit" => {
-        //             app.exit(0);
-        //         }
-        //         item_id => {
-        //             if !item_id.starts_with("in") {
-        //                 return;
-        //             }
-        //             let pattern = Regex::new(r"^in_(video|audio)_")
-        //                 .expect("Failed to create regex for checking tray item events");
-        //             if pattern.is_match(item_id) {
-        //                 #[derive(Clone, serde::Serialize)]
-        //                 struct SetDevicePayload {
-        //                     #[serde(rename(serialize = "type"))]
-        //                     device_type: String,
-        //                     id: Option<String>,
-        //                 }
-        //                 let device_id = pattern.replace_all(item_id, "").into_owned();
-        //                 let kind = if item_id.contains("video") {
-        //                     "videoinput"
-        //                 } else {
-        //                     "audioinput"
-        //                 };
-        //                 app.emit_all(
-        //                     "tray-set-device-id",
-        //                     SetDevicePayload {
-        //                         device_type: kind.to_string(),
-        //                         id: if device_id == "none" {
-        //                             None
-        //                         } else {
-        //                             Some(device_id)
-        //                         },
-        //                     },
-        //                 )
-        //                 .expect("Failed to emit tray set media device event to windows");
-        //             }
-        //         }
-        //     },
-        //     SystemTrayEvent::LeftClick {
-        //         position: _,
-        //         size: _,
-        //         ..
-        //     } => {
-        //         app.emit_all("tray-on-left-click", Some(()))
-        //             .expect("Failed to emit tray left click event to windows");
-        //     }
-        //     _ => {}
-        // })
         .run(context)
         .expect("Error while running tauri application");
 }

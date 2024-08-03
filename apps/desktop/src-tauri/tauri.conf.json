@@ -61,6 +61,8 @@
     },
     "macOSPrivateApi": false,
     "trayIcon": {
+      "id": "cap_main",
+      "menuOnLeftClick": false,
       "iconPath": "icons/tray-default-icon.png",
       "iconAsTemplate": true
     }
