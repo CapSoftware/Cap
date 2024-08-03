@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Device,
   DeviceKind,
@@ -18,6 +18,7 @@ import { Button } from "@cap/ui";
 import { Logo } from "@/components/icons/Logo";
 
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
+import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import { invoke } from "@tauri-apps/api/tauri";
 import {
   getLatestVideoId,
@@ -209,6 +210,7 @@ export const Recorder = () => {
   };
 
   const handleStartAllRecordings = async () => {
+    if (isRecording) return;
     try {
       console.log("bruh");
       setStartingRecording(true);
@@ -235,14 +237,13 @@ export const Recorder = () => {
   };
 
   const handleStopAllRecordings = async () => {
+    if (!isRecording) return;
     setStoppingRecording(true);
 
     try {
       tauriWindow.then(({ WebviewWindow }) => {
         const main = WebviewWindow.getByLabel("main");
-        if (main && main.isMinimized()) {
-          main.unminimize();
-        }
+        if (main?.isMinimized()) main.unminimize();
       });
     } catch (error) {
       console.error("Error unminimizing main window:", error);
@@ -291,6 +292,8 @@ export const Recorder = () => {
     setIsRecording(false);
     setStoppingRecording(false);
   };
+
+  useKeybinds(handleStartAllRecordings, handleStopAllRecordings);
 
   useEffect(() => {
     if (stoppingRecording) {
@@ -492,3 +495,26 @@ export const Recorder = () => {
     </>
   );
 };
+
+function useKeybinds(startRecording: () => void, stopRecording: () => void) {
+  const handlers = useRef({
+    startRecording,
+    stopRecording,
+  });
+  handlers.current = {
+    startRecording,
+    stopRecording,
+  };
+
+  useEffect(() => {
+    // register("CommandOrControl+Shift+R", () =>
+    //   handlers.current.startRecording()
+    // );
+    // register("CommandOrControl+Shift+S", () =>
+    //   handlers.current.stopRecording()
+    // );
+    // return () => {
+    //   unregister(["CommandOrControl+Shift+R", "CommandOrControl+Shift+S"]);
+    // };
+  }, []);
+}

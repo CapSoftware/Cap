@@ -23,6 +23,7 @@
       "window": {
         "all": false,
         "close": true,
+        "create": true,
         "hide": true,
         "show": true,
         "maximize": true,

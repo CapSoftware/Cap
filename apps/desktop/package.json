@@ -30,7 +30,8 @@
     "react-router-dom": "^6.18.0",
     "tailwindcss": "^3.3.4",
     "tauri-plugin-context-menu": "^0.5.0",
-    "tauri-plugin-positioner-api": "^0.2.7"
+    "tauri-plugin-positioner-api": "^0.2.7",
+    "@tauri-apps/plugin-global-shortcut": "workspace:*"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^1.5.11",

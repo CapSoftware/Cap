@@ -41,9 +41,15 @@ importers:
       '@sentry/nextjs':
         specifier: ^7.105.0
         version: 7.105.0(next@14.2.3(@babel/core@7.23.7)(react-dom@18.2.0(react@18.2.0))(react@18.2.0))(react@18.2.0)
+      '@tanstack/react-query':
+        specifier: ^5.51.11
+        version: 5.51.11(react@18.2.0)
       '@tauri-apps/api':
         specifier: ^1.5.3
         version: 1.5.3
+      '@tauri-apps/plugin-global-shortcut':
+        specifier: workspace:*
+        version: link:../../crates/tauri-plugin-global-shortcut
       '@tensorflow-models/body-pix':
         specifier: ^2.2.1
         version: 2.2.1(@tensorflow/tfjs-backend-webgl@4.17.0(@tensorflow/tfjs-core@4.17.0))(@tensorflow/tfjs-converter@4.17.0(@tensorflow/tfjs-core@4.17.0))(@tensorflow/tfjs-core@4.17.0)
@@ -489,6 +495,12 @@ importers:
       typescript:
         specifier: ^5.3.2
         version: 5.3.3
+
+  crates/tauri-plugin-global-shortcut:
+    dependencies:
+      '@tauri-apps/api':
+        specifier: 1.6.0
+        version: 1.6.0
 
   packages/config:
     dependencies:
@@ -3508,6 +3520,10 @@ packages:
 
   '@tauri-apps/api@1.5.3':
     resolution: {integrity: sha512-zxnDjHHKjOsrIzZm6nO5Xapb/BxqUq1tc7cGkFXsFkGTsSWgCPH1D8mm0XS9weJY2OaR73I3k3S+b7eSzJDfqA==}
+    engines: {node: '>= 14.6.0', npm: '>= 6.6.0', yarn: '>= 1.19.1'}
+
+  '@tauri-apps/api@1.6.0':
+    resolution: {integrity: sha512-rqI++FWClU5I2UBp4HXFvl+sBWkdigBkxnpJDQUWttNyG7IZP4FwQGhTNL5EOw0vI8i6eSAJ5frLqO7n7jbJdg==}
     engines: {node: '>= 14.6.0', npm: '>= 6.6.0', yarn: '>= 1.19.1'}
 
   '@tauri-apps/cli-darwin-arm64@1.5.11':
@@ -12340,6 +12356,8 @@ snapshots:
   '@tanstack/virtual-core@3.0.0': {}
 
   '@tauri-apps/api@1.5.3': {}
+
+  '@tauri-apps/api@1.6.0': {}
 
   '@tauri-apps/cli-darwin-arm64@1.5.11':
     optional: true
