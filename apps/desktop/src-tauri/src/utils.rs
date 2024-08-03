@@ -48,7 +48,7 @@ pub fn create_named_pipe(path: &Path) -> Result<(), Box<dyn std::error::Error>> 
     use std::os::windows::ffi::OsStrExt;
     use std::ptr::null_mut;
     use winapi::um::namedpipeapi::CreateNamedPipeW; // Corrected import
-    use winapi::um::winbase::{PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE, PIPE_READMODE_BYTE, PIPE_WAIT};
+    use winapi::um::winbase::{PIPE_ACCESS_DUPLEX, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT};
 
     let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let handle = unsafe {

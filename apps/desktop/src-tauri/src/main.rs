@@ -166,12 +166,12 @@ fn main() {
         .with_menu(create_tray_menu(None))
         .with_menu_on_left_click(false)
         .with_title("Cap");
-    
+
     #[cfg(target_os = "windows")]
     let tray = SystemTray::new()
         .with_menu(create_tray_menu(None))
         .with_id("Cap");
-    
+
     tauri::Builder
         ::default()
         .plugin(tauri_plugin_oauth::init())
@@ -203,7 +203,7 @@ fn main() {
                 .unwrap_or_else(|| PathBuf::new());
 
             let recording_state = RecordingState {
-            active_recording: None,
+            		active_recording: None,
                 data_dir: data_directory,
                 max_screen_width: max_width as usize,
                 max_screen_height: max_height as usize,
@@ -331,6 +331,7 @@ fn main() {
             ]
         )
         .plugin(tauri_plugin_context_menu::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .system_tray(tray)
         .on_system_tray_event(move |app, event| {
             match event {

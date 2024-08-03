@@ -1,11 +1,14 @@
 use std::{
-    path::{ Path, PathBuf },
+    path::{Path, PathBuf},
     process::Stdio,
-    sync::{ atomic::{ AtomicBool, Ordering }, Arc },
-    time::{ Duration, Instant },
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
 };
-use tokio::io::{ AsyncBufReadExt, AsyncWriteExt, BufReader };
-use tokio::process::{ Child, ChildStdin, Command };
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::Level;
@@ -13,7 +16,7 @@ use tracing::Level;
 use crate::{
     app::config,
     recording::RecordingOptions,
-    utils::{ create_named_pipe, ffmpeg_path_as_str },
+    utils::{create_named_pipe, ffmpeg_path_as_str},
 };
 
 mod audio;
@@ -80,7 +83,7 @@ impl MediaRecorder {
         recording_dir: &Path,
         custom_device: Option<&str>,
         max_screen_width: usize,
-        max_screen_height: usize
+        max_screen_height: usize,
     ) -> Result<(), String> {
         if !scap::has_permission() {
             tracing::warn!("Screen capturing permission not granted. Requesting permission...");
@@ -104,7 +107,7 @@ impl MediaRecorder {
         let mut video_capturer = VideoCapturer::new(
             max_screen_width,
             max_screen_height,
-            self.should_stop.clone()
+            self.should_stop.clone(),
         );
         let adjusted_width = video_capturer.frame_width;
         let adjusted_height = video_capturer.frame_height;
@@ -199,13 +202,19 @@ impl MediaRecorder {
             .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
             .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
             .args(["-movflags", "frag_keyframe+empty_moov"])
-            .args(["-vf", &format!("fps={fps},scale=in_range=full:out_range=limited")]);
+            .args([
+                "-vf",
+                &format!("fps={fps},scale=in_range=full:out_range=limited"),
+            ]);
 
         if self.audio_enabled {
             ffmpeg_command
                 // audio
                 .args(["-codec:a", "aac", "-b:a", "128k", "-async", "1"])
-                .args(["-af", "aresample=async=1:min_hard_comp=0.100000:first_pts=0"]);
+                .args([
+                    "-af",
+                    "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
+                ]);
         } else {
             ffmpeg_command.args(["-an"]);
         }
@@ -215,7 +224,8 @@ impl MediaRecorder {
         tracing::trace!("Starting FFmpeg process...");
 
         let (ffmpeg_child, ffmpeg_stdin) = self
-            .start_ffmpeg_process(ffmpeg_command).await
+            .start_ffmpeg_process(ffmpeg_command)
+            .await
             .map_err(|e| e.to_string())?;
         tracing::trace!("Ffmpeg process started");
 
@@ -290,7 +300,7 @@ impl MediaRecorder {
 
     async fn start_ffmpeg_process(
         &self,
-        cmd: Command
+        cmd: Command,
     ) -> Result<(Child, ChildStdin), std::io::Error> {
         let mut video_process = start_recording_process(cmd).await.map_err(|e| {
             tracing::error!("Failed to start video recording process: {}", e);
@@ -317,7 +327,7 @@ pub fn enumerate_audio_devices() -> Vec<String> {
 
 #[tracing::instrument]
 async fn start_recording_process(
-    mut cmd: Command
+    mut cmd: Command,
 ) -> Result<tokio::process::Child, std::io::Error> {
     let mut process = cmd.stdin(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
 
@@ -337,7 +347,7 @@ async fn start_recording_process(
 #[tracing::instrument]
 async fn wait_for_start_times(
     audio_start_time: &Mutex<Option<Instant>>,
-    video_start_time: &Mutex<Option<Instant>>
+    video_start_time: &Mutex<Option<Instant>>,
 ) -> (Instant, Instant) {
     loop {
         let audio_start_locked = audio_start_time.lock().await;
@@ -362,7 +372,7 @@ pub enum TimeOffsetTarget {
 #[tracing::instrument]
 async fn create_time_offset_args(
     audio_start_time: &Mutex<Option<Instant>>,
-    video_start_time: &Mutex<Option<Instant>>
+    video_start_time: &Mutex<Option<Instant>>,
 ) -> Option<(TimeOffsetTarget, Vec<String>)> {
     let (audio_start, video_start) = wait_for_start_times(audio_start_time, video_start_time).await;
     let duration_difference = if audio_start > video_start {

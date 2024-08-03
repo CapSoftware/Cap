@@ -14,40 +14,41 @@ tauri-build = { version = "1.5.1", features = [] }
 ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
 
 [dependencies]
-tauri = { version = "1.6.1", features = [
-  "system-tray",
-  "updater",
-  "macos-private-api",
-  "window-set-position",
-  "fs-write-file",
-  "fs-remove-file",
-  "fs-read-file",
-  "fs-rename-file",
-  "fs-exists",
-  "fs-remove-dir",
-  "fs-read-dir",
-  "fs-copy-file",
-  "fs-create-dir",
-  "window-set-ignore-cursor-events",
-  "window-unminimize",
-  "window-minimize",
-  "window-close",
-  "window-show",
-  "window-start-dragging",
-  "window-hide",
-  "window-unmaximize",
-  "window-maximize",
-  "window-set-always-on-top",
-  "shell-open",
-  "devtools",
-  "os-all",
-  "http-all",
-  "icon-png",
+tauri = { version = "1.6.1", features = [ "window-create",
+	"system-tray",
+	"updater",
+	"macos-private-api",
+	"window-set-position",
+	"fs-write-file",
+	"fs-remove-file",
+	"fs-read-file",
+	"fs-rename-file",
+	"fs-exists",
+	"fs-remove-dir",
+	"fs-read-dir",
+	"fs-copy-file",
+	"fs-create-dir",
+	"window-set-ignore-cursor-events",
+	"window-unminimize",
+	"window-minimize",
+	"window-close",
+	"window-show",
+	"window-start-dragging",
+	"window-hide",
+	"window-unmaximize",
+	"window-maximize",
+	"window-set-always-on-top",
+	"shell-open",
+	"devtools",
+	"os-all",
+	"http-all",
+	"icon-png",
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri-plugin-context-menu = "0.7.0"
 tauri-plugin-positioner = { version = "1.0.4", features = ["system-tray"] }
+tauri-plugin-global-shortcut = { path = "../../../crates/tauri-plugin-global-shortcut" }
 ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
 cpal = "0.15.2"
 which = "4.2.2"
@@ -81,9 +82,15 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 tracing-appender = "0.2"
 sentry-tracing = "0.34.0"
+keyboard-types = "0.7.0"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3.9", features = ["fileapi", "winbase", "winnt", "handleapi"] }
+winapi = { version = "0.3.9", features = [
+	"fileapi",
+	"winbase",
+	"winnt",
+	"handleapi",
+] }
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
