@@ -10,7 +10,11 @@
   "types": "./dist/index.d.ts",
   "main": "./dist/index.js",
   "scripts": {
-    "postinstall": "pnpm tsc"
+    "postinstall": "tsc"
+  },
+  "devDependencies": {
+    "tsconfig": "workspace:*",
+    "typescript": "^5.3.2"
   },
   "dependencies": {
     "@tauri-apps/api": "1.6.0"
