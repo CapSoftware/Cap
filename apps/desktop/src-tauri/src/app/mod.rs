@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     time::{Duration, SystemTime},
 };
-use tauri::{Assets, Context};
+use tauri::{Context, Runtime};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 
 #[macro_use]
@@ -29,8 +29,10 @@ pub fn panic_hook(info: &PanicInfo) {
     }
 }
 
-pub fn get_log_file<A: Assets>(context: &Context<A>) -> RollingFileAppender {
-    let log_directory = tauri::api::path::app_log_dir(context.config()).unwrap_or_else(|| {
+pub fn get_log_file<R: Runtime>(context: &Context<R>) -> RollingFileAppender {
+    // https://github.com/tauri-apps/tauri/discussions/7757#discussioncomment-6929192
+    let identifier = context.config().identifier.clone();
+    let log_directory = app_log_dir(identifier).unwrap_or_else(|_| {
         println!("Using current directory as log directory");
         PathBuf::new().join("logs")
     });
@@ -63,4 +65,18 @@ pub fn get_log_file<A: Assets>(context: &Context<A>) -> RollingFileAppender {
         .filename_suffix("log")
         .build(log_directory)
         .unwrap()
+}
+
+pub fn app_log_dir(identifier: String) -> tauri::Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    let path = dirs::home_dir()
+        .ok_or(tauri::Error::UnknownPath)
+        .map(|dir| dir.join("Library/Logs").join(identifier));
+
+    #[cfg(not(target_os = "macos"))]
+    let path = dirs::data_local_dir()
+        .ok_or(tauri::Error::UnknownPath)
+        .map(|dir| dir.join(identifier).join("logs"));
+
+    path
 }
