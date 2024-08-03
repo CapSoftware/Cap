@@ -90,48 +90,35 @@ export async function GET(request: NextRequest) {
     });
 
     if (video.source.type === "local") {
-      const objects = await s3Client.send(
-        new ListObjectsV2Command({
+      const playlistUrl = await getSignedUrl(
+        s3Client,
+        new GetObjectCommand({
           Bucket: bucket,
-          Prefix: `${userId}/${videoId}/combined-source`,
-        })
+          Key: `${userId}/${videoId}/combined-source/stream.m3u8`,
+        }),
+        { expiresIn: 3600 }
       );
+      const playlistResp = await fetch(playlistUrl);
+      const playlistText = await playlistResp.text();
 
-      const segments = (objects.Contents || []).filter((s) =>
-        s.Key?.endsWith(".ts")
-      );
+      const lines = playlistText.split("\n");
 
-      const chunksUrls = await Promise.all(
-        segments.map(async (object) => {
-          const url = await getSignedUrl(
+      for (const [index, line] of lines.entries()) {
+        if (line.endsWith(".ts")) {
+          lines[index] = await getSignedUrl(
             s3Client,
             new GetObjectCommand({
               Bucket: bucket,
-              Key: object.Key,
+              Key: `${userId}/${videoId}/combined-source/${line}`,
             }),
             { expiresIn: 3600 }
           );
-          const metadata = await s3Client.send(
-            new HeadObjectCommand({
-              Bucket: bucket,
-              Key: object.Key,
-            })
-          );
+        }
+      }
 
-          return {
-            url: url,
-            duration: metadata?.Metadata?.duration ?? "",
-            bandwidth: metadata?.Metadata?.bandwidth ?? "",
-            resolution: metadata?.Metadata?.resolution ?? "",
-            videoCodec: metadata?.Metadata?.videocodec ?? "",
-            audioCodec: metadata?.Metadata?.audiocodec ?? "",
-          };
-        })
-      );
+      const playlist = lines.join("\n");
 
-      const generatedPlaylist = generateM3U8Playlist(chunksUrls);
-
-      return new Response(generatedPlaylist, {
+      return new Response(playlist, {
         status: 200,
         headers: getHeaders(origin),
       });
@@ -266,7 +253,7 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    const generatedPlaylist = await generateM3U8Playlist(chunksUrls);
+    const generatedPlaylist = generateM3U8Playlist(chunksUrls);
 
     return new Response(generatedPlaylist, {
       status: 200,
