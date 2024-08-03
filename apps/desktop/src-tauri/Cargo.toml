@@ -10,39 +10,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [build-dependencies]
-tauri-build = { version = "1.5.1", features = [] }
+tauri-build = { version = "2.0.0-rc", features = [] }
 ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
 
 [dependencies]
-tauri = { version = "1.6.1", features = [ "window-create",
-	"system-tray",
-	"updater",
+tauri = { version = "2.0.0-rc", features = [
 	"macos-private-api",
-	"window-set-position",
-	"fs-write-file",
-	"fs-remove-file",
-	"fs-read-file",
-	"fs-rename-file",
-	"fs-exists",
-	"fs-remove-dir",
-	"fs-read-dir",
-	"fs-copy-file",
-	"fs-create-dir",
-	"window-set-ignore-cursor-events",
-	"window-unminimize",
-	"window-minimize",
-	"window-close",
-	"window-show",
-	"window-start-dragging",
-	"window-hide",
-	"window-unmaximize",
-	"window-maximize",
-	"window-set-always-on-top",
-	"shell-open",
 	"devtools",
-	"os-all",
-	"http-all",
-	"icon-png",
+	"icon-png", "tray-icon",
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

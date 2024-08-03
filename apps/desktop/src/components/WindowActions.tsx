@@ -1,6 +1,6 @@
 "use client";
 
-import { exit } from "@tauri-apps/api/process";
+import { exit } from "@tauri-apps/plugin-process";
 import { Home } from "@/components/icons/Home";
 import { openLinkInBrowser } from "@/utils/helpers";
 

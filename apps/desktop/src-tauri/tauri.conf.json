@@ -2,89 +2,41 @@
   "build": {
     "beforeDevCommand": "next dev -p 3001",
     "beforeBuildCommand": "next build",
-    "devPath": "http://localhost:3001",
-    "distDir": "../out",
-    "withGlobalTauri": false
+    "frontendDist": "../out",
+    "devUrl": "http://localhost:3001"
   },
-  "package": {
-    "productName": "Cap",
-    "version": "0.2.9"
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Utility",
+    "macOS": {
+      "entitlements": "App.entitlements"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": "v1Compatible"
   },
-  "tauri": {
-    "allowlist": {
-      "all": false,
-      "shell": {
-        "all": false,
-        "open": true
-      },
-      "os": {
-        "all": true
-      },
-      "window": {
-        "all": false,
-        "close": true,
-        "create": true,
-        "hide": true,
-        "show": true,
-        "maximize": true,
-        "minimize": true,
-        "unmaximize": true,
-        "unminimize": true,
-        "startDragging": true,
-        "setAlwaysOnTop": true,
-        "setIgnoreCursorEvents": true,
-        "setPosition": true
-      },
-      "fs": {
-        "scope": ["**"],
-        "all": false,
-        "readFile": true,
-        "writeFile": true,
-        "readDir": true,
-        "copyFile": true,
-        "createDir": true,
-        "removeDir": true,
-        "removeFile": true,
-        "renameFile": true,
-        "exists": true
-      },
-      "http": {
-        "all": true,
-        "request": true,
-        "scope": ["http://*", "https://*", "wss://*"]
-      }
-    },
-    "bundle": {
-      "active": true,
-      "targets": "all",
-      "category": "Utility",
-      "identifier": "so.cap.desktop",
-      "icon": [
-        "icons/32x32.png",
-        "icons/128x128.png",
-        "icons/128x128@2x.png",
-        "icons/icon.icns",
-        "icons/icon.ico"
-      ],
-      "macOS": {
-        "entitlements": "App.entitlements"
-      }
-    },
-    "security": {
-      "csp": null
-    },
-    "macOSPrivateApi": true,
+  "productName": "Cap",
+  "version": "0.2.9",
+  "identifier": "so.cap.desktop",
+  "plugins": {
     "updater": {
-      "active": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFRDMyMDE5MDZEMDk4RTEKUldUaG1OQUdHU0RUbm44YWgxNVlkRjBMZU8yOHB5N0kyY01NZDJTeXNOb09Zdlc2Um81UVFKcTAK",
       "endpoints": [
         "https://cap.so/api/releases/tauri/{{current_version}}/{{target}}/{{arch}}"
       ],
-      "dialog": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFRDMyMDE5MDZEMDk4RTEKUldUaG1OQUdHU0RUbm44YWgxNVlkRjBMZU8yOHB5N0kyY01NZDJTeXNOb09Zdlc2Um81UVFKcTAK",
       "windows": {
         "installMode": "passive"
       }
-    },
+    }
+  },
+  "app": {
+    "withGlobalTauri": false,
     "windows": [
       {
         "title": "Cap",
@@ -101,7 +53,11 @@
         "center": true
       }
     ],
-    "systemTray": {
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true,
+    "trayIcon": {
       "iconPath": "icons/tray-default-icon.png",
       "iconAsTemplate": true
     }

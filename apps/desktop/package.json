@@ -13,7 +13,8 @@
     "@cap/utils": "workspace:*",
     "@mux/mux-node": "^8.5.1",
     "@sentry/nextjs": "^7.105.0",
-    "@tauri-apps/api": "^1.5.3",
+    "@tauri-apps/api": "^2.0.0-rc.0",
+    "@tauri-apps/plugin-global-shortcut": "workspace:*",
     "@tensorflow-models/body-pix": "^2.2.1",
     "@tensorflow/tfjs": "^4.17.0",
     "autoprefixer": "^10.4.16",
@@ -30,11 +31,10 @@
     "react-router-dom": "^6.18.0",
     "tailwindcss": "^3.3.4",
     "tauri-plugin-context-menu": "^0.5.0",
-    "tauri-plugin-positioner-api": "^0.2.7",
-    "@tauri-apps/plugin-global-shortcut": "workspace:*"
+    "tauri-plugin-positioner-api": "^0.2.7"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^1.5.11",
+    "@tauri-apps/cli": "2.0.0-rc.0",
     "@types/react": "^18.2.15",
     "@types/react-dom": "latest",
     "typescript": "^5.3.2"

@@ -19,7 +19,7 @@ import { Logo } from "@/components/icons/Logo";
 
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
 import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import {
   getLatestVideoId,
   saveLatestVideoId,

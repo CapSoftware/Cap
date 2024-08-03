@@ -9,7 +9,7 @@ import { LogoSpinner } from "@cap/ui";
 import { getPermissions } from "@/utils/helpers";
 import { initializeCameraWindow } from "@/utils/recording/utils";
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import toast from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import * as commands from "@/utils/commands";
