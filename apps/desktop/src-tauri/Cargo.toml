@@ -14,11 +14,7 @@ tauri-build = { version = "2.0.0-rc", features = [] }
 ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
 
 [dependencies]
-tauri = { version = "=2.0.0-rc.0", features = [
-	"macos-private-api",
-	"devtools",
-	"tray-icon",
-] }
+tauri = { version = "=2.0.0-rc.0", features = ["devtools", "tray-icon"] }
 tauri-plugin-shell = "2.0.0-rc"
 tauri-plugin-global-shortcut = "2.0.0-rc"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
@@ -57,6 +53,7 @@ specta = "=2.0.0-rc.19"
 tauri-specta = { version = "=2.0.0-rc.14", features = ["derive", "typescript"] }
 specta-typescript = "0.0.6"
 dirs = "5.0.1"
+tauri-plugin-decorum = "1.0.0"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = [

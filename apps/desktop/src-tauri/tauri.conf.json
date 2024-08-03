@@ -47,20 +47,19 @@
         "maximized": false,
         "resizable": false,
         "fullscreen": false,
-        "transparent": true,
-        "decorations": false,
         "alwaysOnTop": false,
         "center": true,
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay",
         "windowEffects": {
-          "effects": ["underWindowBackground", "mica"],
-          "radius": 16.0
+          "effects": ["underWindowBackground", "mica"]
         }
       }
     ],
     "security": {
       "csp": null
     },
-    "macOSPrivateApi": true,
+    "macOSPrivateApi": false,
     "trayIcon": {
       "iconPath": "icons/tray-default-icon.png",
       "iconAsTemplate": true

@@ -2239,6 +2239,26 @@
           ]
         },
         {
+          "type": "string",
+          "enum": [
+            "decorum:default"
+          ]
+        },
+        {
+          "description": "decorum:allow-show-snap-overlay -> Enables the show_snap_overlay command without any pre-configured scope.",
+          "type": "string",
+          "enum": [
+            "decorum:allow-show-snap-overlay"
+          ]
+        },
+        {
+          "description": "decorum:deny-show-snap-overlay -> Denies the show_snap_overlay command without any pre-configured scope.",
+          "type": "string",
+          "enum": [
+            "decorum:deny-show-snap-overlay"
+          ]
+        },
+        {
           "description": "global-shortcut:default -> No features are enabled by default, as we believe\nthe shortcuts can be inherently dangerous and it is\napplication specific if specific shortcuts should be\nregistered or unregistered.\n",
           "type": "string",
           "enum": [

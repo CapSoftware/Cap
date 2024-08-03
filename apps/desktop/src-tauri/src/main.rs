@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::vec;
 use tauri::Manager;
+use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::{collect_commands, Builder};
 use tokio::sync::{oneshot, Mutex};
 use tracing::Level;
@@ -193,6 +194,29 @@ fn main() {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let handle = app.handle();
+
+            if let Some(main_window) = app.get_webview_window("main") {
+                main_window
+                    .create_overlay_titlebar()
+                    .expect("Failed to create titlebar for main window");
+
+                #[cfg(target_os = "macos")]
+                {
+                    let inset_x = 11.0;
+                    let inset_y = 24.0;
+                    let _ = main_window.set_traffic_lights_inset(inset_x, inset_y);
+                    main_window
+                        .make_transparent()
+                        .expect("Failed to set transparency on main webview");
+
+                    main_window.on_window_event(move |event| match event {
+                        tauri::WindowEvent::ThemeChanged(_theme) => {
+                            let _ = main_window.set_traffic_lights_inset(inset_x, inset_y);
+                        }
+                        _ => {}
+                    })
+                }
+            }
 
             let data_directory = handle
                 .path()

@@ -12,7 +12,7 @@ export const WindowActions = () => {
     <div className="w-full flex items-center -mt-3 z-20 absolute top-5">
       <div className="flex flex-grow items-center justify-between px-3">
         <div className="flex space-x-2">
-          <div>
+          {/* <div>
             <button
               onClick={async () => {
                 if (window.fathom !== undefined) {
@@ -41,7 +41,7 @@ export const WindowActions = () => {
           </div>
           <div>
             <span className={actionButtonBase}></span>
-          </div>
+          </div> */}
         </div>
         <div className="flex">
           <button
