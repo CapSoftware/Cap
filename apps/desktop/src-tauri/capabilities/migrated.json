@@ -12,9 +12,10 @@
     "core:window:allow-set-size",
     "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
-    "decorum:allow-show-snap-overlay",
+    "core:webview:allow-create-webview-window",
     "fs:allow-read-text-file",
     "fs:allow-resource-read-recursive",
-    "fs:default"
+    "fs:default",
+    "decorum:allow-show-snap-overlay"
   ]
 }

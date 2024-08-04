@@ -53,8 +53,21 @@ async resetMicrophonePermissions() : Promise<void> {
 async resetCameraPermissions() : Promise<void> {
     await TAURI_INVOKE("reset_camera_permissions");
 },
-async closeWebview(label: string) : Promise<boolean> {
-    return await TAURI_INVOKE("close_webview", { label });
+async closeWebview(label: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("close_webview", { label }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async makeWebviewTransparent(label: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("make_webview_transparent", { label }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 

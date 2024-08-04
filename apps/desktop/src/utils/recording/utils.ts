@@ -1,6 +1,7 @@
 "use client";
 
 import { commands } from "@/utils/commands";
+import { Window } from "@tauri-apps/api/window";
 
 export const enumerateAndStoreDevices = async () => {
   if (typeof navigator !== "undefined" && typeof window !== "undefined") {
@@ -78,12 +79,15 @@ export const initializeCameraWindow = async () => {
           maximized: false,
           resizable: false,
           fullscreen: false,
-          transparent: true,
           decorations: false,
           alwaysOnTop: true,
+          visibleOnAllWorkspaces: true,
           center: false,
           shadow: false,
-        })
+          focus: false,
+        }).once("tauri://window-created", () => {
+          commands.makeWebviewTransparent("camera");
+        });
       }
     }
   });

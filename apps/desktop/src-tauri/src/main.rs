@@ -5,7 +5,7 @@ use specta_typescript::Typescript;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::vec;
-use tauri::{Listener, Manager};
+use tauri::Manager;
 use tauri_specta::{collect_commands, Builder};
 use tokio::sync::Mutex;
 use tracing::Level;
@@ -137,7 +137,8 @@ fn main() {
         reset_screen_permissions,
         reset_microphone_permissions,
         reset_camera_permissions,
-        close_webview
+        close_webview,
+        make_webview_transparent
     ]);
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds

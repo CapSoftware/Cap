@@ -84,7 +84,7 @@ export const Camera = () => {
     if (typeof window === "undefined") return;
 
     tauriWindowImport.then(
-      ({ currentMonitor, appWindow, LogicalSize, LogicalPosition }) => {
+      ({ currentMonitor, getCurrentWindow, LogicalSize, LogicalPosition }) => {
         currentMonitor().then((monitor) => {
           const windowWidth = type === "sm" ? 230 : 400;
           const windowHeight = type === "sm" ? 230 : 400;
@@ -103,8 +103,11 @@ export const Camera = () => {
               monitor
             );
 
-            appWindow.setSize(new LogicalSize(windowWidth, windowHeight));
-            appWindow.setPosition(new LogicalPosition(x / scalingFactor, y));
+            const currentWindow = getCurrentWindow();
+            currentWindow.setSize(new LogicalSize(windowWidth, windowHeight));
+            currentWindow.setPosition(
+              new LogicalPosition(x / scalingFactor, y)
+            );
             setOverlaySize(type);
           }
         });
@@ -115,14 +118,14 @@ export const Camera = () => {
   const closeWindow = (emitSetDevice = true) => {
     if (typeof window === "undefined") return;
 
-    tauriWindowImport.then(async ({ appWindow }) => {
+    tauriWindowImport.then(async ({ getCurrentWindow }) => {
       if (emitSetDevice) {
         await emit("change-device", {
           type: "videoinput",
           device: null,
         });
       }
-      appWindow.close();
+      getCurrentWindow().close();
     });
   };
 
@@ -141,51 +144,46 @@ export const Camera = () => {
   };
 
   const handleContextMenu = async () => {
-    const { showMenu } = await import("tauri-plugin-context-menu");
-    const videoDevices = devices.filter(
-      (device) => device.kind === "videoinput"
+    const { Menu, MenuItem, CheckMenuItem, PredefinedMenuItem } = await import(
+      "@tauri-apps/api/menu"
     );
-
-    const select = async (device: Device | null) => {
-      emit("change-device", { type: "videoinput", device: device }).catch(
-        (error) => console.log("Failed to emit change-device event:", error)
+    const createDeviceItems = () =>
+      Promise.all(
+        devices
+          .filter((device) => device.kind === "videoinput")
+          .map(
+            async (device) =>
+              await CheckMenuItem.new({
+                text: device.label,
+                checked: selectedVideoDevice?.index === device.index,
+                action: async () => select(device),
+              })
+          )
       );
-    };
 
-    const menuItems = [
-      {
-        label: "Select Video:",
-        disabled: true,
-      },
-      ...videoDevices.map((device) => ({
-        label: device.label,
-        checked: selectedVideoDevice.index === device.index,
-        event: async () => select(device),
-      })),
-      {
-        is_separator: true,
-      },
-      {
-        label: "Refresh Overlay",
-        event: async () => {
-          if (typeof window !== "undefined") {
-            window.location.reload();
-          }
-        },
-      },
-      {
-        label: "Close Overlay",
-        checked: selectedVideoDevice === null,
-        event: async () => select(null),
-      },
-    ];
-
-    await showMenu({
-      items: [...menuItems],
-      ...(videoDevices.length === 0 && {
-        items: [{ label: "Nothing found." }],
-      }),
+    const menu = await Menu.new({
+      items: [
+        await MenuItem.new({
+          text: "Select Camera:",
+          enabled: false,
+        }),
+        ...(await createDeviceItems()),
+        await PredefinedMenuItem.new({
+          item: "Separator",
+        }),
+        await MenuItem.new({
+          text: "Close Overlay",
+          action: () => select(null),
+        }),
+      ],
     });
+    menu.popup();
+  };
+
+  const select = async (device: Device | null) => {
+    emit("change-device", { type: "videoinput", device: device }).catch(
+      (error) => console.log("Failed to emit change-device event:", error)
+    );
   };
 
   return (
