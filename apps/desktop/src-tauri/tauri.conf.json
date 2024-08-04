@@ -19,7 +19,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": "v1Compatible"
+    "createUpdaterArtifacts": "v1Compatible",
+    "resources": ["icons/tray-default-icon.png", "icons/tray-stop-icon.png"]
   },
   "productName": "Cap",
   "version": "0.2.9",
@@ -51,20 +52,16 @@
         "center": true,
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
+        "decorations": false,
         "windowEffects": {
-          "effects": ["underWindowBackground", "mica"]
+          "effects": ["underWindowBackground", "mica"],
+          "radius": 16.0
         }
       }
     ],
     "security": {
       "csp": null
     },
-    "macOSPrivateApi": false,
-    "trayIcon": {
-      "id": "cap_main",
-      "menuOnLeftClick": false,
-      "iconPath": "icons/tray-default-icon.png",
-      "iconAsTemplate": true
-    }
+    "macOSPrivateApi": false
   }
 }

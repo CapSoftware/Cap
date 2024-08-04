@@ -31,6 +31,8 @@ import { openLinkInBrowser } from "@/utils/helpers";
 import { commands } from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
+import { TrayIconClickEvent } from "@tauri-apps/api/tray";
+import { setTrayStopIcon } from "@/utils/tray";
 
 declare global {
   interface Window {
@@ -135,32 +137,26 @@ export const Recorder = () => {
 
   useEffect(() => {
     let unlistenFn: UnlistenFn | null = null;
+    const setup = async () => {
+      unlistenFn = await listen<TrayIconClickEvent>(
+        "cap://tray/clicked",
+        (event) => {
+          if (event.payload.button !== "Left") return;
 
-    const setupListener = async () => {
-      unlistenFn = await listen("tray-on-left-click", (_) => {
-        if (isRecording) {
-          handleStopAllRecordings();
+          if (isRecording) {
+            handleStopAllRecordings();
+          } else {
+            tauriWindow.then(({ Window }) =>
+              Window.getByLabel("main")?.setFocus()
+            );
+          }
         }
-
-        tauriWindow.then(({ getCurrentWindow }) => {
-          const currentWindow = getCurrentWindow();
-          if (!currentWindow.isVisible) {
-            currentWindow.show();
-          }
-          if (currentWindow.isMinimized()) {
-            currentWindow.unminimize();
-          }
-          currentWindow.setFocus();
-        });
-      });
+      );
     };
-
-    setupListener();
+    setup();
 
     return () => {
-      if (unlistenFn) {
-        unlistenFn();
-      }
+      unlistenFn?.();
     };
   }, [isRecording]);
 
@@ -188,7 +184,7 @@ export const Recorder = () => {
         }
       });
     });
-    await emit("toggle-recording", true);
+    setTrayStopIcon(true);
     try {
       await commands
         .startDualRecording({
@@ -244,7 +240,6 @@ export const Recorder = () => {
       tauriWindow.then(({ Window }) => {
         const main = Window.getByLabel("main");
         if (main?.isMinimized()) main.unminimize();
-
       });
     } catch (error) {
       console.error("Error unminimizing main window:", error);
@@ -285,7 +280,7 @@ export const Recorder = () => {
       setIsRecording(false);
       setHasStartedRecording(false);
       setStoppingRecording(false);
-      await emit("toggle-recording", false);
+      setTrayStopIcon(false);
     } catch (error) {
       console.error("Error stopping recording:", error);
     }

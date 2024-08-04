@@ -93,7 +93,8 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         let videoDevice: Device | null = null;
         if (storedVideoDevice && storedVideoDevice !== "none") {
           videoDevice = formattedDevices.find(
-            (device) => device.kind === "videoinput" && device.label === storedVideoDevice
+            (device) =>
+              device.kind === "videoinput" && device.label === storedVideoDevice
           );
         }
         setSelectedVideoDevice(videoDevice);
@@ -104,7 +105,8 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         let audioDevice: Device | null = null;
         if (storedAudioDevice && storedAudioDevice !== "none") {
           audioDevice = formattedDevices.find(
-            (device) => device.kind === "audioinput" && device.label === storedAudioDevice
+            (device) =>
+              device.kind === "audioinput" && device.label === storedAudioDevice
           );
         }
         setSelectedAudioDevice(audioDevice);
@@ -174,10 +176,10 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
     setupListeners();
 
-    if (devices.length !== 0) {
-      setTrayMenu(devices, selectedAudioDevice, selectedVideoDevice);
-    }
-    
+    // if (devices.length !== 0) {
+    //   setTrayMenu(devices, selectedAudioDevice, selectedVideoDevice);
+    // }
+
     return () => {
       unlistenFnChangeDevice?.();
     };

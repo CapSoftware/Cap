@@ -14,6 +14,7 @@
     "@mux/mux-node": "^8.5.1",
     "@sentry/nextjs": "^7.105.0",
     "@tauri-apps/api": "^2.0.0-rc.0",
+    "@tauri-apps/plugin-fs": "2.0.0-rc.0",
     "@tauri-apps/plugin-global-shortcut": "^2.0.0-rc.0",
     "@tauri-apps/plugin-shell": "2.0.0-rc.0",
     "@tensorflow-models/body-pix": "^2.2.1",

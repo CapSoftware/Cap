@@ -44,6 +44,9 @@ importers:
       '@tauri-apps/api':
         specifier: ^2.0.0-rc.0
         version: 2.0.0-rc.0
+      '@tauri-apps/plugin-fs':
+        specifier: 2.0.0-rc.0
+        version: 2.0.0-rc.0
       '@tauri-apps/plugin-global-shortcut':
         specifier: ^2.0.0-rc.0
         version: 2.0.0-rc.0
@@ -7263,6 +7266,12 @@ packages:
       '@tauri-apps/cli-win32-ia32-msvc': 2.0.0-rc.0
       '@tauri-apps/cli-win32-x64-msvc': 2.0.0-rc.0
     dev: true
+
+  /@tauri-apps/plugin-fs@2.0.0-rc.0:
+    resolution: {integrity: sha512-74VCXEZlzTJ+Jv1V3KrV0qIHhSePpE/ljsF78rcEuvSfyTxLtt/Sb5CIUmVhFlKTRFOH9dX50T4dTZ3qFLyRnA==}
+    dependencies:
+      '@tauri-apps/api': 2.0.0-rc.0
+    dev: false
 
   /@tauri-apps/plugin-global-shortcut@2.0.0-rc.0:
     resolution: {integrity: sha512-rcefV4AG+vnbTtGc07hDn4Uj8u//NpuqHVg1CShACyiCS0q2sZrDVC3qPN3RGhzQyeIOPq4bY1kQRHODffKXZA==}

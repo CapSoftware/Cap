@@ -5,8 +5,7 @@ use specta_typescript::Typescript;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::vec;
-use tauri::Manager;
-use tauri_plugin_decorum::WebviewWindowExt;
+use tauri::{Listener, Manager};
 use tauri_specta::{collect_commands, Builder};
 use tokio::sync::Mutex;
 use tracing::Level;
@@ -152,27 +151,12 @@ fn main() {
             let handle = app.handle();
 
             if let Some(main_window) = app.get_webview_window("main") {
-                main_window
-                    .create_overlay_titlebar()
-                    .expect("Failed to create titlebar for main window");
+                use tauri_plugin_decorum::WebviewWindowExt;
 
                 #[cfg(target_os = "macos")]
-                {
-                    let inset_x = 11.0;
-                    let inset_y = 24.0;
-                    let _ = main_window.set_traffic_lights_inset(inset_x, inset_y);
-                    main_window
-                        .make_transparent()
-                        .expect("Failed to set transparency on main webview");
-
-                    let win_clone = main_window.clone();
-                    main_window.on_window_event(move |event| match event {
-                        tauri::WindowEvent::ThemeChanged(_theme) => {
-                            let _ = win_clone.set_traffic_lights_inset(inset_x, inset_y);
-                        }
-                        _ => {}
-                    })
-                }
+                main_window
+                    .make_transparent()
+                    .expect("Failed to set transparency on main webview");
             }
 
             let data_directory = handle
@@ -188,36 +172,9 @@ fn main() {
             };
 
             app.manage(Arc::new(Mutex::new(recording_state)));
-
-            // let tray_handle = app.tray_handle();
-            // app.listen_global("toggle-recording", move |event| {
-            //     let tray_handle = tray_handle.clone();
-            //     match event.payload() {
-            //         Some(payload) => {
-            //             match serde_json::from_str::<bool>(payload) {
-            //                 Ok(is_recording) => {
-            //                     let icon_bytes = if is_recording {
-            //                         include_bytes!("../icons/tray-stop-icon.png").to_vec()
-            //                     } else {
-            //                         include_bytes!("../icons/tray-default-icon.png").to_vec()
-            //                     };
-
-            //                     if let Err(e) = tray_handle.set_icon(tauri::Icon::Raw(icon_bytes)) {
-            //                         tracing::warn!("Error while setting tray icon: {}", e);
-            //                     }
-            //                 }
-            //                 Err(e) => {
-            //                     tracing::warn!("Error while deserializing recording state from event payload: {}", e);
-            //                 }
-            //             }
-            //         }
-            //         None => {
-            //             tracing::warn!("Error while opening event payload");
-            //         }
-            //     }
-            // });
             Ok(())
         })
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .run(context)
         .expect("Error while running tauri application");

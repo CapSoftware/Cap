@@ -550,6 +550,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-decorum",
+ "tauri-plugin-fs",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-oauth",
  "tauri-plugin-shell",
@@ -4974,6 +4975,7 @@ dependencies = [
  "gtk",
  "heck 0.5.0",
  "http 1.1.0",
+ "image",
  "jni",
  "libc",
  "log",
@@ -5100,6 +5102,25 @@ dependencies = [
  "serde",
  "tauri",
  "tauri-plugin",
+]
+
+[[package]]
+name = "tauri-plugin-fs"
+version = "2.0.0-rc.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5df6b25b1f2b7b61565e66c4dbee9eb39e5635d2a763206e380e07cc3f601a67"
+dependencies = [
+ "anyhow",
+ "glob",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "tauri",
+ "tauri-plugin",
+ "thiserror",
+ "url",
+ "uuid",
 ]
 
 [[package]]

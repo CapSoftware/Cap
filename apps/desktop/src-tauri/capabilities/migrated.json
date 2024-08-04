@@ -2,10 +2,7 @@
   "identifier": "migrated",
   "description": "permissions that were migrated from v1",
   "local": true,
-  "windows": [
-    "main",
-    "camera"
-  ],
+  "windows": ["main", "camera"],
   "permissions": [
     "core:default",
     "core:window:allow-close",
@@ -15,6 +12,9 @@
     "core:window:allow-set-size",
     "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
-    "decorum:allow-show-snap-overlay"
+    "decorum:allow-show-snap-overlay",
+    "fs:allow-read-text-file",
+    "fs:allow-resource-read-recursive",
+    "fs:default"
   ]
 }
