@@ -13,6 +13,7 @@ import toast from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { commands } from "@/utils/commands";
 import { setTrayMenu } from "@/utils/tray";
+import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 
 export const dynamic = "force-static";
 
@@ -22,6 +23,8 @@ export default function CameraPage() {
   const [loading, setLoading] = useState(true);
   const [permissions, setPermissions] = useState(getPermissions());
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
+  const { devices, selectedAudioDevice, selectedVideoDevice } =
+    useMediaDevices();
 
   useEffect(() => {
     const checkVersion = async () => {
@@ -69,8 +72,8 @@ export default function CameraPage() {
   }, [permissions]);
 
   useEffect(() => {
-    setTrayMenu();
-  });
+    setTrayMenu(devices, selectedAudioDevice, selectedVideoDevice);
+  }, [devices, selectedAudioDevice, selectedVideoDevice]);
 
   useEffect(() => {
     const checkSession = setInterval(() => {

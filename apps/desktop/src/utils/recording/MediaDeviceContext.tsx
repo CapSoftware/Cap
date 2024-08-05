@@ -157,10 +157,10 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   };
 
   useEffect(() => {
-    let unlistenFnChangeDevice: any;
-    const setupListeners = async () => {
+    let unlisten: any;
+    const setup = async () => {
       try {
-        unlistenFnChangeDevice = await listen<{
+        unlisten = await listen<{
           type: string;
           device: Device | null;
         }>("cap://av/set-device", (event) => {
@@ -174,16 +174,11 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
       }
     };
 
-    setupListeners();
-
-    if (devices.length !== 0) {
-      setTrayMenu(devices, selectedAudioDevice, selectedVideoDevice);
-    }
-
+    setup();
     return () => {
-      unlistenFnChangeDevice?.();
+      unlisten?.();
     };
-  }, [selectedVideoDevice, selectedAudioDevice]);
+  });
 
   return (
     <MediaDeviceContext.Provider
