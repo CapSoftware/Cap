@@ -8,14 +8,13 @@ import {
   useCallback,
   useRef,
 } from "react";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import {
   getLocalDevices,
   enumerateAndStoreDevices,
   initializeCameraWindow,
 } from "./utils";
 import { commands } from "../commands";
-import { setTrayMenu } from "../tray";
 
 export type DeviceKind = "videoinput" | "audioinput";
 export interface Device {

@@ -59,20 +59,26 @@ export const setTrayMenu = async (
     ] satisfies CheckMenuItem[];
   };
 
-  const items = [
-    await Submenu.new({
-      id: "audio_submenu",
-      text: "Microphone",
-      items: [...(await createDeviceSubmenu("audioinput", selectedAudio))],
-    }),
-    await Submenu.new({
-      id: "video_submenu",
-      text: "Camera",
-      items: [...(await createDeviceSubmenu("videoinput", selectedVideo))],
-    }),
-    await PredefinedMenuItem.new({
-      item: "Separator",
-    }),
+  const items = [];
+  if (devices.length !== 0) {
+    items.push(
+      await Submenu.new({
+        id: "audio_submenu",
+        text: "Microphone",
+        items: [...(await createDeviceSubmenu("audioinput", selectedAudio))],
+      }),
+      await Submenu.new({
+        id: "video_submenu",
+        text: "Camera",
+        items: [...(await createDeviceSubmenu("videoinput", selectedVideo))],
+      }),
+      await PredefinedMenuItem.new({
+        item: "Separator",
+      })
+    );
+  }
+
+  items.push(
     await MenuItem.new({
       text: "Show",
       action: () => {
@@ -82,8 +88,8 @@ export const setTrayMenu = async (
     await PredefinedMenuItem.new({
       text: "Quit",
       item: "Quit",
-    }),
-  ] satisfies MenuItemBase[];
+    })
+  );
 
   tray.setMenu(await Menu.new({ items: items }));
 };
