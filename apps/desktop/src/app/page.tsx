@@ -12,6 +12,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import toast from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { commands } from "@/utils/commands";
+import { setTrayMenu } from "@/utils/tray";
 
 export const dynamic = "force-static";
 
@@ -66,6 +67,10 @@ export default function CameraPage() {
 
     return () => clearInterval(checkPermissions);
   }, [permissions]);
+
+  useEffect(() => {
+    setTrayMenu();
+  });
 
   useEffect(() => {
     const checkSession = setInterval(() => {
