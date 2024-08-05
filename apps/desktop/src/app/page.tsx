@@ -12,8 +12,6 @@ import { getVersion } from "@tauri-apps/api/app";
 import toast from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { commands } from "@/utils/commands";
-import { initTrayMenu } from "@/utils/tray";
-import { TrayIcon } from "@tauri-apps/api/tray";
 
 export const dynamic = "force-static";
 
@@ -52,18 +50,6 @@ export default function CameraPage() {
     };
 
     checkVersion();
-  }, []);
-
-  useEffect(() => {
-    let trayHandle: TrayIcon | null = null;
-    const init = async () => {
-      trayHandle = await initTrayMenu();
-    };
-    init();
-
-    return () => {
-      trayHandle?.close();
-    };
   }, []);
 
   useEffect(() => {

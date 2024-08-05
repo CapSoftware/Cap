@@ -5,7 +5,10 @@ use specta_typescript::Typescript;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::vec;
-use tauri::Manager;
+use tauri::{
+    tray::{MouseButton, MouseButtonState},
+    Emitter, Manager,
+};
 use tauri_specta::{collect_commands, Builder};
 use tokio::sync::Mutex;
 use tracing::Level;
@@ -171,8 +174,25 @@ fn main() {
                 max_screen_width: max_width as usize,
                 max_screen_height: max_height as usize,
             };
-
             app.manage(Arc::new(Mutex::new(recording_state)));
+
+            if let Some(main_tray) = app.tray_by_id("cap_main") {
+                main_tray.on_tray_icon_event(move |tray, event| match event {
+                    tauri::tray::TrayIconEvent::Click {
+                        button,
+                        button_state,
+                        ..
+                    } => {
+                        if button == MouseButton::Left && button_state == MouseButtonState::Down {
+                            if let Err(err) = tray.app_handle().emit("cap://tray/clicked", ()) {
+                                eprintln!("Failed to emit event for tray {}", err);
+                            };
+                        }
+                    }
+                    _ => {}
+                });
+            }
+
             Ok(())
         })
         .plugin(tauri_plugin_fs::init())

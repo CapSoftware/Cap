@@ -176,9 +176,9 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
     setupListeners();
 
-    // if (devices.length !== 0) {
-    //   setTrayMenu(devices, selectedAudioDevice, selectedVideoDevice);
-    // }
+    if (devices.length !== 0) {
+      setTrayMenu(devices, selectedAudioDevice, selectedVideoDevice);
+    }
 
     return () => {
       unlistenFnChangeDevice?.();

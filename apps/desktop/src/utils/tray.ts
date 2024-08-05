@@ -1,56 +1,79 @@
-import { Menu, MenuItem, PredefinedMenuItem } from "@tauri-apps/api/menu";
+import {
+  CheckMenuItem,
+  Menu,
+  MenuItem,
+  PredefinedMenuItem,
+  Submenu,
+} from "@tauri-apps/api/menu";
 import { TrayIcon } from "@tauri-apps/api/tray";
 import { emit } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { Device, DeviceKind } from "./recording/MediaDeviceContext";
 
 const TRAY_ID = "cap_main";
 const TRAY_ICON_DEFAULT = "icons/tray-default-icon.png";
 const TRAY_ICON_STOP = "icons/tray-stop-icon.png";
 
-export const initTrayMenu = async () => {
-  (await TrayIcon.getById(TRAY_ID))?.close();
-
-  return TrayIcon.new({
-    id: TRAY_ID,
-    menuOnLeftClick: false,
-    // action: (event) => {
-    //   if ("click" in event && event.click.button_state === "Up") {
-    //     emit("cap://tray/clicked", event.click).catch((error) =>
-    //       console.log("Failed to emit tray event:", error)
-    //     );
-    //   }
-    // },
-    icon: TRAY_ICON_DEFAULT,
-    iconAsTemplate: true,
-  });
-};
-
-// TODO: Improve this. This might not work properly on Linux.
-export const setTrayMenu = async () => {
+export const setTrayMenu = async (
+  devices: Device[] = [],
+  selectedAudio: Device | null = null,
+  selectedVideo: Device | null = null
+) => {
   let tray = await TrayIcon.getById(TRAY_ID);
-
-  console.log(`setTryMenu: ${tray?.id}`);
-
   if (!tray) {
-    tray = await initTrayMenu();
+    console.error(`No tray found: ${TRAY_ID}`);
+    return;
   }
+
+  const createDeviceSubmenu = async (
+    kind: DeviceKind,
+    selected: Device | null
+  ) => {
+    const filteredDevices = devices.filter((device) => device.kind === kind);
+
+    if (filteredDevices.length === 0) {
+      return [
+        await CheckMenuItem.new({ text: "No devices found.", enabled: false }),
+      ];
+    }
+
+    return [
+      await CheckMenuItem.new({
+        id: `none_${kind}`,
+        text: "None",
+        checked: selected === null,
+        action: (_) => selectDevice(kind, null),
+      }),
+      ...(await Promise.all(
+        filteredDevices.map(
+          async (device) =>
+            await CheckMenuItem.new({
+              id: device.id,
+              text: device.label,
+              checked: device.index === selected?.index,
+              action: (_) => selectDevice(kind, device),
+            })
+        )
+      )),
+    ] satisfies CheckMenuItem[];
+  };
 
   tray.setMenu(
     await Menu.new({
       items: [
-        // await Submenu.new({
-        //   id: "audio_submenu",
-        //   text: "Microphone",
-        //   items: [...(await createDeviceSubmenu("audioinput", selectedAudio))],
-        // }),
-        // await Submenu.new({
-        //   id: "video_submenu",
-        //   text: "Camera",
-        //   items: [...(await createDeviceSubmenu("videoinput", selectedVideo))],
-        // }),
-        // await PredefinedMenuItem.new({
-        //   item: "Separator",
-        // }),
+        await Submenu.new({
+          id: "audio_submenu",
+          text: "Microphone",
+          items: [...(await createDeviceSubmenu("audioinput", selectedAudio))],
+        }),
+        await Submenu.new({
+          id: "video_submenu",
+          text: "Camera",
+          items: [...(await createDeviceSubmenu("videoinput", selectedVideo))],
+        }),
+        await PredefinedMenuItem.new({
+          item: "Separator",
+        }),
         await MenuItem.new({
           text: "Show",
           action: () => {
@@ -66,17 +89,18 @@ export const setTrayMenu = async () => {
   );
 };
 
-export const setTrayStopIcon = async (stopIconEnabled: boolean) => {
+export const setTrayStopIcon = async (showStopIcon: boolean) => {
   const tray = await TrayIcon.getById(TRAY_ID);
   if (!tray) {
-    console.error("No system tray found.");
+    console.error(`No tray found: ${TRAY_ID}`);
     return;
   }
 
-  tray.setIcon(stopIconEnabled ? TRAY_ICON_STOP : TRAY_ICON_DEFAULT);
+  tray.setIcon(showStopIcon ? TRAY_ICON_STOP : TRAY_ICON_DEFAULT);
+  tray.setIconAsTemplate(true);
 };
 
-// const selectDevice = (kind: DeviceKind, device: Device | null) =>
-//   emit("change-device", { type: kind, device: device }).catch((error) =>
-//     console.log("Failed to emit change-device event:", error)
-//   );
+const selectDevice = (kind: DeviceKind, device: Device | null) =>
+  emit("change-device", { type: kind, device: device }).catch((error) =>
+    console.log("Failed to emit change-device event:", error)
+  );

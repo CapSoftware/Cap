@@ -136,27 +136,22 @@ export const Recorder = () => {
   };
 
   useEffect(() => {
-    let unlistenFn: UnlistenFn | null = null;
+    let unlisten: UnlistenFn | null = null;
     const setup = async () => {
-      unlistenFn = await listen<TrayIconClickEvent>(
-        "cap://tray/clicked",
-        (event) => {
-          if (event.payload.button !== "Left") return;
-
-          if (isRecording) {
-            handleStopAllRecordings();
-          } else {
-            tauriWindow.then(({ Window }) =>
-              Window.getByLabel("main")?.setFocus()
-            );
-          }
+      unlisten = await listen<void>("cap://tray/clicked", (_) => {
+        if (isRecording) {
+          handleStopAllRecordings();
+        } else {
+          tauriWindow.then(({ getAllWindows }) =>
+            getAllWindows().forEach((window) => window.setFocus())
+          );
         }
-      );
+      });
     };
     setup();
 
     return () => {
-      unlistenFn?.();
+      unlisten?.();
     };
   }, [isRecording]);
 
