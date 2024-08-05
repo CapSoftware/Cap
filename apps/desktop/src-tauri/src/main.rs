@@ -195,6 +195,7 @@ fn main() {
 
             Ok(())
         })
+        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .run(context)
