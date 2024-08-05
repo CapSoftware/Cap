@@ -20,7 +20,8 @@
       "icons/icon.ico"
     ],
     "createUpdaterArtifacts": "v1Compatible",
-    "resources": ["icons/tray-default-icon.png", "icons/tray-stop-icon.png"]
+    "resources": ["icons/tray-default-icon.png", "icons/tray-stop-icon.png"],
+    "copyright": "© Cap Software, Inc. 2024."
   },
   "productName": "Cap",
   "version": "0.2.9",

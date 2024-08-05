@@ -9,6 +9,7 @@ import { TrayIcon } from "@tauri-apps/api/tray";
 import { emit } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Device, DeviceKind } from "./recording/MediaDeviceContext";
+import { MenuItemBase } from "@tauri-apps/api/menu/base";
 
 const TRAY_ID = "cap_main";
 const TRAY_ICON_DEFAULT = "icons/tray-default-icon.png";
@@ -58,35 +59,33 @@ export const setTrayMenu = async (
     ] satisfies CheckMenuItem[];
   };
 
-  tray.setMenu(
-    await Menu.new({
-      items: [
-        await Submenu.new({
-          id: "audio_submenu",
-          text: "Microphone",
-          items: [...(await createDeviceSubmenu("audioinput", selectedAudio))],
-        }),
-        await Submenu.new({
-          id: "video_submenu",
-          text: "Camera",
-          items: [...(await createDeviceSubmenu("videoinput", selectedVideo))],
-        }),
-        await PredefinedMenuItem.new({
-          item: "Separator",
-        }),
-        await MenuItem.new({
-          text: "Show",
-          action: () => {
-            WebviewWindow.getByLabel("main")?.setFocus();
-          },
-        }),
-        await PredefinedMenuItem.new({
-          text: "Quit",
-          item: "Quit",
-        }),
-      ],
-    })
-  );
+  const items = [
+    await Submenu.new({
+      id: "audio_submenu",
+      text: "Microphone",
+      items: [...(await createDeviceSubmenu("audioinput", selectedAudio))],
+    }),
+    await Submenu.new({
+      id: "video_submenu",
+      text: "Camera",
+      items: [...(await createDeviceSubmenu("videoinput", selectedVideo))],
+    }),
+    await PredefinedMenuItem.new({
+      item: "Separator",
+    }),
+    await MenuItem.new({
+      text: "Show",
+      action: () => {
+        WebviewWindow.getByLabel("main")?.setFocus();
+      },
+    }),
+    await PredefinedMenuItem.new({
+      text: "Quit",
+      item: "Quit",
+    }),
+  ] satisfies MenuItemBase[];
+
+  tray.setMenu(await Menu.new({ items: items }));
 };
 
 export const setTrayStopIcon = async (showStopIcon: boolean) => {

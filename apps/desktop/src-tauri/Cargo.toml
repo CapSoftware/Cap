@@ -3,8 +3,8 @@ name = "cap"
 version = "0.0.0"
 description = "Effortless, instant screen sharing. Open source and cross-platform."
 authors = ["you"]
-license = ""
-repository = ""
+license = "AGPL-3.0"
+repository = "https://github.com/capsoftware/cap/"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
