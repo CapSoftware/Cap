@@ -120,7 +120,7 @@ export const Camera = () => {
 
     tauriWindowImport.then(async ({ getCurrentWindow }) => {
       if (emitSetDevice) {
-        await emit("change-device", {
+        await emit("cap://av/set-device", {
           type: "videoinput",
           device: null,
         });
@@ -181,7 +181,7 @@ export const Camera = () => {
   };
 
   const select = async (device: Device | null) => {
-    emit("change-device", { type: "videoinput", device: device }).catch(
+    emit("cap://av/set-device", { type: "videoinput", device: device }).catch(
       (error) => console.log("Failed to emit change-device event:", error)
     );
   };

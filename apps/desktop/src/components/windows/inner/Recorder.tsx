@@ -70,8 +70,8 @@ export const Recorder = () => {
   }, [proCheckPromise]);
 
   const selectDevice = (kind: DeviceKind, device: Device | null) =>
-    emit("change-device", { type: kind, device: device }).catch((error) =>
-      console.log("Failed to emit change-device event:", error)
+    emit("cap://av/set-device", { type: kind, device: device }).catch((error) =>
+      console.log("Failed to emit cap://av/set-device event:", error)
     );
 
   const createDeviceMenuOptions = (kind: DeviceKind) => [

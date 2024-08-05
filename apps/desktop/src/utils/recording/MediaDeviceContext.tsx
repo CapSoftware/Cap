@@ -163,7 +163,7 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         unlistenFnChangeDevice = await listen<{
           type: string;
           device: Device | null;
-        }>("change-device", (event) => {
+        }>("cap://av/set-device", (event) => {
           updateSelectedDevice(
             event.payload.type as DeviceKind,
             event.payload.device
