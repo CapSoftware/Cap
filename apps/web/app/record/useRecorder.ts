@@ -251,6 +251,12 @@ async function muxSegment({
     }
 
     try {
+      await ffmpeg.deleteFile(segmentPaths.videoInput.replace(".ts", "0.ts"));
+    } catch (error) {
+      console.error("Error deleting video input file:", error);
+    }
+
+    try {
       await ffmpeg.deleteFile(segmentPaths.videoOutput);
     } catch (error) {
       console.error("Error deleting video output file:", error);
