@@ -150,6 +150,10 @@ fn main() {
         .expect("Failed to export typescript bindings");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             let handle = app.handle();
@@ -195,9 +199,6 @@ fn main() {
 
             Ok(())
         })
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .run(context)
         .expect("Error while running tauri application");
 }

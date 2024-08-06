@@ -9,21 +9,21 @@ import { TrayIcon } from "@tauri-apps/api/tray";
 import { emit } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Device, DeviceKind } from "./recording/MediaDeviceContext";
-import { MenuItemBase } from "@tauri-apps/api/menu/base";
+import { toMonospaceUnicodeString } from "./helpers";
 
 const TRAY_ID = "cap_main";
 const TRAY_ICON_DEFAULT = "icons/tray-default-icon.png";
 const TRAY_ICON_STOP = "icons/tray-stop-icon.png";
+
+let handle: TrayIcon | null = null;
 
 export const setTrayMenu = async (
   devices: Device[] = [],
   selectedAudio: Device | null = null,
   selectedVideo: Device | null = null
 ) => {
-  let tray = await TrayIcon.getById(TRAY_ID);
-  if (!tray) {
-    console.error(`No tray found: ${TRAY_ID}`);
-    return;
+  if (!handle) {
+    handle = await TrayIcon.getById(TRAY_ID);
   }
 
   const createDeviceSubmenu = async (
@@ -91,21 +91,30 @@ export const setTrayMenu = async (
     })
   );
 
-  tray.setMenu(await Menu.new({ items: items }));
+  handle.setMenu(await Menu.new({ items: items }));
 };
 
 export const setTrayStopIcon = async (showStopIcon: boolean) => {
-  const tray = await TrayIcon.getById(TRAY_ID);
-  if (!tray) {
-    console.error(`No tray found: ${TRAY_ID}`);
-    return;
-  }
+  await handle?.setIcon(showStopIcon ? TRAY_ICON_STOP : TRAY_ICON_DEFAULT);
+  await handle?.setIconAsTemplate(true);
+};
 
-  tray.setIcon(showStopIcon ? TRAY_ICON_STOP : TRAY_ICON_DEFAULT);
-  tray.setIconAsTemplate(true);
+// let show = false;
+
+export const setTrayTitle = async (title: string | null) => {
+  handle?.setTitle(title);
 };
 
 const selectDevice = (kind: DeviceKind, device: Device | null) =>
   emit("cap://av/set-device", { type: kind, device: device }).catch((error) =>
     console.log("Failed to emit cap://av/set-device event:", error)
   );
+
+// const toMonospaceDigits = (num: number) => {
+//   return num
+//     .toString()
+//     .padStart(2, "0")
+//     .split("")
+//     .map((char) => String.fromCodePoint(0x1d7f6 + parseInt(char, 10)))
+//     .join("");
+// };

@@ -6,7 +6,7 @@ import { Recorder } from "@/components/windows/inner/Recorder";
 import { WindowActions } from "@/components/WindowActions";
 import { Permissions } from "@/components/windows/Permissions";
 import { LogoSpinner } from "@cap/ui";
-import { getPermissions } from "@/utils/helpers";
+import { getPermissions, toMonospaceUnicodeString } from "@/utils/helpers";
 import { initializeCameraWindow } from "@/utils/recording/utils";
 import { getVersion } from "@tauri-apps/api/app";
 import toast from "react-hot-toast";

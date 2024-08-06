@@ -50,6 +50,9 @@ importers:
       '@tauri-apps/plugin-global-shortcut':
         specifier: ^2.0.0-rc.0
         version: 2.0.0-rc.0
+      '@tauri-apps/plugin-os':
+        specifier: 2.0.0-rc.0
+        version: 2.0.0-rc.0
       '@tauri-apps/plugin-shell':
         specifier: 2.0.0-rc.0
         version: 2.0.0-rc.0
@@ -7275,6 +7278,12 @@ packages:
 
   /@tauri-apps/plugin-global-shortcut@2.0.0-rc.0:
     resolution: {integrity: sha512-rcefV4AG+vnbTtGc07hDn4Uj8u//NpuqHVg1CShACyiCS0q2sZrDVC3qPN3RGhzQyeIOPq4bY1kQRHODffKXZA==}
+    dependencies:
+      '@tauri-apps/api': 2.0.0-rc.0
+    dev: false
+
+  /@tauri-apps/plugin-os@2.0.0-rc.0:
+    resolution: {integrity: sha512-OWAl8mooKnGykSD4iog8WRqcnOSx0gGmTJBlEExHdFeIuOHg0Ezvd+WiVLhT9LBg7go3ibNWRWpe/ZG7YEp4Vw==}
     dependencies:
       '@tauri-apps/api': 2.0.0-rc.0
     dev: false

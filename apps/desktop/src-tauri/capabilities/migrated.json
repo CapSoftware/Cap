@@ -19,6 +19,7 @@
     "fs:allow-read-text-file",
     "fs:allow-resource-read-recursive",
     "fs:default",
-    "decorum:allow-show-snap-overlay"
+    "decorum:allow-show-snap-overlay",
+    "os:default"
   ]
 }

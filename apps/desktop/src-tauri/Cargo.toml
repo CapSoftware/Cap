@@ -59,6 +59,7 @@ specta-typescript = "0.0.6"
 dirs = "5.0.1"
 tauri-plugin-decorum = "1.0.0"
 tauri-plugin-fs = "2.0.0-rc.0"
+tauri-plugin-os = "2.0.0-rc.0"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = [

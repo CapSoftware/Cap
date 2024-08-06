@@ -27,12 +27,12 @@ import {
   getUserId,
   isUserPro,
 } from "@cap/utils";
-import { openLinkInBrowser } from "@/utils/helpers";
+import { openLinkInBrowser, toMonospaceUnicodeString } from "@/utils/helpers";
 import { commands } from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
-import { TrayIconClickEvent } from "@tauri-apps/api/tray";
-import { setTrayStopIcon } from "@/utils/tray";
+import { setTrayStopIcon, setTrayTitle } from "@/utils/tray";
+import { type as osType } from "@tauri-apps/plugin-os";
 
 declare global {
   interface Window {
@@ -308,6 +308,8 @@ export const Recorder = () => {
 
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
+    let previousHandleShown = false;
+    let shouldShowTimer = osType() !== "windows";
 
     if (isRecording && !startingRecording) {
       const startTime = Date.now();
@@ -318,11 +320,22 @@ export const Recorder = () => {
         const formattedSeconds =
           seconds % 60 < 10 ? `0${seconds % 60}` : seconds % 60;
         setRecordingTime(`${minutes}:${formattedSeconds}`);
+
+        // TODO: Maybe move to backend.
+        if (shouldShowTimer) {
+          setTrayTitle(
+            toMonospaceUnicodeString(
+              ` ${minutes}${previousHandleShown ? " " : ":"}${formattedSeconds}`
+            )
+          );
+          previousHandleShown = !previousHandleShown;
+        }
       }, 1000);
     }
     return () => {
       clearInterval(intervalId);
       setRecordingTime("00:00");
+      if (shouldShowTimer) setTrayTitle(null);
     };
   }, [isRecording, startingRecording]);
 

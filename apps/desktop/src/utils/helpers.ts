@@ -66,3 +66,29 @@ export const savePermissions = async (permission: string, value: boolean) => {
     console.error("Failed to save permissions:", error);
   }
 };
+
+/**
+ * Credits:
+ * https://github.com/davidkonrad/toUnicodeVariant/blob/master/toUnicodeVariant.js
+ */
+const offsets = {
+  m: [0x1d670, 0x1d7f6],
+};
+
+const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const numbers = "0123456789";
+
+export const toMonospaceUnicodeString = (str: string) => {
+  let result = "";
+  for (let c of str) {
+    let index: number | null;
+    if ((index = chars.indexOf(c)) > -1) {
+      result += String.fromCodePoint(index + offsets.m[0]);
+    } else if ((index = numbers.indexOf(c)) > -1) {
+      result += String.fromCodePoint(index + offsets.m[1]);
+    } else {
+      result += c;
+    }
+  }
+  return result;
+};
