@@ -308,7 +308,6 @@ export const Recorder = () => {
 
   useEffect(() => {
     let intervalId: NodeJS.Timeout;
-    let previousHandleShown = false;
     let shouldShowTimer = osType() !== "windows";
 
     if (isRecording && !startingRecording) {
@@ -324,11 +323,8 @@ export const Recorder = () => {
         // TODO: Maybe move to backend.
         if (shouldShowTimer) {
           setTrayTitle(
-            toMonospaceUnicodeString(
-              ` ${minutes}${previousHandleShown ? " " : ":"}${formattedSeconds}`
-            )
+            toMonospaceUnicodeString(` ${minutes}:${formattedSeconds}`)
           );
-          previousHandleShown = !previousHandleShown;
         }
       }, 1000);
     }

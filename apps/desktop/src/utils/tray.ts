@@ -99,8 +99,6 @@ export const setTrayStopIcon = async (showStopIcon: boolean) => {
   await handle?.setIconAsTemplate(true);
 };
 
-// let show = false;
-
 export const setTrayTitle = async (title: string | null) => {
   handle?.setTitle(title);
 };
@@ -109,12 +107,3 @@ const selectDevice = (kind: DeviceKind, device: Device | null) =>
   emit("cap://av/set-device", { type: kind, device: device }).catch((error) =>
     console.log("Failed to emit cap://av/set-device event:", error)
   );
-
-// const toMonospaceDigits = (num: number) => {
-//   return num
-//     .toString()
-//     .padStart(2, "0")
-//     .split("")
-//     .map((char) => String.fromCodePoint(0x1d7f6 + parseInt(char, 10)))
-//     .join("");
-// };
