@@ -4,8 +4,8 @@ import { uploadToS3 } from "@/utils/video/upload/helpers";
 
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser();
-  const awsRegion = process.env.CAP_AWS_REGION;
-  const awsBucket = process.env.CAP_AWS_BUCKET;
+  const awsRegion = process.env.NEXT_PUBLIC_CAP_AWS_REGION;
+  const awsBucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET;
   const formData = await request.formData();
   const filename = formData.get("filename");
   const videoId = formData.get("videoId");

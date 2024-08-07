@@ -3,7 +3,7 @@ import { createPresignedPost, PresignedPost } from "@aws-sdk/s3-presigned-post";
 import { NextRequest } from "next/server";
 
 const s3Client = new S3Client({
-  region: process.env.CAP_AWS_REGION || "",
+  region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
   credentials: {
     accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
     secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",

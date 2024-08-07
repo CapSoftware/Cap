@@ -96,13 +96,13 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const bucket = process.env.CAP_AWS_BUCKET || "";
+  const bucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET || "";
   const videoPrefix = `${userId}/${videoId}/video/`;
   const audioPrefix = `${userId}/${videoId}/audio/`;
 
   try {
     const s3Client = new S3Client({
-      region: process.env.CAP_AWS_REGION || "",
+      region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
       credentials: {
         accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
         secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
@@ -153,7 +153,7 @@ export async function GET(request: NextRequest) {
     );
 
     const mediaConvertClient = new MediaConvertClient({
-      region: process.env.CAP_AWS_REGION || "",
+      region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
       credentials: {
         accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
         secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",

@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 const STOPPING_MESSAGES = ["Processing video", "Almost done", "Finishing up"];
+const FFMPEG_REINIT_INTERVAL = 25;
 
 async function uploadSegment({
   file,
@@ -57,6 +58,8 @@ async function muxSegment({
   ffmpeg,
   hasAudio,
   userId,
+  reinitializeFFmpeg,
+  segmentCount,
 }: {
   data: Blob[];
   mimeType: string;
@@ -67,8 +70,16 @@ async function muxSegment({
   ffmpeg: FFmpeg;
   hasAudio: boolean;
   userId: string;
+  reinitializeFFmpeg: () => Promise<FFmpeg>;
+  segmentCount: number;
 }) {
   console.log("Muxing segment");
+
+  if (segmentCount >= FFMPEG_REINIT_INTERVAL) {
+    console.log("Reinitializing FFmpeg");
+    ffmpeg = await reinitializeFFmpeg();
+    console.log("FFmpeg reinitialized");
+  }
 
   const segmentIndexString = getSegmentIndexString(segmentIndex);
   const videoSegment = new Blob(data, { type: "video/webm" });
@@ -211,6 +222,17 @@ async function createRecorder(
   screenPreview?: HTMLVideoElement,
   webcamPreview?: HTMLVideoElement
 ) {
+  let ffmpegInstance = ffmpeg;
+  let segmentCount = 0;
+
+  const reinitializeFFmpeg = async () => {
+    console.log("Reinitializing FFmpeg");
+    ffmpegInstance = new FFmpeg();
+    await ffmpegInstance.load();
+    console.log("FFmpeg reinitialized");
+    return ffmpegInstance;
+  };
+
   const res = await fetch(
     `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create?recordingMode=hls`,
     {
@@ -450,6 +472,11 @@ async function createRecorder(
             duration: segmentDuration,
           });
 
+          if (segmentCount >= FFMPEG_REINIT_INTERVAL) {
+            await reinitializeFFmpeg();
+            segmentCount = 0;
+          }
+
           await muxSegment({
             data: chunks,
             mimeType: videoRecorderOptions.mimeType,
@@ -458,11 +485,15 @@ async function createRecorder(
             segmentTime: segmentDuration,
             segmentIndex: totalSegments,
             hasAudio: videoStream !== null && audioDevice !== undefined,
-            ffmpeg,
+            ffmpeg: ffmpegInstance,
             userId,
+            reinitializeFFmpeg,
+            segmentCount,
           });
 
           totalSegments++;
+          segmentCount++;
+
           if (final) onReadyToStopRecording();
         } catch (error) {
           console.error("Error in muxSegment:", error);
