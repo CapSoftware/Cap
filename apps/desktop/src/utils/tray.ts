@@ -9,7 +9,6 @@ import { TrayIcon } from "@tauri-apps/api/tray";
 import { emit } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Device, DeviceKind } from "./recording/MediaDeviceContext";
-import { toMonospaceUnicodeString } from "./helpers";
 
 const TRAY_ID = "cap_main";
 const TRAY_ICON_DEFAULT = "icons/tray-default-icon.png";

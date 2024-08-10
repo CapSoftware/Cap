@@ -19,9 +19,12 @@ tauri = { version = "=2.0.0-rc.0", features = [
 	"tray-icon",
 	"image-png",
 ] }
+tauri-plugin-fs = "2.0.0-rc.0"
+tauri-plugin-os = "2.0.0-rc.0"
 tauri-plugin-shell = "2.0.0-rc"
 tauri-plugin-global-shortcut = "2.0.0-rc"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
+tauri-plugin-decorum = "1.0.0"
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -57,9 +60,6 @@ specta = "=2.0.0-rc.19"
 tauri-specta = { version = "=2.0.0-rc.14", features = ["derive", "typescript"] }
 specta-typescript = "0.0.6"
 dirs = "5.0.1"
-tauri-plugin-decorum = "1.0.0"
-tauri-plugin-fs = "2.0.0-rc.0"
-tauri-plugin-os = "2.0.0-rc.0"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = [
