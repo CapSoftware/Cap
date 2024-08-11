@@ -98,25 +98,27 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
       if (!selectedVideoDevice) {
         const storedVideoDevice = localStorage.getItem("selected-videoinput");
         let videoDevice: Device | null = null;
+
         if (storedVideoDevice && storedVideoDevice !== "none") {
           videoDevice = formattedDevices.find(
             (device) =>
               device.kind === "videoinput" && device.label === storedVideoDevice
           );
+          setSelectedVideoDevice(videoDevice);
         }
-        setSelectedVideoDevice(videoDevice);
       }
 
       if (!selectedAudioDevice) {
         const storedAudioDevice = localStorage.getItem("selected-audioinput");
         let audioDevice: Device | null = null;
+
         if (storedAudioDevice && storedAudioDevice !== "none") {
           audioDevice = formattedDevices.find(
             (device) =>
               device.kind === "audioinput" && device.label === storedAudioDevice
           );
+          setSelectedAudioDevice(audioDevice);
         }
-        setSelectedAudioDevice(audioDevice);
       }
     } catch (error) {
       console.error("Failed to get media devices:", error);

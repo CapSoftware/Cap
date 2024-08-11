@@ -54,7 +54,7 @@
         "center": true,
         "decorations": false,
         "windowEffects": {
-          "effects": ["underWindowBackground", "mica"],
+          "effects": ["mediumLight", "mica"],
           "radius": 16.0
         }
       }
