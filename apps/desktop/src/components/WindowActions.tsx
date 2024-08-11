@@ -1,12 +1,11 @@
 "use client";
 
-// import {  } from "@tauri-apps/api";
 import { Home } from "@/components/icons/Home";
 import { openLinkInBrowser } from "@/utils/helpers";
 
 export const WindowActions = () => {
   const actionButtonBase = "w-3 h-3 bg-gray-500 rounded-full m-0 p-0 block";
-  const tauriWindow = import("@tauri-apps/api/webviewWindow");
+  const tauriWindow = import("@tauri-apps/api/window");
 
   return (
     <div className="w-full flex items-center -mt-3 z-20 absolute top-5">
@@ -18,7 +17,9 @@ export const WindowActions = () => {
                 if (window.fathom !== undefined) {
                   window.fathom.trackEvent("exit_clicked");
                 }
-                // await close();
+                tauriWindow.then(({ getCurrentWindow }) => {
+                  getCurrentWindow().close();
+                });
               }}
               className={`bg-red-500 hover:bg-red-700 transition-all ${actionButtonBase}`}
             ></button>
@@ -29,11 +30,8 @@ export const WindowActions = () => {
                 if (window.fathom !== undefined) {
                   window.fathom.trackEvent("minimize_clicked");
                 }
-                tauriWindow.then(({ WebviewWindow }) => {
-                  const main = WebviewWindow.getByLabel("main");
-                  if (main) {
-                    main.minimize();
-                  }
+                tauriWindow.then(({ getCurrentWindow }) => {
+                  getCurrentWindow().minimize();
                 });
               }}
               className={`bg-orange-400 hover:bg-orange-500 transition-all ${actionButtonBase}`}
