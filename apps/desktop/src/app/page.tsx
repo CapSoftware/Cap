@@ -124,10 +124,10 @@ export default function CameraPage() {
 
   if (process.env.NEXT_PUBLIC_LOCAL_MODE === "true") {
     return (
-      <>
+      <div id="app" data-tauri-drag-region style={{ borderRadius: "16px" }}>
         <WindowActions />
         <Recorder />
-      </>
+      </div>
     );
   }
 
