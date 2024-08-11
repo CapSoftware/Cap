@@ -7,19 +7,17 @@ import {
   useMediaDevices,
 } from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
+import { VideoOff } from "@/components/icons/VideoOff";
 import { Microphone } from "@/components/icons/Microphone";
+import { MicrophoneOff } from "@/components/icons/MicrophoneOff";
 import { Screen } from "@/components/icons/Screen";
 import { Window } from "@/components/icons/Window";
-import { VideoOff } from "@/components/icons/VideoOff";
-import { MicrophoneOff } from "@/components/icons/MicrophoneOff";
+import { Logo } from "@/components/icons/Logo";
 import { ActionButton } from "./ActionButton";
 import { ActionSelect } from "./ActionSelect";
 import { Button } from "@cap/ui";
-import { Logo } from "@/components/icons/Logo";
-
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
 import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
-import { invoke } from "@tauri-apps/api/core";
 import {
   getLatestVideoId,
   saveLatestVideoId,
@@ -43,7 +41,9 @@ export const Recorder = () => {
   const {
     devices,
     selectedVideoDevice,
+    lastSelectedVideoDevice,
     selectedAudioDevice,
+    lastSelectedAudioDevice,
     selectedDisplayType,
     isRecording,
     setIsRecording,
@@ -59,10 +59,6 @@ export const Recorder = () => {
   const proCheckPromise = isUserPro();
   const [proCheck, setProCheck] = useState<boolean>(false);
   const [limitReached, setLimitReached] = useState(false);
-  const [lastSelectedAudioDevice, setLastSelectedAudioDevice] =
-    useState<Device | null>(null);
-  const [lastSelectedVideoDevice, setLastSelectedVideoDevice] =
-    useState<Device | null>(null);
 
   useEffect(() => {
     proCheckPromise.then((result) => setProCheck(Boolean(result)));
@@ -415,7 +411,6 @@ export const Recorder = () => {
                   <ActionSelect
                     options={createDeviceMenuOptions("videoinput")}
                     onStatusClick={(status) => {
-                      setLastSelectedVideoDevice(selectedVideoDevice);
                       selectDevice(
                         "videoinput",
                         status === "on" ? null : lastSelectedVideoDevice
@@ -433,7 +428,6 @@ export const Recorder = () => {
                   <ActionSelect
                     options={createDeviceMenuOptions("audioinput")}
                     onStatusClick={(status) => {
-                      setLastSelectedAudioDevice(selectedAudioDevice);
                       selectDevice(
                         "audioinput",
                         status === "on" ? null : lastSelectedAudioDevice

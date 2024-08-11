@@ -27,12 +27,17 @@ export interface Device {
 export interface MediaDeviceContextData {
   selectedVideoDevice: Device | null;
   setSelectedVideoDevice: React.Dispatch<React.SetStateAction<Device | null>>;
+  lastSelectedVideoDevice: Device | null;
+
   selectedAudioDevice: Device | null;
   setSelectedAudioDevice: React.Dispatch<React.SetStateAction<Device | null>>;
+  lastSelectedAudioDevice: Device | null;
+
   selectedDisplayType: "screen" | "window" | "area";
   setSelectedDisplayType: React.Dispatch<
     React.SetStateAction<"screen" | "window" | "area">
   >;
+
   devices: Device[];
   getDevices: () => Promise<void>;
   isRecording: boolean;
@@ -61,7 +66,10 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   const [isRecording, setIsRecording] = useState(false);
   const [startingRecording, setStartingRecording] = useState(false);
   const getDevicesCalled = useRef(false);
-  const tauriWindowImport = import("@tauri-apps/api/window");
+  const [lastSelectedAudioDevice, setLastSelectedAudioDevice] =
+    useState<Device | null>(null);
+  const [lastSelectedVideoDevice, setLastSelectedVideoDevice] =
+    useState<Device | null>(null);
 
   const getDevices = useCallback(async () => {
     await enumerateAndStoreDevices();
@@ -137,8 +145,9 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     if (kind === "videoinput") {
       if (device?.label !== selectedVideoDevice?.label) {
         const previous = selectedVideoDevice;
+        setLastSelectedVideoDevice(selectedVideoDevice);
         setSelectedVideoDevice(device);
-        localStorage.setItem("selected-videoinput", device?.label || "none");
+        localStorage.setItem("selected-videoinput", device?.label ?? "none");
         if (!device) {
           commands.closeWebview("camera");
         } else if (!previous && device) {
@@ -149,8 +158,9 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
     if (kind === "audioinput") {
       if (device?.label !== selectedAudioDevice?.label) {
+        setLastSelectedAudioDevice(selectedAudioDevice);
         setSelectedAudioDevice(device);
-        localStorage.setItem("selected-audioinput", device?.label || "none");
+        localStorage.setItem("selected-audioinput", device?.label ?? "none");
       }
     }
   };
@@ -184,8 +194,10 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
       value={{
         selectedVideoDevice,
         setSelectedVideoDevice,
+        lastSelectedVideoDevice,
         selectedAudioDevice,
         setSelectedAudioDevice,
+        lastSelectedAudioDevice,
         selectedDisplayType,
         setSelectedDisplayType,
         devices,
