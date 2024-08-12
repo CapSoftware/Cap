@@ -141,6 +141,7 @@ export const Recorder = () => {
         tauriWindow.then(({ getAllWindows }) =>
           getAllWindows().forEach((window) => {
             window.show();
+            window.setFocus();
           })
         );
       });

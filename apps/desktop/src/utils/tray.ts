@@ -81,7 +81,9 @@ export const setTrayMenu = async (
     await MenuItem.new({
       text: "Show",
       action: () => {
-        Window.getCurrent()?.show();
+        const window = Window.getCurrent();
+        window.show();
+        window.setFocus();
       },
     }),
     await PredefinedMenuItem.new({
