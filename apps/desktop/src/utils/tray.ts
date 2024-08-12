@@ -7,8 +7,8 @@ import {
 } from "@tauri-apps/api/menu";
 import { TrayIcon } from "@tauri-apps/api/tray";
 import { emit } from "@tauri-apps/api/event";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Device, DeviceKind } from "./recording/MediaDeviceContext";
+import { Window } from "@tauri-apps/api/window";
 
 const TRAY_ID = "cap_main";
 const TRAY_ICON_DEFAULT = "icons/tray-default-icon.png";
@@ -81,7 +81,7 @@ export const setTrayMenu = async (
     await MenuItem.new({
       text: "Show",
       action: () => {
-        WebviewWindow.getByLabel("main")?.setFocus();
+        Window.getCurrent()?.show();
       },
     }),
     await PredefinedMenuItem.new({

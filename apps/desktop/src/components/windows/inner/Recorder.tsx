@@ -133,14 +133,16 @@ export const Recorder = () => {
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     const setup = async () => {
-      unlisten = await listen<void>("cap://tray/clicked", (_) => {
+      unlisten = await listen<void>("cap://tray/clicked", async (_) => {
         if (isRecording) {
-          handleStopAllRecordings();
-        } else {
-          tauriWindow.then(({ getAllWindows }) =>
-            getAllWindows().forEach((window) => window.setFocus())
-          );
+          await handleStopAllRecordings();
         }
+
+        tauriWindow.then(({ getAllWindows }) =>
+          getAllWindows().forEach((window) => {
+            window.show();
+          })
+        );
       });
     };
     setup();

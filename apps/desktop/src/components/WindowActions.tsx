@@ -18,7 +18,7 @@ export const WindowActions = () => {
                   window.fathom.trackEvent("exit_clicked");
                 }
                 tauriWindow.then(({ getCurrentWindow }) => {
-                  getCurrentWindow().close();
+                  getCurrentWindow().hide();
                 });
               }}
               className={`bg-red-500 hover:bg-red-700 transition-all ${actionButtonBase}`}
