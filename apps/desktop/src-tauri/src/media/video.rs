@@ -28,7 +28,12 @@ pub struct VideoCapturer {
 impl VideoCapturer {
     pub const FPS: u32 = 30;
 
-    pub fn new(_width: usize, _height: usize, should_stop: SharedFlag) -> VideoCapturer {
+    pub fn new(
+        _width: usize,
+        _height: usize,
+        should_stop: SharedFlag,
+        output_resolution: Resolution,
+    ) -> VideoCapturer {
         let mut capturer = Capturer::new(Options {
             fps: Self::FPS,
             target: None,
@@ -36,7 +41,7 @@ impl VideoCapturer {
             show_highlight: true,
             excluded_targets: None,
             output_type: FrameType::BGRAFrame,
-            output_resolution: Resolution::Captured,
+            output_resolution,
             crop_area: None,
         });
 

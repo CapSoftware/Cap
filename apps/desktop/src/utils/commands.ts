@@ -81,7 +81,8 @@ async makeWebviewTransparent(label: string) : Promise<Result<null, string>> {
 
 /** user-defined types **/
 
-export type RecordingOptions = { user_id: string; video_id: string; screen_index: string; video_index: string; audio_name: string; aws_region: string; aws_bucket: string }
+export type OutputResolution = "_480p" | "_720p" | "_1080p" | "_1440p" | "_2160p" | "_4320p" | "Captured"
+export type RecordingOptions = { user_id: string; video_id: string; screen_index: string; resolution: OutputResolution; video_index: string; audio_name: string; aws_region: string; aws_bucket: string }
 
 /** tauri-specta globals **/
 

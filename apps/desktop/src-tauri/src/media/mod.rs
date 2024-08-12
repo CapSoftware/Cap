@@ -1,3 +1,4 @@
+use scap::capturer::Resolution;
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -15,7 +16,7 @@ use tracing::Level;
 
 use crate::{
     app::config,
-    recording::RecordingOptions,
+    recording::{OutputResolution, RecordingOptions},
     utils::{create_named_pipe, ffmpeg_path_as_str},
 };
 
@@ -104,10 +105,15 @@ impl MediaRecorder {
 
         self.audio_capturer = AudioCapturer::init(custom_device, self.should_stop.clone());
 
+        // TODO: Impl FromStr in scap
+        let output_res = options_clone.resolution.clone();
         let mut video_capturer = VideoCapturer::new(
             max_screen_width,
             max_screen_height,
             self.should_stop.clone(),
+            OutputResolution::from_str(&output_res)
+                .unwrap_or(OutputResolution::_720p)
+                .to_scap_resolution(),
         );
         let adjusted_width = video_capturer.frame_width;
         let adjusted_height = video_capturer.frame_height;

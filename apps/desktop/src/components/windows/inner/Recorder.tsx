@@ -12,6 +12,7 @@ import { Microphone } from "@/components/icons/Microphone";
 import { MicrophoneOff } from "@/components/icons/MicrophoneOff";
 import { Screen } from "@/components/icons/Screen";
 import { Window } from "@/components/icons/Window";
+import { Scaling } from "@/components/icons/Scaling";
 import { Logo } from "@/components/icons/Logo";
 import { ActionButton } from "./ActionButton";
 import { ActionSelect } from "./ActionSelect";
@@ -30,6 +31,7 @@ import { commands } from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { setTrayStopIcon } from "@/utils/tray";
+import { OutputResolution } from "@/utils/recording/utils";
 
 declare global {
   interface Window {
@@ -59,6 +61,9 @@ export const Recorder = () => {
   const proCheckPromise = isUserPro();
   const [proCheck, setProCheck] = useState<boolean>(false);
   const [limitReached, setLimitReached] = useState(false);
+  const [outputResolution, setOutputResolution] = useState<OutputResolution>(
+    OutputResolution._720p
+  );
 
   useEffect(() => {
     proCheckPromise.then((result) => setProCheck(Boolean(result)));
@@ -187,6 +192,7 @@ export const Recorder = () => {
           aws_region: videoData.aws_region,
           aws_bucket: videoData.aws_bucket,
           screen_index: "Capture screen 0",
+          resolution: "Captured",
           video_index: String(selectedVideoDevice?.index),
         })
         .catch((error) => {
@@ -380,7 +386,7 @@ export const Recorder = () => {
                 <Logo className="w-24 h-auto" />
               </div>
             </div>
-            <div className="space-y-4 mb-4 w-full">
+            <div className="space-y-2 mb-4 w-full">
               <div>
                 <label className="text-sm font-medium">Display</label>
                 <div className="flex items-center space-x-1">
@@ -407,6 +413,35 @@ export const Recorder = () => {
                     active={selectedDisplayType === "window"}
                   />
                 </div>
+              </div>
+              <div>
+                <label className="text-sm font-medium">Resolution</label>
+                <ActionSelect
+                  status="on"
+                  options={[
+                    { value: "_", label: "Output Resolution:", disabled: true },
+                    ...Object.values(OutputResolution).map((value) => ({
+                      value,
+                      label:
+                        value === OutputResolution.Captured ? "Source" : value,
+                      disabled: true,
+                    })),
+                  ]}
+                  iconEnabled={<Scaling className="w-5 h-5" />}
+                  selectedValue={outputResolution}
+                  onSelect={(value) => {
+                    const filtered = Object.values(OutputResolution).find(
+                      (res) => res === value
+                    );
+                    if (filtered) {
+                      setOutputResolution(filtered);
+                    } else {
+                      console.error(
+                        `Invalid resolution selected! "${value}" is not valid.`
+                      );
+                    }
+                  }}
+                />
               </div>
               <div>
                 <label className="text-sm font-medium">Webcam / Video</label>

@@ -1,4 +1,5 @@
 use futures::future::join_all;
+use scap::capturer::Resolution;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -39,10 +40,51 @@ pub struct RecordingOptions {
     pub user_id: String,
     pub video_id: String,
     pub screen_index: String,
+    pub resolution: String,
     pub video_index: String,
     pub audio_name: String,
     pub aws_region: String,
     pub aws_bucket: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, specta::Type)]
+pub enum OutputResolution {
+    _480p,
+    _720p,
+    _1080p,
+    _1440p,
+    _2160p,
+    _4320p,
+
+    #[default]
+    Captured,
+}
+
+impl OutputResolution {
+    pub fn from_str(input: &str) -> Option<OutputResolution> {
+        match input {
+            "480p" => Some(Self::_480p),
+            "720p" => Some(Self::_720p),
+            "1080p" => Some(Self::_1080p),
+            "1440p" => Some(Self::_1440p),
+            "2160p" => Some(Self::_2160p),
+            "4320p" => Some(Self::_4320p),
+            "Captured" => Some(Self::Captured),
+            _ => None,
+        }
+    }
+
+    pub fn to_scap_resolution(self) -> Resolution {
+        match self {
+            Self::_480p => Resolution::_480p,
+            Self::_720p => Resolution::_720p,
+            Self::_1080p => Resolution::_1080p,
+            Self::_1440p => Resolution::_1440p,
+            Self::_2160p => Resolution::_2160p,
+            Self::_4320p => Resolution::_4320p,
+            Self::Captured => Resolution::Captured,
+        }
+    }
 }
 
 #[tauri::command]

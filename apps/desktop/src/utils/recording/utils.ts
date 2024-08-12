@@ -92,3 +92,13 @@ export const initializeCameraWindow = async () => {
     }
   });
 };
+
+export enum OutputResolution {
+  _480p = "480p",
+  _720p = "720p",
+  _1080p = "1080p",
+  _1440p = "1440p",
+  _2160p = "2160p",
+  _4320p = "4320p",
+  Captured = "Captured",
+}

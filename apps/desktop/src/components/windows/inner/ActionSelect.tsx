@@ -1,4 +1,4 @@
-import React, { ReactNode, useRef, MouseEvent, useMemo, useState, useEffect } from "react";
+import React, { ReactNode } from "react";
 
 export const ActionSelect = ({
   iconEnabled = null,
@@ -31,14 +31,20 @@ export const ActionSelect = ({
       `}
     >
       <div className="flex items-center min-w-0 flex-grow h-full">
-        <span className="flex-shrink-0 mr-2">{status === "off" && iconDisabled ? iconDisabled : iconEnabled}</span>
+        <span className="flex-shrink-0 mr-2">
+          {status === "off" && iconDisabled ? iconDisabled : iconEnabled}
+        </span>
         <select
           className="bg-transparent border-none appearance-none w-full min-w-0 cursor-pointer h-full truncate"
           value={selectedValue || -1}
           onChange={(e) => onSelect(e.target.value)}
         >
           {options.map((option) => (
-            <option key={option.value} value={option.value} disabled={option.disabled}>
+            <option
+              key={option.value}
+              value={option.value}
+              disabled={option.disabled}
+            >
               {option.label}
             </option>
           ))}
@@ -46,7 +52,9 @@ export const ActionSelect = ({
       </div>
       {showStatus && (
         <div
-          className={onStatusClick ? "transition-transform active:scale-95" : ""}
+          className={
+            onStatusClick ? "transition-transform active:scale-95" : ""
+          }
           onClick={(e) => {
             e.stopPropagation();
             onStatusClick?.(status);
@@ -54,7 +62,9 @@ export const ActionSelect = ({
         >
           <span
             className={`${
-              status === "on" ? "bg-tertiary text-primary" : "bg-red-600 text-white" 
+              status === "on"
+                ? "bg-tertiary text-primary"
+                : "bg-red-600 text-white"
             } h-5 w-8 font-medium text-xs rounded-full flex items-center justify-center`}
           >
             <span>{status === "on" ? "On" : "Off"}</span>
