@@ -100,10 +100,6 @@ export const setTrayStopIcon = async (showStopIcon: boolean) => {
   await handle?.setIconAsTemplate(true);
 };
 
-export const setTrayTitle = async (title: string | null) => {
-  handle?.setTitle(title);
-};
-
 const selectDevice = (kind: DeviceKind, device: Device | null) =>
   emit("cap://av/set-device", { type: kind, device: device }).catch((error) =>
     console.log("Failed to emit cap://av/set-device event:", error)
