@@ -14,7 +14,7 @@ tauri-build = { version = "1.5.1", features = [] }
 ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
 
 [dependencies]
-tauri = { version = "1.6.1", features = [ "window-create",
+tauri = { version = "1.6.1", features = [ "shell-all", "window-create",
 	"system-tray",
 	"updater",
 	"macos-private-api",
@@ -38,7 +38,6 @@ tauri = { version = "1.6.1", features = [ "window-create",
 	"window-unmaximize",
 	"window-maximize",
 	"window-set-always-on-top",
-	"shell-open",
 	"devtools",
 	"os-all",
 	"http-all",
@@ -83,6 +82,7 @@ tracing-subscriber = "0.3"
 tracing-appender = "0.2"
 sentry-tracing = "0.34.0"
 keyboard-types = "0.7.0"
+rand = "0.8.5"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = [

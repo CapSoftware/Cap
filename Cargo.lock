@@ -535,6 +535,7 @@ dependencies = [
  "keyboard-types",
  "nix 0.20.0",
  "num-traits",
+ "rand 0.8.5",
  "regex",
  "reqwest 0.11.27",
  "scap",
@@ -3189,6 +3190,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "os_pipe"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57119c3b893986491ec9aa85056780d3a0f3cf4da7cc09dd3650dbd6c6738fb9"
+dependencies = [
+ "libc",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "overload"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4443,6 +4454,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shared_child"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0d94659ad3c2137fef23ae75b03d5241d633f8acded53d672decfa0e6e0caef"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4886,6 +4907,7 @@ dependencies = [
  "once_cell",
  "open",
  "os_info",
+ "os_pipe",
  "percent-encoding",
  "png",
  "rand 0.8.5",
@@ -4898,6 +4920,7 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "serialize-to-javascript",
+ "shared_child",
  "state",
  "sys-locale",
  "tar",

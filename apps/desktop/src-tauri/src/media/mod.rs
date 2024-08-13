@@ -7,6 +7,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use scap::capturer::Resolution;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::Mutex;
@@ -84,6 +85,7 @@ impl MediaRecorder {
         custom_device: Option<&str>,
         max_screen_width: usize,
         max_screen_height: usize,
+        video_resolution: Resolution,
     ) -> Result<(), String> {
         if !scap::has_permission() {
             tracing::warn!("Screen capturing permission not granted. Requesting permission...");
@@ -107,6 +109,7 @@ impl MediaRecorder {
         let mut video_capturer = VideoCapturer::new(
             max_screen_width,
             max_screen_height,
+            video_resolution,
             self.should_stop.clone(),
         );
         let adjusted_width = video_capturer.frame_width;

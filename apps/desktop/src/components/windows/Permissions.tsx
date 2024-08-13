@@ -5,6 +5,9 @@ import { useEffect, useState } from "react";
 import { savePermissions, getPermissions } from "@/utils/helpers";
 import * as commands from "@/utils/commands";
 import { invoke } from "@tauri-apps/api/tauri";
+import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
+import { runTestRecord } from "@/utils/recording/utils";
+import toast from "react-hot-toast";
 
 export const Permissions = () => {
   const permissionsOpened = {
@@ -18,6 +21,8 @@ export const Permissions = () => {
     camera: false,
     microphone: false,
   });
+  const [isTestRecordSuccessful, setIsTestRecordSuccessful] = useState(false);
+  const { selectedVideoDevice } = useMediaDevices();
 
   const checkScreenCapture = async () => {
     const hasAccess = await commands.hasScreenCaptureAccess();
@@ -138,9 +143,34 @@ export const Permissions = () => {
     fetchPermissions();
   }, []);
 
+  const testRecord = async () => {
+    try {
+      const response = await runTestRecord({
+        video_index: "0",
+      });
+      console.log(`TEST RECORDING FINAL RESPONSE:`, response);
+      setIsTestRecordSuccessful(true);
+    } catch (error) {
+      console.error("Test record failed:", error);
+      if (error === "ERR_INVALID_SEGMENT") {
+        toast.error("Test recording failed. Please contact support.", {
+          duration: 5000,
+        });
+      }
+    }
+  };
+
   const allPermissionsEnabled = Object.entries(permissions)
     .filter(([key]) => key !== "confirmed")
     .every(([, value]) => value);
+
+  const allChecksPassed = allPermissionsEnabled && isTestRecordSuccessful;
+
+  useEffect(() => {
+    if (allPermissionsEnabled) {
+      testRecord();
+    }
+  }, [allPermissionsEnabled]);
 
   return (
     <div data-tauri-drag-region className="w-full space-y-3 px-3">
@@ -192,7 +222,7 @@ export const Permissions = () => {
             handleAllPermissionsEnabled();
           }}
           className="w-full"
-          disabled={!allPermissionsEnabled}
+          disabled={!allChecksPassed}
         >
           Continue
         </Button>

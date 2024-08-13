@@ -14,8 +14,8 @@ export function startDualRecording(options: RecordingOptions) {
     return invoke()<null>("start_dual_recording", { options })
 }
 
-export function stopAllRecordings() {
-    return invoke()<null>("stop_all_recordings")
+export function stopAllRecordings(isValidationCheck: boolean | null) {
+    return invoke()<string>("stop_all_recordings", { isValidationCheck })
 }
 
 export function enumerateAudioDevices() {
@@ -62,4 +62,4 @@ export function setWebviewShadow(label: string, enable: boolean) {
     return invoke()<boolean>("set_webview_shadow", { label,enable })
 }
 
-export type RecordingOptions = { user_id: string; video_id: string; screen_index: string; video_index: string; audio_name: string; aws_region: string; aws_bucket: string }
+export type RecordingOptions = { user_id: string; video_id: string; screen_index: string; video_index: string; audio_name: string; aws_region: string; aws_bucket: string; video_resolution: string }

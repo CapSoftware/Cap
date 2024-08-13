@@ -14,8 +14,16 @@
     "allowlist": {
       "all": false,
       "shell": {
-        "all": false,
-        "open": true
+        "all": true,
+        "open": true,
+        "execute": true,
+        "scope": [
+          {
+            "name": "networkQuality",
+            "cmd": "networkQuality",
+            "args": [{ "validator": "\\S+" }]
+          }
+        ]
       },
       "os": {
         "all": true

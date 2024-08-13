@@ -49,6 +49,35 @@ export const getSelectedVideoProperties = async () => {
   }
 };
 
+export const runTestRecord = async ({video_index}: {video_index: string}) => {
+  const testPayload ={
+    id: "test",
+    user_id: "test",
+    aws_region: "test",
+    aws_bucket: "test",
+    video_resolution: ""
+  }
+  await commands
+  .startDualRecording({
+    user_id: testPayload.user_id,
+    video_id: testPayload.id,
+    audio_name: "None",
+    aws_region: testPayload.aws_region,
+    aws_bucket: testPayload.aws_bucket,
+    screen_index: "Capture screen 0",
+    video_index: video_index,
+    video_resolution: testPayload.video_resolution,
+  })
+  .catch((error) => {
+    console.error("Error invoking start_screen_recording:", error);
+  });
+  
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  const isTestRecordSuccessful = await commands.stopAllRecordings(true)
+  return isTestRecordSuccessful
+}
+
 export const initializeCameraWindow = async () => {
   if (typeof window === "undefined") return;
   import("@tauri-apps/api/window").then(({ currentMonitor, WebviewWindow }) => {

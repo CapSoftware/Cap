@@ -31,6 +31,8 @@ import { openLinkInBrowser } from "@/utils/helpers";
 import * as commands from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
+import { NetworkQuality } from "./NetworkQuality";
+import { getNetworkQualityDetails, getUploadSpeed } from "@/utils/network/utils";
 
 declare global {
   interface Window {
@@ -169,12 +171,13 @@ export const Recorder = () => {
     user_id: string;
     aws_region: string;
     aws_bucket: string;
+    video_resolution: string;
   }) => {
     if (hasStartedRecording) {
       console.log("Recording has already started.");
       return;
     }
-    console.log("Starting dual recording...");
+    console.log("Starting dual recording... with resolution:", videoData.video_resolution);
     setIsRecording(true);
     setStartingRecording(false);
     setHasStartedRecording(true);
@@ -199,6 +202,7 @@ export const Recorder = () => {
           aws_bucket: videoData.aws_bucket,
           screen_index: "Capture screen 0",
           video_index: String(selectedVideoDevice?.index),
+          video_resolution: videoData.video_resolution,
         })
         .catch((error) => {
           console.error("Error invoking start_screen_recording:", error);
@@ -212,9 +216,11 @@ export const Recorder = () => {
   const handleStartAllRecordings = async () => {
     if (isRecording) return;
     try {
-      console.log("bruh");
       setStartingRecording(true);
-      const videoData =
+      const uploadMbps = getUploadSpeed();
+      const { resolution } = getNetworkQualityDetails(uploadMbps);
+
+      const videoDataBase =
         process.env.NEXT_PUBLIC_LOCAL_MODE &&
         process.env.NEXT_PUBLIC_LOCAL_MODE === "true"
           ? {
@@ -224,6 +230,10 @@ export const Recorder = () => {
               aws_bucket: "test",
             }
           : await prepareVideoData();
+      const videoData = {
+        ...videoDataBase,
+        video_resolution: resolution,
+      };
       console.log("Video data :", videoData);
       if (videoData) {
         await startDualRecording(videoData);
@@ -253,7 +263,7 @@ export const Recorder = () => {
       console.log("Stopping recordings...");
 
       try {
-        await commands.stopAllRecordings();
+        await commands.stopAllRecordings(null);
       } catch (error) {
         console.error("Error stopping recording:", error);
       }
@@ -488,6 +498,9 @@ export const Recorder = () => {
             ) : (
               <p className="text-sm text-gray-600">No recording limit</p>
             )}
+          </div>
+          <div className="flex justify-center mt-3">
+            <NetworkQuality />
           </div>
         </div>
         <Toaster />
