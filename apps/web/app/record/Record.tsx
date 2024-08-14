@@ -46,7 +46,7 @@ const client = new QueryClient({
   },
 });
 
-export function Record({ user }: { user: typeof users.$inferSelect | null }) {
+export function Record({ user }: { user: typeof users.$inferSelect }) {
   return (
     <QueryClientProvider client={client}>
       <Component user={user} />
@@ -57,7 +57,7 @@ export function Record({ user }: { user: typeof users.$inferSelect | null }) {
 const CENTERED_THRESHOLD = 15;
 
 // million-ignore
-const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
+const Component = ({ user }: { user: typeof users.$inferSelect }) => {
   const devices = useQuery(devicesQuery).data;
   const [audioDeviceId, setAudioDeviceId] = useState<string>();
   const [webcamDeviceId, setWebcamDeviceId] = useState<string>();
@@ -142,7 +142,7 @@ const Component = ({ user }: { user: typeof users.$inferSelect | null }) => {
 
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
-  const recorder = useRecorder();
+  const recorder = useRecorder(user.id);
 
   const stopScreenCapture = () => {
     showScreen.current = false;

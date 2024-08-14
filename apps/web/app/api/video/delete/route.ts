@@ -31,14 +31,14 @@ export async function DELETE(request: NextRequest) {
     .where(and(eq(videos.id, videoId), eq(videos.ownerId, userId)));
 
   const s3Client = new S3Client({
-    region: process.env.CAP_AWS_REGION || "",
+    region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
     credentials: {
       accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
       secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
     },
   });
 
-  const bucket = process.env.CAP_AWS_BUCKET || "";
+  const bucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET || "";
   const prefix = `${userId}/${videoId}/`;
 
   const listObjectsCommand = new ListObjectsV2Command({

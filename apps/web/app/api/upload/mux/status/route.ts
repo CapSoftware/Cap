@@ -101,7 +101,7 @@ export async function GET(request: NextRequest) {
   }
 
   const mediaConvertClient = new MediaConvertClient({
-    region: process.env.CAP_AWS_REGION || "",
+    region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
     credentials: {
       accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
       secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",

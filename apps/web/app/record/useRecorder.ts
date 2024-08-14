@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 const STOPPING_MESSAGES = ["Processing video", "Almost done", "Finishing up"];
+const FFMPEG_REINIT_INTERVAL = 25;
 
 async function uploadSegment({
   file,
@@ -43,6 +44,10 @@ async function uploadSegment({
   });
 }
 
+function getSegmentIndexString(segmentIndex: number) {
+  return String(segmentIndex).padStart(3, "0");
+}
+
 async function muxSegment({
   data,
   mimeType,
@@ -52,6 +57,9 @@ async function muxSegment({
   segmentIndex,
   ffmpeg,
   hasAudio,
+  userId,
+  reinitializeFFmpeg,
+  segmentCount,
 }: {
   data: Blob[];
   mimeType: string;
@@ -61,48 +69,43 @@ async function muxSegment({
   segmentIndex: number;
   ffmpeg: FFmpeg;
   hasAudio: boolean;
+  userId: string;
+  reinitializeFFmpeg: () => Promise<FFmpeg>;
+  segmentCount: number;
 }) {
   console.log("Muxing segment");
 
-  const segmentIndexString = String(segmentIndex).padStart(3, "0");
+  if (segmentCount >= FFMPEG_REINIT_INTERVAL) {
+    console.log("Reinitializing FFmpeg");
+    ffmpeg = await reinitializeFFmpeg();
+    console.log("FFmpeg reinitialized");
+  }
+
+  const segmentIndexString = getSegmentIndexString(segmentIndex);
   const videoSegment = new Blob(data, { type: "video/webm" });
-  const segmentPaths = {
-    tempInput: `temp_segment_${segmentIndexString}${
-      mimeType.includes("mp4") ? ".mp4" : ".webm"
-    }`,
-    videoInput: `input_segment_${segmentIndexString}.ts`,
-    videoOutput: `video_segment_${segmentIndexString}.ts`,
-    audioOutput: `audio_segment_${segmentIndexString}.aac`,
-  };
+
+  const inputFile = `temp_segment_${segmentIndexString}${
+    mimeType.includes("mp4") ? ".mp4" : ".webm"
+  }`;
+  const outputFile = `segment_${segmentIndexString}.ts`;
 
   if (videoSegment) {
     const videoFile = await fetchFile(URL.createObjectURL(videoSegment));
 
-    await ffmpeg.writeFile(segmentPaths.tempInput, videoFile);
+    await ffmpeg.writeFile(inputFile, videoFile);
 
     const tempVideoCommand = [
-      "-ss",
-      start.toFixed(2),
-      "-to",
-      end.toFixed(2),
-      "-i",
-      segmentPaths.tempInput,
-      "-c:v",
-      "libx264",
-      "-preset",
-      "ultrafast",
-      "-crf",
-      "0",
-      "-pix_fmt",
-      "yuv420p",
-      "-r",
-      "30",
-      "-c:a",
-      "aac",
-      "-f",
-      "hls",
-      segmentPaths.videoInput,
-    ];
+      ["-ss", start.toFixed(2)],
+      ["-to", end.toFixed(2)],
+      ["-i", inputFile],
+      ["-c:v", "libx264"],
+      ["-preset", "ultrafast"],
+      ["-crf", "0"],
+      ["-pix_fmt", "yuv420p"],
+      ["-r", "30"],
+      ["-c:a", "aac"],
+    ].flat();
+    tempVideoCommand.push(outputFile);
 
     try {
       await ffmpeg.exec(tempVideoCommand);
@@ -111,66 +114,16 @@ async function muxSegment({
       throw error;
     }
 
-    const videoFFmpegCommand = [
-      ["-i", segmentPaths.videoInput, "-map", "0:v"],
-      ["-c:v", "libx264", "-preset", "ultrafast"],
-      ["-pix_fmt", "yuv420p", "-r", "30"],
-      [segmentPaths.videoOutput],
-    ].flat();
-
+    let videoData: FileData;
     try {
-      await ffmpeg.exec(videoFFmpegCommand);
-    } catch (error) {
-      console.error("Error executing videoFFmpegCommand with FFmpeg:", error);
-      throw error;
-    }
-
-    if (hasAudio) {
-      console.log("Muxing audio");
-      const audioFFmpegCommand = [
-        ["-i", segmentPaths.videoInput],
-        ["-map", "0:a", "-c:a", "aac"],
-        ["-b:a", "128k", "-profile:a", "aac_low"],
-        [segmentPaths.audioOutput],
-      ].flat();
-      try {
-        await ffmpeg.exec(audioFFmpegCommand);
-        console.log("hereaudioexecuted: ", await ffmpeg.listDir("/"));
-      } catch (error) {
-        console.error("Error executing audioFFmpegCommand with FFmpeg:", error);
-        console.log("audio error here: ", await ffmpeg.listDir("/"));
-        throw error;
-      }
-    }
-
-    let videoData: FileData | undefined;
-    try {
-      videoData = await ffmpeg.readFile(segmentPaths.videoOutput);
+      videoData = await ffmpeg.readFile(outputFile);
       console.log("file list: ", await ffmpeg.listDir("/"));
     } catch (error) {
       console.error("Error reading video file with FFmpeg:", error);
       throw error;
     }
 
-    let audioData: FileData | undefined;
-    if (hasAudio) {
-      try {
-        audioData = await ffmpeg.readFile(segmentPaths.audioOutput);
-
-        console.log("Found audio data:", audioData);
-      } catch (error) {
-        console.error("Error reading audio file with FFmpeg:", error);
-        console.log("audio error here: ", await ffmpeg.listDir("/"));
-        throw error;
-      }
-    }
-
-    const segmentFilenames = {
-      video: `video/video_recording_${segmentIndexString}.ts`,
-      audio: `audio/audio_recording_${segmentIndexString}.aac`,
-    };
-
-    const videoId = await getLatestVideoId();
+    const videoId = getLatestVideoId();
 
     if (segmentIndex === 0) {
       console.log("Generating screenshot...");
@@ -215,53 +168,46 @@ async function muxSegment({
       });
     }
 
-    try {
-      await uploadSegment({
-        file: videoData,
-        filename: segmentFilenames.video,
-        videoId,
-        duration: segmentTime.toFixed(1),
-      });
+    const presignedPostData = await getPresignedPostData(userId, videoId, {
+      type: "segment",
+      name: outputFile,
+      duration: segmentTime,
+    });
 
-      if (audioData) {
-        await uploadSegment({
-          file: audioData,
-          filename: segmentFilenames.audio,
-          videoId,
-          duration: segmentTime.toFixed(1),
-        });
-      }
-    } catch (error) {
-      console.error("Upload segment error:", error);
-      throw error;
+    const formData = new FormData();
+
+    Object.entries(presignedPostData.fields).forEach(([key, value]) => {
+      formData.append(key, value);
+    });
+
+    let mimeType = "video/mp2t";
+    if (outputFile.endsWith(".aac")) mimeType = "audio/aac";
+    else if (outputFile.endsWith(".jpg")) mimeType = "image/jpeg";
+
+    formData.append("file", new Blob([videoData], { type: mimeType }));
+
+    try {
+      await fetch(presignedPostData.url, {
+        method: "POST",
+        body: formData,
+        mode: "no-cors",
+      });
+    } catch {
+      console.log("error uploading segment");
     }
 
     console.log("herelast: ", await ffmpeg.listDir("/"));
 
     try {
-      await ffmpeg.deleteFile(segmentPaths.tempInput);
+      await ffmpeg.deleteFile(inputFile);
     } catch (error) {
       console.error("Error deleting temp input file:", error);
     }
 
     try {
-      await ffmpeg.deleteFile(segmentPaths.videoInput);
+      await ffmpeg.deleteFile(outputFile);
     } catch (error) {
       console.error("Error deleting video input file:", error);
-    }
-
-    try {
-      await ffmpeg.deleteFile(segmentPaths.videoOutput);
-    } catch (error) {
-      console.error("Error deleting video output file:", error);
-    }
-
-    if (audioData) {
-      try {
-        await ffmpeg.deleteFile(segmentPaths.audioOutput);
-      } catch (error) {
-        console.error("Error deleting audio output file:", error);
-      }
     }
   }
 }
@@ -271,12 +217,24 @@ async function createRecorder(
   videoStream: MediaStream | null,
   audioDevice: MediaDeviceInfo | undefined,
   ffmpeg: FFmpeg,
+  userId: string,
   videoContainer: HTMLElement,
   screenPreview?: HTMLVideoElement,
   webcamPreview?: HTMLVideoElement
 ) {
+  let ffmpegInstance = ffmpeg;
+  let segmentCount = 0;
+
+  const reinitializeFFmpeg = async () => {
+    console.log("Reinitializing FFmpeg");
+    ffmpegInstance = new FFmpeg();
+    await ffmpegInstance.load();
+    console.log("FFmpeg reinitialized");
+    return ffmpegInstance;
+  };
+
   const res = await fetch(
-    `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create`,
+    `${process.env.NEXT_PUBLIC_URL}/api/desktop/video/create?recordingMode=hls`,
     {
       method: "GET",
       credentials: "include",
@@ -488,6 +446,8 @@ async function createRecorder(
 
   const muxQueue = new AsyncTaskQueue();
 
+  const segments: Array<Segment> = [];
+
   videoRecorder.ondataavailable = async (event) => {
     if (event.data.size > 0) {
       chunks.push(event.data);
@@ -507,6 +467,16 @@ async function createRecorder(
 
       muxQueue.enqueue(async () => {
         try {
+          segments.push({
+            name: `segment_${getSegmentIndexString(totalSegments)}.ts`,
+            duration: segmentDuration,
+          });
+
+          if (segmentCount >= FFMPEG_REINIT_INTERVAL) {
+            await reinitializeFFmpeg();
+            segmentCount = 0;
+          }
+
           await muxSegment({
             data: chunks,
             mimeType: videoRecorderOptions.mimeType,
@@ -515,10 +485,15 @@ async function createRecorder(
             segmentTime: segmentDuration,
             segmentIndex: totalSegments,
             hasAudio: videoStream !== null && audioDevice !== undefined,
-            ffmpeg,
+            ffmpeg: ffmpegInstance,
+            userId,
+            reinitializeFFmpeg,
+            segmentCount,
           });
 
           totalSegments++;
+          segmentCount++;
+
           if (final) onReadyToStopRecording();
         } catch (error) {
           console.error("Error in muxSegment:", error);
@@ -565,7 +540,34 @@ async function createRecorder(
 
         console.log("All segments muxed");
 
-        const videoId = await getLatestVideoId();
+        const videoId = getLatestVideoId();
+
+        const playlist = createPlaylist(segments);
+
+        const presignedPostData = await getPresignedPostData(userId, videoId, {
+          type: "playlist",
+        });
+
+        const formData = new FormData();
+
+        Object.entries(presignedPostData.fields).forEach(([key, value]) => {
+          formData.append(key, value);
+        });
+
+        formData.append(
+          "file",
+          new Blob([playlist], { type: "application/x-mpegURL" })
+        );
+
+        try {
+          await fetch(presignedPostData.url, {
+            method: "POST",
+            body: formData,
+            mode: "no-cors",
+          });
+        } catch {
+          console.log("error uploading playlist");
+        }
 
         console.log("---Opening link here---");
 
@@ -576,6 +578,7 @@ async function createRecorder(
 
         const audio = new Audio("/recording-end.mp3");
         await audio.play();
+        console.log({ url });
         window.open(url, "_blank");
       } finally {
         clearInterval(messageInterval);
@@ -584,7 +587,7 @@ async function createRecorder(
   };
 }
 
-export function useRecorder() {
+export function useRecorder(userId: string) {
   const [ffmpeg] = useState(() => new FFmpeg());
   const [isLoading, setIsLoading] = useState(true);
   const [recorder, setRecorder] = useState<Recorder | null>(null);
@@ -640,6 +643,7 @@ export function useRecorder() {
         videoStream,
         audioDevice,
         ffmpeg,
+        userId,
         videoContainer,
         screenPreview,
         webcamPreview
@@ -711,4 +715,62 @@ class AsyncTaskQueue {
       this.resolveEmptyPromise = resolve;
     });
   }
+}
+
+type Segment = { name: string; duration: number };
+
+function createPlaylist(segments: Array<Segment>) {
+  let playlist = `#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:3
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-INDEPENDENT-SEGMENTS
+`;
+
+  for (const segment of segments) {
+    playlist += `#EXTINF:${segment.duration},\n${segment.name}\n`;
+  }
+
+  playlist += "#EXT-X-ENDLIST";
+
+  return playlist;
+}
+
+async function getPresignedPostData(
+  userId: string,
+  videoId: string,
+  args:
+    | { type: "segment"; name: string; duration: number }
+    | { type: "playlist" }
+) {
+  const fileKeyBase = `${userId}/${videoId}/combined-source`;
+
+  let fileKey: string;
+
+  if (args.type === "segment") fileKey = `${fileKeyBase}/${args.name}`;
+  else fileKey = `${fileKeyBase}/stream.m3u8`;
+
+  const body: Record<string, any> = {
+    userId,
+    fileKey,
+    awsBucket: process.env.NEXT_PUBLIC_CAP_AWS_BUCKET,
+    awsRegion: process.env.NEXT_PUBLIC_CAP_AWS_REGION,
+  };
+
+  if (args.type === "segment") {
+    body["segment"] = args.duration.toFixed(1);
+  }
+
+  const signedUrlResp = await fetch("/api/upload/signed", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const signedUrlJson: { fields: object; url: string } = (
+    await signedUrlResp.json()
+  ).presignedPostData;
+
+  return signedUrlJson;
 }

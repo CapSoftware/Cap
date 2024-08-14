@@ -32,14 +32,14 @@ export async function GET(request: NextRequest) {
   }
 
   const s3Client = new S3Client({
-    region: process.env.CAP_AWS_REGION || "",
+    region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
     credentials: {
       accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
       secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
     },
   });
 
-  const bucket = process.env.CAP_AWS_BUCKET;
+  const bucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET;
   const fileKeys: FileKey[] = [
     {
       type: "screen",

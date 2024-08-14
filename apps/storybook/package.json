@@ -1,0 +1,28 @@
+{
+  "name": "@cap/storybook",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "storybook dev -p 6006",
+    "build": "storybook build"
+  },
+  "dependencies": {
+    "solid-js": "^1.8.18",
+    "@cap/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@chromatic-com/storybook": "^1.6.1",
+    "@storybook/addon-essentials": "^8.2.7",
+    "@storybook/addon-interactions": "^8.2.7",
+    "@storybook/addon-links": "^8.2.7",
+    "@storybook/blocks": "^8.2.7",
+    "@storybook/docs-tools": "^8.2.7",
+    "@storybook/testing-library": "^0.2.2",
+    "storybook": "^8.2.7",
+    "storybook-solidjs": "^1.0.0-beta.2",
+    "storybook-solidjs-vite": "^1.0.0-beta.2",
+    "typescript": "^5.2.2",
+    "vite": "^5.3.4",
+    "vite-plugin-solid": "^2.10.2"
+  }
+}

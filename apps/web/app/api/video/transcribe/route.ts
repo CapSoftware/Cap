@@ -31,8 +31,8 @@ export async function GET(request: NextRequest) {
   const origin = request.headers.get("origin") as string;
 
   if (
-    !process.env.CAP_AWS_BUCKET ||
-    !process.env.CAP_AWS_REGION ||
+    !process.env.NEXT_PUBLIC_CAP_AWS_BUCKET ||
+    !process.env.NEXT_PUBLIC_CAP_AWS_REGION ||
     !process.env.CAP_AWS_ACCESS_KEY ||
     !process.env.CAP_AWS_SECRET_KEY ||
     !process.env.DEEPGRAM_API_KEY
@@ -96,11 +96,11 @@ export async function GET(request: NextRequest) {
     .set({ transcriptionStatus: "PROCESSING" })
     .where(eq(videos.id, videoId));
 
-  const bucket = process.env.CAP_AWS_BUCKET || "";
+  const bucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET || "";
   const filePrefix = `${userId}/${videoId}/combined-source/`;
 
   const s3Client = new S3Client({
-    region: process.env.CAP_AWS_REGION || "",
+    region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
     credentials: {
       accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
       secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",

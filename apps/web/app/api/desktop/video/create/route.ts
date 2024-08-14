@@ -49,8 +49,8 @@ export async function GET(req: NextRequest) {
   }
 
   const user = await getCurrentUser();
-  const awsRegion = process.env.CAP_AWS_REGION;
-  const awsBucket = process.env.CAP_AWS_BUCKET;
+  const awsRegion = process.env.NEXT_PUBLIC_CAP_AWS_REGION;
+  const awsBucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET;
   const params = req.nextUrl.searchParams;
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
