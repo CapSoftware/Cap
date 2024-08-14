@@ -1,17 +1,5 @@
-use tauri::{Manager, Window};
+use tauri::{Emitter, Manager, Window};
 use tauri_plugin_oauth::start;
-
-macro_rules! generate_handler {
-    ($($command:ident),*) => {{
-        #[cfg(debug_assertions)]
-        tauri_specta::ts::export(
-            specta::collect_types![$($command),*],
-            "../src/utils/commands.ts"
-        ).unwrap();
-
-        tauri::generate_handler![$($command),*]
-    }}
-}
 
 #[tauri::command]
 #[specta::specta]
@@ -96,16 +84,31 @@ pub fn reset_camera_permissions() {
 
 #[tauri::command]
 #[specta::specta]
-pub fn close_webview(app_handle: tauri::AppHandle, label: String) -> bool {
-    app_handle
-        .get_window(&label)
-        .is_some_and(|window| window.close().is_ok())
+pub fn close_webview(app_handle: tauri::AppHandle, label: String) -> Result<(), String> {
+    match app_handle.get_webview_window(&label) {
+        Some(window) => {
+            let _ = window.close();
+            Ok(())
+        }
+        None => Err(format!("No window found with label {}", &label).to_string()),
+    }
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_webview_shadow(app_handle: tauri::AppHandle, label: String, enable: bool) -> bool {
-    app_handle
-        .get_window(&label)
-        .is_some_and(|window| window_shadows::set_shadow(window, enable).is_ok())
+pub fn make_webview_transparent(app_handle: tauri::AppHandle, label: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_decorum::WebviewWindowExt;
+
+        match app_handle.get_webview_window(&label) {
+            Some(window) => {
+                let _ = window.make_transparent();
+                Ok(())
+            }
+            None => Err(format!("No window found with label {}", &label).to_string()),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    "This command is only available on macOS."
 }

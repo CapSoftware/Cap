@@ -4,7 +4,7 @@ export const openLinkInBrowser = async (url: string) => {
   let open:
     | ((path: string, openWith?: string) => Promise<void>)
     | ((arg0: string) => any);
-  const shellImport = await import("@tauri-apps/api/shell");
+  const shellImport = await import("@tauri-apps/plugin-shell");
   open = shellImport.open;
 
   if (typeof window === "undefined") {
