@@ -5,6 +5,7 @@ use serde_json::Value as JsonValue;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::str;
+use std::sync::Arc;
 
 use crate::recording::RecordingOptions;
 use crate::utils::ffmpeg_path_as_str;
@@ -149,15 +150,9 @@ pub async fn upload_recording_asset(
         _ => "video/mp2t",
     };
 
-    let file_bytes = tokio::fs::read(&file_path)
+    let file_data = tokio::fs::read(&file_path)
         .await
         .map_err(|e| format!("Failed to read file: {}", e))?;
-    let file_part = reqwest::multipart::Part::bytes(file_bytes)
-        .file_name(file_name.clone())
-        .mime_str(mime_type)
-        .map_err(|e| format!("Error setting MIME type: {}", e))?;
-
-    form = form.part("file", file_part);
 
     let post_url = presigned_post_data["presignedPostData"]["url"]
         .as_str()
@@ -165,31 +160,51 @@ pub async fn upload_recording_asset(
 
     tracing::info!("Uploading file to: {}", post_url);
 
-    let response = client.post(post_url).multipart(form).send().await;
+    let on_progress_update = |info: ProgressInfo| {
+        tracing::info!(
+            "Upload progress: {:.2}%, Speed: {:.2} MB/s, Uploaded: {} / {} bytes",
+            info.progress,
+            info.speed / 1_000_000.0,
+            info.uploaded_bytes,
+            info.total_size
+        );
+        if let Some(error) = info.error {
+            tracing::error!("Upload error: {}", error);
+        }
+    };
 
-    match response {
-        Ok(response) if response.status().is_success() => {
-            tracing::info!("File uploaded successfully");
-        }
-        Ok(response) => {
-            let status = response.status();
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<no response body>".to_string());
-            tracing::error!(
-                "Failed to upload file. Status: {}. Body: {}",
-                status,
-                error_body
-            );
-            return Err(format!(
-                "Failed to upload file. Status: {}. Body: {}",
-                status, error_body
-            ));
-        }
-        Err(e) => {
-            return Err(format!("Failed to send upload file request: {}", e));
-        }
+    // TODO: Might need adjustments
+    let chunk_size = 1024 * 1024; // 1MB chunks
+    let response = post_multipart_chunks_with_progress(
+        &client,
+        post_url,
+        form,
+        file_name.clone(),
+        file_data,
+        mime_type,
+        chunk_size,
+        on_progress_update,
+    )
+    .await
+    .map_err(|e| format!("Failed to upload file: {}", e))?;
+
+    if response.status().is_success() {
+        tracing::info!("File uploaded successfully");
+    } else {
+        let status = response.status();
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        tracing::error!(
+            "Failed to upload file. Status: {}. Body: {}",
+            status,
+            error_body
+        );
+        return Err(format!(
+            "Failed to upload file. Status: {}. Body: {}",
+            status, error_body
+        ));
     }
 
     tracing::info!("Removing file after upload: {file_path:?}");
@@ -263,4 +278,92 @@ fn log_video_info(file_path: &Path) -> Result<(String, String, String, String, S
     let bit_rate: String = info_parts[4].to_string();
 
     Ok((codec_name, width, height, frame_rate, bit_rate))
+}
+
+#[derive(Clone, Debug)]
+pub struct ProgressInfo {
+    pub progress: f64,
+    pub speed: f64,
+    pub total_size: u64,
+    pub uploaded_bytes: u64,
+    pub error: Option<String>,
+}
+
+async fn post_multipart_chunks_with_progress<F>(
+    client: &reqwest::Client,
+    url: &str,
+    mut form: reqwest::multipart::Form,
+    file_name: String,
+    file_data: Vec<u8>,
+    mime_type: &str,
+    chunk_size: usize,
+    progress_callback: F,
+) -> Result<reqwest::Response, Box<dyn std::error::Error>>
+where
+    F: Fn(ProgressInfo) + Send + Sync + 'static,
+{
+    let total_size = file_data.len() as u64;
+    let start_time = tokio::time::Instant::now();
+    let progress_callback = Arc::new(progress_callback);
+
+    let mut uploaded_bytes = 0u64;
+
+    let progress_callback_clone = Arc::clone(&progress_callback);
+
+    // Create a stream of file chunks using async_stream
+    // Credit: https://github.com/mihaigalos/aim/ (MIT License.)
+    // source: https://github.com/mihaigalos/aim/blob/723daabfb8c97a0b57bf772500c90b62bffcf598/src/https.rs#L44
+    let file_stream = async_stream::stream! {
+        for chunk in file_data.chunks(chunk_size) {
+            let chunk = chunk.to_vec();
+            uploaded_bytes += chunk.len() as u64;
+
+            let progress = (uploaded_bytes as f64 / total_size as f64) * 100.0;
+            let elapsed = start_time.elapsed().as_secs_f64();
+            let speed = uploaded_bytes as f64 / elapsed;
+
+            progress_callback_clone(ProgressInfo {
+                progress,
+                speed,
+                total_size,
+                uploaded_bytes,
+                error: None,
+            });
+
+            yield Ok::<_, std::io::Error>(chunk);
+        }
+    };
+
+    // Create a Part from the stream
+    let file_part = reqwest::multipart::Part::stream(reqwest::Body::wrap_stream(file_stream))
+        .file_name(file_name)
+        .mime_str(mime_type)?;
+
+    form = form.part("file", file_part);
+
+    let response = client.post(url).multipart(form).send().await;
+
+    match response {
+        Ok(resp) => {
+            progress_callback(ProgressInfo {
+                progress: 100.0,
+                speed: total_size as f64 / start_time.elapsed().as_secs_f64(),
+                total_size,
+                uploaded_bytes: total_size,
+                error: None,
+            });
+            Ok(resp)
+        }
+        Err(e) => {
+            let error_msg = e.to_string();
+            progress_callback(ProgressInfo {
+                progress: 0.0,
+                speed: 0.0,
+                total_size,
+                uploaded_bytes: 0,
+                error: Some(error_msg.clone()),
+            });
+            Err(Box::new(e))
+        }
+    }
 }
