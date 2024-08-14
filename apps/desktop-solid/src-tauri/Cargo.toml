@@ -1,0 +1,35 @@
+[package]
+name = "desktop-solid"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "desktop_solid_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0.0-rc", features = [] }
+swift-rs = { version = "1.0.6", features = ["build"] }
+
+[dependencies]
+tauri = { version = "2.0.0-rc", features = [] }
+tauri-plugin-shell = "2.0.0-rc"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+specta = "=2.0.0-rc.19"
+tauri-specta = { version = "=2.0.0-rc.14", features = ["derive", "typescript"] }
+specta-typescript = "0.0.6"
+tauri-plugin-decorum = "1.0.0"
+swift-rs = "1.0.6"
+nokhwa = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1", features = [
+	"input-avfoundation",
+] }
+nokhwa-bindings-macos = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1" }
+
+nix = { version = "0.29.0", features = ["fs"] }
+tokio = { version = "1.39.2", features = ["macros"] }
+uuid = { version = "1.10.0", features = ["v4"] }
