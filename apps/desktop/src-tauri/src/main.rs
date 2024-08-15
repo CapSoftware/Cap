@@ -9,7 +9,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState},
     Emitter, Manager,
 };
-use tauri_specta::{collect_commands, Builder};
+use tauri_specta::{collect_commands, collect_events, Builder};
 use tokio::sync::Mutex;
 use tracing::Level;
 use tracing_subscriber::prelude::*;
@@ -128,21 +128,23 @@ fn main() {
         }
     };
 
-    let specta_builder = Builder::<tauri::Wry>::new().commands(collect_commands![
-        start_dual_recording,
-        stop_all_recordings,
-        enumerate_audio_devices,
-        start_server,
-        open_screen_capture_preferences,
-        open_mic_preferences,
-        open_camera_preferences,
-        has_screen_capture_access,
-        reset_screen_permissions,
-        reset_microphone_permissions,
-        reset_camera_permissions,
-        close_webview,
-        make_webview_transparent
-    ]);
+    let specta_builder = Builder::<tauri::Wry>::new()
+        .commands(collect_commands![
+            start_dual_recording,
+            stop_all_recordings,
+            enumerate_audio_devices,
+            start_server,
+            open_screen_capture_preferences,
+            open_mic_preferences,
+            open_camera_preferences,
+            has_screen_capture_access,
+            reset_screen_permissions,
+            reset_microphone_permissions,
+            reset_camera_permissions,
+            close_webview,
+            make_webview_transparent
+        ])
+        .events(collect_events![recording::UploadProgressEvent]);
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds
     specta_builder

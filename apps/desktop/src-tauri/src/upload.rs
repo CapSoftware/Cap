@@ -283,12 +283,12 @@ fn log_video_info(file_path: &Path) -> Result<(String, String, String, String, S
     Ok((codec_name, width, height, frame_rate, bit_rate))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
+#[derive(Serialize, Deserialize, Debug, Clone, specta::Type)]
 pub struct ProgressInfo {
     pub progress: f64,
     pub speed: f64,
-    pub total_size: u64,
-    pub uploaded_bytes: u64,
+    pub total_size: f64,
+    pub uploaded_bytes: f64,
     pub error: Option<String>,
 }
 
@@ -305,13 +305,13 @@ async fn post_multipart_chunks<F>(
 where
     F: Fn(ProgressInfo) + Send + Sync + 'static,
 {
-    let total_size = file_data.len() as u64;
+    let total_size = file_data.len() as f64;
     let start_time = tokio::time::Instant::now();
 
     let on_progress = Arc::new(progress_callback);
     let on_progress_clone = Arc::clone(&on_progress);
 
-    let mut uploaded_bytes = 0u64;
+    let mut uploaded_bytes = 0.0;
 
     // Create a stream of file chunks using async_stream
     // Credit: https://github.com/mihaigalos/aim/ (MIT License.)
@@ -323,9 +323,9 @@ where
             let chunk = chunk.to_vec();
 
             if let Some(callback) = on_progress_ref {
-                uploaded_bytes += chunk.len() as u64;
+                uploaded_bytes += chunk.len() as f64;
 
-                let progress = (uploaded_bytes as f64 / total_size as f64) * 100.0;
+                let progress = (uploaded_bytes / total_size) * 100.0;
                 let elapsed = start_time.elapsed().as_secs_f64();
                 let speed = uploaded_bytes as f64 / elapsed;
 
@@ -356,9 +356,9 @@ where
             if let Some(callback) = on_progress.as_ref() {
                 callback(ProgressInfo {
                     progress: 100.0,
-                    speed: total_size as f64 / start_time.elapsed().as_secs_f64(),
+                    speed: total_size / start_time.elapsed().as_secs_f64(),
                     total_size,
-                    uploaded_bytes: total_size,
+                    uploaded_bytes,
                     error: None,
                 });
             }
@@ -368,10 +368,10 @@ where
             let error_msg = e.to_string();
             if let Some(callback) = on_progress.as_ref() {
                 callback(ProgressInfo {
-                    progress: 0.0,
+                    progress: (uploaded_bytes / total_size) * 100.0,
                     speed: 0.0,
                     total_size,
-                    uploaded_bytes: 0,
+                    uploaded_bytes,
                     error: Some(error_msg.clone()),
                 });
             }

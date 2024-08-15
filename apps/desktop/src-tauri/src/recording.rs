@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
+use tauri_specta::Event;
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::Duration;
 
@@ -166,6 +167,9 @@ pub async fn start_dual_recording(
     Ok(())
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, specta::Type, tauri_specta::Event)]
+pub struct UploadProgressEvent(ProgressInfo);
+
 #[tauri::command]
 #[specta::specta]
 pub async fn stop_all_recordings(
@@ -191,8 +195,8 @@ pub async fn stop_all_recordings(
         active_recording.recording_options,
         state.data_dir.join("recording/stream.m3u8"),
         RecordingAssetType::CombinedSourcePlaylist,
-        Some(move |info| {
-            if let Err(err) = app_handle.emit("cap://upload/on_progress", info) {
+        Some(move |info: ProgressInfo| {
+            if let Err(err) = UploadProgressEvent(info.into()).emit(&app_handle) {
                 tracing::error!("Failed to emit event for upload progress: {}", err);
             };
         }),

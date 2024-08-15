@@ -74,6 +74,11 @@ async makeWebviewTransparent(label: string) : Promise<Result<null, string>> {
 /** user-defined events **/
 
 
+export const events = __makeEvents__<{
+uploadProgressEvent: UploadProgressEvent
+}>({
+uploadProgressEvent: "upload-progress-event"
+})
 
 /** user-defined constants **/
 
@@ -81,8 +86,9 @@ async makeWebviewTransparent(label: string) : Promise<Result<null, string>> {
 
 /** user-defined types **/
 
-export type OutputResolution = "_480p" | "_720p" | "_1080p" | "_1440p" | "_2160p" | "_4320p" | "Captured"
-export type RecordingOptions = { user_id: string; video_id: string; screen_index: string; resolution: OutputResolution; video_index: string; audio_name: string; aws_region: string; aws_bucket: string }
+export type ProgressInfo = { progress: number; speed: number; total_size: number; uploaded_bytes: number; error: string | null }
+export type RecordingOptions = { user_id: string; video_id: string; screen_index: string; resolution: string; video_index: string; audio_name: string; aws_region: string; aws_bucket: string }
+export type UploadProgressEvent = ProgressInfo
 
 /** tauri-specta globals **/
 
