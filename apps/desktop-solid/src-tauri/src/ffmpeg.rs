@@ -92,23 +92,11 @@ impl ApplyFFmpegArgs for FFmpegRawVideoInput {
         let size = format!("{}x{}", self.width, self.height);
 
         command
-            // input
             .args(&["-f", "rawvideo", "-pix_fmt", self.pix_fmt])
             .args(["-s", &size])
             .args(["-r", &self.fps.to_string()])
             .args(["-thread_queue_size", "4096", "-i"])
             .arg(&self.input);
-        // // output
-        // .args(["-f", "mp4", "-map", &format!("{index}:v")])
-        // .args(["-codec:v", "libx264", "-preset", "ultrafast"])
-        // .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-        // .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
-        // .args(["-movflags", "frag_keyframe+empty_moov"])
-        // .args([
-        //     "-vf",
-        //     &format!("fps={},scale=in_range=full:out_range=limited", self.fps),
-        // ])
-        // .arg(self.output);
     }
 }
 
