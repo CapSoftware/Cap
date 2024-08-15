@@ -1,29 +1,40 @@
 mod camera;
+mod display;
+mod ffmpeg;
+mod macos;
+mod utils;
 
+use ffmpeg::{FFmpegRawSourceEncoder, FFmpegRecording, NamedPipeCapture};
+use scap::Target;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use tauri::{AppHandle, Manager, State};
 use tauri_specta::Event;
 use tokio::sync::RwLock;
 
-use camera::create_camera_window;
+use camera::{create_camera_window, get_cameras};
+use display::{get_capture_windows, CaptureTarget};
 
-#[derive(Default, specta::Type, Serialize, Deserialize, Clone)]
+#[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingOptions {
+    capture_target: CaptureTarget,
     camera_label: Option<String>,
 }
 
-pub struct CurrentRecording {
-    camera_recording: Option<camera::FfmpegRecording>,
+pub struct InProgressRecording {
+    recording_path: PathBuf,
+    ffmpeg_recording: FFmpegRecording,
+    display_capture: NamedPipeCapture,
+    camera_capture: Option<NamedPipeCapture>,
 }
 
-#[derive(Default, specta::Type, Serialize)]
+#[derive(specta::Type, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppState {
     start_recording_options: RecordingOptions,
     #[serde(skip)]
-    current_recording: Option<CurrentRecording>,
+    current_recording: Option<InProgressRecording>,
 }
 
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
@@ -59,6 +70,8 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, AppState>) -> R
     let mut state = state.write().await;
     let recording_options = &state.start_recording_options;
 
+    dbg!(&recording_options);
+
     let id = uuid::Uuid::new_v4().to_string();
 
     let recording_path = app
@@ -67,28 +80,59 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, AppState>) -> R
         .unwrap()
         .join("recordings")
         .join(format!("{id}.cap"));
-
     std::fs::create_dir_all(&recording_path).unwrap();
+    let content_path = recording_path.join("content");
 
-    let camera_info = recording_options
-        .camera_label
-        .as_ref()
-        .and_then(|camera_label| {
-            let cameras = dbg!(nokhwa::query(nokhwa::utils::ApiBackend::AVFoundation)).unwrap();
+    let mut ffmpeg = FFmpegRawSourceEncoder::new();
 
-            cameras
-                .into_iter()
-                .find(|c| c.human_name().as_str() == camera_label)
-        });
+    let camera_capture = {
+        let Some(camera_info) = recording_options
+            .camera_label
+            .as_ref()
+            .and_then(|camera_label| {
+                camera::get_cameras()
+                    .into_iter()
+                    .find(|c| &c.human_name == camera_label)
+            })
+        else {
+            todo!()
+        };
+        let source = camera::start_recording(&content_path, "camera", camera_info).await;
 
-    let camera_recording = match camera_info {
-        Some(camera_info) => {
-            Some(camera::start_recording(&recording_path.join("camera"), camera_info).await)
-        }
-        _ => None,
+        Some(ffmpeg.add_source(move |cmd, i| source.apply_to_ffmpeg(cmd, i)))
     };
 
-    let current_recording = CurrentRecording { camera_recording };
+    let display_capture = {
+        let camera_window_target =
+            app.get_webview_window(camera::CAMERA_WINDOW)
+                .and_then(|window| {
+                    let ns_window = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
+
+                    let window_id = unsafe { (*ns_window).windowNumber() };
+                    scap::get_all_targets()
+                        .into_iter()
+                        .find(|target| match target {
+                            Target::Window(window) => window.raw_handle as isize == window_id,
+                            _ => false,
+                        })
+                });
+
+        let display_source = display::start_recording(
+            &content_path,
+            "display",
+            &recording_options.capture_target,
+            camera_window_target,
+        );
+
+        ffmpeg.add_source(move |cmd, i| display_source.apply_to_ffmpeg(cmd, i))
+    };
+
+    let current_recording = InProgressRecording {
+        recording_path,
+        ffmpeg_recording: ffmpeg.start(),
+        display_capture,
+        camera_capture,
+    };
 
     state.current_recording = Some(current_recording);
 
@@ -104,8 +148,10 @@ async fn stop_recording(state: MutableState<'_, AppState>) -> Result<(), String>
         return Err("Recording not in progress".to_string());
     };
 
-    if let Some(camera_recording) = current_recording.camera_recording {
-        camera_recording.stop();
+    current_recording.ffmpeg_recording.stop();
+    current_recording.display_capture.stop();
+    if let Some(camera_capture) = current_recording.camera_capture {
+        camera_capture.stop();
     };
 
     Ok(())
@@ -133,7 +179,9 @@ pub fn run() {
             set_recording_options,
             create_camera_window,
             start_recording,
-            stop_recording
+            stop_recording,
+            get_cameras,
+            get_capture_windows
         ])
         .events(tauri_specta::collect_events![RecordingOptionsChanged]);
 
@@ -151,7 +199,13 @@ pub fn run() {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
-            app.manage(Arc::new(RwLock::new(AppState::default())));
+            app.manage(Arc::new(RwLock::new(AppState {
+                start_recording_options: RecordingOptions {
+                    capture_target: CaptureTarget::Display,
+                    camera_label: None,
+                },
+                current_recording: None,
+            })));
 
             Ok(())
         })

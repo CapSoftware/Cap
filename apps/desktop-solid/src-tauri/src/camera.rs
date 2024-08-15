@@ -1,17 +1,19 @@
-use nokhwa::utils::{CameraInfo, Resolution};
+use nokhwa::utils::{CameraFormat, FrameFormat, Resolution};
+use serde::Serialize;
+use specta::Type;
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    process::{ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::Duration,
 };
-use tokio::{sync::oneshot, time::sleep};
+use tokio::sync::oneshot;
 
 use tauri::{AppHandle, Manager, WebviewUrl};
+
+use crate::ffmpeg::{FFmpegRawVideoSource, NamedPipeCapture};
 
 pub const CAMERA_WINDOW: &str = "camera";
 const CAMERA_ROUTE: &str = "/camera";
@@ -54,65 +56,80 @@ pub fn create_camera_window(app: AppHandle) {
     }
 }
 
-#[cfg(unix)]
-pub fn create_named_pipe(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    use nix::sys::stat;
-    use nix::unistd;
-    unistd::mkfifo(path, stat::Mode::S_IRWXU)?;
-    Ok(())
+#[tauri::command]
+#[specta::specta]
+pub fn get_cameras() -> Vec<CameraInfo> {
+    nokhwa::query(nokhwa::utils::ApiBackend::Auto)
+        .unwrap()
+        .into_iter()
+        .map(|i| CameraInfo {
+            human_name: i.human_name().to_string(),
+            description: i.description().to_string(),
+            misc: i.misc().to_string(),
+            index: match i.index() {
+                nokhwa::utils::CameraIndex::Index(i) => CameraIndex::Index(*i),
+                nokhwa::utils::CameraIndex::String(s) => CameraIndex::String(s.to_string()),
+            },
+        })
+        .collect()
 }
 
-pub struct FfmpegRecording {
-    folder_path: PathBuf,
-    ffmpeg_stdin: ChildStdin,
-    capture: NamedPipeCapture,
+#[derive(Serialize, Type)]
+pub struct CameraInfo {
+    pub human_name: String,
+    pub description: String,
+    pub misc: String,
+    pub index: CameraIndex,
 }
 
-impl FfmpegRecording {
-    pub fn stop(mut self) {
-        self.ffmpeg_stdin.write_all(b"q").ok();
-        self.capture.stop();
+#[derive(Serialize, Type)]
+pub enum CameraIndex {
+    Index(u32),
+    String(String),
+}
+
+impl From<CameraIndex> for nokhwa::utils::CameraIndex {
+    fn from(value: CameraIndex) -> Self {
+        match value {
+            CameraIndex::Index(i) => nokhwa::utils::CameraIndex::Index(i),
+            CameraIndex::String(s) => nokhwa::utils::CameraIndex::String(s),
+        }
     }
 }
 
-pub async fn start_recording(folder_path: &Path, camera_info: CameraInfo) -> FfmpegRecording {
-    std::fs::create_dir_all(folder_path).ok();
-    let pipe_path = folder_path.join("output.pipe");
-    std::fs::remove_file(&pipe_path).ok();
+pub async fn start_recording(
+    output_folder: &Path,
+    output_name: &str,
+    camera_info: CameraInfo,
+) -> FFmpegRawVideoSource {
+    std::fs::create_dir_all(output_folder).ok();
 
-    let output_path = folder_path.join("output.mp4");
+    let pipe_path = output_folder.join(format!("{output_name}.pipe"));
+
+    let output_path = output_folder.join(format!("{output_name}.mp4"));
     std::fs::remove_file(&output_path).ok();
 
-    println!("Beginning camera capture");
+    println!("Beginning camera recording");
 
-    let ((resolution, frame_rate), capture) = start_capturing(pipe_path.clone(), camera_info).await;
+    let (camera_format, capture) = start_capturing(pipe_path.clone(), camera_info).await;
 
-    println!("Received video info: {:?}", (resolution, frame_rate));
+    println!(
+        "Received video info: {:?}",
+        (camera_format.resolution(), camera_format.frame_rate())
+    );
 
-    let size = format!("{}x{}", resolution.width(), resolution.height());
-
-    let mut cmd = Command::new("ffmpeg")
-        .args(&["-f", "rawvideo", "-pix_fmt", "uyvy422"])
-        .args(["-s", &size, "-r", &frame_rate.to_string()])
-        .args(["-thread_queue_size", "4096", "-i"])
-        .arg(pipe_path.to_str().unwrap())
-        .args(["-f", "mp4"])
-        .args(["-codec:v", "libx264", "-preset", "ultrafast"])
-        .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-        .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
-        .args(["-movflags", "frag_keyframe+empty_moov"])
-        .args([
-            "-vf",
-            &format!("fps={frame_rate},scale=in_range=full:out_range=limited"),
-        ])
-        .arg(output_path)
-        .stdin(Stdio::piped())
-        .spawn()
-        .expect("Failed to execute command");
-
-    FfmpegRecording {
-        folder_path: folder_path.to_path_buf(),
-        ffmpeg_stdin: cmd.stdin.take().unwrap(),
+    FFmpegRawVideoSource {
+        width: camera_format.resolution().width(),
+        height: camera_format.resolution().height(),
+        fps: camera_format.frame_rate(),
+        input: pipe_path,
+        output: output_path,
+        pix_fmt: match camera_format.format() {
+            FrameFormat::YUYV => "uyvy422",
+            FrameFormat::RAWRGB => "rgb24",
+            FrameFormat::NV12 => "nv12",
+            _ => panic!("unimplemented"),
+        },
         capture,
     }
 }
@@ -120,17 +137,10 @@ pub async fn start_recording(folder_path: &Path, camera_info: CameraInfo) -> Ffm
 async fn start_capturing(
     pipe_path: PathBuf,
     camera_info: CameraInfo,
-) -> ((Resolution, u32), NamedPipeCapture) {
-    std::fs::remove_file(&pipe_path).ok();
-    create_named_pipe(&pipe_path).unwrap();
-
-    let stop = Arc::new(AtomicBool::new(false));
+) -> (CameraFormat, NamedPipeCapture) {
     let (video_info_tx, video_info_rx) = oneshot::channel();
 
-    let capture = NamedPipeCapture {
-        path: pipe_path.clone(),
-        stop: stop.clone(),
-    };
+    let (capture, is_stopped) = NamedPipeCapture::new(&pipe_path);
 
     std::thread::spawn(move || {
         use nokhwa::{pixel_format::*, utils::*, *};
@@ -145,11 +155,9 @@ async fn start_capturing(
 
         let format =
             RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
-        let mut camera = Camera::new(camera_info.index().clone(), format).unwrap();
+        let mut camera = Camera::new(camera_info.index.into(), format).unwrap();
 
-        video_info_tx
-            .send((camera.resolution(), camera.frame_rate()))
-            .ok();
+        video_info_tx.send(camera.camera_format()).ok();
 
         camera.open_stream().unwrap();
 
@@ -159,28 +167,17 @@ async fn start_capturing(
 
         println!("Receiving frames");
         loop {
-            if stop.load(Ordering::Relaxed) {
-                println!("Stopping receiving frames");
+            if is_stopped.load(Ordering::Relaxed) {
+                println!("Stopping receiving camera frames");
                 return;
             }
-            file.write_all(camera.frame().unwrap().buffer()).ok();
+            let frame = camera.frame().unwrap();
+            dbg!(frame.source_frame_format());
+            dbg!(frame.buffer().len());
+            dbg!(frame.resolution());
+            file.write_all(frame.buffer()).ok();
         }
     });
 
     (video_info_rx.await.unwrap(), capture)
-}
-
-struct NamedPipeCapture {
-    path: PathBuf,
-    stop: Arc<AtomicBool>,
-}
-
-impl NamedPipeCapture {
-    fn path(&self) -> &PathBuf {
-        &self.path
-    }
-
-    fn stop(&self) {
-        self.stop.store(true, Ordering::Relaxed);
-    }
 }

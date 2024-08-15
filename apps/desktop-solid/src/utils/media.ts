@@ -1,4 +1,13 @@
-import { type Accessor, createResource, onCleanup } from "solid-js";
+import { createTimer } from "@solid-primitives/timer";
+import {
+  type Accessor,
+  createEffect,
+  createResource,
+  on,
+  onCleanup,
+  onMount,
+} from "solid-js";
+import { commands } from "./tauri";
 
 export function createDevices() {
   const [devices, { refetch }] = createResource(async () => {
@@ -6,10 +15,12 @@ export function createDevices() {
     return await navigator.mediaDevices.enumerateDevices();
   });
 
-  navigator.mediaDevices.addEventListener("devicechange", refetch);
-  onCleanup(() =>
-    navigator.mediaDevices.removeEventListener("devicechange", refetch)
-  );
+  onMount(() => {
+    navigator.mediaDevices.addEventListener("devicechange", refetch);
+    onCleanup(() =>
+      navigator.mediaDevices.removeEventListener("devicechange", refetch)
+    );
+  });
 
   return () => devices.latest ?? [];
 }
@@ -17,7 +28,24 @@ export function createDevices() {
 export function createCameras() {
   const devices = createDevices();
 
-  return () => devices().filter((device) => device.kind === "videoinput");
+  const [rustCameras, { refetch }] = createResource(() =>
+    commands.getCameras()
+  );
+
+  createTimer(refetch, 5 * 1000, setInterval);
+  createEffect(on(devices, refetch));
+
+  return () => {
+    const videoDevices = devices().filter(
+      (device) => device.kind === "videoinput"
+    );
+
+    const cameras = rustCameras.latest ?? [];
+
+    return videoDevices.filter((device) =>
+      cameras.some((c) => c.human_name === device.label)
+    );
+  };
 }
 
 export function createCameraForLabel(label: Accessor<string>) {

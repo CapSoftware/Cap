@@ -39,6 +39,12 @@ async stopRecording() : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async getCameras() : Promise<CameraInfo[]> {
+    return await TAURI_INVOKE("get_cameras");
+},
+async getCaptureWindows() : Promise<CaptureWindow[]> {
+    return await TAURI_INVOKE("get_capture_windows");
 }
 }
 
@@ -57,7 +63,11 @@ recordingOptionsChanged: "recording-options-changed"
 
 /** user-defined types **/
 
-export type RecordingOptions = { cameraLabel: string | null }
+export type CameraIndex = { Index: number } | { String: string }
+export type CameraInfo = { human_name: string; description: string; misc: string; index: CameraIndex }
+export type CaptureTarget = "display" | { window: number }
+export type CaptureWindow = { id: number; name: string }
+export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
 export type RecordingOptionsChanged = null
 
 /** tauri-specta globals **/

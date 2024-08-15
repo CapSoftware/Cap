@@ -1,17 +1,19 @@
-import { createEffect, createResource, createSignal, on, Show } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
-import { createStore } from "solid-js/store";
 import {
-  currentMonitor,
-  getCurrentWindow,
   LogicalPosition,
   LogicalSize,
+  currentMonitor,
+  getCurrentWindow,
 } from "@tauri-apps/api/window";
+import { Show, createEffect, createResource, createSignal, on } from "solid-js";
+import { createStore } from "solid-js/store";
 
-import { commands } from "../utils/tauri";
-import { createCameraForLabel } from "../utils/media";
-import { makeInvalidated } from "../utils/events";
+import { createQuery } from "@tanstack/solid-query";
 import { CloseX, Expand, Flip, Minimize, Squircle } from "../icons";
+import { createQueryInvalidate, makeInvalidated } from "../utils/events";
+import { createCameraForLabel } from "../utils/media";
+import { createOptionsQuery, getOptions } from "../utils/queries";
+import { commands } from "../utils/tauri";
 
 namespace CameraWindow {
   export type Size = "sm" | "lg";
@@ -24,36 +26,11 @@ namespace CameraWindow {
 }
 
 export default function () {
-  const [options] = makeInvalidated(
-    createResource(async () => {
-      const o = await commands.getRecordingOptions();
-      if (o.status === "ok") return o.data;
-    }),
-    "recordingOptionsChanged"
-  );
+  const options = createOptionsQuery();
 
-  const camera = createCameraForLabel(() => options()?.cameraLabel ?? "");
+  const camera = createCameraForLabel(() => options.data?.cameraLabel ?? "");
 
-  const [cameraStream] = createResource(
-    () => camera()?.deviceId,
-    (cameraInputId) =>
-      navigator.mediaDevices.getUserMedia({
-        video: { deviceId: cameraInputId },
-      })
-  );
-
-  const [cameraRef, setCameraRef] = createSignal<HTMLVideoElement>();
-
-  createEffect(() => {
-    const stream = cameraStream();
-    const ref = cameraRef();
-
-    if (ref && stream) {
-      if (ref.srcObject === stream) return;
-      ref.srcObject = stream;
-      ref.play();
-    }
-  });
+  const [cameraPreviewRef] = createCameraPreview(() => camera()?.deviceId);
 
   const [state, setState] = makePersisted(
     createStore<CameraWindow.State>({
@@ -66,7 +43,7 @@ export default function () {
   createEffect(on(() => state.size, resizeWindow));
 
   return (
-    <Show when={options()}>
+    <Show when={options.data}>
       {(options) => (
         <div
           data-tauri-drag-region
@@ -134,7 +111,7 @@ export default function () {
               "absolute top-0 left-0 w-full h-full object-cover pointer-events-none"
             }
             style={{ transform: state.mirrored ? "scaleX(1)" : "scaleX(-1)" }}
-            ref={setCameraRef}
+            ref={cameraPreviewRef}
           />
         </div>
       )}
@@ -165,4 +142,30 @@ async function resizeWindow(size: CameraWindow.Size) {
   const currentWindow = getCurrentWindow();
   currentWindow.setSize(new LogicalSize(windowWidth, windowHeight));
   currentWindow.setPosition(new LogicalPosition(x / scalingFactor, y));
+}
+
+function createCameraPreview(deviceId: () => string | undefined) {
+  const [cameraStream] = createResource(
+    deviceId,
+
+    (cameraInputId) =>
+      navigator.mediaDevices.getUserMedia({
+        video: { deviceId: cameraInputId },
+      })
+  );
+
+  const [cameraRef, setCameraRef] = createSignal<HTMLVideoElement>();
+
+  createEffect(() => {
+    const stream = cameraStream();
+    const ref = cameraRef();
+
+    if (ref && stream) {
+      if (ref.srcObject === stream) return;
+      ref.srcObject = stream;
+      ref.play();
+    }
+  });
+
+  return [setCameraRef] as const;
 }
