@@ -1,6 +1,7 @@
 use core::fmt;
 use regex::Regex;
 use reqwest;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -48,12 +49,16 @@ impl fmt::Display for RecordingAssetType {
     }
 }
 
-#[tracing::instrument]
-pub async fn upload_recording_asset(
+#[tracing::instrument(skip(on_progress))]
+pub async fn upload_recording_asset<F>(
     options: RecordingOptions,
     file_path: PathBuf,
     file_type: RecordingAssetType,
-) -> Result<String, String> {
+    on_progress: Option<F>,
+) -> Result<String, String>
+where
+    F: Fn(ProgressInfo) + Send + Sync + 'static,
+{
     tracing::info!("Uploading recording asset {file_type}...");
 
     let file_name = file_path
@@ -160,51 +165,49 @@ pub async fn upload_recording_asset(
 
     tracing::info!("Uploading file to: {}", post_url);
 
-    let on_progress_update = |info: ProgressInfo| {
-        tracing::info!(
-            "Upload progress: {:.2}%, Speed: {:.2} MB/s, Uploaded: {} / {} bytes",
-            info.progress,
-            info.speed / 1_000_000.0,
-            info.uploaded_bytes,
-            info.total_size
-        );
-        if let Some(error) = info.error {
-            tracing::error!("Upload error: {}", error);
+    let response = match file_type {
+        // Only send combined source playlist in chunks.
+        RecordingAssetType::CombinedSourcePlaylist => {
+            // TODO: Might need adjustments
+            let chunk_size = 1024 * 1024; // 1MB chunks
+            post_multipart_chunks(
+                &client,
+                post_url,
+                form,
+                file_name.clone(),
+                file_data,
+                mime_type,
+                chunk_size,
+                on_progress,
+            )
+            .await
         }
+        _ => client.post(post_url).multipart(form).send().await,
     };
 
-    // TODO: Might need adjustments
-    let chunk_size = 1024 * 1024; // 1MB chunks
-    let response = post_multipart_chunks_with_progress(
-        &client,
-        post_url,
-        form,
-        file_name.clone(),
-        file_data,
-        mime_type,
-        chunk_size,
-        on_progress_update,
-    )
-    .await
-    .map_err(|e| format!("Failed to upload file: {}", e))?;
-
-    if response.status().is_success() {
-        tracing::info!("File uploaded successfully");
-    } else {
-        let status = response.status();
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".to_string());
-        tracing::error!(
-            "Failed to upload file. Status: {}. Body: {}",
-            status,
-            error_body
-        );
-        return Err(format!(
-            "Failed to upload file. Status: {}. Body: {}",
-            status, error_body
-        ));
+    match response {
+        Ok(response) if response.status().is_success() => {
+            tracing::info!("File uploaded successfully");
+        }
+        Ok(response) => {
+            let status = response.status();
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<no response body>".to_string());
+            tracing::error!(
+                "Failed to upload file. Status: {}. Body: {}",
+                status,
+                error_body
+            );
+            return Err(format!(
+                "Failed to upload file. Status: {}. Body: {}",
+                status, error_body
+            ));
+        }
+        Err(e) => {
+            return Err(format!("Failed to send upload file request: {}", e));
+        }
     }
 
     tracing::info!("Removing file after upload: {file_path:?}");
@@ -280,7 +283,7 @@ fn log_video_info(file_path: &Path) -> Result<(String, String, String, String, S
     Ok((codec_name, width, height, frame_rate, bit_rate))
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize, specta::Type)]
 pub struct ProgressInfo {
     pub progress: f64,
     pub speed: f64,
@@ -289,7 +292,7 @@ pub struct ProgressInfo {
     pub error: Option<String>,
 }
 
-async fn post_multipart_chunks_with_progress<F>(
+async fn post_multipart_chunks<F>(
     client: &reqwest::Client,
     url: &str,
     mut form: reqwest::multipart::Form,
@@ -297,38 +300,43 @@ async fn post_multipart_chunks_with_progress<F>(
     file_data: Vec<u8>,
     mime_type: &str,
     chunk_size: usize,
-    progress_callback: F,
-) -> Result<reqwest::Response, Box<dyn std::error::Error>>
+    progress_callback: Option<F>,
+) -> Result<reqwest::Response, reqwest::Error>
 where
     F: Fn(ProgressInfo) + Send + Sync + 'static,
 {
     let total_size = file_data.len() as u64;
     let start_time = tokio::time::Instant::now();
-    let progress_callback = Arc::new(progress_callback);
+
+    let on_progress = Arc::new(progress_callback);
+    let on_progress_clone = Arc::clone(&on_progress);
 
     let mut uploaded_bytes = 0u64;
-
-    let progress_callback_clone = Arc::clone(&progress_callback);
 
     // Create a stream of file chunks using async_stream
     // Credit: https://github.com/mihaigalos/aim/ (MIT License.)
     // source: https://github.com/mihaigalos/aim/blob/723daabfb8c97a0b57bf772500c90b62bffcf598/src/https.rs#L44
     let file_stream = async_stream::stream! {
+        let on_progress_ref = on_progress_clone.as_ref();
+
         for chunk in file_data.chunks(chunk_size) {
             let chunk = chunk.to_vec();
-            uploaded_bytes += chunk.len() as u64;
 
-            let progress = (uploaded_bytes as f64 / total_size as f64) * 100.0;
-            let elapsed = start_time.elapsed().as_secs_f64();
-            let speed = uploaded_bytes as f64 / elapsed;
+            if let Some(callback) = on_progress_ref {
+                uploaded_bytes += chunk.len() as u64;
 
-            progress_callback_clone(ProgressInfo {
-                progress,
-                speed,
-                total_size,
-                uploaded_bytes,
-                error: None,
-            });
+                let progress = (uploaded_bytes as f64 / total_size as f64) * 100.0;
+                let elapsed = start_time.elapsed().as_secs_f64();
+                let speed = uploaded_bytes as f64 / elapsed;
+
+                callback(ProgressInfo {
+                    progress,
+                    speed,
+                    total_size,
+                    uploaded_bytes,
+                    error: None,
+                });
+            }
 
             yield Ok::<_, std::io::Error>(chunk);
         }
@@ -345,25 +353,29 @@ where
 
     match response {
         Ok(resp) => {
-            progress_callback(ProgressInfo {
-                progress: 100.0,
-                speed: total_size as f64 / start_time.elapsed().as_secs_f64(),
-                total_size,
-                uploaded_bytes: total_size,
-                error: None,
-            });
+            if let Some(callback) = on_progress.as_ref() {
+                callback(ProgressInfo {
+                    progress: 100.0,
+                    speed: total_size as f64 / start_time.elapsed().as_secs_f64(),
+                    total_size,
+                    uploaded_bytes: total_size,
+                    error: None,
+                });
+            }
             Ok(resp)
         }
         Err(e) => {
             let error_msg = e.to_string();
-            progress_callback(ProgressInfo {
-                progress: 0.0,
-                speed: 0.0,
-                total_size,
-                uploaded_bytes: 0,
-                error: Some(error_msg.clone()),
-            });
-            Err(Box::new(e))
+            if let Some(callback) = on_progress.as_ref() {
+                callback(ProgressInfo {
+                    progress: 0.0,
+                    speed: 0.0,
+                    total_size,
+                    uploaded_bytes: 0,
+                    error: Some(error_msg.clone()),
+                });
+            }
+            Err(e)
         }
     }
 }

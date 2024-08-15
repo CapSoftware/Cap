@@ -141,10 +141,13 @@ impl VideoCapturer {
                                 if !config::is_local_mode() {
                                     let rt = tokio::runtime::Runtime::new().unwrap();
                                     rt.block_on(async move {
-                                        let upload_task = tokio::spawn(upload_recording_asset(
+                                        let upload_task = tokio::spawn(upload_recording_asset::<
+                                            fn(crate::upload::ProgressInfo),
+                                        >(
                                             options_clone,
                                             screenshot_path.clone(),
                                             RecordingAssetType::ScreenCapture,
+                                            None,
                                         ));
                                         match upload_task.await {
                                             Ok(result) => match result {

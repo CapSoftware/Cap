@@ -3,16 +3,14 @@ use scap::capturer::Resolution;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
-use tauri::State;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, State};
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::Duration;
 
 use crate::app::config;
-use crate::upload::{upload_recording_asset, RecordingAssetType};
+use crate::upload::{upload_recording_asset, ProgressInfo, RecordingAssetType};
 
 use crate::media::MediaRecorder;
 
@@ -171,6 +169,7 @@ pub async fn start_dual_recording(
 #[tauri::command]
 #[specta::specta]
 pub async fn stop_all_recordings(
+    app_handle: AppHandle,
     state: State<'_, Arc<Mutex<RecordingState>>>,
 ) -> Result<(), String> {
     let mut state = state.lock().await;
@@ -187,10 +186,16 @@ pub async fn stop_all_recordings(
         .expect("Failed to stop media recording");
 
     tracing::info!("Uploading stream.m3u8");
+
     upload_recording_asset(
         active_recording.recording_options,
         state.data_dir.join("recording/stream.m3u8"),
         RecordingAssetType::CombinedSourcePlaylist,
+        Some(move |info| {
+            if let Err(err) = app_handle.emit("cap://upload/on_progress", info) {
+                tracing::error!("Failed to emit event for upload progress: {}", err);
+            };
+        }),
     )
     .await
     .ok();
@@ -257,10 +262,11 @@ async fn hls_upload_loop(
 
             upload_tasks.push(tokio::spawn(async move {
                 tracing::debug!("Uploading segment {:?}", file.path());
-                upload_recording_asset(
+                upload_recording_asset::<fn(ProgressInfo)>(
                     options,
                     file.path().to_owned(),
                     RecordingAssetType::CombinedSourceSegment,
+                    None,
                 )
                 .await
                 .ok();
