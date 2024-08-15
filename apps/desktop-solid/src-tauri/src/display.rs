@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::{
-    ffmpeg::{FFmpegRawVideoSource, NamedPipeCapture},
+    ffmpeg::{FFmpegRawVideoInput, NamedPipeCapture},
     macos,
 };
 
@@ -56,38 +56,9 @@ pub fn get_capture_windows() -> Vec<CaptureWindow> {
         .collect::<Vec<_>>()
 }
 
-const FPS: u32 = 30;
+pub const FPS: u32 = 30;
 
-pub fn start_recording(
-    output_folder: &Path,
-    output_name: &str,
-    capture_target: &CaptureTarget,
-    camera_target: Option<Target>,
-) -> FFmpegRawVideoSource {
-    std::fs::create_dir_all(output_folder).ok();
-
-    let pipe_path = output_folder.join(format!("{output_name}.pipe"));
-
-    let output_path = output_folder.join(format!("{output_name}.mp4"));
-    std::fs::remove_file(&output_path).ok();
-
-    println!("Beginning capture recording");
-
-    let ((width, height), capture) =
-        start_capturing(pipe_path.clone(), &capture_target, camera_target);
-
-    FFmpegRawVideoSource {
-        width,
-        height,
-        fps: FPS,
-        input: pipe_path,
-        output: output_path,
-        pix_fmt: "bgra",
-        capture,
-    }
-}
-
-fn start_capturing(
+pub fn start_capturing(
     pipe_path: PathBuf,
     capture_target: &CaptureTarget,
     camera_target: Option<Target>,
@@ -149,7 +120,6 @@ fn start_capturing(
 
             match capturer.get_next_frame() {
                 Ok(Frame::BGRA(frame)) => {
-                    println!("bruh");
                     file.write_all(&frame.data).ok();
                 }
                 _ => println!("Failed to get frame"),

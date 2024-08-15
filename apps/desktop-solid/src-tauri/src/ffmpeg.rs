@@ -1,7 +1,9 @@
 use std::{
+    ffi::OsString,
     io::Write,
+    ops::Deref,
     path::PathBuf,
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -10,12 +12,12 @@ use std::{
 
 use crate::utils::create_named_pipe;
 
-pub struct FFmpegRecording {
+pub struct FFmpegProcess {
     ffmpeg_stdin: ChildStdin,
 }
 
-impl FFmpegRecording {
-    pub fn create(mut command: Command) -> Self {
+impl FFmpegProcess {
+    pub fn spawn(mut command: Command) -> Self {
         let mut cmd = command
             .stdin(Stdio::piped())
             .spawn()
@@ -60,25 +62,34 @@ impl NamedPipeCapture {
     }
 }
 
-pub struct FFmpegRawVideoSource {
+pub struct FFmpegInput<T> {
+    inner: T,
+    pub index: u8,
+}
+
+impl<T> Deref for FFmpegInput<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+pub trait ApplyFFmpegArgs {
+    fn apply_ffmpeg_args(&self, command: &mut Command);
+}
+
+pub struct FFmpegRawVideoInput {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
-    pub input: PathBuf,
-    pub output: PathBuf,
     pub pix_fmt: &'static str,
-    pub capture: NamedPipeCapture,
+    pub input: OsString,
 }
 
-impl FFmpegRawVideoSource {
-    pub fn apply_to_ffmpeg(
-        self,
-        command: &mut std::process::Command,
-        index: u8,
-    ) -> NamedPipeCapture {
+impl ApplyFFmpegArgs for FFmpegRawVideoInput {
+    fn apply_ffmpeg_args(&self, command: &mut Command) {
         let size = format!("{}x{}", self.width, self.height);
-
-        println!("applying to ffmpeg: size: {size}");
 
         command
             // input
@@ -86,29 +97,45 @@ impl FFmpegRawVideoSource {
             .args(["-s", &size])
             .args(["-r", &self.fps.to_string()])
             .args(["-thread_queue_size", "4096", "-i"])
-            .arg(self.input)
-            // output
-            .args(["-f", "mp4", "-map", &format!("{index}:v")])
-            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
-            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-            .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
-            .args(["-movflags", "frag_keyframe+empty_moov"])
-            .args([
-                "-vf",
-                &format!("fps={},scale=in_range=full:out_range=limited", self.fps),
-            ])
-            .arg(self.output);
-
-        self.capture
+            .arg(&self.input);
+        // // output
+        // .args(["-f", "mp4", "-map", &format!("{index}:v")])
+        // .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+        // .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
+        // .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
+        // .args(["-movflags", "frag_keyframe+empty_moov"])
+        // .args([
+        //     "-vf",
+        //     &format!("fps={},scale=in_range=full:out_range=limited", self.fps),
+        // ])
+        // .arg(self.output);
     }
 }
 
-pub struct FFmpegRawSourceEncoder {
-    command: Command,
+pub struct FFmpegRawAudioSource {
+    pub sample_format: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub input: OsString,
+}
+
+impl ApplyFFmpegArgs for FFmpegRawAudioSource {
+    fn apply_ffmpeg_args(&self, command: &mut Command) {
+        command
+            .args(["-f", &self.sample_format])
+            .args(["-ar", &self.sample_rate.to_string()])
+            .args(["-ac", &self.channels.to_string()])
+            .args(["-thread_queue_size", "4096", "-i"])
+            .arg(&self.input);
+    }
+}
+
+pub struct FFmpeg {
+    pub command: Command,
     source_index: u8,
 }
 
-impl FFmpegRawSourceEncoder {
+impl FFmpeg {
     pub fn new() -> Self {
         Self {
             command: Command::new("ffmpeg"),
@@ -116,14 +143,19 @@ impl FFmpegRawSourceEncoder {
         }
     }
 
-    pub fn add_source<R>(&mut self, source: impl FnOnce(&mut Command, u8) -> R) -> R {
+    pub fn add_input<S: ApplyFFmpegArgs>(&mut self, source: S) -> FFmpegInput<S> {
         let source_index = self.source_index;
         self.source_index += 1;
 
-        source(&mut self.command, source_index)
+        source.apply_ffmpeg_args(&mut self.command);
+
+        FFmpegInput {
+            inner: source,
+            index: source_index,
+        }
     }
 
-    pub fn start(self) -> FFmpegRecording {
-        FFmpegRecording::create(self.command)
+    pub fn start(self) -> FFmpegProcess {
+        FFmpegProcess::spawn(self.command)
     }
 }

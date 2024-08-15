@@ -1,35 +1,32 @@
-use nokhwa::utils::{CameraFormat, FrameFormat, Resolution};
+use nokhwa::utils::{CameraFormat, FrameFormat};
 use serde::Serialize;
 use specta::Type;
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::atomic::Ordering,
 };
 use tokio::sync::oneshot;
 
 use tauri::{AppHandle, Manager, WebviewUrl};
 
-use crate::ffmpeg::{FFmpegRawVideoSource, NamedPipeCapture};
+use crate::ffmpeg::NamedPipeCapture;
 
-pub const CAMERA_WINDOW: &str = "camera";
+pub const WINDOW_LABEL: &str = "camera";
 const CAMERA_ROUTE: &str = "/camera";
 const WINDOW_SIZE: f64 = 230.0;
 
 #[tauri::command]
 #[specta::specta]
 pub fn create_camera_window(app: AppHandle) {
-    if let Some(window) = app.get_webview_window(CAMERA_WINDOW) {
+    if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
         window.set_focus().ok();
     } else {
         let monitor = app.primary_monitor().unwrap().unwrap();
 
         let window = tauri::webview::WebviewWindow::builder(
             &app,
-            CAMERA_WINDOW,
+            WINDOW_LABEL,
             WebviewUrl::App(CAMERA_ROUTE.into()),
         )
         .title("Cap Camera")
@@ -97,44 +94,7 @@ impl From<CameraIndex> for nokhwa::utils::CameraIndex {
     }
 }
 
-pub async fn start_recording(
-    output_folder: &Path,
-    output_name: &str,
-    camera_info: CameraInfo,
-) -> FFmpegRawVideoSource {
-    std::fs::create_dir_all(output_folder).ok();
-
-    let pipe_path = output_folder.join(format!("{output_name}.pipe"));
-
-    let output_path = output_folder.join(format!("{output_name}.mp4"));
-    std::fs::remove_file(&output_path).ok();
-
-    println!("Beginning camera recording");
-
-    let (camera_format, capture) = start_capturing(pipe_path.clone(), camera_info).await;
-
-    println!(
-        "Received video info: {:?}",
-        (camera_format.resolution(), camera_format.frame_rate())
-    );
-
-    FFmpegRawVideoSource {
-        width: camera_format.resolution().width(),
-        height: camera_format.resolution().height(),
-        fps: camera_format.frame_rate(),
-        input: pipe_path,
-        output: output_path,
-        pix_fmt: match camera_format.format() {
-            FrameFormat::YUYV => "uyvy422",
-            FrameFormat::RAWRGB => "rgb24",
-            FrameFormat::NV12 => "nv12",
-            _ => panic!("unimplemented"),
-        },
-        capture,
-    }
-}
-
-async fn start_capturing(
+pub async fn start_capturing(
     pipe_path: PathBuf,
     camera_info: CameraInfo,
 ) -> (CameraFormat, NamedPipeCapture) {
@@ -172,9 +132,6 @@ async fn start_capturing(
                 return;
             }
             let frame = camera.frame().unwrap();
-            dbg!(frame.source_frame_format());
-            dbg!(frame.buffer().len());
-            dbg!(frame.resolution());
             file.write_all(frame.buffer()).ok();
         }
     });

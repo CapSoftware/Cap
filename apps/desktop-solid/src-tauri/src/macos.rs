@@ -1,3 +1,5 @@
+use std::ffi::c_void;
+
 use core_graphics::{
     base::boolean_t,
     display::{CFDictionaryRef, CGRect},
@@ -168,6 +170,12 @@ pub fn get_on_screen_windows() -> Vec<Window> {
     }
 
     array
+}
+
+pub fn get_ns_window_number(ns_window: *mut c_void) -> isize {
+    let ns_window = ns_window as *const objc2_app_kit::NSWindow;
+
+    unsafe { (*ns_window).windowNumber() }
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
