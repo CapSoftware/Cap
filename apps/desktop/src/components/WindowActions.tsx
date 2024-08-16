@@ -2,6 +2,7 @@
 
 import { Home } from "@/components/icons/Home";
 import { openLinkInBrowser } from "@/utils/helpers";
+import { HealthCheckStatus } from "./health";
 
 export const WindowActions = () => {
   const actionButtonBase = "w-3 h-3 bg-gray-500 rounded-full m-0 p-0 block";
@@ -41,23 +42,26 @@ export const WindowActions = () => {
             <span className={actionButtonBase}></span>
           </div>
         </div>
-        <div className="flex">
-          <button
-            onClick={async () => {
-              if (window.fathom !== undefined) {
-                window.fathom.trackEvent("home_clicked");
-              }
-              await openLinkInBrowser(
-                `${process.env.NEXT_PUBLIC_URL}/dashboard`
-              );
-            }}
-            className="p-1.5 bg-transparent hover:bg-gray-200 rounded-full transition-all"
-          >
-            <Home className="w-5 h-5" />
-          </button>
-          {/* <button className="p-1.5 bg-transparent hover:bg-gray-200 rounded-full transition-all">
-            <Settings className="w-5 h-5" />
-          </button> */}
+        <div className="flex space-x-2">
+          <HealthCheckStatus/>
+          <div className="flex">
+            <button
+              onClick={async () => {
+                if (window.fathom !== undefined) {
+                  window.fathom.trackEvent("home_clicked");
+                }
+                await openLinkInBrowser(
+                  `${process.env.NEXT_PUBLIC_URL}/dashboard`
+                );
+              }}
+              className="p-1.5 bg-transparent hover:bg-gray-200 rounded-full transition-all"
+            >
+              <Home className="w-5 h-5" />
+            </button>
+            {/* <button className="p-1.5 bg-transparent hover:bg-gray-200 rounded-full transition-all">
+              <Settings className="w-5 h-5" />
+            </button> */}
+          </div>
         </div>
       </div>
     </div>

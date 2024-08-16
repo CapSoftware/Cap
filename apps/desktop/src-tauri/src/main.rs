@@ -1,10 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use reqwest::multipart::{Form, Part};
 use sentry_tracing::EventFilter;
 use specta_typescript::Typescript;
-use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 use std::vec;
+use std::{path::PathBuf, sync::atomic::AtomicBool};
+use atomic_float::AtomicF64;
+
 use tauri::{
     tray::{MouseButton, MouseButtonState},
     Emitter, Manager,
@@ -33,6 +38,9 @@ use ffmpeg_sidecar::{
 };
 
 use winit::monitor::{MonitorHandle, VideoMode};
+
+static UPLOAD_SPEED: AtomicF64 = AtomicF64::new(0.0);
+static HEALTH_CHECK: AtomicBool = AtomicBool::new(false);
 
 fn main() {
     let _ = fix_path_env::fix();
@@ -101,6 +109,37 @@ fn main() {
         Ok(())
     }
 
+    async fn perform_health_check_and_calculate_upload_speed() -> Result<(), Box<dyn std::error::Error>> {
+        let client = reqwest::Client::new();
+        let sample_screen_recording = vec![0u8; 1_000_000];
+
+        let health_check_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
+        let health_check_url = format!("{}/api/health-check", health_check_url_base);
+
+        let form = Form::new().part(
+            "file",
+            Part::bytes(sample_screen_recording.clone())
+                .file_name("sample_screen_recording.webm")
+                .mime_str("video/webm")?,
+        );
+        let start_time = Instant::now();
+        let resp = client.post(health_check_url).multipart(form).send().await?;
+        let time_elapsed = start_time.elapsed();
+
+        let is_success = resp.status().is_success();
+        HEALTH_CHECK.store(is_success, Ordering::Relaxed);
+
+        if is_success {
+            let upload_speed = (sample_screen_recording.len() as f64 / time_elapsed.as_secs_f64()) / 1250000.0;
+            UPLOAD_SPEED.store(upload_speed, Ordering::Relaxed);
+            tracing::debug!("Health check successful. Upload speed: {} Mbps", upload_speed);
+        } else {
+            tracing::debug!("Health check failed.");
+        }
+
+        Ok(())
+    }
+
     if let Err(error) = handle_ffmpeg_installation() {
         tracing::error!(error);
         // TODO: UI message instead
@@ -141,7 +180,9 @@ fn main() {
         reset_microphone_permissions,
         reset_camera_permissions,
         close_webview,
-        make_webview_transparent
+        make_webview_transparent,
+        get_health_check_status,
+        get_upload_speed
     ]);
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds
@@ -156,6 +197,14 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
+            tracing::info!("Setting up application...");
+
+            tauri::async_runtime::spawn(async {
+                if let Err(error) = perform_health_check_and_calculate_upload_speed().await {
+                    tracing::error!("Health check and upload speed calculation failed: {}", error);
+                }
+            });
+
             let handle = app.handle();
 
             if let Some(main_window) = app.get_webview_window("main") {

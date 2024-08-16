@@ -86,7 +86,7 @@ export const initializeCameraWindow = async () => {
           shadow: false,
           focus: false,
         }).once("tauri://window-created", () => {
-          commands.makeWebviewTransparent("camera");
+          //commands.makeWebviewTransparent("camera");
         });
       }
     }

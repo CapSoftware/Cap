@@ -14,6 +14,7 @@ import { authFetch } from "@/utils/auth/helpers";
 import { commands } from "@/utils/commands";
 import { setTrayMenu } from "@/utils/tray";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
+import { UploadSpeed } from "@/components/upload-speed";
 
 export const dynamic = "force-static";
 
@@ -127,6 +128,7 @@ export default function CameraPage() {
       <div id="app" data-tauri-drag-region style={{ borderRadius: "16px" }}>
         <WindowActions />
         <Recorder />
+        <UploadSpeed />
       </div>
     );
   }
@@ -149,6 +151,7 @@ export default function CameraPage() {
           ) : (
             <Recorder />
           )}
+          <UploadSpeed />
         </>
       ) : (
         <SignIn />

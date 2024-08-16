@@ -68,6 +68,12 @@ async makeWebviewTransparent(label: string) : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async getHealthCheckStatus() : Promise<boolean> {
+    return await TAURI_INVOKE("get_health_check_status");
+},
+async getUploadSpeed() : Promise<number> {
+    return await TAURI_INVOKE("get_upload_speed");
 }
 }
 
