@@ -13,9 +13,9 @@ async startDualRecording(options: RecordingOptions) : Promise<Result<null, strin
     else return { status: "error", error: e  as any };
 }
 },
-async stopAllRecordings() : Promise<Result<null, string>> {
+async stopAllRecordings(isValidationCheck: boolean | null) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("stop_all_recordings") };
+    return { status: "ok", data: await TAURI_INVOKE("stop_all_recordings", { isValidationCheck }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -81,7 +81,7 @@ async makeWebviewTransparent(label: string) : Promise<Result<null, string>> {
 
 /** user-defined types **/
 
-export type RecordingOptions = { user_id: string; video_id: string; screen_index: string; video_index: string; audio_name: string; aws_region: string; aws_bucket: string }
+export type RecordingOptions = { user_id: string; video_id: string; screen_index: string; video_index: string; audio_name: string; aws_region: string; aws_bucket: string; video_resolution: string }
 
 /** tauri-specta globals **/
 

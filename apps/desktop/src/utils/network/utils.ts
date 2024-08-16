@@ -1,4 +1,4 @@
-import { Command } from "@tauri-apps/api/shell";
+import { Command } from "@tauri-apps/plugin-shell";
 
 interface NetworkQualityResponse {
   base_rtt: number;
@@ -58,7 +58,7 @@ const NETWORK_SPEED_KEY = "networkSpeedMbps";
 const runNetworkQuality = async (): Promise<NetworkQualityResponse> => {
   try {
     console.time("networkQuality");
-    const output = await new Command("networkQuality", "-c").execute();
+    const output = await Command.create("networkQuality", "-c").execute();
     console.timeEnd("networkQuality");
     return JSON.parse(output.stdout) as NetworkQualityResponse;
   } catch (error) {

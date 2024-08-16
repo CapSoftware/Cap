@@ -1,7 +1,6 @@
 "use client";
 
 import { commands } from "@/utils/commands";
-import { Window } from "@tauri-apps/api/window";
 
 export const enumerateAndStoreDevices = async () => {
   if (typeof navigator !== "undefined" && typeof window !== "undefined") {
