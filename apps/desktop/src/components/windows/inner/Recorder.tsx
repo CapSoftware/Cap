@@ -16,7 +16,7 @@ import { Scaling } from "@/components/icons/Scaling";
 import { Logo } from "@/components/icons/Logo";
 import { ActionButton } from "./ActionButton";
 import { ActionSelect } from "./ActionSelect";
-import { Button } from "@cap/ui";
+import { Button, Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
 import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import {
@@ -27,7 +27,7 @@ import {
   isUserPro,
 } from "@cap/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
-import { commands } from "@/utils/commands";
+import { commands, events, ProgressInfo } from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { setTrayStopIcon } from "@/utils/tray";
@@ -64,6 +64,8 @@ export const Recorder = () => {
   const [outputResolution, setOutputResolution] = useState<OutputResolution>(
     OutputResolution._720p
   );
+  const [uploadProgressInfo, setUploadProgressInfo] =
+    useState<ProgressInfo | null>(null);
 
   useEffect(() => {
     proCheckPromise.then((result) => setProCheck(Boolean(result)));
@@ -247,6 +249,10 @@ export const Recorder = () => {
     try {
       console.log("Stopping recordings...");
 
+      let unlistenUploadProgress = await events.uploadProgressEvent.listen(
+        (event) => setUploadProgressInfo(event.payload)
+      );
+
       try {
         await commands.stopAllRecordings();
       } catch (error) {
@@ -257,6 +263,7 @@ export const Recorder = () => {
         window.fathom.trackEvent("stop_recording");
       }
 
+      unlistenUploadProgress();
       console.log("All recordings stopped...");
 
       console.log("Opening window...");
@@ -373,145 +380,149 @@ export const Recorder = () => {
       )} */}
       <div
         data-tauri-drag-region
-        className="w-full h-full px-3 pt-4 relative flex items-center justify-center"
+        className="w-full h-screen flex flex-col px-3 pt-4"
       >
-        <div className="w-full">
-          <div
-            className={`${
-              isRecording === true && "blur-sm pointer-events-none"
-            } mb-4`}
-          >
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <Logo className="w-24 h-auto" />
-              </div>
-            </div>
-            <div className="space-y-2 mb-4 w-full">
-              <div>
-                <label className="text-sm font-medium">Display</label>
-                <div className="flex items-center space-x-1">
-                  <ActionButton
-                    handler={() => {
-                      console.log("Screen option selected");
-                      if (window.fathom !== undefined) {
-                        window.fathom.trackEvent("screen_option");
-                      }
-                    }}
-                    icon={<Screen className="w-5 h-5" />}
-                    label="Full screen"
-                    active={selectedDisplayType === "screen"}
-                  />
-                  <ActionButton
-                    handler={() => {
-                      toast.error("This option is coming soon!");
-                      if (window.fathom !== undefined) {
-                        window.fathom.trackEvent("window_option");
-                      }
-                    }}
-                    icon={<Window className="w-5 h-5" />}
-                    label="Window"
-                    active={selectedDisplayType === "window"}
-                  />
+        <div className="mt-10">
+          <div className="w-full">
+            <div
+              className={`${
+                isRecording === true && "blur-sm pointer-events-none"
+              } mb-4`}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <Logo className="w-24 h-auto" />
                 </div>
               </div>
-              <div>
-                <label className="text-sm font-medium">Resolution</label>
-                <ActionSelect
-                  status="on"
-                  options={[
-                    { value: "_", label: "Output Resolution:", disabled: true },
-                    ...Object.values(OutputResolution).map((value) => ({
-                      value,
-                      label:
-                        value === OutputResolution.Captured ? "Source" : value,
-                      disabled: true,
-                    })),
-                  ]}
-                  iconEnabled={<Scaling className="w-5 h-5" />}
-                  selectedValue={outputResolution}
-                  onSelect={(value) => {
-                    const filtered = Object.values(OutputResolution).find(
-                      (res) => res === value
-                    );
-                    if (filtered) {
-                      setOutputResolution(filtered);
-                    } else {
-                      console.error(
-                        `Invalid resolution selected! "${value}" is not valid.`
-                      );
-                    }
-                  }}
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium">Webcam / Video</label>
-                <div className="space-y-2">
-                  <ActionSelect
-                    options={createDeviceMenuOptions("videoinput")}
-                    onStatusClick={(status) => {
-                      selectDevice(
-                        "videoinput",
-                        status === "on" ? null : lastSelectedVideoDevice
-                      );
-                    }}
-                    showStatus={true}
-                    status={selectedVideoDevice === null ? "off" : "on"}
-                    iconEnabled={<Video className="w-5 h-5" />}
-                    iconDisabled={<VideoOff className="w-5 h-5" />}
-                    selectedValue={selectedVideoDevice?.label}
-                    onSelect={(value) =>
-                      handleSelectInputDevice("videoinput", value as string)
-                    }
-                  />
-                  <ActionSelect
-                    options={createDeviceMenuOptions("audioinput")}
-                    onStatusClick={(status) => {
-                      selectDevice(
-                        "audioinput",
-                        status === "on" ? null : lastSelectedAudioDevice
-                      );
-                    }}
-                    showStatus={true}
-                    status={selectedAudioDevice === null ? "off" : "on"}
-                    iconEnabled={<Microphone className="w-5 h-5" />}
-                    iconDisabled={<MicrophoneOff className="w-5 h-5" />}
-                    selectedValue={selectedAudioDevice?.label}
-                    onSelect={(value) =>
-                      handleSelectInputDevice("audioinput", value as string)
-                    }
-                  />
+              <div className="space-y-4 mb-4 w-full">
+                <div>
+                  <label className="text-sm font-medium">Display</label>
+                  <div className="flex items-center space-x-1">
+                    <ActionButton
+                      handler={() => {
+                        console.log("Screen option selected");
+                        if (window.fathom !== undefined) {
+                          window.fathom.trackEvent("screen_option");
+                        }
+                      }}
+                      icon={<Screen className="w-5 h-5" />}
+                      label="Full screen"
+                      active={selectedDisplayType === "screen"}
+                    />
+                    <ActionButton
+                      handler={() => {
+                        toast.error("This option is coming soon!");
+                        if (window.fathom !== undefined) {
+                          window.fathom.trackEvent("window_option");
+                        }
+                      }}
+                      icon={<Window className="w-5 h-5" />}
+                      label="Window"
+                      active={selectedDisplayType === "window"}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Webcam / Video</label>
+                  <div className="space-y-2">
+                    <ActionSelect
+                      options={createDeviceMenuOptions("videoinput")}
+                      onStatusClick={(status) => {
+                        selectDevice(
+                          "videoinput",
+                          status === "on" ? null : lastSelectedVideoDevice
+                        );
+                      }}
+                      showStatus={true}
+                      status={selectedVideoDevice === null ? "off" : "on"}
+                      iconEnabled={<Video className="w-5 h-5" />}
+                      iconDisabled={<VideoOff className="w-5 h-5" />}
+                      selectedValue={selectedVideoDevice?.label}
+                      onSelect={(value) =>
+                        handleSelectInputDevice("videoinput", value as string)
+                      }
+                    />
+                    <ActionSelect
+                      options={createDeviceMenuOptions("audioinput")}
+                      onStatusClick={(status) => {
+                        selectDevice(
+                          "audioinput",
+                          status === "on" ? null : lastSelectedAudioDevice
+                        );
+                      }}
+                      showStatus={true}
+                      status={selectedAudioDevice === null ? "off" : "on"}
+                      iconEnabled={<Microphone className="w-5 h-5" />}
+                      iconDisabled={<MicrophoneOff className="w-5 h-5" />}
+                      selectedValue={selectedAudioDevice?.label}
+                      onSelect={(value) =>
+                        handleSelectInputDevice("audioinput", value as string)
+                      }
+                    />
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-          <Button
-            {...(isRecording && { variant: "destructive" })}
-            className="w-full flex mx-auto"
-            onClick={() => {
-              if (isRecording) {
-                handleStopAllRecordings();
-              } else {
-                handleStartAllRecordings();
-              }
-            }}
-            spinner={startingRecording || stoppingRecording}
-          >
-            {startingRecording
-              ? "Starting..."
-              : isRecording
-              ? stoppingRecording
-                ? currentStoppingMessage
-                : `Stop - ${recordingTime}`
-              : "Start Recording"}
-          </Button>
-          <div className="text-center mt-3">
-            {proCheck === false ? (
-              <p className="text-sm text-gray-600">5 min recording limit</p>
-            ) : (
-              <p className="text-sm text-gray-600">No recording limit</p>
-            )}
+            <Button
+              {...(isRecording && { variant: "destructive" })}
+              className="w-full flex mx-auto"
+              onClick={() => {
+                if (isRecording) {
+                  handleStopAllRecordings();
+                } else {
+                  handleStartAllRecordings();
+                }
+              }}
+              spinner={startingRecording || stoppingRecording}
+            >
+              {startingRecording
+                ? "Starting..."
+                : isRecording
+                ? stoppingRecording
+                  ? `${currentStoppingMessage} (${uploadProgressInfo?.progress}%)`
+                  : `Stop - ${recordingTime}`
+                : "Start Recording"}
+            </Button>
           </div>
         </div>
+        <div className="flex flex-col items-center mt-2 mb-6 space-y-1 cursor-pointer">
+          <div>
+            {(!stoppingRecording || !isRecording) && (
+              <Popover>
+                <PopoverTrigger>
+                  <p
+                    className="text-sm text-gray-800"
+                    onClick={() => {
+                      // TODO: Implement window.
+                      console.log("Clicked");
+                    }}
+                  >
+                    Quality:{" "}
+                    <span className="underline">
+                      {outputResolution.toString()}
+                    </span>
+                  </p>
+                </PopoverTrigger>
+                <PopoverContent className="bg-white w-64">
+                  Select resolution
+                </PopoverContent>
+              </Popover>
+            )}
+            {stoppingRecording && (
+              <p className="text-sm text-gray-600">
+                Uploading at{" "}
+                {(uploadProgressInfo?.speed / 1_000_000.0).toFixed(2)}
+                <span>MB/s</span>
+              </p>
+            )}
+          </div>
+          <p className="text-sm text-gray-600">
+            {proCheck === false
+              ? "5 min recording limit"
+              : "No recording limit"}
+          </p>
+        </div>
+
         <Toaster />
       </div>
     </>
