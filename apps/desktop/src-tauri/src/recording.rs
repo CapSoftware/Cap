@@ -196,6 +196,14 @@ pub async fn stop_all_recordings(
         state.data_dir.join("recording/stream.m3u8"),
         RecordingAssetType::CombinedSourcePlaylist,
         Some(move |info: ProgressInfo| {
+            tracing::info!(
+                "Upload progress: {:.2}%, at: {:.2} MB/s, Uploaded: {} / {} bytes",
+                info.progress,
+                info.speed / 1_000_000.0,
+                info.uploaded_bytes,
+                info.total_size
+            );
+
             if let Err(err) = UploadProgressEvent(info.into()).emit(&app_handle) {
                 tracing::error!("Failed to emit event for upload progress: {}", err);
             };
