@@ -479,7 +479,9 @@ export const Recorder = () => {
                 ? "Starting..."
                 : isRecording
                 ? stoppingRecording
-                  ? `${currentStoppingMessage} (${uploadProgressInfo?.progress}%)`
+                  ? `${currentStoppingMessage} (${uploadProgressInfo?.progress.toFixed(
+                      2
+                    )}%)`
                   : `Stop - ${recordingTime}`
                 : "Start Recording"}
             </Button>
