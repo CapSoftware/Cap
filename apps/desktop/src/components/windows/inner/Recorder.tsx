@@ -490,13 +490,7 @@ export const Recorder = () => {
             {(!stoppingRecording || !isRecording) && (
               <Popover>
                 <PopoverTrigger>
-                  <p
-                    className="text-sm text-gray-800"
-                    onClick={() => {
-                      // TODO: Implement window.
-                      console.log("Clicked");
-                    }}
-                  >
+                  <p className="text-sm text-gray-800">
                     Quality:{" "}
                     <span className="underline">
                       {outputResolution.toString()}
