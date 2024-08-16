@@ -16,6 +16,14 @@ const getOptions = queryOptions({
   },
 });
 
+export const getCurrentRecording = queryOptions({
+  queryKey: ["recordingOptions"] as const,
+  queryFn: async () => {
+    const o = await commands.getCurrentRecording();
+    if (o.status === "ok") return o.data;
+  },
+});
+
 export function createOptionsQuery() {
   const options = createQuery(() => getOptions);
   createQueryInvalidate(options, "recordingOptionsChanged");

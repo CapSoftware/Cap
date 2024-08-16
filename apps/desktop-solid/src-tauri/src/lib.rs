@@ -5,12 +5,16 @@ mod macos;
 mod recording;
 mod utils;
 
+use objc2_app_kit::{NSPopUpMenuWindowLevel, NSScreenSaverWindowLevel};
+use recording::{DisplaySource, InProgressRecording};
 // use macos::Bounds;
 use scap::Target;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use specta::Type;
 use std::{
     collections::HashMap,
+    marker::PhantomData,
     path::PathBuf,
     process::{Command, Stdio},
     sync::Arc,
@@ -18,6 +22,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
+use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
 use tokio::{sync::RwLock, time::sleep};
 
@@ -36,7 +41,7 @@ pub struct RecordingOptions {
 pub struct AppState {
     start_recording_options: RecordingOptions,
     #[serde(skip)]
-    current_recording: Option<recording::InProgressRecording>,
+    current_recording: Option<InProgressRecording>,
     prev_recordings: Vec<PathBuf>,
 }
 
@@ -71,6 +76,29 @@ async fn set_recording_options(
     Ok(())
 }
 
+type Bruh<T> = (T,);
+
+#[derive(Serialize, Type)]
+struct JsonValue<T>(
+    #[serde(skip)] PhantomData<T>,
+    #[specta(type = Bruh<T>)] serde_json::Value,
+);
+
+impl<T: Serialize> JsonValue<T> {
+    fn new(value: &T) -> Self {
+        Self(PhantomData, json!(value))
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_current_recording(
+    state: MutableState<'_, AppState>,
+) -> Result<JsonValue<Option<InProgressRecording>>, ()> {
+    let state = state.read().await;
+    Ok(JsonValue::new(&state.current_recording))
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn get_prev_recordings(state: MutableState<'_, AppState>) -> Result<Vec<PathBuf>, ()> {
@@ -95,20 +123,42 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, AppState>) -> R
         .join("recordings")
         .join(format!("{id}.cap"));
 
-    state.current_recording = Some(recording::start(recording_dir, recording_options).await);
+    let current_recording = recording::start(recording_dir, recording_options).await;
+    let current_recording = state.current_recording.insert(current_recording);
+
+    if let DisplaySource::Window { .. } = &current_recording.display_source {
+        let monitor = app.primary_monitor().unwrap().unwrap();
+
+        let occluder_window = WebviewWindow::builder(
+            &app,
+            "window-capture-occluder",
+            tauri::WebviewUrl::App("/window-capture-occluder".into()),
+        )
+        .title("Cap Window Capture Occluder")
+        .maximized(false)
+        .resizable(false)
+        .fullscreen(false)
+        .decorations(false)
+        .shadow(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .content_protected(true)
+        .inner_size(
+            monitor.size().width as f64 / monitor.scale_factor(),
+            monitor.size().height as f64 / monitor.scale_factor(),
+        )
+        .position(0.0, 0.0)
+        .build()
+        .unwrap();
+
+        occluder_window
+            .set_window_level(NSScreenSaverWindowLevel as u32)
+            .unwrap();
+        occluder_window.set_ignore_cursor_events(true).unwrap();
+        occluder_window.make_transparent().unwrap();
+    }
 
     Ok(())
-}
-
-fn get_target_for_window(window: &WebviewWindow) -> Option<Target> {
-    let window_number = macos::get_ns_window_number(window.ns_window().unwrap());
-
-    scap::get_all_targets()
-        .into_iter()
-        .find(|target| match target {
-            Target::Window(window) => window.raw_handle as isize == window_number,
-            _ => false,
-        })
 }
 
 #[tauri::command]
@@ -149,18 +199,18 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, AppState>) -> Re
 
 #[tauri::command]
 #[specta::specta]
-fn open_dat_shit(app: AppHandle) {
+fn open_previous_recordings_window(app: AppHandle) {
     show_previous_recordings_window(app);
 }
 
 struct FakeWindowBounds(pub Arc<RwLock<HashMap<String, HashMap<String, Bounds>>>>);
 
-#[derive(Type, Deserialize, Debug)]
+#[derive(Type, Serialize, Deserialize, Debug, Clone)]
 struct Bounds {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[tauri::command]
@@ -330,10 +380,11 @@ pub fn run() {
             get_cameras,
             get_capture_windows,
             get_prev_recordings,
-            open_dat_shit,
+            open_previous_recordings_window,
             set_fake_window_bounds,
             remove_fake_window,
-            focus_captures_panel
+            focus_captures_panel,
+            get_current_recording
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -357,7 +408,7 @@ pub fn run() {
 
             app.manage(Arc::new(RwLock::new(AppState {
                 start_recording_options: RecordingOptions {
-                    capture_target: CaptureTarget::Display,
+                    capture_target: CaptureTarget::Screen,
                     camera_label: None,
                 },
                 current_recording: None,

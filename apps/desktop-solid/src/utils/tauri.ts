@@ -54,8 +54,8 @@ async getPrevRecordings() : Promise<Result<string[], null>> {
     else return { status: "error", error: e  as any };
 }
 },
-async openDatShit() : Promise<void> {
-    await TAURI_INVOKE("open_dat_shit");
+async openPreviousRecordingsWindow() : Promise<void> {
+    await TAURI_INVOKE("open_previous_recordings_window");
 },
 async setFakeWindowBounds(name: string, bounds: Bounds) : Promise<Result<null, string>> {
     try {
@@ -75,6 +75,14 @@ async removeFakeWindow(name: string) : Promise<Result<null, string>> {
 },
 async focusCapturesPanel() : Promise<void> {
     await TAURI_INVOKE("focus_captures_panel");
+},
+async getCurrentRecording() : Promise<Result<JsonValue<InProgressRecording | null>, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_current_recording") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -96,9 +104,12 @@ recordingOptionsChanged: "recording-options-changed"
 /** user-defined types **/
 
 export type Bounds = { x: number; y: number; width: number; height: number }
-export type CaptureTarget = "display" | { window: number }
+export type CaptureTarget = "screen" | { window: number }
 export type CaptureWindow = { id: number; name: string }
+export type DisplaySource = { variant: "screen" } | { variant: "window"; bounds: Bounds }
 export type FocusCapturesPanel = null
+export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
+export type JsonValue<T> = [T]
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
 export type RecordingOptionsChanged = null
 

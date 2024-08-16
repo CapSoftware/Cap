@@ -14,7 +14,7 @@ use specta::Type;
 
 use crate::{
     ffmpeg::{FFmpegRawVideoInput, NamedPipeCapture},
-    macos,
+    macos, Bounds,
 };
 
 #[derive(Type, Serialize)]
@@ -26,7 +26,7 @@ pub struct CaptureWindow {
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum CaptureTarget {
-    Display,
+    Screen,
     Window(u32),
 }
 
@@ -65,22 +65,15 @@ pub fn start_capturing(
     dbg!(capture_target);
     let mut capturer = {
         let crop_area = match capture_target {
-            CaptureTarget::Window(id) => {
-                let windows = macos::get_on_screen_windows();
-
-                let window = windows
-                    .into_iter()
-                    .find(|w| w.window_number == *id)
-                    .unwrap();
-
-                Some(Area {
+            CaptureTarget::Window(window_number) => {
+                get_window_bounds(*window_number).map(|bounds| Area {
                     size: Size {
-                        width: window.bounds.width as f64,
-                        height: window.bounds.height as f64,
+                        width: bounds.width,
+                        height: bounds.height,
                     },
                     origin: Point {
-                        x: window.bounds.x as f64,
-                        y: window.bounds.y as f64,
+                        x: bounds.x,
+                        y: bounds.y,
                     },
                 })
             }
@@ -126,4 +119,19 @@ pub fn start_capturing(
     });
 
     ((width, height), capture)
+}
+
+pub fn get_window_bounds(window_number: u32) -> Option<Bounds> {
+    let windows = macos::get_on_screen_windows();
+
+    let window = windows
+        .into_iter()
+        .find(|w| w.window_number == window_number)?;
+
+    Some(Bounds {
+        width: window.bounds.width as f64,
+        height: window.bounds.height as f64,
+        x: window.bounds.x as f64,
+        y: window.bounds.y as f64,
+    })
 }

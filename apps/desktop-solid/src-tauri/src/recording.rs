@@ -1,13 +1,31 @@
+use serde::Serialize;
+use specta::Type;
 use std::path::PathBuf;
 
-use scap::Target;
+use crate::{
+    camera,
+    display::{self, get_window_bounds, CaptureTarget},
+    ffmpeg::*,
+    Bounds, RecordingOptions,
+};
 
-use crate::{camera, display, ffmpeg::*, RecordingOptions};
+#[derive(Clone, Type, Serialize)]
+#[serde(rename_all = "camelCase", tag = "variant")]
+pub enum DisplaySource {
+    Screen,
+    Window { bounds: Bounds },
+}
 
+#[derive(Type, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InProgressRecording {
     pub recording_dir: PathBuf,
+    #[serde(skip)]
     pub ffmpeg_process: FFmpegProcess,
+    #[serde(skip)]
     pub display: FFmpegCaptureOutput<FFmpegRawVideoInput>,
+    pub display_source: DisplaySource,
+    #[serde(skip)]
     pub camera: Option<FFmpegCaptureOutput<FFmpegRawVideoInput>>,
 }
 
@@ -38,7 +56,7 @@ pub async fn start(
 
     let mut ffmpeg = FFmpeg::new();
 
-    let camera = start_camera_recording(&content_dir, &recording_options, &mut ffmpeg).await;
+    let camera = start_camera_recording(&content_dir, recording_options, &mut ffmpeg).await;
     let display = start_display_recording(&content_dir, recording_options, &mut ffmpeg).await;
 
     let ffmpeg_process = ffmpeg.start();
@@ -47,6 +65,12 @@ pub async fn start(
         recording_dir,
         ffmpeg_process,
         display,
+        display_source: match recording_options.capture_target {
+            CaptureTarget::Screen => DisplaySource::Screen,
+            CaptureTarget::Window(window_number) => DisplaySource::Window {
+                bounds: get_window_bounds(window_number).unwrap(),
+            },
+        },
         camera,
     }
 }

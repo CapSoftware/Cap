@@ -17,7 +17,10 @@ export default function () {
 
   return (
     <>
-      <button type="button" onClick={() => commands.openDatShit()}>
+      <button
+        type="button"
+        onClick={() => commands.openPreviousRecordingsWindow()}
+      >
         Open prev recordings window
       </button>
       <Suspense fallback="LOADING">
@@ -184,58 +187,3 @@ export default function () {
     </>
   );
 }
-
-// <key>CFBundleDocumentTypes</key>
-//  <array>
-//      <dict>
-//          <key>CFBundleDocumentTypes</key>
-//          <array>
-//              <dict>
-//                  <key>CFBundleTypeName</key>
-//                  <string>LSTypeIsPackage</string>
-//                  <key>LSHandlerRank</key>
-//                  <string>Default</string>
-//              </dict>
-//          </array>
-//          <key>CFBundleTypeExtensions</key>
-//          <array>
-//              <string>cap</string>
-//          </array>
-//          <key>CFBundleTypeName</key>
-//          <string>Unique Extension</string>
-//          <key>CFBundleTypeRole</key>
-//          <string>Editor</string>
-//          <key>LSHandlerRank</key>
-//          <string>Default</string>
-//          <key>LSItemContentTypes</key>
-//          <array>
-//              <string>so.cap.recording</string>
-//          </array>
-//          <key>NSDocumentClass</key>
-//          <string>$(PRODUCT_MODULE_NAME).Document</string>
-//      </dict>
-//      <dict/>
-//  </array>
-//  <key>UTExportedTypeDeclarations</key>
-//  <array>
-//      <dict>
-//          <key>UTTypeConformsTo</key>
-//          <array>
-//              <string>com.apple.package</string>
-//              <string>public.composite-content</string>
-//          </array>
-//          <key>UTTypeDescription</key>
-//          <string>Unique Extension</string>
-//          <key>UTTypeIcons</key>
-//          <dict/>
-//          <key>UTTypeIdentifier</key>
-//          <string>com.buddhiman.Unique-Extension</string>
-//          <key>UTTypeTagSpecification</key>
-//          <dict>
-//              <key>public.filename-extension</key>
-//              <array>
-//                  <string>cap</string>
-//              </array>
-//          </dict>
-//      </dict>
-//  </array>
