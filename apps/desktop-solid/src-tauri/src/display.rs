@@ -61,8 +61,8 @@ pub const FPS: u32 = 30;
 pub fn start_capturing(
     pipe_path: PathBuf,
     capture_target: &CaptureTarget,
-    camera_target: Option<Target>,
 ) -> ((u32, u32), NamedPipeCapture) {
+    dbg!(capture_target);
     let mut capturer = {
         let crop_area = match capture_target {
             CaptureTarget::Window(id) => {
@@ -89,8 +89,6 @@ pub fn start_capturing(
 
         let options = Options {
             fps: FPS,
-            excluded_targets: camera_target.map(|t| vec![t]),
-            show_cursor: true,
             show_highlight: true,
             output_type: FrameType::BGRAFrame,
             output_resolution: Resolution::Captured,

@@ -1,11 +1,7 @@
-use nokhwa::utils::{CameraFormat, FrameFormat};
+use nokhwa::utils::CameraFormat;
 use serde::Serialize;
 use specta::Type;
-use std::{
-    io::Write,
-    path::{Path, PathBuf},
-    sync::atomic::Ordering,
-};
+use std::{io::Write, path::PathBuf, sync::atomic::Ordering};
 use tokio::sync::oneshot;
 
 use tauri::{AppHandle, Manager, WebviewUrl};
@@ -35,6 +31,7 @@ pub fn create_camera_window(app: AppHandle) {
         .fullscreen(false)
         .decorations(false)
         .always_on_top(true)
+        .content_protected(true)
         .visible_on_all_workspaces(true)
         .inner_size(WINDOW_SIZE, WINDOW_SIZE)
         .position(
@@ -55,48 +52,30 @@ pub fn create_camera_window(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_cameras() -> Vec<CameraInfo> {
+pub fn get_cameras() -> Vec<String> {
     nokhwa::query(nokhwa::utils::ApiBackend::Auto)
         .unwrap()
         .into_iter()
-        .map(|i| CameraInfo {
-            human_name: i.human_name().to_string(),
-            description: i.description().to_string(),
-            misc: i.misc().to_string(),
-            index: match i.index() {
-                nokhwa::utils::CameraIndex::Index(i) => CameraIndex::Index(*i),
-                nokhwa::utils::CameraIndex::String(s) => CameraIndex::String(s.to_string()),
-            },
-        })
+        .map(|i| i.human_name().to_string())
         .collect()
+}
+
+pub fn find_camera_by_label(label: &str) -> Option<nokhwa::utils::CameraInfo> {
+    nokhwa::query(nokhwa::utils::ApiBackend::Auto)
+        .unwrap()
+        .into_iter()
+        .find(|c| &c.human_name() == label)
 }
 
 #[derive(Serialize, Type)]
 pub struct CameraInfo {
     pub human_name: String,
     pub description: String,
-    pub misc: String,
-    pub index: CameraIndex,
-}
-
-#[derive(Serialize, Type)]
-pub enum CameraIndex {
-    Index(u32),
-    String(String),
-}
-
-impl From<CameraIndex> for nokhwa::utils::CameraIndex {
-    fn from(value: CameraIndex) -> Self {
-        match value {
-            CameraIndex::Index(i) => nokhwa::utils::CameraIndex::Index(i),
-            CameraIndex::String(s) => nokhwa::utils::CameraIndex::String(s),
-        }
-    }
 }
 
 pub async fn start_capturing(
     pipe_path: PathBuf,
-    camera_info: CameraInfo,
+    camera_info: nokhwa::utils::CameraInfo,
 ) -> (CameraFormat, NamedPipeCapture) {
     let (video_info_tx, video_info_rx) = oneshot::channel();
 
@@ -115,7 +94,7 @@ pub async fn start_capturing(
 
         let format =
             RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
-        let mut camera = Camera::new(camera_info.index.into(), format).unwrap();
+        let mut camera = Camera::new(camera_info.index().clone(), format).unwrap();
 
         video_info_tx.send(camera.camera_format()).ok();
 

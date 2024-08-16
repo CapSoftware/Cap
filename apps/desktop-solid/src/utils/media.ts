@@ -43,7 +43,7 @@ export function createCameras() {
     const cameras = rustCameras.latest ?? [];
 
     return videoDevices.filter((device) =>
-      cameras.some((c) => c.human_name === device.label)
+      cameras.some((c) => c === device.label)
     );
   };
 }

@@ -40,11 +40,41 @@ async stopRecording() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async getCameras() : Promise<CameraInfo[]> {
+async getCameras() : Promise<string[]> {
     return await TAURI_INVOKE("get_cameras");
 },
 async getCaptureWindows() : Promise<CaptureWindow[]> {
     return await TAURI_INVOKE("get_capture_windows");
+},
+async getPrevRecordings() : Promise<Result<string[], null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_prev_recordings") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async openDatShit() : Promise<void> {
+    await TAURI_INVOKE("open_dat_shit");
+},
+async setFakeWindowBounds(name: string, bounds: Bounds) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_fake_window_bounds", { name, bounds }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async removeFakeWindow(name: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_fake_window", { name }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async focusCapturesPanel() : Promise<void> {
+    await TAURI_INVOKE("focus_captures_panel");
 }
 }
 
@@ -52,8 +82,10 @@ async getCaptureWindows() : Promise<CaptureWindow[]> {
 
 
 export const events = __makeEvents__<{
+focusCapturesPanel: FocusCapturesPanel,
 recordingOptionsChanged: RecordingOptionsChanged
 }>({
+focusCapturesPanel: "focus-captures-panel",
 recordingOptionsChanged: "recording-options-changed"
 })
 
@@ -63,10 +95,10 @@ recordingOptionsChanged: "recording-options-changed"
 
 /** user-defined types **/
 
-export type CameraIndex = { Index: number } | { String: string }
-export type CameraInfo = { human_name: string; description: string; misc: string; index: CameraIndex }
+export type Bounds = { x: number; y: number; width: number; height: number }
 export type CaptureTarget = "display" | { window: number }
 export type CaptureWindow = { id: number; name: string }
+export type FocusCapturesPanel = null
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
 export type RecordingOptionsChanged = null
 

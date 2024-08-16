@@ -3,7 +3,7 @@ use std::{
     io::Write,
     ops::Deref,
     path::PathBuf,
-    process::{ChildStdin, Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -14,6 +14,7 @@ use crate::utils::create_named_pipe;
 
 pub struct FFmpegProcess {
     ffmpeg_stdin: ChildStdin,
+    cmd: Child,
 }
 
 impl FFmpegProcess {
@@ -25,11 +26,13 @@ impl FFmpegProcess {
 
         Self {
             ffmpeg_stdin: cmd.stdin.take().unwrap(),
+            cmd,
         }
     }
 
-    pub fn stop(mut self) {
+    pub fn stop(&mut self) {
         self.ffmpeg_stdin.write_all(b"q").ok();
+        self.cmd.wait().ok();
     }
 }
 

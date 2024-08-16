@@ -5,23 +5,24 @@ use scap::Target;
 use crate::{camera, display, ffmpeg::*, RecordingOptions};
 
 pub struct InProgressRecording {
-    recording_dir: PathBuf,
-    ffmpeg_process: FFmpegProcess,
-    display: FFmpegCaptureOutput<FFmpegRawVideoInput>,
-    camera: Option<FFmpegCaptureOutput<FFmpegRawVideoInput>>,
+    pub recording_dir: PathBuf,
+    pub ffmpeg_process: FFmpegProcess,
+    pub display: FFmpegCaptureOutput<FFmpegRawVideoInput>,
+    pub camera: Option<FFmpegCaptureOutput<FFmpegRawVideoInput>>,
 }
 
 impl InProgressRecording {
-    pub fn stop(self) {
-        self.ffmpeg_process.stop();
+    pub fn stop(&mut self) {
         self.display.capture.stop();
-        if let Some(camera) = self.camera {
+        if let Some(camera) = &self.camera {
             camera.capture.stop();
         }
+
+        self.ffmpeg_process.stop();
     }
 }
 
-struct FFmpegCaptureOutput<T> {
+pub struct FFmpegCaptureOutput<T> {
     pub input: FFmpegInput<T>,
     pub capture: NamedPipeCapture,
     pub output_path: PathBuf,
@@ -30,7 +31,6 @@ struct FFmpegCaptureOutput<T> {
 pub async fn start(
     recording_dir: PathBuf,
     recording_options: &RecordingOptions,
-    camera_target: Option<Target>,
 ) -> InProgressRecording {
     let content_dir = recording_dir.join("content");
 
@@ -39,8 +39,7 @@ pub async fn start(
     let mut ffmpeg = FFmpeg::new();
 
     let camera = start_camera_recording(&content_dir, &recording_options, &mut ffmpeg).await;
-    let display =
-        start_display_recording(&content_dir, recording_options, &mut ffmpeg, camera_target).await;
+    let display = start_display_recording(&content_dir, recording_options, &mut ffmpeg).await;
 
     let ffmpeg_process = ffmpeg.start();
 
@@ -60,11 +59,7 @@ async fn start_camera_recording(
     let Some(camera_info) = recording_options
         .camera_label
         .as_ref()
-        .and_then(|camera_label| {
-            camera::get_cameras()
-                .into_iter()
-                .find(|c| &c.human_name == camera_label)
-        })
+        .and_then(|camera_label| camera::find_camera_by_label(camera_label))
     else {
         return None;
     };
@@ -116,16 +111,12 @@ async fn start_display_recording(
     content_path: &PathBuf,
     recording_options: &RecordingOptions,
     ffmpeg: &mut FFmpeg,
-    camera_window_target: Option<Target>,
 ) -> FFmpegCaptureOutput<FFmpegRawVideoInput> {
     let pipe_path = content_path.join("display.pipe");
     let output_path = content_path.join("display.mp4");
 
-    let ((width, height), capture) = display::start_capturing(
-        pipe_path.clone(),
-        &recording_options.capture_target,
-        camera_window_target,
-    );
+    let ((width, height), capture) =
+        display::start_capturing(pipe_path.clone(), &recording_options.capture_target);
 
     let ffmpeg_input = ffmpeg.add_input(FFmpegRawVideoInput {
         input: pipe_path.into_os_string(),
