@@ -7,6 +7,12 @@ import { useEffect, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
 import { Email } from "./icons/Email";
 import { Bot } from "./icons/Bot";
+import {
+  commands,
+  SystemsStatusResponse,
+  SystemStatusResponseError,
+} from "@/utils/commands";
+import { RotateCCW } from "./icons/RotateCCW";
 
 export const WindowActions = () => {
   const actionButtonBase = "w-3 h-3 bg-gray-500 rounded-full m-0 p-0 block";
@@ -14,24 +20,46 @@ export const WindowActions = () => {
   const [connectionStatus, setConnectionStatus] = useState<
     "connected" | "failed" | "pending"
   >("pending");
+  const [lastConnectionStatus, setLastConnectionStatus] =
+    useState<SystemsStatusResponse | null>();
+  const [lastConnectionError, setLastConnectionError] =
+    useState<SystemStatusResponseError | null>(null);
+
+  const checkStatus = async (clearPrevious = true) => {
+    if (clearPrevious) {
+      setConnectionStatus("pending");
+      setLastConnectionError(null);
+      setLastConnectionStatus(null);
+    }
+
+    commands
+      .checkCapSystemsStatus()
+      .then((result) => {
+        if (result.status === "ok") {
+          setLastConnectionStatus(result.data);
+          setConnectionStatus("connected");
+          setLastConnectionError(null);
+        } else {
+          setLastConnectionStatus(null);
+          setConnectionStatus("failed");
+          setLastConnectionError(result.error);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to check connection status", error);
+      });
+  };
 
   useEffect(() => {
-    let timeout: NodeJS.Timeout;
-    // Simulating a connection check
-    const checkConnection = () => {
-      // Replace this with your actual connection check logic
-      timeout = setInterval(() => {
-        const rand = Math.random();
-        setConnectionStatus(
-          rand > 0.6 ? "connected" : rand > 0.3 ? "pending" : "failed"
-        );
-      }, 10000);
-    };
+    checkStatus(false);
 
-    checkConnection();
+    let timeout: NodeJS.Timeout = null;
+    timeout = setInterval(() => {
+      if (document.hasFocus()) checkStatus();
+    }, 20000);
 
     return () => {
-      clearInterval(timeout);
+      if (timeout) clearInterval(timeout);
     };
   }, []);
 
@@ -95,23 +123,35 @@ export const WindowActions = () => {
             <PopoverContent
               align="center"
               side="bottom"
-              className="bg-white w-64 shadow-xl bg-opacity-80 backdrop-blur-md"
+              className="bg-white w-64 shadow-2xl bg-opacity-80 backdrop-blur-md"
               style={{ marginRight: "18px" }}
             >
               <div className="flex flex-col">
-                <div className="font-bold border-b pb-1 mb-2">
-                  {connectionStatus === "pending" && (
-                    <p>Cap is connecting...</p>
-                  )}
-                  {connectionStatus === "failed" && <p>Failed to connect!</p>}
-                  {connectionStatus === "connected" && <p>Cap is online!</p>}
+                <div className="font-bold border-b pb-1 mb-2 flex justify-between items-center">
+                  <div>
+                    {connectionStatus === "pending" && (
+                      <p>Cap is connecting...</p>
+                    )}
+                    {connectionStatus === "failed" && <p>Failed to connect!</p>}
+                    {connectionStatus === "connected" && <p>Cap is online!</p>}
+                  </div>
+                  <button
+                    onClick={() => checkStatus()}
+                    className="flex items-center justify-center p-1 text-sm font-medium rounded-md bg-white bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-all duration-200 active:scale-90"
+                    aria-label="Refresh connection"
+                  >
+                    <RotateCCW className="w-3 h-3 " />
+                  </button>
                 </div>
+                {/* {lastConnectionError?.type === "ReqwestError" && (
+                  <div>{lastConnectionError?.data}</div>
+                )} */}
                 <div>
                   <p className="text-sm mb-1">Need support?</p>
                   <div className="flex space-x-1 h-8">
                     <button
                       type="button"
-                      className="flex items-center justify-center w-full text-sm font-medium rounded-md bg-white bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-colors duration-200"
+                      className="flex items-center justify-center w-full text-sm font-medium rounded-md bg-white bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-all duration-200 active:scale-95"
                       onClick={() => openLinkInBrowser("mailto:hello@cap.so")}
                     >
                       <Email className="w-4 h-4 mr-2" />
@@ -119,7 +159,7 @@ export const WindowActions = () => {
                     </button>
                     <button
                       type="button"
-                      className={`flex items-center justify-center w-full text-sm font-medium rounded-md bg-white bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-colors duration-200`}
+                      className={`flex items-center justify-center w-full text-sm font-medium rounded-md bg-white bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-all duration-200 active:scale-95`}
                       onClick={() => {
                         const url = process.env.CAP_DISCORD_SUPPORT_URL;
                         if (url) openLinkInBrowser(url);
@@ -142,7 +182,17 @@ export const WindowActions = () => {
                   </button>
                   <div className="text-sm text-gray-600">
                     <small>
-                      <code>Latency: 0ms</code>
+                      {lastConnectionStatus &&
+                        connectionStatus !== "pending" && (
+                          <code>
+                            {lastConnectionStatus?.latency.toFixed(0) || "0"}ms
+                          </code>
+                        )}
+                      {connectionStatus === "failed" &&
+                        (lastConnectionError.type === "TimedOut"
+                          ? "Timed out."
+                          : "No connection.")}
+                      {connectionStatus === "pending" && "Pending..."}
                     </small>
                   </div>
                 </div>

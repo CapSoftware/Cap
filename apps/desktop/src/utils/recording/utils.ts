@@ -102,3 +102,6 @@ export enum OutputResolution {
   _4320p = "4320p",
   Captured = "Captured",
 }
+
+export const resolutionFromString = (value: string): OutputResolution | null =>
+  Object.values(OutputResolution).find((res) => res === value);

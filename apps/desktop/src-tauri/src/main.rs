@@ -142,7 +142,8 @@ fn main() {
             reset_microphone_permissions,
             reset_camera_permissions,
             close_webview,
-            make_webview_transparent
+            make_webview_transparent,
+            check_cap_systems_status
         ])
         .events(collect_events![recording::UploadProgressEvent]);
 

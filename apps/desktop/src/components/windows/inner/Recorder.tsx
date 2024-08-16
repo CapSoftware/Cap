@@ -12,7 +12,6 @@ import { Microphone } from "@/components/icons/Microphone";
 import { MicrophoneOff } from "@/components/icons/MicrophoneOff";
 import { Screen } from "@/components/icons/Screen";
 import { Window } from "@/components/icons/Window";
-import { Scaling } from "@/components/icons/Scaling";
 import { Logo } from "@/components/icons/Logo";
 import { ActionButton } from "./ActionButton";
 import { ActionSelect } from "./ActionSelect";
@@ -31,7 +30,10 @@ import { commands, events, ProgressInfo } from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { setTrayStopIcon } from "@/utils/tray";
-import { OutputResolution } from "@/utils/recording/utils";
+import {
+  OutputResolution,
+  resolutionFromString,
+} from "@/utils/recording/utils";
 import { RadioButtonGroup } from "@/components/RadioGroupButton";
 
 declare global {
@@ -63,6 +65,10 @@ export const Recorder = () => {
   const [proCheck, setProCheck] = useState<boolean>(false);
   const [limitReached, setLimitReached] = useState(false);
   const [outputResolution, setOutputResolution] = useState<OutputResolution>(
+    // typeof localStorage !== "undefined"
+    //   ? (localStorage.getItem("outputResolution") as OutputResolution) ||
+    //       OutputResolution._720p
+    //   : OutputResolution._720p
     OutputResolution._720p
   );
   const [uploadProgressInfo, setUploadProgressInfo] =
@@ -507,7 +513,7 @@ export const Recorder = () => {
                   side="bottom"
                   sideOffset={-1}
                 >
-                  <p className="font-bold mb-3">Select Resolution</p>
+                  <p className="font-bold mb-2">Select Resolution</p>
 
                   <RadioButtonGroup
                     selectedValue={outputResolution.toString()}
@@ -526,6 +532,7 @@ export const Recorder = () => {
                       );
                       if (filtered) {
                         setOutputResolution(filtered);
+                        localStorage.setItem("outputResolution", filtered);
                       } else {
                         console.error(
                           `Invalid resolution selected! "${value}" is not valid.`

@@ -18,14 +18,13 @@ export const RadioButtonGroup: React.FC<RadioButtonGroupProps> = ({
           key={option.value}
           type="button"
           className={`
-            flex-grow px-2 py-1 text-xs font-medium rounded-md
+            flex-grow px-2 py-1 text-xs font-medium rounded-md transition-all duration-200 active:scale-90
             ${
               selectedValue === option.value
                 ? "bg-blue-600 text-white hover:bg-blue-700"
                 : "bg-white text-gray-900 hover:bg-gray-100"
             }
             border border-gray-200
-            transition-colors duration-200
           `}
           onClick={() => onSelect(option.value)}
         >

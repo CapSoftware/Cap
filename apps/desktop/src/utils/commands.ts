@@ -68,6 +68,14 @@ async makeWebviewTransparent(label: string) : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async checkCapSystemsStatus() : Promise<Result<SystemsStatusResponse, SystemStatusResponseError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("check_cap_systems_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -88,6 +96,8 @@ uploadProgressEvent: "upload-progress-event"
 
 export type ProgressInfo = { progress: number; speed: number; total_size: number; uploaded_bytes: number; error: string | null }
 export type RecordingOptions = { user_id: string; video_id: string; screen_index: string; resolution: string; video_index: string; audio_name: string; aws_region: string; aws_bucket: string }
+export type SystemStatusResponseError = { type: "TimedOut"; data: [] } | { type: "ReqwestError"; data: string }
+export type SystemsStatusResponse = { connected: boolean; latency: number | null; status: number; message: string }
 export type UploadProgressEvent = ProgressInfo
 
 /** tauri-specta globals **/
