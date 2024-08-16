@@ -7,19 +7,17 @@ import {
   useMediaDevices,
 } from "@/utils/recording/MediaDeviceContext";
 import { Video } from "@/components/icons/Video";
+import { VideoOff } from "@/components/icons/VideoOff";
 import { Microphone } from "@/components/icons/Microphone";
+import { MicrophoneOff } from "@/components/icons/MicrophoneOff";
 import { Screen } from "@/components/icons/Screen";
 import { Window } from "@/components/icons/Window";
-import { VideoOff } from "@/components/icons/VideoOff";
-import { MicrophoneOff } from "@/components/icons/MicrophoneOff";
+import { Logo } from "@/components/icons/Logo";
 import { ActionButton } from "./ActionButton";
 import { ActionSelect } from "./ActionSelect";
 import { Button } from "@cap/ui";
-import { Logo } from "@/components/icons/Logo";
-
 import { emit, listen, UnlistenFn } from "@tauri-apps/api/event";
 import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
-import { invoke } from "@tauri-apps/api/tauri";
 import {
   getLatestVideoId,
   saveLatestVideoId,
@@ -28,11 +26,12 @@ import {
   isUserPro,
 } from "@cap/utils";
 import { openLinkInBrowser } from "@/utils/helpers";
-import * as commands from "@/utils/commands";
+import { commands } from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { NetworkQuality } from "./NetworkQuality";
 import { getNetworkQualityDetails, getUploadSpeed } from "@/utils/network/utils";
+import { setTrayStopIcon } from "@/utils/tray";
 
 declare global {
   interface Window {
@@ -44,7 +43,9 @@ export const Recorder = () => {
   const {
     devices,
     selectedVideoDevice,
+    lastSelectedVideoDevice,
     selectedAudioDevice,
+    lastSelectedAudioDevice,
     selectedDisplayType,
     isRecording,
     setIsRecording,
@@ -60,18 +61,14 @@ export const Recorder = () => {
   const proCheckPromise = isUserPro();
   const [proCheck, setProCheck] = useState<boolean>(false);
   const [limitReached, setLimitReached] = useState(false);
-  const [lastSelectedAudioDevice, setLastSelectedAudioDevice] =
-    useState<Device | null>(null);
-  const [lastSelectedVideoDevice, setLastSelectedVideoDevice] =
-    useState<Device | null>(null);
 
   useEffect(() => {
     proCheckPromise.then((result) => setProCheck(Boolean(result)));
   }, [proCheckPromise]);
 
   const selectDevice = (kind: DeviceKind, device: Device | null) =>
-    emit("change-device", { type: kind, device: device }).catch((error) =>
-      console.log("Failed to emit change-device event:", error)
+    emit("cap://av/set-device", { type: kind, device: device }).catch((error) =>
+      console.log("Failed to emit cap://av/set-device event:", error)
     );
 
   const createDeviceMenuOptions = (kind: DeviceKind) => [
@@ -136,33 +133,25 @@ export const Recorder = () => {
   };
 
   useEffect(() => {
-    let unlistenFn: UnlistenFn | null = null;
-
-    const setupListener = async () => {
-      unlistenFn = await listen("tray-on-left-click", (_) => {
+    let unlisten: UnlistenFn | null = null;
+    const setup = async () => {
+      unlisten = await listen<void>("cap://tray/clicked", async (_) => {
         if (isRecording) {
-          handleStopAllRecordings();
+          await handleStopAllRecordings();
         }
 
-        tauriWindow.then(({ getCurrent }) => {
-          const currentWindow = getCurrent();
-          if (!currentWindow.isVisible) {
-            currentWindow.show();
-          }
-          if (currentWindow.isMinimized()) {
-            currentWindow.unminimize();
-          }
-          currentWindow.setFocus();
-        });
+        tauriWindow.then(({ getAllWindows }) =>
+          getAllWindows().forEach((window) => {
+            window.show();
+            window.setFocus();
+          })
+        );
       });
     };
-
-    setupListener();
+    setup();
 
     return () => {
-      if (unlistenFn) {
-        unlistenFn();
-      }
+      unlisten?.();
     };
   }, [isRecording]);
 
@@ -184,14 +173,14 @@ export const Recorder = () => {
     if (window.fathom !== undefined) {
       window.fathom.trackEvent("start_recording");
     }
-    tauriWindow.then(({ getAll }) => {
-      getAll().forEach((window) => {
+    tauriWindow.then(({ getAllWindows }) => {
+      getAllWindows().forEach((window) => {
         if (window.label !== "camera") {
           window.minimize();
         }
       });
     });
-    await emit("toggle-recording", true);
+    setTrayStopIcon(true);
     try {
       await commands
         .startDualRecording({
@@ -251,8 +240,8 @@ export const Recorder = () => {
     setStoppingRecording(true);
 
     try {
-      tauriWindow.then(({ WebviewWindow }) => {
-        const main = WebviewWindow.getByLabel("main");
+      tauriWindow.then(({ Window }) => {
+        const main = Window.getByLabel("main");
         if (main?.isMinimized()) main.unminimize();
       });
     } catch (error) {
@@ -294,7 +283,7 @@ export const Recorder = () => {
       setIsRecording(false);
       setHasStartedRecording(false);
       setStoppingRecording(false);
-      await emit("toggle-recording", false);
+      setTrayStopIcon(false);
     } catch (error) {
       console.error("Error stopping recording:", error);
     }
@@ -354,8 +343,8 @@ export const Recorder = () => {
         const seconds = Math.floor((Date.now() - startTime) / 1000);
         if (seconds >= 300) {
           setLimitReached(true);
-          tauriWindow.then(({ getCurrent }) => {
-            const currentWindow = getCurrent();
+          tauriWindow.then(({ getCurrentWindow }) => {
+            const currentWindow = getCurrentWindow();
             if (currentWindow.isMinimized()) {
               currentWindow.unminimize();
               toast.error(
@@ -435,7 +424,6 @@ export const Recorder = () => {
                   <ActionSelect
                     options={createDeviceMenuOptions("videoinput")}
                     onStatusClick={(status) => {
-                      setLastSelectedVideoDevice(selectedVideoDevice);
                       selectDevice(
                         "videoinput",
                         status === "on" ? null : lastSelectedVideoDevice
@@ -453,7 +441,6 @@ export const Recorder = () => {
                   <ActionSelect
                     options={createDeviceMenuOptions("audioinput")}
                     onStatusClick={(status) => {
-                      setLastSelectedAudioDevice(selectedAudioDevice);
                       selectDevice(
                         "audioinput",
                         status === "on" ? null : lastSelectedAudioDevice

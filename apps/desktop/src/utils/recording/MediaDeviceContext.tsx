@@ -8,13 +8,13 @@ import {
   useCallback,
   useRef,
 } from "react";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import {
   getLocalDevices,
   enumerateAndStoreDevices,
   initializeCameraWindow,
 } from "./utils";
-import { closeWebview } from "../commands";
+import { commands } from "../commands";
 
 export type DeviceKind = "videoinput" | "audioinput";
 export interface Device {
@@ -27,12 +27,17 @@ export interface Device {
 export interface MediaDeviceContextData {
   selectedVideoDevice: Device | null;
   setSelectedVideoDevice: React.Dispatch<React.SetStateAction<Device | null>>;
+  lastSelectedVideoDevice: Device | null;
+
   selectedAudioDevice: Device | null;
   setSelectedAudioDevice: React.Dispatch<React.SetStateAction<Device | null>>;
+  lastSelectedAudioDevice: Device | null;
+
   selectedDisplayType: "screen" | "window" | "area";
   setSelectedDisplayType: React.Dispatch<
     React.SetStateAction<"screen" | "window" | "area">
   >;
+
   devices: Device[];
   getDevices: () => Promise<void>;
   isRecording: boolean;
@@ -61,7 +66,10 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   const [isRecording, setIsRecording] = useState(false);
   const [startingRecording, setStartingRecording] = useState(false);
   const getDevicesCalled = useRef(false);
-  const tauriWindowImport = import("@tauri-apps/api/window");
+  const [lastSelectedAudioDevice, setLastSelectedAudioDevice] =
+    useState<Device | null>(null);
+  const [lastSelectedVideoDevice, setLastSelectedVideoDevice] =
+    useState<Device | null>(null);
 
   const getDevices = useCallback(async () => {
     await enumerateAndStoreDevices();
@@ -90,23 +98,27 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
       if (!selectedVideoDevice) {
         const storedVideoDevice = localStorage.getItem("selected-videoinput");
         let videoDevice: Device | null = null;
+
         if (storedVideoDevice && storedVideoDevice !== "none") {
           videoDevice = formattedDevices.find(
-            (device) => device.kind === "videoinput" && device.label === storedVideoDevice
+            (device) =>
+              device.kind === "videoinput" && device.label === storedVideoDevice
           );
+          setSelectedVideoDevice(videoDevice);
         }
-        setSelectedVideoDevice(videoDevice);
       }
 
       if (!selectedAudioDevice) {
         const storedAudioDevice = localStorage.getItem("selected-audioinput");
         let audioDevice: Device | null = null;
+
         if (storedAudioDevice && storedAudioDevice !== "none") {
           audioDevice = formattedDevices.find(
-            (device) => device.kind === "audioinput" && device.label === storedAudioDevice
+            (device) =>
+              device.kind === "audioinput" && device.label === storedAudioDevice
           );
+          setSelectedAudioDevice(audioDevice);
         }
-        setSelectedAudioDevice(audioDevice);
       }
     } catch (error) {
       console.error("Failed to get media devices:", error);
@@ -135,10 +147,11 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     if (kind === "videoinput") {
       if (device?.label !== selectedVideoDevice?.label) {
         const previous = selectedVideoDevice;
+        setLastSelectedVideoDevice(selectedVideoDevice);
         setSelectedVideoDevice(device);
-        localStorage.setItem("selected-videoinput", device?.label || "none");
+        localStorage.setItem("selected-videoinput", device?.label ?? "none");
         if (!device) {
-          closeWebview("camera");
+          commands.closeWebview("camera");
         } else if (!previous && device) {
           initializeCameraWindow();
         }
@@ -147,22 +160,21 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
 
     if (kind === "audioinput") {
       if (device?.label !== selectedAudioDevice?.label) {
+        setLastSelectedAudioDevice(selectedAudioDevice);
         setSelectedAudioDevice(device);
-        localStorage.setItem("selected-audioinput", device?.label || "none");
+        localStorage.setItem("selected-audioinput", device?.label ?? "none");
       }
     }
   };
 
   useEffect(() => {
-    let unlistenFnChangeDevice: any;
-    let unlistenFnTraySetDevice: any;
-
-    const setupListeners = async () => {
+    let unlisten: any;
+    const setup = async () => {
       try {
-        unlistenFnChangeDevice = await listen<{
+        unlisten = await listen<{
           type: string;
           device: Device | null;
-        }>("change-device", (event) => {
+        }>("cap://av/set-device", (event) => {
           updateSelectedDevice(
             event.payload.type as DeviceKind,
             event.payload.device
@@ -171,51 +183,23 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
       } catch (error) {
         console.error("Error setting up change-device listener:", error);
       }
-
-      try {
-        unlistenFnTraySetDevice = await listen<{
-          type: string;
-          id: string | null;
-        }>("tray-set-device-id", (event) => {
-          const id = event.payload.id;
-          const kind = event.payload.type as DeviceKind;
-          const newDevice = id
-            ? devices.find((device) => kind === device.kind && id === device.id)
-            : null;
-          updateSelectedDevice(kind, newDevice);
-        });
-      } catch (error) {
-        console.error("Error setting up tray-set-device-id listener:", error);
-      }
     };
 
-    setupListeners();
-
-    if (devices.length !== 0) {
-      emit("media-devices-set", {
-        mediaDevices: [...(devices as Omit<Device, "index">[])],
-        selectedVideo: selectedVideoDevice,
-        selectedAudio: selectedAudioDevice,
-      });
-    }
-
+    setup();
     return () => {
-      if (unlistenFnChangeDevice) {
-        unlistenFnChangeDevice();
-      }
-      if (unlistenFnTraySetDevice) {
-        unlistenFnTraySetDevice();
-      }
+      unlisten?.();
     };
-  }, [selectedVideoDevice, selectedAudioDevice]);
+  });
 
   return (
     <MediaDeviceContext.Provider
       value={{
         selectedVideoDevice,
         setSelectedVideoDevice,
+        lastSelectedVideoDevice,
         selectedAudioDevice,
         setSelectedAudioDevice,
+        lastSelectedAudioDevice,
         selectedDisplayType,
         setSelectedDisplayType,
         devices,

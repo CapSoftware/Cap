@@ -3,10 +3,10 @@
 import { Button, LogoBadge } from "@cap/ui";
 import { useEffect, useState } from "react";
 import { savePermissions, getPermissions } from "@/utils/helpers";
-import * as commands from "@/utils/commands";
-import { invoke } from "@tauri-apps/api/tauri";
 import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 import { runTestRecord } from "@/utils/recording/utils";
+import { commands } from "@/utils/commands";
+import { invoke } from "@tauri-apps/api/core";
 import toast from "react-hot-toast";
 
 export const Permissions = () => {

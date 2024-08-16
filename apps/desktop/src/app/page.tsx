@@ -9,10 +9,11 @@ import { LogoSpinner } from "@cap/ui";
 import { getPermissions } from "@/utils/helpers";
 import { initializeCameraWindow } from "@/utils/recording/utils";
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/tauri";
 import toast from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
-import * as commands from "@/utils/commands";
+import { commands } from "@/utils/commands";
+import { setTrayMenu } from "@/utils/tray";
+import { useMediaDevices } from "@/utils/recording/MediaDeviceContext";
 
 export const dynamic = "force-static";
 
@@ -22,6 +23,8 @@ export default function CameraPage() {
   const [loading, setLoading] = useState(true);
   const [permissions, setPermissions] = useState(getPermissions());
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
+  const { devices, selectedAudioDevice, selectedVideoDevice } =
+    useMediaDevices();
 
   useEffect(() => {
     const checkVersion = async () => {
@@ -67,6 +70,10 @@ export default function CameraPage() {
 
     return () => clearInterval(checkPermissions);
   }, [permissions]);
+
+  useEffect(() => {
+    setTrayMenu(devices, selectedAudioDevice, selectedVideoDevice);
+  }, [devices, selectedAudioDevice, selectedVideoDevice]);
 
   useEffect(() => {
     const checkSession = setInterval(() => {
@@ -117,10 +124,10 @@ export default function CameraPage() {
 
   if (process.env.NEXT_PUBLIC_LOCAL_MODE === "true") {
     return (
-      <>
+      <div id="app" data-tauri-drag-region style={{ borderRadius: "16px" }}>
         <WindowActions />
         <Recorder />
-      </>
+      </div>
     );
   }
 

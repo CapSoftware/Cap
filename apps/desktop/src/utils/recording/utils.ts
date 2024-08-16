@@ -1,6 +1,7 @@
 "use client";
 
-import * as commands from "@/utils/commands";
+import { commands } from "@/utils/commands";
+import { Window } from "@tauri-apps/api/window";
 
 export const enumerateAndStoreDevices = async () => {
   if (typeof navigator !== "undefined" && typeof window !== "undefined") {
@@ -80,40 +81,43 @@ export const runTestRecord = async ({video_index}: {video_index: string}) => {
 
 export const initializeCameraWindow = async () => {
   if (typeof window === "undefined") return;
-  import("@tauri-apps/api/window").then(({ currentMonitor, WebviewWindow }) => {
-    currentMonitor().then((monitor) => {
-      const windowWidth = 230;
-      const windowHeight = 230;
+  import("@tauri-apps/api/webviewWindow").then(async ({ WebviewWindow }) => {
+    const { currentMonitor } = await import("@tauri-apps/api/window");
+    const monitor = await currentMonitor();
 
-      if (monitor && monitor.size) {
-        const scalingFactor = monitor.scaleFactor;
-        const x = 100;
-        const y = monitor.size.height / scalingFactor - windowHeight - 100;
+    const windowWidth = 230;
+    const windowHeight = 230;
 
-        const existingCameraWindow = WebviewWindow.getByLabel("camera");
-        if (existingCameraWindow) {
-          console.log("Camera window already open.");
-          existingCameraWindow.close();
-        } else {
-          new WebviewWindow("camera", {
-            url: "/camera",
-            title: "Cap Camera",
-            width: windowWidth,
-            height: windowHeight,
-            x: x / scalingFactor,
-            y: y,
-            maximized: false,
-            resizable: false,
-            fullscreen: false,
-            transparent: true,
-            decorations: false,
-            alwaysOnTop: true,
-            center: false,
-          }).once("tauri://created", () => {
-            commands.setWebviewShadow("camera", false);
-          });
-        }
+    if (monitor && monitor.size) {
+      const scalingFactor = monitor.scaleFactor;
+      const x = 100;
+      const y = monitor.size.height / scalingFactor - windowHeight - 100;
+
+      const existingCameraWindow = WebviewWindow.getByLabel("camera");
+      if (existingCameraWindow) {
+        console.log("Camera window already open.");
+        existingCameraWindow.close();
+      } else {
+        new WebviewWindow("camera", {
+          url: "/camera",
+          title: "Cap Camera",
+          width: windowWidth,
+          height: windowHeight,
+          x: x / scalingFactor,
+          y: y,
+          maximized: false,
+          resizable: false,
+          fullscreen: false,
+          decorations: false,
+          alwaysOnTop: true,
+          visibleOnAllWorkspaces: true,
+          center: false,
+          shadow: false,
+          focus: false,
+        }).once("tauri://window-created", () => {
+          commands.makeWebviewTransparent("camera");
+        });
       }
-    });
+    }
   });
 };
