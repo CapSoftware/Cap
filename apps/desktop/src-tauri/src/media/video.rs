@@ -28,7 +28,12 @@ pub struct VideoCapturer {
 impl VideoCapturer {
     pub const FPS: u32 = 30;
 
-    pub fn new(_width: usize, _height: usize, should_stop: SharedFlag) -> VideoCapturer {
+    pub fn new(
+        _width: usize,
+        _height: usize,
+        should_stop: SharedFlag,
+        resolution: Resolution,
+    ) -> VideoCapturer {
         let mut capturer = Capturer::new(Options {
             fps: Self::FPS,
             target: None,
@@ -36,7 +41,7 @@ impl VideoCapturer {
             show_highlight: true,
             excluded_targets: None,
             output_type: FrameType::BGRAFrame,
-            output_resolution: Resolution::Captured,
+            output_resolution: resolution,
             crop_area: None,
         });
 
@@ -227,6 +232,18 @@ impl VideoCapturer {
             }
 
             let _ = pipe.sync_all().await;
+        }
+    }
+
+    pub fn get_dynamic_resolution(upload_speed: f64) -> Resolution {
+        match upload_speed {
+            speed if speed >= 60.0 => Resolution::Captured,
+            speed if speed >= 50.0 => Resolution::_4320p,
+            speed if speed >= 25.0 => Resolution::_2160p,
+            speed if speed >= 15.0 => Resolution::_1440p,
+            speed if speed >= 8.0 => Resolution::_1080p,
+            speed if speed >= 5.0 => Resolution::_720p,
+            _ => Resolution::_480p,
         }
     }
 }

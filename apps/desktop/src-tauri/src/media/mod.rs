@@ -16,7 +16,7 @@ use tracing::Level;
 use crate::{
     app::config,
     recording::RecordingOptions,
-    utils::{create_named_pipe, ffmpeg_path_as_str},
+    utils::{create_named_pipe, ffmpeg_path_as_str}, UPLOAD_SPEED,
 };
 
 mod audio;
@@ -108,6 +108,7 @@ impl MediaRecorder {
             max_screen_width,
             max_screen_height,
             self.should_stop.clone(),
+            VideoCapturer::get_dynamic_resolution(UPLOAD_SPEED.load(Ordering::Relaxed)),
         );
         let adjusted_width = video_capturer.frame_width;
         let adjusted_height = video_capturer.frame_height;

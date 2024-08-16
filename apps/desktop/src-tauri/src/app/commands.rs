@@ -1,5 +1,9 @@
+use std::sync::atomic::Ordering;
+
 use tauri::{Emitter, Manager, Window};
 use tauri_plugin_oauth::start;
+
+use crate::{HEALTH_CHECK, UPLOAD_SPEED};
 
 #[tauri::command]
 #[specta::specta]
@@ -111,4 +115,46 @@ pub fn make_webview_transparent(app_handle: tauri::AppHandle, label: String) -> 
     }
     #[cfg(not(target_os = "macos"))]
     "This command is only available on macOS."
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_health_check_status() -> bool {
+    let health = HEALTH_CHECK.load(Ordering::Relaxed);
+    return health;
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_upload_speed() -> f64 {
+    let upload_speed = UPLOAD_SPEED.load(Ordering::Relaxed);
+    return upload_speed;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{get_health_check_status, get_upload_speed, HEALTH_CHECK, UPLOAD_SPEED};
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn test_get_health_check_status() {
+        // example 1
+        HEALTH_CHECK.store(true, Ordering::Relaxed);
+        assert_eq!(get_health_check_status(), true);
+
+        // example 2
+        HEALTH_CHECK.store(false, Ordering::Relaxed);
+        assert_eq!(get_health_check_status(), false);
+    }
+
+    #[test]
+    fn test_get_upload_speed() {
+        // example 1
+        UPLOAD_SPEED.store(10.5, Ordering::Relaxed);
+        assert_eq!(get_upload_speed(), 10.5);
+
+        // example 2
+        UPLOAD_SPEED.store(20.7, Ordering::Relaxed);
+        assert_eq!(get_upload_speed(), 20.7);
+    }
 }
