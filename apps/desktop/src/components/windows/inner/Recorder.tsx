@@ -32,6 +32,7 @@ import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { setTrayStopIcon } from "@/utils/tray";
 import { OutputResolution } from "@/utils/recording/utils";
+import { RadioButtonGroup } from "@/components/RadioGroupButton";
 
 declare global {
   interface Window {
@@ -194,7 +195,7 @@ export const Recorder = () => {
           aws_region: videoData.aws_region,
           aws_bucket: videoData.aws_bucket,
           screen_index: "Capture screen 0",
-          resolution: "Captured",
+          resolution: outputResolution,
           video_index: String(selectedVideoDevice?.index),
         })
         .catch((error) => {
@@ -495,12 +496,43 @@ export const Recorder = () => {
                   <p className="text-sm text-gray-800">
                     Quality:{" "}
                     <span className="underline">
-                      {outputResolution.toString()}
+                      {outputResolution === OutputResolution.Captured
+                        ? "Source"
+                        : outputResolution.toString()}
                     </span>
                   </p>
                 </PopoverTrigger>
-                <PopoverContent className="bg-white w-64">
-                  Select resolution
+                <PopoverContent
+                  className="bg-white w-64 shadow-xl bg-opacity-90 backdrop-blur-md"
+                  side="bottom"
+                  sideOffset={-1}
+                >
+                  <p className="font-bold mb-3">Select Resolution</p>
+
+                  <RadioButtonGroup
+                    selectedValue={outputResolution.toString()}
+                    options={[
+                      ...Object.values(OutputResolution).map((value) => ({
+                        value,
+                        label:
+                          value === OutputResolution.Captured
+                            ? "Source"
+                            : value,
+                      })),
+                    ]}
+                    onSelect={(value) => {
+                      const filtered = Object.values(OutputResolution).find(
+                        (res) => res === value
+                      );
+                      if (filtered) {
+                        setOutputResolution(filtered);
+                      } else {
+                        console.error(
+                          `Invalid resolution selected! "${value}" is not valid.`
+                        );
+                      }
+                    }}
+                  />
                 </PopoverContent>
               </Popover>
             )}

@@ -5,6 +5,8 @@ import { openLinkInBrowser } from "@/utils/helpers";
 import { Globe } from "./icons/Globe";
 import { useEffect, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
+import { Email } from "./icons/Email";
+import { Bot } from "./icons/Bot";
 
 export const WindowActions = () => {
   const actionButtonBase = "w-3 h-3 bg-gray-500 rounded-full m-0 p-0 block";
@@ -14,10 +16,11 @@ export const WindowActions = () => {
   >("pending");
 
   useEffect(() => {
+    let timeout: NodeJS.Timeout;
     // Simulating a connection check
     const checkConnection = () => {
       // Replace this with your actual connection check logic
-      setInterval(() => {
+      timeout = setInterval(() => {
         const rand = Math.random();
         setConnectionStatus(
           rand > 0.6 ? "connected" : rand > 0.3 ? "pending" : "failed"
@@ -26,6 +29,10 @@ export const WindowActions = () => {
     };
 
     checkConnection();
+
+    return () => {
+      clearInterval(timeout);
+    };
   }, []);
 
   const getConnectionStatusColor = () => {
@@ -88,21 +95,57 @@ export const WindowActions = () => {
             <PopoverContent
               align="center"
               side="bottom"
-              className="bg-white w-64"
+              className="bg-white w-64 shadow-xl bg-opacity-80 backdrop-blur-md"
               style={{ marginRight: "18px" }}
             >
-              <div>
-                <span className="font-extra-bold">this is a demo</span>
-                <br />
-                <small>
-                  <code>Connection: {connectionStatus}</code>
-                </small>
-                <br />
-                Cap is connected
-                <br />
-                <span>Latency: 0ms</span>
-                <br />
-                {"<support links>"}
+              <div className="flex flex-col">
+                <div className="font-bold border-b pb-1 mb-2">
+                  {connectionStatus === "pending" && (
+                    <p>Cap is connecting...</p>
+                  )}
+                  {connectionStatus === "failed" && <p>Failed to connect!</p>}
+                  {connectionStatus === "connected" && <p>Cap is online!</p>}
+                </div>
+                <div>
+                  <p className="text-sm mb-1">Need support?</p>
+                  <div className="flex space-x-1 h-8">
+                    <button
+                      type="button"
+                      className="flex items-center justify-center w-full text-sm font-medium rounded-md bg-white bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-colors duration-200"
+                      onClick={() => openLinkInBrowser("mailto:hello@cap.so")}
+                    >
+                      <Email className="w-4 h-4 mr-2" />
+                      Email
+                    </button>
+                    <button
+                      type="button"
+                      className={`flex items-center justify-center w-full text-sm font-medium rounded-md bg-white bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-colors duration-200`}
+                      onClick={() => {
+                        const url = process.env.CAP_DISCORD_SUPPORT_URL;
+                        if (url) openLinkInBrowser(url);
+                      }}
+                    >
+                      <Bot className="w-4 h-4 mr-2" />
+                      Discord
+                    </button>
+                  </div>
+                </div>
+                <div className="flex mt-4 w-full justify-between items-center">
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-gray-800 hover:underline transition-colors duration-200"
+                    onClick={() =>
+                      openLinkInBrowser("https://cap.openstatus.dev/")
+                    }
+                  >
+                    Cap System Status
+                  </button>
+                  <div className="text-sm text-gray-600">
+                    <small>
+                      <code>Latency: 0ms</code>
+                    </small>
+                  </div>
+                </div>
               </div>
             </PopoverContent>
           </Popover>
