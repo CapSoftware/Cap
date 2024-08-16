@@ -169,7 +169,7 @@ where
         // Only send combined source playlist in chunks.
         RecordingAssetType::CombinedSourcePlaylist => {
             // TODO: Might need adjustments
-            let chunk_size = 1024 * 1024; // 1MB chunks
+            const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
             post_multipart_chunks(
                 &client,
                 post_url,
@@ -177,7 +177,7 @@ where
                 file_name.clone(),
                 file_data,
                 mime_type,
-                chunk_size,
+                CHUNK_SIZE,
                 on_progress,
             )
             .await
