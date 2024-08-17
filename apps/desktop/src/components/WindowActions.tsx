@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
 import { Email } from "./icons/Email";
 import { Bot } from "./icons/Bot";
 import { RotateCCW } from "./icons/RotateCCW";
+import toast from "react-hot-toast";
 
 export const WindowActions = () => {
   const actionButtonBase = "w-3 h-3 bg-gray-500 rounded-full m-0 p-0 block";
@@ -171,13 +172,13 @@ export const WindowActions = () => {
                       if (connectionStatus !== "pending") checkStatus();
                     }}
                     disabled={connectionStatus === "pending"}
-                    className={`flex items-center justify-center p-1 text-sm font-medium rounded-md bg-white disabled:bg-gray-100 bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-all duration-200 active:scale-90`}
+                    className={`flex items-center justify-center p-1 text-sm font-medium rounded-md bg-white disabled:bg-gray-100 disabled:opacity-50 bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-all duration-200 active:scale-90`}
                     aria-label="Refresh connection"
                   >
                     <RotateCCW className="w-3 h-3 " />
                   </button>
                 </div>
-                {process.env.NEXT_PUBLIC_LOCAL_MODE && (
+                {process.env.NODE_ENV === "development" && (
                   <div className="bg-gray-100 rounded-md mb-3 text-sm p-1 !outline-2 !outline-dashed !outline-yellow-500 text-balance">
                     <p className="font-medium mb-2">Running in development?</p>
                     <p className="mb-2">
@@ -204,7 +205,18 @@ export const WindowActions = () => {
                     <button
                       type="button"
                       className="flex items-center justify-center w-full text-sm font-medium rounded-md bg-white bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-all duration-200 active:scale-95"
-                      onClick={() => openLinkInBrowser("mailto:hello@cap.so")}
+                      onClick={() => {
+                        const mail = process.env.CAP_SUPPORT_EMAIL_ADDRESS;
+                        if (mail) openLinkInBrowser(`mailto:${mail}`);
+                        else if (process.env.NODE_ENV === "development") {
+                          toast.error(
+                            "Support Email is not set. Check console."
+                          );
+                          console.error(
+                            "Make sure to set the value for `CAP_SUPPORT_EMAIL_ADDRESS` in env"
+                          );
+                        }
+                      }}
                     >
                       <Email className="w-4 h-4 mr-2" />
                       Email
@@ -213,8 +225,16 @@ export const WindowActions = () => {
                       type="button"
                       className={`flex items-center justify-center w-full text-sm font-medium rounded-md bg-white bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-all duration-200 active:scale-95`}
                       onClick={() => {
-                        const url = process.env.CAP_DISCORD_SUPPORT_URL;
+                        const url = process.env.CAP_SUPPORT_DISCORD_URL;
                         if (url) openLinkInBrowser(url);
+                        else if (process.env.NODE_ENV === "development") {
+                          toast.error(
+                            "Support Discord Server is not set. Check console."
+                          );
+                          console.error(
+                            "Make sure to set the value for `CAP_SUPPORT_DISCORD_URL` in env"
+                          );
+                        }
                       }}
                     >
                       <Bot className="w-4 h-4 mr-2" />

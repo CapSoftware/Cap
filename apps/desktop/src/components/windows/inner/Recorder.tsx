@@ -30,10 +30,7 @@ import { commands, events, ProgressInfo } from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { setTrayStopIcon } from "@/utils/tray";
-import {
-  OutputResolution,
-  resolutionFromString,
-} from "@/utils/recording/utils";
+import { OutputResolution } from "@/utils/recording/utils";
 import { RadioButtonGroup } from "@/components/RadioGroupButton";
 
 declare global {
