@@ -13,6 +13,7 @@ import {
   SystemStatusResponseError,
 } from "@/utils/commands";
 import { RotateCCW } from "./icons/RotateCCW";
+import toast from "react-hot-toast";
 
 export const WindowActions = () => {
   const actionButtonBase = "w-3 h-3 bg-gray-500 rounded-full m-0 p-0 block";
@@ -203,7 +204,6 @@ export const WindowActions = () => {
                   <div className="text-sm text-gray-600">
                     <small>
                       <code>
-                        {connectionStatus === "pending" && "Pending..."} */}
                         {connectionStatus === "connected" &&
                           `${lastConnectionInfo?.latency.toFixed(0)}ms`}
                         {connectionStatus === "pending" && "Pending..."}
