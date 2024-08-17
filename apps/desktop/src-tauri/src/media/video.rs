@@ -148,6 +148,7 @@ impl VideoCapturer {
                                             screenshot_path.clone(),
                                             RecordingAssetType::ScreenCapture,
                                             None,
+                                            None,
                                         ));
                                         match upload_task.await {
                                             Ok(result) => match result {

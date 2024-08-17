@@ -55,6 +55,7 @@ pub async fn upload_recording_asset<F>(
     file_path: PathBuf,
     file_type: RecordingAssetType,
     on_progress: Option<F>,
+    callback_frequency: Option<tokio::time::Duration>,
 ) -> Result<String, String>
 where
     F: Fn(ProgressInfo) + Send + Sync + 'static,
@@ -179,6 +180,7 @@ where
                 mime_type,
                 CHUNK_SIZE,
                 on_progress,
+                callback_frequency,
             )
             .await
         }
@@ -301,6 +303,7 @@ async fn post_multipart_chunks<F>(
     mime_type: &str,
     chunk_size: usize,
     progress_callback: Option<F>,
+    callback_frequency: Option<tokio::time::Duration>,
 ) -> Result<reqwest::Response, reqwest::Error>
 where
     F: Fn(ProgressInfo) + Send + Sync + 'static,
@@ -313,6 +316,9 @@ where
 
     let mut uploaded_bytes = 0.0;
 
+    let mut last_update = tokio::time::Instant::now();
+    let update_interval = callback_frequency.unwrap_or(tokio::time::Duration::from_millis(200));
+
     // Create a stream of file chunks using async_stream
     // Credit: https://github.com/mihaigalos/aim/ (MIT License.)
     // source: https://github.com/mihaigalos/aim/blob/723daabfb8c97a0b57bf772500c90b62bffcf598/src/https.rs#L44
@@ -323,19 +329,24 @@ where
             let chunk = chunk.to_vec();
 
             if let Some(callback) = on_progress_ref {
-                uploaded_bytes += chunk.len() as f64;
+                let now = tokio::time::Instant::now();
+                if now.duration_since(last_update) >= update_interval {
+                    uploaded_bytes += chunk.len() as f64;
 
-                let progress = (uploaded_bytes / total_size) * 100.0;
-                let elapsed = start_time.elapsed().as_secs_f64();
-                let speed = uploaded_bytes as f64 / elapsed;
+                    let progress = (uploaded_bytes / total_size) * 100.0;
+                    let elapsed = start_time.elapsed().as_secs_f64();
+                    let speed = uploaded_bytes as f64 / elapsed;
 
-                callback(ProgressInfo {
-                    progress,
-                    speed,
-                    total_size,
-                    uploaded_bytes,
-                    error: None,
-                });
+                    callback(ProgressInfo {
+                        progress,
+                        speed,
+                        total_size,
+                        uploaded_bytes,
+                        error: None,
+                    });
+
+                    last_update = now;
+                }
             }
 
             yield Ok::<_, std::io::Error>(chunk);

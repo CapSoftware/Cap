@@ -208,6 +208,7 @@ pub async fn stop_all_recordings(
                 tracing::error!("Failed to emit event for upload progress: {}", err);
             };
         }),
+        None,
     )
     .await
     .ok();
@@ -278,6 +279,7 @@ async fn hls_upload_loop(
                     options,
                     file.path().to_owned(),
                     RecordingAssetType::CombinedSourceSegment,
+                    None,
                     None,
                 )
                 .await
