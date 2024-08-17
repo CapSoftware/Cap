@@ -65,10 +65,6 @@ export const Recorder = () => {
   const [proCheck, setProCheck] = useState<boolean>(false);
   const [limitReached, setLimitReached] = useState(false);
   const [outputResolution, setOutputResolution] = useState<OutputResolution>(
-    // typeof localStorage !== "undefined"
-    //   ? (localStorage.getItem("outputResolution") as OutputResolution) ||
-    //       OutputResolution._720p
-    //   : OutputResolution._720p
     OutputResolution._720p
   );
   const [uploadProgressInfo, setUploadProgressInfo] =
@@ -166,6 +162,13 @@ export const Recorder = () => {
       unlisten?.();
     };
   }, [isRecording]);
+
+  useEffect(() => {
+    const storedResolution = localStorage.getItem("outputResolution");
+    if (storedResolution) {
+      setOutputResolution(storedResolution as OutputResolution);
+    }
+  });
 
   const startDualRecording = async (videoData: {
     id: string;
@@ -500,7 +503,7 @@ export const Recorder = () => {
               <Popover>
                 <PopoverTrigger>
                   <p className="text-sm text-gray-800">
-                    Quality:{" "}
+                    Resolution:{" "}
                     <span className="underline">
                       {outputResolution === OutputResolution.Captured
                         ? "Source"

@@ -20,29 +20,31 @@ export const WindowActions = () => {
   const [connectionStatus, setConnectionStatus] = useState<
     "connected" | "failed" | "pending"
   >("pending");
-  const [lastConnectionStatus, setLastConnectionStatus] =
+  const [lastConnectionInfo, setLastConnectionInfo] =
     useState<SystemsStatusResponse | null>();
   const [lastConnectionError, setLastConnectionError] =
     useState<SystemStatusResponseError | null>(null);
 
-  const checkStatus = async (clearPrevious = true) => {
-    if (clearPrevious) {
+  const checkStatus = async (showPendingStatus = true) => {
+    if (showPendingStatus) {
       setConnectionStatus("pending");
       setLastConnectionError(null);
-      setLastConnectionStatus(null);
+      setLastConnectionInfo(null);
     }
-
     commands
       .checkCapSystemsStatus()
       .then((result) => {
         if (result.status === "ok") {
-          setLastConnectionStatus(result.data);
-          setConnectionStatus("connected");
+          setLastConnectionInfo(result.data);
+          setConnectionStatus(result.data.connected ? "connected" : "failed");
           setLastConnectionError(null);
         } else {
-          setLastConnectionStatus(null);
+          setLastConnectionInfo(null);
           setConnectionStatus("failed");
           setLastConnectionError(result.error);
+          console.error(
+            `Failed to check system's status: ${result.error.data}`
+          );
         }
       })
       .catch((error) => {
@@ -143,9 +145,27 @@ export const WindowActions = () => {
                     <RotateCCW className="w-3 h-3 " />
                   </button>
                 </div>
-                {/* {lastConnectionError?.type === "ReqwestError" && (
-                  <div>{lastConnectionError?.data}</div>
-                )} */}
+                {process.env.NEXT_PUBLIC_LOCAL_MODE && (
+                  <div className="bg-gray-100 rounded-md mb-3 text-sm p-1 !outline-2 !outline-dashed !outline-yellow-500 text-balance">
+                    <p className="font-medium mb-2">Running in development?</p>
+                    <p className="mb-2">
+                      Current server is set to:{" "}
+                      <code className="bg-white rounded-sm px-1">
+                        {process.env.NEXT_PUBLIC_URL}
+                      </code>
+                    </p>
+                    <p>
+                      If you're only running the desktop app, you can set{" "}
+                      <code className="bg-white rounded-sm px-1">
+                        NEXT_PUBLIC_URL
+                      </code>{" "}
+                      to{" "}
+                      <code className="bg-white rounded-sm px-1">
+                        https://cap.so
+                      </code>
+                    </p>
+                  </div>
+                )}
                 <div>
                   <p className="text-sm mb-1">Need support?</p>
                   <div className="flex space-x-1 h-8">
@@ -173,7 +193,7 @@ export const WindowActions = () => {
                 <div className="flex mt-4 w-full justify-between items-center">
                   <button
                     type="button"
-                    className="text-xs font-medium text-gray-800 hover:underline transition-colors duration-200"
+                    className="text-xs font-medium text-gray-800 hover:underline duration-200 transition-all active:scale-95"
                     onClick={() =>
                       openLinkInBrowser("https://cap.openstatus.dev/")
                     }
@@ -182,17 +202,16 @@ export const WindowActions = () => {
                   </button>
                   <div className="text-sm text-gray-600">
                     <small>
-                      {lastConnectionStatus &&
-                        connectionStatus !== "pending" && (
-                          <code>
-                            {lastConnectionStatus?.latency.toFixed(0) || "0"}ms
-                          </code>
-                        )}
-                      {connectionStatus === "failed" &&
-                        (lastConnectionError.type === "TimedOut"
-                          ? "Timed out."
-                          : "No connection.")}
-                      {connectionStatus === "pending" && "Pending..."}
+                      <code>
+                        {connectionStatus === "pending" && "Pending..."} */}
+                        {connectionStatus === "connected" &&
+                          `${lastConnectionInfo?.latency.toFixed(0)}ms`}
+                        {connectionStatus === "pending" && "Pending..."}
+                        {connectionStatus === "failed" &&
+                          (lastConnectionError?.type === "TimedOut"
+                            ? "Timed out."
+                            : "No connection.")}
+                      </code>
                     </small>
                   </div>
                 </div>

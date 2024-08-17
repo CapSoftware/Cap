@@ -15,18 +15,9 @@ export const Camera = () => {
   const { selectedVideoDevice, devices } = useMediaDevices();
   const [isLoading, setIsLoading] = useState(true);
   const tauriWindowImport = import("@tauri-apps/api/window");
-  const [cameraMirrored, setCameraMirrored] = useState(
-    typeof window !== "undefined"
-      ? localStorage.getItem("cameraMirrored") || "false"
-      : "false"
-  );
+  const [cameraMirrored, setCameraMirrored] = useState(false);
   const [overlaySize, setOverlaySize] = useState<"sm" | "lg">("sm");
-  const [overlayShape, setOverlayShape] = useState<"round" | "square">(
-    typeof localStorage !== "undefined"
-      ? (localStorage.getItem("cameraOverlayShape") as "round" | "square") ||
-          "round"
-      : "round"
-  );
+  const [overlayShape, setOverlayShape] = useState<"round" | "square">("round");
 
   useEffect(
     () =>
@@ -70,13 +61,9 @@ export const Camera = () => {
   const mirrorCamera = () => {
     if (videoRef.current) {
       const video = videoRef.current;
-      const newCameraMirrored = cameraMirrored === "true" ? "false" : "true";
-      video.style.transform =
-        newCameraMirrored === "true" ? "scaleX(-1)" : "scaleX(1)";
-      setCameraMirrored(newCameraMirrored);
-      if (typeof window !== "undefined") {
-        localStorage.setItem("cameraMirrored", newCameraMirrored);
-      }
+      setCameraMirrored(!cameraMirrored);
+      video.style.transform = cameraMirrored ? "scaleX(-1)" : "scaleX(1)";
+      localStorage.setItem("cameraMirrored", String(cameraMirrored));
     }
   };
 
@@ -132,8 +119,17 @@ export const Camera = () => {
   useEffect(() => {
     if (videoRef.current) {
       const video = videoRef.current;
-      video.style.transform =
-        cameraMirrored === "true" ? "scaleX(-1)" : "scaleX(1)";
+      video.style.transform = cameraMirrored ? "scaleX(-1)" : "scaleX(1)";
+    }
+
+    const storedOverlayShape = localStorage.getItem("cameraOverlayShape");
+    if (storedOverlayShape) {
+      setOverlayShape(storedOverlayShape as "round" | "square");
+    }
+
+    const storedCameraMirrored = localStorage.getItem("cameraMirrored");
+    if (storedCameraMirrored) {
+      setCameraMirrored(Boolean(storedCameraMirrored));
     }
   }, []);
 
