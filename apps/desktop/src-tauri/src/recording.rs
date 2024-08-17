@@ -197,9 +197,9 @@ pub async fn stop_all_recordings(
         RecordingAssetType::CombinedSourcePlaylist,
         Some(move |info: ProgressInfo| {
             tracing::info!(
-                "Upload progress: {:.2}%, at: {:.2} MB/s, Uploaded: {} / {} bytes",
+                "Upload progress: {:.2}%, at: {:.2} Mb/s, Uploaded: {} / {} bytes",
                 info.progress,
-                info.speed / 1_000_000.0,
+                info.speed / 1_000_000.0 * 8.0,
                 info.uploaded_bytes,
                 info.total_size
             );

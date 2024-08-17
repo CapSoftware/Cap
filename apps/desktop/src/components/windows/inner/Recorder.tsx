@@ -390,7 +390,7 @@ export const Recorder = () => {
       )} */}
       <div
         data-tauri-drag-region
-        className="w-full h-screen flex flex-col px-3 pt-4"
+        className="w-full h-full flex flex-col justify-between px-3 pt-4"
       >
         <div className="mt-10">
           <div className="w-full">
@@ -489,17 +489,17 @@ export const Recorder = () => {
                 ? "Starting..."
                 : isRecording
                 ? stoppingRecording
-                  ? `${currentStoppingMessage} (${uploadProgressInfo?.progress.toFixed(
-                      2
-                    )}%)`
+                  ? `${currentStoppingMessage} (${
+                      uploadProgressInfo?.progress.toFixed(0) || 0
+                    }%)`
                   : `Stop - ${recordingTime}`
                 : "Start Recording"}
             </Button>
           </div>
         </div>
-        <div className="flex flex-col items-center mt-2 mb-6 space-y-1 cursor-pointer">
+        <div className="flex flex-col justify-end items-center mb-3 space-y-1 cursor-pointer">
           <div>
-            {(!stoppingRecording || !isRecording) && (
+            {!stoppingRecording && !isRecording && (
               <Popover>
                 <PopoverTrigger>
                   <p className="text-sm text-gray-800">
@@ -546,11 +546,26 @@ export const Recorder = () => {
                 </PopoverContent>
               </Popover>
             )}
-            {stoppingRecording && (
+            {stoppingRecording && uploadProgressInfo && (
               <p className="text-sm text-gray-600">
                 Uploading at{" "}
-                {(uploadProgressInfo?.speed / 1_000_000.0).toFixed(2)}
-                <span>MB/s</span>
+                {(((uploadProgressInfo?.speed || 0) / 1_000_000.0) * 8).toFixed(
+                  2
+                )}
+                <span>Mb/s</span>
+              </p>
+            )}
+            {stoppingRecording && !uploadProgressInfo && (
+              <p className="text-sm text-gray-600">Waiting to upload...</p>
+            )}
+            {!stoppingRecording && isRecording && (
+              <p className="text-sm text-gray-800">
+                Recording at{" "}
+                <span className="font-semibold">
+                  {outputResolution === OutputResolution.Captured
+                    ? "Source"
+                    : outputResolution.toString()}
+                </span>
               </p>
             )}
           </div>
