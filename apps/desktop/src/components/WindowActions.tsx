@@ -7,11 +7,6 @@ import { useEffect, useState } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
 import { Email } from "./icons/Email";
 import { Bot } from "./icons/Bot";
-import {
-  commands,
-  SystemsStatusResponse,
-  SystemStatusResponseError,
-} from "@/utils/commands";
 import { RotateCCW } from "./icons/RotateCCW";
 
 export const WindowActions = () => {
@@ -20,10 +15,16 @@ export const WindowActions = () => {
   const [connectionStatus, setConnectionStatus] = useState<
     "connected" | "failed" | "pending"
   >("pending");
-  const [lastConnectionInfo, setLastConnectionInfo] =
-    useState<SystemsStatusResponse | null>();
-  const [lastConnectionError, setLastConnectionError] =
-    useState<SystemStatusResponseError | null>(null);
+  const [lastConnectionInfo, setLastConnectionInfo] = useState<{
+    connected: boolean;
+    latency: string;
+    status: number;
+    message: string;
+  } | null>();
+  const [lastConnectionError, setLastConnectionError] = useState<{
+    type: "timeout" | "abort";
+    message: string | null;
+  } | null>(null);
 
   const checkStatus = async (showPendingStatus = true) => {
     if (showPendingStatus) {
@@ -31,25 +32,53 @@ export const WindowActions = () => {
       setLastConnectionError(null);
       setLastConnectionInfo(null);
     }
-    commands
-      .checkCapSystemsStatus()
-      .then((result) => {
-        if (result.status === "ok") {
-          setLastConnectionInfo(result.data);
-          setConnectionStatus(result.data.connected ? "connected" : "failed");
-          setLastConnectionError(null);
-        } else {
-          setLastConnectionInfo(null);
-          setConnectionStatus("failed");
-          setLastConnectionError(result.error);
-          console.error(
-            `Failed to check system's status: ${result.error.data}`
-          );
+
+    const startTime = performance.now();
+
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_URL}/api/status?origin=${window.location.origin}`,
+        {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          signal: AbortSignal.timeout(5000),
         }
-      })
-      .catch((error) => {
-        console.error("Failed to check connection status", error);
-      });
+      );
+
+      const endTime = performance.now();
+      const latency = endTime - startTime;
+
+      if (response.ok) {
+        const data = await response.text();
+        setConnectionStatus("connected");
+        setLastConnectionInfo({
+          connected: true,
+          latency: latency.toFixed(0),
+          status: response.status,
+          message: data,
+        });
+        setLastConnectionError(null);
+      } else {
+        setConnectionStatus("failed");
+        setLastConnectionInfo(null);
+        setLastConnectionError({ type: "abort", message: response.statusText });
+      }
+    } catch (error) {
+      setConnectionStatus("failed");
+      setLastConnectionInfo(null);
+
+      switch (error.name) {
+        case "TimeoutError": {
+          setLastConnectionError(error.message);
+        }
+        case "AbortError": {
+        }
+        default: {
+          console.error("Failed to check connection status", error);
+        }
+      }
+    }
   };
 
   useEffect(() => {
@@ -138,8 +167,11 @@ export const WindowActions = () => {
                     {connectionStatus === "connected" && <p>Cap is online!</p>}
                   </div>
                   <button
-                    onClick={() => checkStatus()}
-                    className="flex items-center justify-center p-1 text-sm font-medium rounded-md bg-white bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-all duration-200 active:scale-90"
+                    onClick={() => {
+                      if (connectionStatus !== "pending") checkStatus();
+                    }}
+                    disabled={connectionStatus === "pending"}
+                    className={`flex items-center justify-center p-1 text-sm font-medium rounded-md bg-white disabled:bg-gray-100 bg-opacity-80 text-gray-900 hover:bg-gray-100 border border-gray-200 transition-all duration-200 active:scale-90`}
                     aria-label="Refresh connection"
                   >
                     <RotateCCW className="w-3 h-3 " />
@@ -204,10 +236,10 @@ export const WindowActions = () => {
                     <small>
                       <code>
                         {connectionStatus === "connected" &&
-                          `${lastConnectionInfo?.latency.toFixed(0)}ms`}
+                          `${lastConnectionInfo?.latency}ms`}
                         {connectionStatus === "pending" && "Pending..."}
                         {connectionStatus === "failed" &&
-                          (lastConnectionError?.type === "TimedOut"
+                          (lastConnectionError?.type === "timeout"
                             ? "Timed out."
                             : "No connection.")}
                       </code>

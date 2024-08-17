@@ -22,6 +22,9 @@
     "fs:allow-resource-read-recursive",
     "fs:default",
     "decorum:allow-show-snap-overlay",
-    "os:default"
+    "os:default",
+    "oauth:default",
+    "oauth:allow-start",
+    "oauth:allow-cancel"
   ]
 }

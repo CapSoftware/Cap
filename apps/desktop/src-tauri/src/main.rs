@@ -142,8 +142,7 @@ fn main() {
             reset_microphone_permissions,
             reset_camera_permissions,
             close_webview,
-            make_webview_transparent,
-            check_cap_systems_status
+            make_webview_transparent
         ])
         .events(collect_events![recording::UploadProgressEvent]);
 
@@ -154,6 +153,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
