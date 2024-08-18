@@ -1,16 +1,22 @@
 use std::{
     ffi::OsString,
-    io::Write,
+    io::{ Write, Read },
     ops::Deref,
     path::PathBuf,
-    process::{Child, ChildStdin, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    process::{ Child, ChildStdin, Command, Stdio },
+    sync::{ atomic::{ AtomicBool, Ordering }, Arc },
 };
 
-use crate::utils::create_named_pipe;
+use ffmpeg_sidecar::{
+    command::ffmpeg_is_installed,
+    download::{ check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg },
+    paths::sidecar_dir,
+    version::ffmpeg_version,
+};
+
+use std::io;
+
+use crate::utils::{ create_named_pipe, ffmpeg_path_as_str };
 
 pub struct FFmpegProcess {
     ffmpeg_stdin: ChildStdin,
@@ -21,18 +27,52 @@ impl FFmpegProcess {
     pub fn spawn(mut command: Command) -> Self {
         let mut cmd = command
             .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
-            .expect("Failed to start ffmpeg");
+            .unwrap_or_else(|e| {
+                println!("Failed to start FFmpeg: {}", e);
+                println!("Command: {:?}", command);
+                panic!("Failed to start FFmpeg");
+            });
+
+        let ffmpeg_stdin = cmd.stdin.take().unwrap_or_else(|| {
+            println!("Failed to capture FFmpeg stdin");
+            panic!("Failed to capture FFmpeg stdin");
+        });
 
         Self {
-            ffmpeg_stdin: cmd.stdin.take().unwrap(),
+            ffmpeg_stdin,
             cmd,
         }
+    }
+
+    pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
+        self.ffmpeg_stdin.write_all(data)
     }
 
     pub fn stop(&mut self) {
         self.ffmpeg_stdin.write_all(b"q").ok();
         self.cmd.wait().ok();
+    }
+
+    pub fn read_video_frame(
+        &mut self,
+        frame_size: usize
+    ) -> Result<Option<Vec<u8>>, std::io::Error> {
+        let mut buffer = vec![0u8; frame_size];
+        match self.cmd.stdout.as_mut().unwrap().read_exact(&mut buffer) {
+            Ok(_) => {
+                println!("Read video frame of size: {}", buffer.len());
+                Ok(Some(buffer))
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None), // End of stream
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn write_video_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
+        self.ffmpeg_stdin.write_all(data)
     }
 }
 
@@ -68,6 +108,20 @@ impl NamedPipeCapture {
 pub struct FFmpegInput<T> {
     inner: T,
     pub index: u8,
+}
+
+pub enum FFmpegOutput {
+    File {
+        path: PathBuf,
+        codec: String,
+        preset: String,
+        crf: u32,
+    },
+    RawVideo {
+        format: String,
+        width: u32,
+        height: u32,
+    },
 }
 
 impl<T> Deref for FFmpegInput<T> {
@@ -128,8 +182,10 @@ pub struct FFmpeg {
 
 impl FFmpeg {
     pub fn new() -> Self {
+        let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
+
         Self {
-            command: Command::new("ffmpeg"),
+            command: Command::new(ffmpeg_binary_path_str),
             source_index: 0,
         }
     }
@@ -146,7 +202,55 @@ impl FFmpeg {
         }
     }
 
+    pub fn add_output(&mut self, output: FFmpegOutput) {
+        match output {
+            FFmpegOutput::File { path, codec, preset, crf } => {
+                self.command
+                    .arg("-i")
+                    .arg("pipe:0")
+                    .args(&["-c:v", &codec])
+                    .args(&["-preset", &preset])
+                    .args(&["-crf", &crf.to_string()])
+                    .arg(path);
+            }
+            FFmpegOutput::RawVideo { format, width, height } => {
+                self.command
+                    .arg("-i")
+                    .arg("pipe:0")
+                    .args(&["-f", &format])
+                    .args(&["-s", &format!("{}x{}", width, height)])
+                    .arg("pipe:1");
+            }
+        }
+    }
+
     pub fn start(self) -> FFmpegProcess {
         FFmpegProcess::spawn(self.command)
     }
+}
+
+pub fn handle_ffmpeg_installation() -> Result<(), String> {
+    if ffmpeg_is_installed() {
+        return Ok(());
+    }
+
+    match check_latest_version() {
+        Ok(version) => println!("Latest available version: {}", version),
+        Err(e) => println!("Skipping version check due to error: {e}"),
+    }
+
+    let download_url = ffmpeg_download_url().map_err(|e| e.to_string())?;
+    let destination = sidecar_dir().map_err(|e| e.to_string())?;
+
+    let archive_path = download_ffmpeg_package(download_url, &destination).map_err(|e|
+        e.to_string()
+    )?;
+
+    unpack_ffmpeg(&archive_path, &destination).map_err(|e| e.to_string())?;
+
+    let version = ffmpeg_version().map_err(|e| e.to_string())?;
+
+    println!("Done! Installed FFmpeg version {} 🏁", version);
+
+    Ok(())
 }

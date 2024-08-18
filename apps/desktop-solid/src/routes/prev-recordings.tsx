@@ -9,6 +9,7 @@ import {
   createSignal,
   on,
   onCleanup,
+  onMount,
 } from "solid-js";
 import createPresence from "solid-presence";
 
@@ -37,6 +38,25 @@ export default function () {
       <div class="absolute left-0 bottom-0 flex flex-col-reverse w-60 pl-8 pb-8 gap-8">
         <For each={recordings.data}>
           {(recording, i) => {
+            const [thumbnailUrl, setThumbnailUrl] = createSignal("");
+
+            onMount(() => {
+              const video = document.createElement("video");
+              video.src = convertFileSrc(`${recording}/content/display.mp4`);
+              video.addEventListener("loadeddata", () => {
+                video.currentTime = 1; // Set to 1 second or adjust as needed
+              });
+              video.addEventListener("seeked", () => {
+                const canvas = document.createElement("canvas");
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas
+                  .getContext("2d")
+                  ?.drawImage(video, 0, 0, canvas.width, canvas.height);
+                setThumbnailUrl(canvas.toDataURL());
+              });
+            });
+
             const [ref, setRef] = createSignal<HTMLElement | null>(null);
 
             const [exiting, setExiting] = createSignal(false);
@@ -90,11 +110,16 @@ export default function () {
                       : "animate-in fade-in"
                   )}
                 >
-                  <img
-                    class="pointer-events-none w-full h-full object-cover absolute inset-0 -z-10 "
-                    alt="screenshot"
-                    src={convertFileSrc(`${recording}/screenshots/display.jpg`)}
-                  />
+                  <Show
+                    when={thumbnailUrl()}
+                    fallback={<div class="w-full h-full bg-gray-800" />}
+                  >
+                    <img
+                      class="pointer-events-none w-full h-full object-cover absolute inset-0 -z-10"
+                      alt="video thumbnail"
+                      src={thumbnailUrl()}
+                    />
+                  </Show>
                   <div class="w-full h-full absolute inset-0 transition-all opacity-0 hover:opacity-100 backdrop-blur hover:backdrop-blur bg-black/50 text-white p-4">
                     <IconButton class="absolute left-3 top-3">
                       <IconLucideEye class="size-4" />
