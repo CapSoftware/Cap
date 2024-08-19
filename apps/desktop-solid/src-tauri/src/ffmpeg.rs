@@ -56,6 +56,9 @@ impl FFmpegProcess {
         self.ffmpeg_stdin.write_all(b"q")?;
         println!("Sent quit command to FFmpeg");
 
+        self.cmd.wait();
+        println!("FFmpeg exited");
+
         // Wait for the process to exit
         let timeout = std::time::Duration::from_secs(5);
         match self.wait_with_timeout(timeout)? {
@@ -91,7 +94,7 @@ impl FFmpegProcess {
     }
 
     pub fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        self.ffmpeg_process.wait()
+        self.cmd.wait()
     }
 
     pub fn kill(&mut self) {

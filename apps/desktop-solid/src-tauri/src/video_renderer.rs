@@ -290,22 +290,10 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf> {
                     println!("All frames sent to FFmpeg");
                     ffmpeg_process.ffmpeg_stdin.flush().unwrap();
                     ffmpeg_process.ffmpeg_stdin.write_all(b"q").unwrap();
+                    ffmpeg_process.wait().unwrap();
                     break;
                 }
             }
-        }
-
-        match ffmpeg_process.wait_with_timeout(std::time::Duration::from_secs(10)) {
-            Ok(Some(status)) => println!("FFmpeg exited with status: {}", status),
-            Ok(None) => {
-                println!("FFmpeg did not exit within the timeout period. Attempting to terminate.");
-                ffmpeg_process.kill();
-                match ffmpeg_process.wait() {
-                    Ok(status) => println!("FFmpeg terminated with status: {}", status),
-                    Err(e) => eprintln!("Error waiting for FFmpeg to terminate: {}", e),
-                }
-            }
-            Err(e) => eprintln!("Error waiting for FFmpeg to exit: {}", e),
         }
     });
 
