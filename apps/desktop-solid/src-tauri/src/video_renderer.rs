@@ -144,7 +144,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf> {
                 // Uniform buffer
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -273,6 +273,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf> {
             .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
             .args(["-codec:v", "libx264", "-preset", "ultrafast"])
             .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
+            .arg("-y")
             .arg(&output_path_clone);
 
         let mut ffmpeg_process = ffmpeg.start();

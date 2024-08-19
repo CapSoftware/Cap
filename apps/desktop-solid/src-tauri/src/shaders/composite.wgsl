@@ -85,22 +85,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Calculate webcam UV coordinates (bottom left corner)
     let webcam_scale = 0.2; // Adjust webcam size
     let webcam_offset = vec2<f32>(0.02, 0.98 - webcam_scale); // Position in bottom left
-    let webcam_uv = (in.tex_coords - webcam_offset) / webcam_scale;
-    
+    var webcam_uv = (in.tex_coords - webcam_offset) / webcam_scale; // Change let to var
+
+    // Ensure the webcam overlay is a perfect square
+    let square_size = min(params.webcam_size.x, params.webcam_size.y);
+    let square_uv = (in.tex_coords - webcam_offset) / (square_size / params.output_size.x);
+
     // Apply webcam overlay
-    if (webcam_uv.x >= 0.0 && webcam_uv.x <= 1.0 && webcam_uv.y >= 0.0 && webcam_uv.y <= 1.0) {
-        let webcam_color = textureSample(webcam_texture, webcam_sampler, webcam_uv);
+    if (square_uv.x >= 0.0 && square_uv.x <= 1.0 && square_uv.y >= 0.0 && square_uv.y <= 1.0) {
+        let webcam_color = textureSample(webcam_texture, webcam_sampler, square_uv);
         
         // Apply border radius
         let webcam_radius = 0.05; // Adjust this value to change the border radius
-        let border_alpha = rounded_rect(webcam_uv, vec2<f32>(1.0), webcam_radius);
+        let border_alpha = rounded_rect(square_uv, vec2<f32>(1.0), webcam_radius);
         
         // Apply box shadow
         let shadow_size = 0.01;
         let shadow_offset = vec2<f32>(shadow_size, -shadow_size);
-        let shadow_uv = webcam_uv - shadow_offset / webcam_scale;
+        let shadow_uv = square_uv - shadow_offset / webcam_scale;
         
-        final_color = apply_shadow(final_color, webcam_uv, shadow_uv);
+        final_color = apply_shadow(final_color, square_uv, shadow_uv);
         final_color = mix(final_color, webcam_color, webcam_color.a * border_alpha);
     }
     
