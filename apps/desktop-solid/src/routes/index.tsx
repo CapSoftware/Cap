@@ -3,7 +3,7 @@ import { For, Show, Suspense, createSignal } from "solid-js";
 
 import { createCameraForLabel, createCameras } from "../utils/media";
 import { createOptionsQuery, createWindowsQuery } from "../utils/queries";
-import { commands } from "../utils/tauri";
+import { commands, events } from "../utils/tauri";
 
 export default function () {
   const cameras = createCameras();
@@ -15,11 +15,15 @@ export default function () {
   // temporary
   const [isRecording, setIsRecording] = createSignal(false);
 
+  events.showCapturesPanel.listen(() => {
+    commands.showPreviousRecordingsWindow();
+  });
+
   return (
     <>
       <button
         type="button"
-        onClick={() => commands.openPreviousRecordingsWindow()}
+        onClick={() => commands.showPreviousRecordingsWindow()}
       >
         Open prev recordings window
       </button>
@@ -78,14 +82,14 @@ export default function () {
                       type="button"
                       class={cx(
                         "flex-1",
-                        "display" === options().captureTarget
+                        "screen" === options().captureTarget
                           ? "bg-neutral-200"
                           : "bg-neutral-100"
                       )}
                       onClick={() =>
                         commands.setRecordingOptions({
                           ...options(),
-                          captureTarget: "display",
+                          captureTarget: "screen",
                         })
                       }
                     >
@@ -97,7 +101,7 @@ export default function () {
                           type="button"
                           class={cx(
                             "flex-1",
-                            options().captureTarget !== "display"
+                            options().captureTarget !== "screen"
                               ? "bg-neutral-200"
                               : "bg-neutral-100"
                           )}
@@ -123,7 +127,7 @@ export default function () {
                   <Show
                     when={(() => {
                       const captureTarget = options().captureTarget;
-                      if (captureTarget === "display") return;
+                      if (captureTarget === "screen") return;
 
                       return {
                         windows: windows.data,

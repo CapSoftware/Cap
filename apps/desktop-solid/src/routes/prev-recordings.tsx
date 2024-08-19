@@ -28,8 +28,8 @@ export default function () {
   //   if (e.deltaX === 0) closingRecording = null;
   // });
 
-  events.focusCapturesPanel.listen(() => {
-    commands.focusCapturesPanel();
+  events.showCapturesPanel.listen(() => {
+    recordings.refetch();
   });
 
   return (
