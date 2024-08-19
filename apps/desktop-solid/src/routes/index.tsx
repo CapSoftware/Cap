@@ -22,10 +22,19 @@ const settings = {
 
 async function testRender() {
   try {
-    const outputFilePath = await renderVideo(
+    const outputFilePath = await commands.renderVideo(
       screenInputFilePath,
       webcamInputFilePath,
-      settings
+      [settings.webcamSize.width, settings.webcamSize.height],
+      [settings.webcamPosition.x / 100, settings.webcamPosition.y / 100],
+      {
+        border_radius: settings.webcamStyle.borderRadius,
+        shadow_color: [0, 0, 0, 0.5], // Assuming shadow is "rgba(0, 0, 0, 0.5)"
+        shadow_blur: 5, // You may want to add this to your settings
+        shadow_offset: [2, 2], // You may want to add this to your settings
+      },
+      [settings.videoOutputSize.width, settings.videoOutputSize.height],
+      { Color: [0, 0, 0, 1] } // Assuming videoBackground is "#000000"
     );
     console.log(`Video rendered successfully: ${outputFilePath}`);
   } catch (error) {

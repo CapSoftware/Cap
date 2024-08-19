@@ -1,28 +1,25 @@
 use std::{
     ffi::OsString,
-    io::{Read, Write},
+    io::{ Read, Write },
     ops::Deref,
     path::PathBuf,
-    process::{Child, ChildStdin, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    process::{ Child, ChildStdin, Command, Stdio },
+    sync::{ atomic::{ AtomicBool, Ordering }, Arc },
 };
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
-    download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
+    download::{ check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg },
     paths::sidecar_dir,
     version::ffmpeg_version,
 };
 
 use std::io;
 
-use crate::utils::{create_named_pipe, ffmpeg_path_as_str};
+use crate::utils::{ create_named_pipe, ffmpeg_path_as_str };
 
 pub struct FFmpegProcess {
-    ffmpeg_stdin: ChildStdin,
+    pub ffmpeg_stdin: ChildStdin,
     cmd: Child,
 }
 
@@ -51,14 +48,75 @@ impl FFmpegProcess {
         self.ffmpeg_stdin.write_all(data)
     }
 
-    pub fn stop(&mut self) {
-        self.ffmpeg_stdin.write_all(b"q").ok();
-        self.cmd.wait().ok();
+    pub fn stop(&mut self) -> io::Result<()> {
+        self.ffmpeg_stdin.flush()?;
+        println!("Flushed FFmpeg stdin");
+
+        // Send the quit command
+        self.ffmpeg_stdin.write_all(b"q")?;
+        println!("Sent quit command to FFmpeg");
+
+        // Wait for the process to exit
+        let timeout = std::time::Duration::from_secs(5);
+        match self.wait_with_timeout(timeout)? {
+            Some(status) => {
+                println!("FFmpeg exited with status: {}", status);
+                Ok(())
+            }
+            None => {
+                println!("FFmpeg did not exit within the timeout period. Attempting to terminate.");
+                self.cmd.kill()?;
+
+                // Wait a bit more to see if the process terminates after kill
+                std::thread::sleep(std::time::Duration::from_secs(1));
+
+                match self.cmd.try_wait()? {
+                    Some(status) => {
+                        println!("FFmpeg terminated with status: {}", status);
+                        Ok(())
+                    }
+                    None => {
+                        println!("FFmpeg still running after kill attempt. Forcing termination.");
+                        self.cmd.kill()?;
+                        Err(
+                            io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "FFmpeg did not exit even after kill attempt"
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.ffmpeg_process.wait()
+    }
+
+    pub fn kill(&mut self) {
+        let _ = self.cmd.kill();
+    }
+
+    pub fn wait_with_timeout(
+        &mut self,
+        timeout: std::time::Duration
+    ) -> std::io::Result<Option<std::process::ExitStatus>> {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            match self.cmd.try_wait()? {
+                Some(status) => {
+                    return Ok(Some(status));
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
+        }
+        Ok(None)
     }
 
     pub fn read_video_frame(
         &mut self,
-        frame_size: usize,
+        frame_size: usize
     ) -> Result<Option<Vec<u8>>, std::io::Error> {
         let mut buffer = vec![0u8; frame_size];
         match self.cmd.stdout.as_mut().unwrap().read_exact(&mut buffer) {
@@ -66,13 +124,36 @@ impl FFmpegProcess {
                 println!("Read video frame of size: {}", buffer.len());
                 Ok(Some(buffer))
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None), // End of stream
+            Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
             Err(e) => Err(e),
         }
     }
 
     pub fn write_video_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
-        self.ffmpeg_stdin.write_all(data)
+        let mut remaining = data;
+        while !remaining.is_empty() {
+            match self.ffmpeg_stdin.write(remaining) {
+                Ok(0) => {
+                    return Err(
+                        std::io::Error::new(
+                            std::io::ErrorKind::WriteZero,
+                            "Failed to write data to FFmpeg"
+                        )
+                    );
+                }
+                Ok(n) => {
+                    remaining = &remaining[n..];
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                    continue;
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+        }
+        self.ffmpeg_stdin.flush()?;
+        Ok(())
     }
 }
 
@@ -204,12 +285,7 @@ impl FFmpeg {
 
     pub fn add_output(&mut self, output: FFmpegOutput) {
         match output {
-            FFmpegOutput::File {
-                path,
-                codec,
-                preset,
-                crf,
-            } => {
+            FFmpegOutput::File { path, codec, preset, crf } => {
                 self.command
                     .arg("-i")
                     .arg("pipe:0")
@@ -218,11 +294,7 @@ impl FFmpeg {
                     .args(&["-crf", &crf.to_string()])
                     .arg(path);
             }
-            FFmpegOutput::RawVideo {
-                format,
-                width,
-                height,
-            } => {
+            FFmpegOutput::RawVideo { format, width, height } => {
                 self.command
                     .arg("-i")
                     .arg("pipe:0")
@@ -251,8 +323,9 @@ pub fn handle_ffmpeg_installation() -> Result<(), String> {
     let download_url = ffmpeg_download_url().map_err(|e| e.to_string())?;
     let destination = sidecar_dir().map_err(|e| e.to_string())?;
 
-    let archive_path =
-        download_ffmpeg_package(download_url, &destination).map_err(|e| e.to_string())?;
+    let archive_path = download_ffmpeg_package(download_url, &destination).map_err(|e|
+        e.to_string()
+    )?;
 
     unpack_ffmpeg(&archive_path, &destination).map_err(|e| e.to_string())?;
 
