@@ -13,6 +13,7 @@ import {
 import createPresence from "solid-presence";
 
 import { commands, events } from "../utils/tauri";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 export default function () {
   const recordings = createQuery(() => ({
@@ -99,7 +100,16 @@ export default function () {
                     <IconButton class="absolute left-3 top-3">
                       <IconLucideEye class="size-4" />
                     </IconButton>
-                    <IconButton class="absolute right-3 top-3">
+                    <IconButton
+                      class="absolute right-3 top-3"
+                      onClick={() => {
+                        new WebviewWindow("editor", {
+                          width: 800,
+                          height: 600,
+                          url: `/editor?path=${recording}`,
+                        });
+                      }}
+                    >
                       <IconLucidePencil class="size-4" />
                     </IconButton>
                     <IconButton class="absolute left-3 bottom-3">
