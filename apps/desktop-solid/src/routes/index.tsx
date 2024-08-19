@@ -29,12 +29,12 @@ async function testRender() {
       [settings.webcamPosition.x / 100, settings.webcamPosition.y / 100],
       {
         border_radius: settings.webcamStyle.borderRadius,
-        shadow_color: [0, 0, 0, 0.5], // Assuming shadow is "rgba(0, 0, 0, 0.5)"
-        shadow_blur: 5, // You may want to add this to your settings
-        shadow_offset: [2, 2], // You may want to add this to your settings
+        shadow_color: [0, 0, 0, 0.5],
+        shadow_blur: 5,
+        shadow_offset: [2, 2],
       },
       [settings.videoOutputSize.width, settings.videoOutputSize.height],
-      { Color: [0, 0, 0, 1] } // Assuming videoBackground is "#000000"
+      { Color: [0, 0, 0, 1] }
     );
     console.log(`Video rendered successfully: ${outputFilePath}`);
   } catch (error) {
@@ -115,14 +115,14 @@ export default function () {
                       type="button"
                       class={cx(
                         "flex-1",
-                        "display" === options().captureTarget
+                        "screen" === options().captureTarget
                           ? "bg-neutral-200"
                           : "bg-neutral-100"
                       )}
                       onClick={() =>
                         commands.setRecordingOptions({
                           ...options(),
-                          captureTarget: "display",
+                          captureTarget: "screen",
                         })
                       }
                     >
@@ -134,7 +134,7 @@ export default function () {
                           type="button"
                           class={cx(
                             "flex-1",
-                            options().captureTarget !== "display"
+                            options().captureTarget !== "screen"
                               ? "bg-neutral-200"
                               : "bg-neutral-100"
                           )}
@@ -160,7 +160,7 @@ export default function () {
                   <Show
                     when={(() => {
                       const captureTarget = options().captureTarget;
-                      if (captureTarget === "display") return;
+                      if (captureTarget === "screen") return;
 
                       return {
                         windows: windows.data,

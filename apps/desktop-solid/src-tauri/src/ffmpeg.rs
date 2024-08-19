@@ -27,8 +27,6 @@ impl FFmpegProcess {
     pub fn spawn(mut command: Command) -> Self {
         let mut cmd = command
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|e| {
                 println!("Failed to start FFmpeg: {}", e);
@@ -48,49 +46,9 @@ impl FFmpegProcess {
         self.ffmpeg_stdin.write_all(data)
     }
 
-    pub fn stop(&mut self) -> io::Result<()> {
-        self.ffmpeg_stdin.flush()?;
-        println!("Flushed FFmpeg stdin");
-
-        // Send the quit command
-        self.ffmpeg_stdin.write_all(b"q")?;
-        println!("Sent quit command to FFmpeg");
-
-        self.cmd.wait();
-        println!("FFmpeg exited");
-
-        // Wait for the process to exit
-        let timeout = std::time::Duration::from_secs(5);
-        match self.wait_with_timeout(timeout)? {
-            Some(status) => {
-                println!("FFmpeg exited with status: {}", status);
-                Ok(())
-            }
-            None => {
-                println!("FFmpeg did not exit within the timeout period. Attempting to terminate.");
-                self.cmd.kill()?;
-
-                // Wait a bit more to see if the process terminates after kill
-                std::thread::sleep(std::time::Duration::from_secs(1));
-
-                match self.cmd.try_wait()? {
-                    Some(status) => {
-                        println!("FFmpeg terminated with status: {}", status);
-                        Ok(())
-                    }
-                    None => {
-                        println!("FFmpeg still running after kill attempt. Forcing termination.");
-                        self.cmd.kill()?;
-                        Err(
-                            io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                "FFmpeg did not exit even after kill attempt"
-                            )
-                        )
-                    }
-                }
-            }
-        }
+    pub fn stop(&mut self) {
+        self.ffmpeg_stdin.write_all(b"q").ok();
+        println!("Sent stop command to FFmpeg");
     }
 
     pub fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {

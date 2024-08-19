@@ -288,13 +288,13 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf> {
                 }
                 Err(mpsc::RecvError) => {
                     println!("All frames sent to FFmpeg");
-                    ffmpeg_process.ffmpeg_stdin.flush().unwrap();
-                    ffmpeg_process.ffmpeg_stdin.write_all(b"q").unwrap();
-                    ffmpeg_process.wait().unwrap();
                     break;
                 }
             }
         }
+
+        println!("Stopping FFmpeg process...");
+        ffmpeg_process.stop();
     });
 
     let mut screen_command = Command::new(&ffmpeg_binary_path_str);
