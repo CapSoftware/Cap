@@ -42,3 +42,4 @@ ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch
 wgpu = "22.1.0"
 bytemuck = { version = "1.7", features = ["derive"] }
 image = "0.25.2"
+tauri-plugin-fs = "2.0.0-rc.0"

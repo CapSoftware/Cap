@@ -150,12 +150,18 @@ importers:
       '@tauri-apps/api':
         specifier: '>=2.0.0-rc.0'
         version: 2.0.0-rc.0
+      '@tauri-apps/plugin-fs':
+        specifier: 2.0.0-rc.0
+        version: 2.0.0-rc.0
       '@tauri-apps/plugin-shell':
         specifier: '>=2.0.0-rc.0'
         version: 2.0.0-rc.0
       cva:
         specifier: npm:class-variance-authority@^0.7.0
         version: /class-variance-authority@0.7.0
+      mp4box:
+        specifier: ^0.5.2
+        version: 0.5.2
       solid-js:
         specifier: ^1.7.8
         version: 1.8.21
@@ -171,6 +177,9 @@ importers:
       vinxi:
         specifier: ^0.4.1
         version: 0.4.1(@types/node@20.14.2)
+      webcodecs:
+        specifier: ^0.1.0
+        version: 0.1.0
     devDependencies:
       '@iconify/json':
         specifier: ^2.2.237
@@ -178,6 +187,9 @@ importers:
       '@tauri-apps/cli':
         specifier: '>=2.0.0-rc.0'
         version: 2.0.0-rc.0
+      '@types/dom-webcodecs':
+        specifier: ^0.1.11
+        version: 0.1.11
       autoprefixer:
         specifier: ^10.4.20
         version: 10.4.20(postcss@8.4.41)
@@ -9391,11 +9403,11 @@ packages:
       util-deprecate: 1.0.2
     dev: true
 
-  /@storybook/builder-vite@8.3.0-alpha.6(storybook@8.2.9)(typescript@5.5.4)(vite@5.4.0):
-    resolution: {integrity: sha512-r8O+6hRBNCql6f5NykbDUr5U/clNeDRJoBF+FpWkpQT9dXFoYor54u6JMEJmseHPdmiJemhiIZ0xo54ktWUJLg==}
+  /@storybook/builder-vite@8.3.0-alpha.7(storybook@8.2.9)(typescript@5.5.4)(vite@5.4.0):
+    resolution: {integrity: sha512-7PTe8neeo/itoFGZXer79KH87KFGbp3Ru16Tb9SscSfP2RkVk72Joth8aYY6lL0ah+AS7RmTiN7HvzGf2D2/Eg==}
     peerDependencies:
       '@preact/preset-vite': '*'
-      storybook: ^8.3.0-alpha.6
+      storybook: ^8.3.0-alpha.7
       typescript: '>= 4.3.x'
       vite: ^4.0.0 || ^5.0.0
       vite-plugin-glimmerx: '*'
@@ -9407,7 +9419,7 @@ packages:
       vite-plugin-glimmerx:
         optional: true
     dependencies:
-      '@storybook/csf-plugin': 8.3.0-alpha.6(storybook@8.2.9)
+      '@storybook/csf-plugin': 8.3.0-alpha.7(storybook@8.2.9)
       '@types/find-cache-dir': 3.2.1
       browser-assert: 1.2.1
       es-module-lexer: 1.5.4
@@ -9474,10 +9486,10 @@ packages:
       unplugin: 1.12.1
     dev: true
 
-  /@storybook/csf-plugin@8.3.0-alpha.6(storybook@8.2.9):
-    resolution: {integrity: sha512-zGJ3qaF/Zx1EQZr5blS611vBzR0U+EwFjs7qwl0gYYrV+TSTCCZpIP6v7jDtpJ8vF2QVeem7iXreERi0L5Y8sQ==}
+  /@storybook/csf-plugin@8.3.0-alpha.7(storybook@8.2.9):
+    resolution: {integrity: sha512-xSb9gfURa/mbkF1/cg39NvADzJsSPuF82s1SAQO3ptflNgesPVABMyzRgTcNJO53lIZ7T36eAstbE3t5Mf4Kjw==}
     peerDependencies:
-      storybook: ^8.3.0-alpha.6
+      storybook: ^8.3.0-alpha.7
     dependencies:
       storybook: 8.2.9
       unplugin: 1.12.1
@@ -10263,6 +10275,10 @@ packages:
     dependencies:
       '@types/ms': 0.7.34
     dev: false
+
+  /@types/dom-webcodecs@0.1.11:
+    resolution: {integrity: sha512-yPEZ3z7EohrmOxbk/QTAa0yonMFkNkjnVXqbGb7D4rMr+F1dGQ8ZUFxXkyLLJuiICPejZ0AZE9Rrk9wUCczx4A==}
+    dev: true
 
   /@types/emscripten@1.39.13:
     resolution: {integrity: sha512-cFq+fO/isvhvmuP/+Sl4K4jtU6E23DoivtbO4r50e3odaxAiVdbfSYRDdJ4gCdxx+3aRjhphS5ZMwIH4hFy/Cw==}
@@ -17884,6 +17900,10 @@ packages:
       - supports-color
     dev: false
 
+  /mp4box@0.5.2:
+    resolution: {integrity: sha512-zRmGlvxy+YdW3Dmt+TR4xPHynbxwXtAQDTN/Fo9N3LMxaUlB2C5KmZpzYyGKy4c7k4Jf3RCR0A2pm9SZELOLXw==}
+    dev: false
+
   /mpd-parser@1.3.0:
     resolution: {integrity: sha512-WgeIwxAqkmb9uTn4ClicXpEQYCEduDqRKfmUdp4X8vmghKfBNXZLYpREn9eqrDx/Tf5LhzRcJLSpi4ohfV742Q==}
     hasBin: true
@@ -20497,7 +20517,7 @@ packages:
     resolution: {integrity: sha512-dD+VMYC5fBBQNesVb+mjB0LOkZIf100SQFbjAt9/sDstNUvc5ce3yZwLYXzgcOc7jcSMkrBu/cZNRzEM4YIAyw==}
     engines: {node: ^14.18 || >=16}
     dependencies:
-      '@storybook/builder-vite': 8.3.0-alpha.6(storybook@8.2.9)(typescript@5.5.4)(vite@5.4.0)
+      '@storybook/builder-vite': 8.3.0-alpha.7(storybook@8.2.9)(typescript@5.5.4)(vite@5.4.0)
     transitivePeerDependencies:
       - '@preact/preset-vite'
       - storybook
@@ -21645,6 +21665,26 @@ packages:
       vfile: 5.3.7
     dev: false
 
+  /unimport@3.10.0:
+    resolution: {integrity: sha512-/UvKRfWx3mNDWwWQhR62HsoM3wxHwYdTq8ellZzMOHnnw4Dp8tovgthyW7DjTrbjDL+i4idOp06voz2VKlvrLw==}
+    dependencies:
+      '@rollup/pluginutils': 5.1.0(rollup@2.78.0)
+      acorn: 8.12.1
+      escape-string-regexp: 5.0.0
+      estree-walker: 3.0.3
+      fast-glob: 3.3.2
+      local-pkg: 0.5.0
+      magic-string: 0.30.11
+      mlly: 1.7.1
+      pathe: 1.1.2
+      pkg-types: 1.1.3
+      scule: 1.3.0
+      strip-literal: 2.1.0
+      unplugin: 1.12.1
+    transitivePeerDependencies:
+      - rollup
+    dev: false
+
   /unimport@3.10.0(rollup@4.20.0):
     resolution: {integrity: sha512-/UvKRfWx3mNDWwWQhR62HsoM3wxHwYdTq8ellZzMOHnnw4Dp8tovgthyW7DjTrbjDL+i4idOp06voz2VKlvrLw==}
     dependencies:
@@ -21772,12 +21812,12 @@ packages:
         optional: true
     dependencies:
       '@antfu/utils': 0.7.10
-      '@rollup/pluginutils': 5.1.0(rollup@4.20.0)
+      '@rollup/pluginutils': 5.1.0(rollup@2.78.0)
       fast-glob: 3.3.2
       local-pkg: 0.5.0
       magic-string: 0.30.11
       minimatch: 9.0.5
-      unimport: 3.10.0(rollup@4.20.0)
+      unimport: 3.10.0
       unplugin: 1.12.1
     transitivePeerDependencies:
       - rollup
@@ -22247,7 +22287,7 @@ packages:
         optional: true
     dependencies:
       '@antfu/utils': 0.7.10
-      '@rollup/pluginutils': 5.1.0(rollup@4.20.0)
+      '@rollup/pluginutils': 5.1.0(rollup@2.78.0)
       debug: 4.3.6
       error-stack-parser-es: 0.1.5
       fs-extra: 11.1.1
@@ -22421,6 +22461,10 @@ packages:
   /web-streams-polyfill@4.0.0-beta.3:
     resolution: {integrity: sha512-QW95TCTaHmsYfHDybGMwO5IJIM93I/6vTRk+daHTWFPhwh+C8Cg7j7XyKrwrj8Ib6vYXe0ocYNrmzY4xAAN6ug==}
     engines: {node: '>= 14'}
+    dev: false
+
+  /webcodecs@0.1.0:
+    resolution: {integrity: sha512-orPnYDqIbUQLQgJI6tkfZvlOULu71cpylnAK8Wh5Hgo0v84mhPHgCbbzKtqn6m6QP7yVAlNrHD+snVhqcGVFfA==}
     dev: false
 
   /webidl-conversions@3.0.1:

@@ -1,16 +1,16 @@
-use std::path::PathBuf;
-use std::collections::HashMap;
-use serde::{ Serialize, Deserialize };
+use bytemuck::{Pod, Zeroable};
+use image::{ImageBuffer, Rgba, RgbaImage};
+use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use wgpu::util::DeviceExt;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-use bytemuck::{ Pod, Zeroable };
-use image::{ ImageBuffer, Rgba, RgbaImage };
 
 use crate::utils::ffmpeg_path_as_str;
 
-use std::process::Command;
 use std::io::Read;
+use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RenderOptions {
@@ -60,11 +60,19 @@ pub enum Background {
 pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std::error::Error>> {
     println!("Initializing wgpu...");
 
-    println!("Size of CompositeParams: {} bytes", std::mem::size_of::<CompositeParams>());
+    println!(
+        "Size of CompositeParams: {} bytes",
+        std::mem::size_of::<CompositeParams>()
+    );
 
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
-    let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor::default(), None).await?;
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .unwrap();
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor::default(), None)
+        .await?;
 
     println!("Creating output texture...");
     let texture_size = wgpu::Extent3d {
@@ -82,7 +90,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             label: Some("output_texture"),
             view_formats: &[],
-        })
+        }),
     );
     let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -145,7 +153,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
                     count: None,
                 },
             ],
-        })
+        }),
     );
 
     let pipeline_layout = device.create_pipeline_layout(
@@ -153,7 +161,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
             label: Some("Render Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
-        })
+        }),
     );
 
     let compilation_options = wgpu::PipelineCompilationOptions {
@@ -175,13 +183,11 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
-                targets: &[
-                    Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                ],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
                 compilation_options,
             }),
             primitive: wgpu::PrimitiveState {
@@ -201,7 +207,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
             },
             multiview: None,
             cache: None,
-        })
+        }),
     );
 
     println!("Creating uniform buffer...");
@@ -229,53 +235,49 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
             label: Some("Uniform Buffer"),
             contents: bytemuck::cast_slice(&[uniform_data]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        })
+        }),
     );
 
     println!("Setting up FFmpeg input for screen recording...");
     let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
     let mut screen_command = Command::new(&ffmpeg_binary_path_str);
     screen_command
-        .args(
-            &[
-                "-i",
-                options.screen_recording_path.to_str().unwrap(),
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "rgba",
-                "-s",
-                &format!("{}x{}", options.output_size.0, options.output_size.1),
-                "-c:v",
-                "rawvideo",
-                "-frames:v",
-                "1",
-                "pipe:1",
-            ]
-        )
+        .args(&[
+            "-i",
+            options.screen_recording_path.to_str().unwrap(),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-s",
+            &format!("{}x{}", options.output_size.0, options.output_size.1),
+            "-c:v",
+            "rawvideo",
+            "-frames:v",
+            "1",
+            "pipe:1",
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
 
     println!("Setting up FFmpeg input for webcam recording...");
     let mut webcam_command = Command::new(&ffmpeg_binary_path_str);
     webcam_command
-        .args(
-            &[
-                "-i",
-                options.webcam_recording_path.to_str().unwrap(),
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "rgba",
-                "-s",
-                &format!("{}x{}", options.webcam_size.0, options.webcam_size.1),
-                "-c:v",
-                "rawvideo",
-                "-frames:v",
-                "1",
-                "pipe:1",
-            ]
-        )
+        .args(&[
+            "-i",
+            options.webcam_recording_path.to_str().unwrap(),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-s",
+            &format!("{}x{}", options.webcam_size.0, options.webcam_size.1),
+            "-c:v",
+            "rawvideo",
+            "-frames:v",
+            "1",
+            "pipe:1",
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
 
@@ -286,15 +288,21 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
     let mut screen_frame = vec![0u8; screen_frame_size];
     let mut webcam_frame = vec![0u8; webcam_frame_size];
 
-    let mut screen_output = screen_command.spawn().expect("Failed to spawn screen FFmpeg process");
-    let mut webcam_output = webcam_command.spawn().expect("Failed to spawn webcam FFmpeg process");
+    let mut screen_output = screen_command
+        .spawn()
+        .expect("Failed to spawn screen FFmpeg process");
+    let mut webcam_output = webcam_command
+        .spawn()
+        .expect("Failed to spawn webcam FFmpeg process");
 
-    screen_output.stdout
+    screen_output
+        .stdout
         .as_mut()
         .unwrap()
         .read_exact(&mut screen_frame)
         .expect("Failed to read screen frame data");
-    webcam_output.stdout
+    webcam_output
+        .stdout
         .as_mut()
         .unwrap()
         .read_exact(&mut webcam_frame)
@@ -310,8 +318,9 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
     let screen_image: RgbaImage = ImageBuffer::from_raw(
         options.output_size.0,
         options.output_size.1,
-        screen_frame.clone()
-    ).expect("Failed to create screen image buffer");
+        screen_frame.clone(),
+    )
+    .expect("Failed to create screen image buffer");
     screen_image.save(&screen_frame_path)?;
     println!("Saved screen frame to {:?}", screen_frame_path);
 
@@ -322,8 +331,9 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
     let webcam_image: RgbaImage = ImageBuffer::from_raw(
         options.webcam_size.0,
         options.webcam_size.1,
-        webcam_frame.clone()
-    ).expect("Failed to create webcam image buffer");
+        webcam_frame.clone(),
+    )
+    .expect("Failed to create webcam image buffer");
     webcam_image.save(&webcam_frame_path)?;
     println!("Saved webcam frame to {:?}", webcam_frame_path);
 
@@ -345,7 +355,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
             view_formats: &[],
         }),
         wgpu::util::TextureDataOrder::LayerMajor,
-        &screen_frame
+        &screen_frame,
     );
 
     let webcam_texture = device.create_texture_with_data(
@@ -365,7 +375,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
             view_formats: &[],
         }),
         wgpu::util::TextureDataOrder::LayerMajor,
-        &webcam_frame
+        &webcam_frame,
     );
 
     let screen_view = screen_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -383,7 +393,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(
-                        &device.create_sampler(&wgpu::SamplerDescriptor::default())
+                        &device.create_sampler(&wgpu::SamplerDescriptor::default()),
                     ),
                 },
                 wgpu::BindGroupEntry {
@@ -393,7 +403,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(
-                        &device.create_sampler(&wgpu::SamplerDescriptor::default())
+                        &device.create_sampler(&wgpu::SamplerDescriptor::default()),
                     ),
                 },
                 wgpu::BindGroupEntry {
@@ -402,34 +412,32 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
                 },
             ],
             label: Some("Bind Group"),
-        })
+        }),
     );
 
     println!("Starting render pass...");
     let mut encoder = device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
-        })
+        }),
     );
 
     {
         let mut render_pass = encoder.begin_render_pass(
             &(wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
-                color_attachments: &[
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &output_view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                ],
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
-            })
+            }),
         );
 
         render_pass.set_pipeline(&render_pipeline);
@@ -456,13 +464,13 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             label: Some("Output Buffer"),
             mapped_at_creation: false,
-        })
+        }),
     );
 
     let mut encoder = device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Copy Encoder"),
-        })
+        }),
     );
 
     encoder.copy_texture_to_buffer(
@@ -480,7 +488,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
                 rows_per_image: Some(height),
             },
         },
-        texture_size
+        texture_size,
     );
 
     queue.submit(std::iter::once(encoder.finish()));
@@ -502,11 +510,8 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, Box<dyn std
     for chunk in padded_data.chunks(padded_bytes_per_row as usize) {
         image_data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
     }
-    let image_buffer: ImageBuffer<Rgba<u8>, _> = ImageBuffer::from_raw(
-        width,
-        height,
-        image_data
-    ).ok_or("Failed to create image buffer")?;
+    let image_buffer: ImageBuffer<Rgba<u8>, _> =
+        ImageBuffer::from_raw(width, height, image_data).ok_or("Failed to create image buffer")?;
 
     let output_image_path = PathBuf::from(
         "/Users/richie/Library/Application Support/so.cap.desktop-solid/recordings/ac2909e0-2f5e-45ff-95e3-8efb50a56a12.cap/output/result.png"

@@ -84,9 +84,9 @@ async getCurrentRecording() : Promise<Result<JsonValue<InProgressRecording | nul
     else return { status: "error", error: e  as any };
 }
 },
-async renderVideo(screenRecordingPath: string, webcamRecordingPath: string, webcamSize: [number, number], webcamPosition: [number, number], webcamStyle: WebcamStyle, outputSize: [number, number], background: Background, padding: number) : Promise<Result<string, string>> {
+async renderVideo(screenRecordingPath: string, webcamRecordingPath: string, webcamSize: [number, number], webcamPosition: [number, number], webcamStyle: WebcamStyle, outputSize: [number, number], background: Background) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("render_video", { screenRecordingPath, webcamRecordingPath, webcamSize, webcamPosition, webcamStyle, outputSize, background, padding }) };
+    return { status: "ok", data: await TAURI_INVOKE("render_video", { screenRecordingPath, webcamRecordingPath, webcamSize, webcamPosition, webcamStyle, outputSize, background }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

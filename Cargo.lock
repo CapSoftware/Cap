@@ -1428,6 +1428,7 @@ dependencies = [
  "tauri-build",
  "tauri-nspanel",
  "tauri-plugin-decorum",
+ "tauri-plugin-fs",
  "tauri-plugin-shell",
  "tauri-specta",
  "tokio",

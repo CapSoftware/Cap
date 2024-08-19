@@ -1,5 +1,5 @@
-use std::path::Path;
 use ffmpeg_sidecar::paths::sidecar_dir;
+use std::path::Path;
 
 #[cfg(unix)]
 pub fn create_named_pipe(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -11,11 +11,13 @@ pub fn create_named_pipe(path: &Path) -> Result<(), Box<dyn std::error::Error>> 
 }
 
 pub fn ffmpeg_path_as_str() -> Result<String, String> {
-    let binary_name = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
+    let binary_name = if cfg!(target_os = "windows") {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
 
-    let path = sidecar_dir()
-        .map_err(|e| e.to_string())?
-        .join(binary_name);
+    let path = sidecar_dir().map_err(|e| e.to_string())?.join(binary_name);
 
     if Path::new(&path).exists() {
         path.to_str()

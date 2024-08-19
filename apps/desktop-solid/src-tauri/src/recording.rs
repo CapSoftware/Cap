@@ -4,19 +4,16 @@ use std::path::PathBuf;
 
 use crate::{
     camera,
-    display::{ self, get_window_bounds, CaptureTarget },
+    display::{self, get_window_bounds, CaptureTarget},
     ffmpeg::*,
-    Bounds,
-    RecordingOptions,
+    Bounds, RecordingOptions,
 };
 
 #[derive(Clone, Type, Serialize)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum DisplaySource {
     Screen,
-    Window {
-        bounds: Bounds,
-    },
+    Window { bounds: Bounds },
 }
 
 #[derive(Type, Serialize)]
@@ -51,7 +48,7 @@ pub struct FFmpegCaptureOutput<T> {
 
 pub async fn start(
     recording_dir: PathBuf,
-    recording_options: &RecordingOptions
+    recording_options: &RecordingOptions,
 ) -> InProgressRecording {
     let content_dir = recording_dir.join("content");
 
@@ -70,10 +67,9 @@ pub async fn start(
         display,
         display_source: match recording_options.capture_target {
             CaptureTarget::Screen => DisplaySource::Screen,
-            CaptureTarget::Window(window_number) =>
-                DisplaySource::Window {
-                    bounds: get_window_bounds(window_number).unwrap(),
-                },
+            CaptureTarget::Window(window_number) => DisplaySource::Window {
+                bounds: get_window_bounds(window_number).unwrap(),
+            },
         },
         camera,
     }
@@ -82,11 +78,13 @@ pub async fn start(
 async fn start_camera_recording(
     content_path: &PathBuf,
     recording_options: &RecordingOptions,
-    ffmpeg: &mut FFmpeg
+    ffmpeg: &mut FFmpeg,
 ) -> Option<FFmpegCaptureOutput<FFmpegRawVideoInput>> {
-    let Some(camera_info) = recording_options.camera_label
+    let Some(camera_info) = recording_options
+        .camera_label
         .as_ref()
-        .and_then(|camera_label| camera::find_camera_by_label(camera_label)) else {
+        .and_then(|camera_label| camera::find_camera_by_label(camera_label))
+    else {
         return None;
     };
 
@@ -110,13 +108,20 @@ async fn start_camera_recording(
         },
     });
 
-    ffmpeg.command
+    ffmpeg
+        .command
         .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
         .args(["-codec:v", "libx264", "-preset", "ultrafast"])
         .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
         .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
         .args(["-movflags", "frag_keyframe+empty_moov"])
-        .args(["-vf", &format!("fps={},scale=in_range=full:out_range=limited", ffmpeg_input.fps)])
+        .args([
+            "-vf",
+            &format!(
+                "fps={},scale=in_range=full:out_range=limited",
+                ffmpeg_input.fps
+            ),
+        ])
         .arg(&output_path);
 
     Some(FFmpegCaptureOutput {
@@ -129,15 +134,13 @@ async fn start_camera_recording(
 async fn start_display_recording(
     content_path: &PathBuf,
     recording_options: &RecordingOptions,
-    ffmpeg: &mut FFmpeg
+    ffmpeg: &mut FFmpeg,
 ) -> FFmpegCaptureOutput<FFmpegRawVideoInput> {
     let pipe_path = content_path.join("display.pipe");
     let output_path = content_path.join("display.mp4");
 
-    let ((width, height), capture) = display::start_capturing(
-        pipe_path.clone(),
-        &recording_options.capture_target
-    );
+    let ((width, height), capture) =
+        display::start_capturing(pipe_path.clone(), &recording_options.capture_target);
 
     let ffmpeg_input = ffmpeg.add_input(FFmpegRawVideoInput {
         input: pipe_path.into_os_string(),
@@ -147,13 +150,20 @@ async fn start_display_recording(
         pix_fmt: "bgra",
     });
 
-    ffmpeg.command
+    ffmpeg
+        .command
         .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
         .args(["-codec:v", "libx264", "-preset", "ultrafast"])
         .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
         .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
         .args(["-movflags", "frag_keyframe+empty_moov"])
-        .args(["-vf", &format!("fps={},scale=in_range=full:out_range=limited", ffmpeg_input.fps)])
+        .args([
+            "-vf",
+            &format!(
+                "fps={},scale=in_range=full:out_range=limited",
+                ffmpeg_input.fps
+            ),
+        ])
         .arg(&output_path);
 
     FFmpegCaptureOutput {
