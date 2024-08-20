@@ -54,8 +54,8 @@ async getPrevRecordings() : Promise<Result<string[], null>> {
     else return { status: "error", error: e  as any };
 }
 },
-async openPreviousRecordingsWindow() : Promise<void> {
-    await TAURI_INVOKE("open_previous_recordings_window");
+async showPreviousRecordingsWindow() : Promise<void> {
+    await TAURI_INVOKE("show_previous_recordings_window");
 },
 async setFakeWindowBounds(name: string, bounds: Bounds) : Promise<Result<null, string>> {
     try {
@@ -83,14 +83,6 @@ async getCurrentRecording() : Promise<Result<JsonValue<InProgressRecording | nul
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
-},
-async renderVideo(screenRecordingPath: string, webcamRecordingPath: string, webcamSize: [number, number], webcamPosition: [number, number], webcamStyle: WebcamStyle, outputSize: [number, number], background: Background) : Promise<Result<string, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("render_video", { screenRecordingPath, webcamRecordingPath, webcamSize, webcamPosition, webcamStyle, outputSize, background }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
 }
 }
 
@@ -98,11 +90,11 @@ async renderVideo(screenRecordingPath: string, webcamRecordingPath: string, webc
 
 
 export const events = __makeEvents__<{
-focusCapturesPanel: FocusCapturesPanel,
-recordingOptionsChanged: RecordingOptionsChanged
+recordingOptionsChanged: RecordingOptionsChanged,
+showCapturesPanel: ShowCapturesPanel
 }>({
-focusCapturesPanel: "focus-captures-panel",
-recordingOptionsChanged: "recording-options-changed"
+recordingOptionsChanged: "recording-options-changed",
+showCapturesPanel: "show-captures-panel"
 })
 
 /** user-defined constants **/
@@ -111,17 +103,15 @@ recordingOptionsChanged: "recording-options-changed"
 
 /** user-defined types **/
 
-export type Background = { Color: [number, number, number, number] } | { Gradient: { start: [number, number, number, number]; end: [number, number, number, number]; angle: number } }
 export type Bounds = { x: number; y: number; width: number; height: number }
 export type CaptureTarget = "screen" | { window: number }
 export type CaptureWindow = { id: number; name: string }
 export type DisplaySource = { variant: "screen" } | { variant: "window"; bounds: Bounds }
-export type FocusCapturesPanel = null
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
 export type JsonValue<T> = [T]
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
 export type RecordingOptionsChanged = null
-export type WebcamStyle = { border_radius: number; shadow_color: [number, number, number, number]; shadow_blur: number; shadow_offset: [number, number] }
+export type ShowCapturesPanel = null
 
 /** tauri-specta globals **/
 

@@ -3,44 +3,7 @@ import { For, Show, Suspense, createSignal } from "solid-js";
 
 import { createCameraForLabel, createCameras } from "../utils/media";
 import { createOptionsQuery, createWindowsQuery } from "../utils/queries";
-import { commands } from "../utils/tauri";
-import { renderVideo } from "../utils/render";
-
-const screenInputFilePath =
-  "/Users/richie/Library/Application Support/so.cap.desktop-solid/recordings/ac2909e0-2f5e-45ff-95e3-8efb50a56a12.cap/content/display.mp4";
-const webcamInputFilePath =
-  "/Users/richie/Library/Application Support/so.cap.desktop-solid/recordings/ac2909e0-2f5e-45ff-95e3-8efb50a56a12.cap/content/camera.mp4";
-
-const settings = {
-  webcamSize: { width: 320, height: 240 },
-  webcamPosition: { x: 10, y: 10 },
-  webcamStyle: { borderRadius: 50, shadow: "rgba(0, 0, 0, 0.5)" },
-  videoOutputSize: { width: 1280, height: 720 },
-  videoBackground: "#000000",
-  videoPadding: 20,
-};
-
-async function testRender() {
-  try {
-    const outputFilePath = await commands.renderVideo(
-      screenInputFilePath,
-      webcamInputFilePath,
-      [settings.webcamSize.width, settings.webcamSize.height],
-      [settings.webcamPosition.x / 100, settings.webcamPosition.y / 100],
-      {
-        border_radius: settings.webcamStyle.borderRadius,
-        shadow_color: [0, 0, 0, 0.5],
-        shadow_blur: 5,
-        shadow_offset: [2, 2],
-      },
-      [settings.videoOutputSize.width, settings.videoOutputSize.height],
-      { Color: [0, 0, 0, 1] }
-    );
-    console.log(`Video rendered successfully: ${outputFilePath}`);
-  } catch (error) {
-    console.error("Error rendering video:", error);
-  }
-}
+import { commands, events } from "../utils/tauri";
 
 export default function () {
   const cameras = createCameras();
@@ -52,11 +15,15 @@ export default function () {
   // temporary
   const [isRecording, setIsRecording] = createSignal(false);
 
+  events.showCapturesPanel.listen(() => {
+    commands.showPreviousRecordingsWindow();
+  });
+
   return (
     <>
       <button
         type="button"
-        onClick={() => commands.openPreviousRecordingsWindow()}
+        onClick={() => commands.showPreviousRecordingsWindow()}
       >
         Open prev recordings window
       </button>
@@ -216,11 +183,6 @@ export default function () {
                     )}
                   </div>
                 }
-                <div>
-                  <button type="button" onClick={() => testRender()}>
-                    Test Render
-                  </button>
-                </div>
               </div>
             </>
           )}

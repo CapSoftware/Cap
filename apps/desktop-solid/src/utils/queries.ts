@@ -17,7 +17,7 @@ const getOptions = queryOptions({
 });
 
 export const getCurrentRecording = queryOptions({
-  queryKey: ["recordingOptions"] as const,
+  queryKey: ["currentRecording"] as const,
   queryFn: async () => {
     const o = await commands.getCurrentRecording();
     if (o.status === "ok") return o.data;

@@ -1,8 +1,4 @@
-use std::{
-    io::Write,
-    path::{Path, PathBuf},
-    sync::atomic::Ordering,
-};
+use std::{io::Write, path::PathBuf, sync::atomic::Ordering};
 
 use scap::{
     capturer::{Area, Capturer, Options, Point, Resolution, Size},
@@ -12,10 +8,15 @@ use scap::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{
-    ffmpeg::{FFmpegRawVideoInput, NamedPipeCapture},
-    macos, Bounds,
-};
+use crate::{ffmpeg::NamedPipeCapture, macos};
+
+#[derive(Type, Serialize, Deserialize, Debug, Clone)]
+pub struct Bounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
 
 #[derive(Type, Serialize)]
 pub struct CaptureWindow {
