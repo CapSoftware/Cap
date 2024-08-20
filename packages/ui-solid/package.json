@@ -1,0 +1,22 @@
+{
+  "name": "@cap/ui-solid",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tailwind": "./tailwind.config.js"
+  },
+  "dependencies": {
+    "@kobalte/core": "^0.13.4",
+    "cva": "npm:class-variance-authority@^0.7.0",
+    "solid-js": "^1.8.18",
+    "tailwindcss": "^3.4.10"
+  },
+  "devDependencies": {
+    "@kobalte/tailwindcss": "^0.9.0",
+    "@tailwindcss/typography": "^0.5.9",
+    "storybook-solidjs": "^1.0.0-beta.2",
+    "tailwind-scrollbar": "^3.1.0",
+    "tailwindcss-animate": "^1.0.6"
+  }
+}

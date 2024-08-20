@@ -1,1 +1,1 @@
-module.exports = require("@cap/ui/tailwind")("desktop-solid");
+module.exports = require("@cap/ui-solid/tailwind");
