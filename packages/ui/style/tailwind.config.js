@@ -97,6 +97,8 @@ module.exports = function (app, options) {
     plugins: [
       require("tailwindcss-animate"),
       require("@tailwindcss/typography"),
+      require("@kobalte/tailwindcss"),
+      require("tailwind-scrollbar"),
     ],
   };
   return config;
