@@ -292,37 +292,44 @@ function SettingsSidebar() {
                 }
               }}
             >
-              <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border ">
-                <For each={BACKGROUND_SOURCES}>
-                  {(item, i) => (
-                    <>
-                      <Show when={i() > 0}>
-                        <div
-                          class={cx(
-                            "w-px h-[0.75rem] rounded-full transition-colors",
+              <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
+                <div class="absolute inset-0 flex flex-row items-center justify-evenly">
+                  <For
+                    each={Array.from(
+                      { length: BACKGROUND_SOURCES.length - 1 },
+                      (_, i) => i
+                    )}
+                  >
+                    {(i) => (
+                      <div
+                        class={cx(
+                          "w-px h-[0.75rem] rounded-full transition-colors",
+                          BACKGROUND_SOURCES.indexOf(
+                            state.background.source.type
+                          ) === i ||
                             BACKGROUND_SOURCES.indexOf(
                               state.background.source.type
-                            ) === i() ||
-                              BACKGROUND_SOURCES.indexOf(
-                                state.background.source.type
-                              ) ===
-                                i() - 1
-                              ? "bg-gray-50"
-                              : "bg-gray-200"
-                          )}
-                        />
-                      </Show>
-                      <KTabs.Trigger
-                        class="flex-1 text-gray-400 py-1 z-10 ui-highlighted:text-black peer outline-none"
-                        value={item}
-                      >
-                        {item}
-                      </KTabs.Trigger>
-                    </>
+                            ) ===
+                              i + 1
+                            ? "bg-gray-50"
+                            : "bg-gray-200"
+                        )}
+                      />
+                    )}
+                  </For>
+                </div>
+                <For each={BACKGROUND_SOURCES}>
+                  {(item, i) => (
+                    <KTabs.Trigger
+                      class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
+                      value={item}
+                    >
+                      {item}
+                    </KTabs.Trigger>
                   )}
                 </For>
-                <KTabs.Indicator class="absolute inset-px transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-lg overflow-hidden">
-                  <div class="bg-gray-100 w-full h-full" />
+                <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden">
+                  <div class="bg-gray-100 flex-1" />
                 </KTabs.Indicator>
               </KTabs.List>
               <KTabs.Content value="Wallpaper">
@@ -347,7 +354,7 @@ function SettingsSidebar() {
                         class="col-span-1 row-span-1"
                       >
                         <KRadioGroup.ItemInput class="peer" />
-                        <KRadioGroup.ItemControl class="bg-gray-100 rounded-lg w-full h-full border border-gray-200 ui-checked:border-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300" />
+                        <KRadioGroup.ItemControl class="cursor-pointer bg-gray-100 rounded-lg w-full h-full border border-gray-200 ui-checked:border-blue-300 peer-focus-visible:border-2 peer-focus-visible:border-blue-300" />
                       </KRadioGroup.Item>
                     )}
                   </For>
@@ -356,7 +363,7 @@ function SettingsSidebar() {
               <KTabs.Content value="Image">
                 <button
                   type="button"
-                  class="h-20 bg-gray-50 w-full rounded-md border flex flex-col items-center justify-center gap-2 text-gray-400"
+                  class="p-[0.75rem] bg-gray-100 w-full rounded-[0.5rem] border flex flex-col items-center justify-center gap-[0.5rem] text-gray-400"
                 >
                   <IconLucideImage class="size-6" />
                   <span>Click to select or drag and drop image</span>
@@ -364,38 +371,41 @@ function SettingsSidebar() {
               </KTabs.Content>
               <KTabs.Content
                 value="Color"
-                class="flex flex-row items-center gap-3"
+                class="flex flex-row items-center gap-[0.75rem]"
               >
                 <div
-                  class="size-12 rounded-md"
+                  class="size-[3rem] rounded-[0.5rem]"
                   style={{ "background-color": "#4785FF" }}
                 />
                 <input
-                  class="border p-1 text-gray-400 w-20 rounded-md"
+                  class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem]"
                   value="#4785FF"
                 />
               </KTabs.Content>
               <KTabs.Content
                 value="Gradient"
-                class="flex flex-row items-center gap-3"
+                class="flex flex-row items-center gap-[1.5rem]"
               >
-                <div
-                  class="size-12 rounded-md"
-                  style={{ "background-color": "#4785FF" }}
-                />
-                <input
-                  class="border p-1 text-gray-400 w-20 rounded-md"
-                  value="#4785FF"
-                />
-                <br />
-                <div
-                  class="size-12 rounded-md"
-                  style={{ "background-color": "#FF4766" }}
-                />
-                <input
-                  class="border p-1 text-gray-400 w-20 rounded-md"
-                  value="#FF4766"
-                />
+                <div class="flex flex-row items-center gap-[0.75rem]">
+                  <div
+                    class="size-[3rem] rounded-[0.5rem]"
+                    style={{ "background-color": "#4785FF" }}
+                  />
+                  <input
+                    class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem]"
+                    value="#4785FF"
+                  />
+                </div>
+                <div class="flex flex-row items-center gap-[0.75rem]">
+                  <div
+                    class="size-[3rem] rounded-[0.5rem]"
+                    style={{ "background-color": "#FF4766" }}
+                  />
+                  <input
+                    class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem]"
+                    value="#FF4766"
+                  />
+                </div>
               </KTabs.Content>
             </KTabs>
           </Field>
