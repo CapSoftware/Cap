@@ -240,7 +240,7 @@ export function EditorButton<T extends ValidComponent = "button">(
         {local.leftIcon}
       </span>
       <span>{local.children}</span>
-      {local.rightIcon}
+      <span class="text-gray-400">{local.rightIcon}</span>
     </Polymorphic>
   );
 }

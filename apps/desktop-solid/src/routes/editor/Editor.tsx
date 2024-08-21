@@ -91,16 +91,12 @@ function Inner() {
             <div class="flex flex-row justify-between font-medium p-[0.75rem] text-[0.875rem]">
               <div class="flex flex-row items-center gap-[0.5rem]">
                 <AspectRatioSelect />
-                <EditorButton leftIcon={<IconLucideCrop />}>Crop</EditorButton>
+                <EditorButton leftIcon={<IconCapCrop />}>Crop</EditorButton>
                 <PresetsDropdown />
               </div>
               <div class="flex flex-row place-items-center gap-2">
-                <EditorButton leftIcon={<IconLucideUndo2 />}>Undo</EditorButton>
-                <EditorButton
-                  leftIcon={<IconLucideRedo2 class="text-gray-400" />}
-                >
-                  Redo
-                </EditorButton>
+                <EditorButton leftIcon={<IconCapUndo />}>Undo</EditorButton>
+                <EditorButton leftIcon={<IconCapRedo />}>Redo</EditorButton>
               </div>
             </div>
             <div class="bg-gray-100 flex items-center justify-center flex-1 flex-row object-contain p-4">
@@ -118,16 +114,16 @@ function Inner() {
               <div class="flex-1" />
               <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
                 <span>0:00.00</span>
-                <IconLucideRewind class="size-[1.2rem]" />
-                <IconLucideCircleStop class="size-[1.5rem]" />
-                <IconLucideFastForward class="size-[1rem]" />
+                <IconCapFrameFirst class="size-[1.2rem]" />
+                <IconCapStopCircle class="size-[1.5rem]" />
+                <IconCapFrameLast class="size-[1rem]" />
                 <span>8:32.16</span>
               </div>
               <div class="flex-1 flex flex-row justify-end">
                 <EditorButton<typeof KToggleButton>
                   as={KToggleButton}
                   variant="danger"
-                  leftIcon={<IconLucideScissors />}
+                  leftIcon={<IconCapScissors />}
                 >
                   Split
                 </EditorButton>
@@ -228,15 +224,15 @@ function SettingsSidebar() {
       <KTabs.List class="h-[3.5rem] flex flex-row divide-x divide-gray-200 text-black/50 text-lg relative z-40 overflow-x-auto border-b border-gray-200">
         <For
           each={[
-            { id: "background" as const, icon: IconLucideImage },
-            { id: "camera" as const, icon: IconLucideVideo },
+            { id: "background" as const, icon: IconCapImage },
+            { id: "camera" as const, icon: IconCapCamera },
             {
               id: "transcript" as const,
-              icon: IconLucideMessageSquareMore,
+              icon: IconCapMessageBubble,
             },
-            { id: "audio" as const, icon: IconLucideVolume1 },
-            { id: "cursor" as const, icon: IconLucideMousePointer2 },
-            { id: "hotkeys" as const, icon: IconLucideCommand },
+            { id: "audio" as const, icon: IconCapAudioOn },
+            { id: "cursor" as const, icon: IconCapCursor },
+            { id: "hotkeys" as const, icon: IconCapHotkeys },
           ]}
         >
           {(item) => (
@@ -249,13 +245,13 @@ function SettingsSidebar() {
             </KTabs.Trigger>
           )}
         </For>
-        <KTabs.Indicator class="absolute inset-0 transition-transform">
+        <KTabs.Indicator class="absolute inset-0">
           <div class="bg-gray-100 w-full h-full" />
         </KTabs.Indicator>
       </KTabs.List>
       <div class="p-[0.75rem] overflow-y-auto text-[0.875rem] font-[500]">
         <KTabs.Content value="background" class="flex flex-col gap-[1.5rem]">
-          <Field name="Background" icon={<IconLucideImage />}>
+          <Field name="Background" icon={<IconCapImage />}>
             <KTabs
               class="space-y-3"
               value={state.background.source.type}
@@ -368,7 +364,7 @@ function SettingsSidebar() {
                   type="button"
                   class="p-[0.75rem] bg-gray-100 w-full rounded-[0.5rem] border flex flex-col items-center justify-center gap-[0.5rem] text-gray-400"
                 >
-                  <IconLucideImage class="size-6" />
+                  <IconCapImage class="size-6" />
                   <span>Click to select or drag and drop image</span>
                 </button>
               </KTabs.Content>
@@ -412,7 +408,7 @@ function SettingsSidebar() {
               </KTabs.Content>
             </KTabs>
           </Field>
-          <Field name="Background Blur" icon={<IconMdiBlur />}>
+          <Field name="Background Blur" icon={<IconCapBlur />}>
             <Slider
               value={[state.background.blur]}
               onChange={(v) => setState("background", "blur", v[0])}
@@ -420,7 +416,7 @@ function SettingsSidebar() {
               maxValue={100}
             />
           </Field>
-          <Field name="Padding" icon={<IconHugeiconsDashedLine02 />}>
+          <Field name="Padding" icon={<IconCapPadding />}>
             <Slider
               value={[state.background.padding]}
               onChange={(v) => setState("background", "padding", v[0])}
@@ -428,7 +424,7 @@ function SettingsSidebar() {
               maxValue={100}
             />
           </Field>
-          <Field name="Rounded Corners" icon={<IconLucideCircleDashed />}>
+          <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
               value={[state.background.rounding]}
               onChange={(v) => setState("background", "rounding", v[0])}
@@ -436,7 +432,7 @@ function SettingsSidebar() {
               maxValue={100}
             />
           </Field>
-          <Field name="Inset" icon={<IconLucideSquare />}>
+          <Field name="Inset" icon={<IconCapInset />}>
             <Slider
               value={[state.background.inset]}
               onChange={(v) => setState("background", "inset", v[0])}
@@ -446,7 +442,7 @@ function SettingsSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="camera" class="flex flex-col gap-[1.5rem]">
-          <Field name="Camera" icon={<IconLucideVideo />}>
+          <Field name="Camera" icon={<IconCapCamera />}>
             <div class="flex flex-col gap-[0.75rem]">
               <Subfield name="Hide Camera">
                 <Toggle />
@@ -498,7 +494,7 @@ function SettingsSidebar() {
               </div>
             </div>
           </Field>
-          <Field name="Rounded Corners" icon={<IconLucideCircleDashed />}>
+          <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
               value={[state.camera.rounding]}
               onChange={(v) => setState("camera", "rounding", v[0])}
@@ -506,7 +502,7 @@ function SettingsSidebar() {
               maxValue={100}
             />
           </Field>
-          <Field name="Shadow" icon={<IconTablerShadow />}>
+          <Field name="Shadow" icon={<IconCapShadow />}>
             <Slider
               value={[state.camera.shadow]}
               onChange={(v) => setState("camera", "shadow", v[0])}
@@ -516,7 +512,7 @@ function SettingsSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="transcript" class="flex flex-col gap-6">
-          <Field name="Transcript" icon={<IconLucideMessageSquareMore />}>
+          <Field name="Transcript" icon={<IconCapMessageBubble />}>
             <div class="text-wrap bg-gray-50 border text-gray-400 p-1 rounded-md">
               Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed ac
               purus sit amet nunc ultrices ultricies. Nullam nec scelerisque
@@ -531,7 +527,7 @@ function SettingsSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="audio" class="flex flex-col gap-6">
-          <Field name="Audio" icon={<IconLucideVolume1 />}>
+          <Field name="Audio" icon={<IconCapAudioOn />}>
             <div class="flex flex-col gap-3 ">
               <Subfield name="Mute Audio">
                 <Toggle />
@@ -543,12 +539,12 @@ function SettingsSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
-          <Field name="Cursor" icon={<IconLucideMousePointer2 />}>
+          <Field name="Cursor" icon={<IconCapCursor />}>
             <Subfield name="Hide cursor when not moving">
               <Toggle />
             </Subfield>
           </Field>
-          <Field name="Size" icon={<IconMiExpand />}>
+          <Field name="Size" icon={<IconCapEnlarge />}>
             <Slider
               value={[state.cursor.size]}
               onChange={(v) => setState("cursor", "size", v[0])}
@@ -556,13 +552,13 @@ function SettingsSidebar() {
               maxValue={100}
             />
           </Field>
-          <Field name="Type" icon={<IconLucideMousePointer2 />}>
+          <Field name="Type" icon={<IconCapCursor />}>
             <ul class="flex flex-row gap-2 text-gray-400">
               <For
                 each={
                   [
-                    { type: "pointer", icon: IconLucideMousePointer2 },
-                    { type: "circle", icon: IconLucideCircle },
+                    { type: "pointer", icon: IconCursor },
+                    { type: "circle", icon: IconCapCircle },
                   ] satisfies Array<{
                     icon: Component;
                     type: CursorType;
@@ -589,7 +585,7 @@ function SettingsSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
-          <Field name="Hotkeys" icon={<IconLucideCommand />}>
+          <Field name="Hotkeys" icon={<IconCapHotkeys />}>
             <Subfield name="Show hotkeys">
               <Toggle />
             </Subfield>
@@ -631,7 +627,7 @@ function AspectRatioSelect() {
               </Show>
             </KSelect.ItemLabel>
             <KSelect.ItemIndicator class="ml-auto">
-              <IconLucideCircleCheck />
+              <IconCapCircleCheck />
             </KSelect.ItemIndicator>
           </MenuItem>
         );
@@ -640,10 +636,10 @@ function AspectRatioSelect() {
     >
       <EditorButton<typeof KSelect.Trigger>
         as={KSelect.Trigger}
-        leftIcon={<IconLucideLayoutDashboard />}
+        leftIcon={<IconCapLayout />}
         rightIcon={
           <KSelect.Icon>
-            <IconLucideChevronDown />
+            <IconCapChevronDown />
           </KSelect.Icon>
         }
       >
@@ -673,7 +669,7 @@ function PresetsDropdown() {
     <KDropdownMenu gutter={8}>
       <EditorButton<typeof KDropdownMenu.Trigger>
         as={KDropdownMenu.Trigger}
-        leftIcon={<IconLucideWandSparkles />}
+        leftIcon={<IconCapPresets />}
       >
         Presets
       </EditorButton>
@@ -726,42 +722,46 @@ function PresetsDropdown() {
                           e.preventDefault();
                         }}
                       >
-                        <IconLucideSettings />
+                        <IconCapSettings />
                       </button>
                     </MenuItem>
                     <KDropdownMenu.Portal>
                       {showSettings() && (
-                        <MenuItemList<typeof KDropdownMenu.SubContent>
-                          class={cx(
-                            "animate-in fade-in slide-in-from-left-1 w-44",
-                            dropdownContainerClasses
-                          )}
-                        >
-                          <DropdownItem>Apply</DropdownItem>
-                          <DropdownItem>Set as default</DropdownItem>
-                          <DropdownItem
-                            onSelect={() =>
-                              setDialog({
-                                type: "renamePreset",
-                                presetId: preset,
-                                open: true,
-                              })
-                            }
+                        <>
+                          BRUH
+                          <MenuItemList<typeof KDropdownMenu.SubContent>
+                            as={KDropdownMenu.SubContent}
+                            class={cx(
+                              "animate-in fade-in slide-in-from-left-1 w-44",
+                              dropdownContainerClasses
+                            )}
                           >
-                            Rename
-                          </DropdownItem>
-                          <DropdownItem
-                            onClick={() =>
-                              setDialog({
-                                type: "deletePreset",
-                                presetId: preset,
-                                open: true,
-                              })
-                            }
-                          >
-                            Delete
-                          </DropdownItem>
-                        </MenuItemList>
+                            <DropdownItem>Apply</DropdownItem>
+                            <DropdownItem>Set as default</DropdownItem>
+                            <DropdownItem
+                              onSelect={() =>
+                                setDialog({
+                                  type: "renamePreset",
+                                  presetId: preset,
+                                  open: true,
+                                })
+                              }
+                            >
+                              Rename
+                            </DropdownItem>
+                            <DropdownItem
+                              onClick={() =>
+                                setDialog({
+                                  type: "deletePreset",
+                                  presetId: preset,
+                                  open: true,
+                                })
+                              }
+                            >
+                              Delete
+                            </DropdownItem>
+                          </MenuItemList>
+                        </>
                       )}
                     </KDropdownMenu.Portal>
                   </KDropdownMenu.Sub>
@@ -777,7 +777,7 @@ function PresetsDropdown() {
               onSelect={() => setDialog({ type: "createPreset", open: true })}
             >
               <span>Create new preset</span>
-              <IconLucideCirclePlus class="ml-auto" />
+              <IconCapCirclePlus class="ml-auto" />
             </DropdownItem>
           </MenuItemList>
         </PopperContent>
