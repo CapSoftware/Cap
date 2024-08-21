@@ -83,6 +83,30 @@ async getCurrentRecording() : Promise<Result<JsonValue<InProgressRecording | nul
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async renderVideo(options: RenderOptions) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("render_video", { options }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getRenderedVideo(videoId: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_rendered_video", { videoId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async copyRenderedVideoToClipboard(videoId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("copy_rendered_video_to_clipboard", { videoId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -103,6 +127,7 @@ showCapturesPanel: "show-captures-panel"
 
 /** user-defined types **/
 
+export type Background = { Color: [number, number, number, number] } | { Gradient: { start: [number, number, number, number]; end: [number, number, number, number]; angle: number } }
 export type Bounds = { x: number; y: number; width: number; height: number }
 export type CaptureTarget = "screen" | { window: number }
 export type CaptureWindow = { id: number; name: string }
@@ -111,7 +136,9 @@ export type InProgressRecording = { recordingDir: string; displaySource: Display
 export type JsonValue<T> = [T]
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
 export type RecordingOptionsChanged = null
+export type RenderOptions = { screen_recording_path: string; webcam_recording_path: string; webcam_size: [number, number]; webcam_position: [number, number]; webcam_style: WebcamStyle; output_size: [number, number]; background: Background }
 export type ShowCapturesPanel = null
+export type WebcamStyle = { border_radius: number; shadow_color: [number, number, number, number]; shadow_blur: number; shadow_offset: [number, number] }
 
 /** tauri-specta globals **/
 

@@ -19,6 +19,47 @@ export default function () {
     commands.showPreviousRecordingsWindow();
   });
 
+  const screenInputFilePath =
+    "/Users/richie/Library/Application Support/so.cap.desktop-solid/recordings/ac2909e0-2f5e-45ff-95e3-8efb50a56a12.cap/content/display.mp4";
+  const webcamInputFilePath =
+    "/Users/richie/Library/Application Support/so.cap.desktop-solid/recordings/ac2909e0-2f5e-45ff-95e3-8efb50a56a12.cap/content/camera.mp4";
+
+  const settings = {
+    webcamSize: { width: 320, height: 240 },
+    webcamPosition: { x: 10, y: 10 },
+    webcamStyle: { borderRadius: 50, shadow: "rgba(0, 0, 0, 0.5)" },
+    videoOutputSize: { width: 1280, height: 720 },
+    videoBackground: "#000000",
+    videoPadding: 20,
+  };
+
+  async function testRender() {
+    try {
+      const outputFilePath = await commands.renderVideo({
+        screen_recording_path: screenInputFilePath,
+        webcam_recording_path: webcamInputFilePath,
+        webcam_size: [settings.webcamSize.width, settings.webcamSize.height],
+        webcam_position: [
+          settings.webcamPosition.x / 100,
+          settings.webcamPosition.y / 100,
+        ],
+        webcam_style: {
+          border_radius: settings.webcamStyle.borderRadius,
+          shadow_color: [0, 0, 0, 0.5],
+          shadow_blur: 5,
+          shadow_offset: [2, 2],
+        },
+        output_size: [
+          settings.videoOutputSize.width,
+          settings.videoOutputSize.height,
+        ],
+        background: { Color: [0, 0, 0, 1] },
+      });
+      console.log(`Video rendered successfully: ${outputFilePath}`);
+    } catch (error) {
+      console.error("Error rendering video:", error);
+    }
+  }
   return (
     <>
       <button
@@ -181,6 +222,9 @@ export default function () {
                         Stop Recording
                       </button>
                     )}
+                    <button type="button" onClick={testRender}>
+                      Test Render
+                    </button>
                   </div>
                 }
               </div>

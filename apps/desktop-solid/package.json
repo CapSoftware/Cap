@@ -8,6 +8,7 @@
   "dependencies": {
     "@cap/database": "workspace:*",
     "@cap/ui-solid": "workspace:*",
+    "@cap/ui": "workspace:*",
     "@cap/utils": "workspace:*",
     "@kobalte/core": "^0.13.4",
     "@solid-primitives/context": "^0.2.3",

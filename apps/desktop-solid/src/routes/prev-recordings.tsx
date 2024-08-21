@@ -9,12 +9,12 @@ import {
   createSignal,
   on,
   onCleanup,
-  onMount,
 } from "solid-js";
 import createPresence from "solid-presence";
 
 import { commands, events } from "../utils/tauri";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { Window } from "@tauri-apps/api/window";
 
 export default function () {
   const recordings = createQuery(() => ({
@@ -39,28 +39,11 @@ export default function () {
       <div class="absolute left-0 bottom-0 flex flex-col-reverse w-60 pl-8 pb-8 gap-8">
         <For each={recordings.data}>
           {(recording, i) => {
-            const [thumbnailUrl, setThumbnailUrl] = createSignal("");
-
-            onMount(() => {
-              const video = document.createElement("video");
-              video.src = convertFileSrc(`${recording}/content/display.mp4`);
-              video.addEventListener("loadeddata", () => {
-                video.currentTime = 1; // Set to 1 second or adjust as needed
-              });
-              video.addEventListener("seeked", () => {
-                const canvas = document.createElement("canvas");
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                canvas
-                  .getContext("2d")
-                  ?.drawImage(video, 0, 0, canvas.width, canvas.height);
-                setThumbnailUrl(canvas.toDataURL());
-              });
-            });
-
             const [ref, setRef] = createSignal<HTMLElement | null>(null);
 
             const [exiting, setExiting] = createSignal(false);
+            const [isLoading, setIsLoading] = createSignal(false);
+            const [isSuccess, setIsSuccess] = createSignal(false);
 
             const { present } = createPresence({
               show: () => !exiting(),
@@ -90,7 +73,6 @@ export default function () {
                 {/* biome-ignore lint/a11y/useKeyWithClickEvents: <explanation> */}
                 <div
                   ref={setRef}
-                  onClick={() => setExiting(true)}
                   // onWheel={(e) => {
                   //   if (closingRecording && closingRecording !== recording) {
                   //     if (e.deltaX === 1) closingRecording = null;
@@ -111,16 +93,11 @@ export default function () {
                       : "animate-in fade-in"
                   )}
                 >
-                  <Show
-                    when={thumbnailUrl()}
-                    fallback={<div class="w-full h-full bg-gray-800" />}
-                  >
-                    <img
-                      class="pointer-events-none w-full h-full object-cover absolute inset-0 -z-10"
-                      alt="video thumbnail"
-                      src={thumbnailUrl()}
-                    />
-                  </Show>
+                  <img
+                    class="pointer-events-none w-full h-full object-cover absolute inset-0 -z-10 "
+                    alt="screenshot"
+                    src={convertFileSrc(`${recording}/screenshots/display.jpg`)}
+                  />
                   <div class="w-full h-full absolute inset-0 transition-all opacity-0 hover:opacity-100 backdrop-blur hover:backdrop-blur bg-black/50 text-white p-4">
                     <IconButton class="absolute left-3 top-3">
                       <IconLucideEye class="size-4" />
@@ -129,16 +106,40 @@ export default function () {
                       class="absolute right-3 top-3"
                       onClick={() => {
                         new WebviewWindow("editor", {
-                          width: 800,
-                          height: 600,
+                          width: 1440,
+                          height: 1024,
                           url: `/editor?path=${recording}`,
                         });
                       }}
                     >
                       <IconLucidePencil class="size-4" />
                     </IconButton>
-                    <IconButton class="absolute left-3 bottom-3">
-                      <IconLucideCopy class="size-4" />
+                    <IconButton
+                      onClick={async () => {
+                        setIsLoading(true);
+                        try {
+                          await commands.copyRenderedVideoToClipboard(
+                            recording
+                          );
+                          setIsLoading(false);
+                          setIsSuccess(true);
+                          setTimeout(() => setIsSuccess(false), 2000);
+                        } catch (error) {
+                          setIsLoading(false);
+                          window.alert("Failed to copy to clipboard");
+                        }
+                      }}
+                      class="absolute left-3 bottom-3 z-20"
+                    >
+                      <Show when={isLoading()}>
+                        <IconLucideLoaderCircle class="size-4 animate-spin" />
+                      </Show>
+                      <Show when={isSuccess()}>
+                        <IconLucideCheck class="size-4" />
+                      </Show>
+                      <Show when={!isLoading() && !isSuccess()}>
+                        <IconLucideCopy class="size-4" />
+                      </Show>
                     </IconButton>
                     <IconButton class="absolute right-3 bottom-3">
                       <IconLucideShare class="size-4" />
@@ -166,3 +167,19 @@ const IconButton = (props: ComponentProps<"button">) => {
     />
   );
 };
+
+const LoaderIcon = (props: ComponentProps<"svg">) => (
+  <svg
+    {...props}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    class="animate-spin"
+  >
+    <circle cx="12" cy="12" r="10" />
+    <path d="M4 12a8 8 0 018-8" />
+  </svg>
+);

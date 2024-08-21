@@ -1411,6 +1411,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
  "ffmpeg-sidecar",
@@ -1419,6 +1420,7 @@ dependencies = [
  "nix 0.29.0",
  "nokhwa",
  "nokhwa-bindings-macos",
+ "objc",
  "objc2-app-kit",
  "scap",
  "serde",

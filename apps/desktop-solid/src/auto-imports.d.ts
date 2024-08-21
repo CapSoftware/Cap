@@ -26,6 +26,7 @@ declare global {
   const IconLucideFastForward: typeof import('~icons/lucide/fast-forward.jsx')['default']
   const IconLucideImage: typeof import('~icons/lucide/image.jsx')['default']
   const IconLucideLayoutDashboard: typeof import('~icons/lucide/layout-dashboard.jsx')['default']
+  const IconLucideLoaderCircle: typeof import('~icons/lucide/loader-circle.jsx')['default']
   const IconLucideMessageSquareMore: typeof import('~icons/lucide/message-square-more.jsx')['default']
   const IconLucideMousePointer2: typeof import('~icons/lucide/mouse-pointer2.jsx')['default']
   const IconLucidePencil: typeof import('~icons/lucide/pencil.jsx')['default']
