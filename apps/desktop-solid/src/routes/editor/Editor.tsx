@@ -3,7 +3,10 @@ import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Select as KSelect } from "@kobalte/core/select";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
-import { RadioGroup as KRadioGroup } from "@kobalte/core/radio-group";
+import {
+  RadioGroup as KRadioGroup,
+  RadioGroup,
+} from "@kobalte/core/radio-group";
 import { cx } from "cva";
 import {
   type Component,
@@ -453,7 +456,14 @@ function SettingsSidebar() {
               </Subfield>
               <div>
                 <Subfield name="Camera Position" class="mt-[0.75rem]" />
-                <div class="mt-[0.75rem] rounded-[0.5rem] border border-gray-200 bg-gray-100 w-full h-[7.5rem] relative">
+                <KRadioGroup
+                  value={`${state.camera.position.x}:${state.camera.position.y}`}
+                  onChange={(v) => {
+                    const [x, y] = v.split(":");
+                    setState("camera", "position", { x, y } as any);
+                  }}
+                  class="mt-[0.75rem] rounded-[0.5rem] border border-gray-200 bg-gray-100 w-full h-[7.5rem] relative"
+                >
                   <For
                     each={[
                       { x: "l", y: "t" } as const,
@@ -465,28 +475,26 @@ function SettingsSidebar() {
                     ]}
                   >
                     {(item) => (
-                      <button
-                        type="button"
-                        data-selected={
-                          state.camera.position.x === item.x &&
-                          state.camera.position.y === item.y
-                        }
-                        class={cx(
-                          "size-[1.25rem] rhink-0 rounded-[0.375rem] bg-gray-300 absolute flex justify-center items-center data-[selected='true']:bg-blue-300 focus-visible:outline outline-2 outline-offset-2 outline-blue-300 transition-colors duration-100",
-                          item.x === "l"
-                            ? "left-2"
-                            : item.x === "r"
-                            ? "right-2"
-                            : "left-1/2 transform -translate-x-1/2",
-                          item.y === "t" ? "top-2" : "bottom-2"
-                        )}
-                        onClick={() => setState("camera", "position", item)}
-                      >
-                        <div class="size-[0.5rem] shrink-0 bg-gray-50 rounded-full" />
-                      </button>
+                      <RadioGroup.Item value={`${item.x}:${item.y}`}>
+                        <RadioGroup.ItemInput class="peer" />
+                        <RadioGroup.ItemControl
+                          class={cx(
+                            "cursor-pointer size-[1.25rem] shink-0 rounded-[0.375rem] bg-gray-300 absolute flex justify-center items-center ui-checked:bg-blue-300 focus-visible:outline peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300 transition-colors duration-100",
+                            item.x === "l"
+                              ? "left-2"
+                              : item.x === "r"
+                              ? "right-2"
+                              : "left-1/2 transform -translate-x-1/2",
+                            item.y === "t" ? "top-2" : "bottom-2"
+                          )}
+                          onClick={() => setState("camera", "position", item)}
+                        >
+                          <div class="size-[0.5rem] shrink-0 bg-gray-50 rounded-full" />
+                        </RadioGroup.ItemControl>
+                      </RadioGroup.Item>
                     )}
                   </For>
-                </div>
+                </KRadioGroup>
               </div>
             </div>
           </Field>
