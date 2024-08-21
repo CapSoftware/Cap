@@ -1,5 +1,5 @@
 import { createQuery } from "@tanstack/solid-query";
-import { createEffect, Show, Suspense } from "solid-js";
+import { Show, Suspense } from "solid-js";
 import { getCurrentRecording } from "../utils/queries";
 
 export default function () {

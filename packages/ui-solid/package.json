@@ -4,7 +4,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./tailwind": "./tailwind.config.js"
+    "./tailwind": "./tailwind.config.js",
+    "./main.css": "./src/main.css"
   },
   "dependencies": {
     "@kobalte/core": "^0.13.4",

@@ -8,11 +8,9 @@ import {
 import { Show, createEffect, createResource, createSignal, on } from "solid-js";
 import { createStore } from "solid-js/store";
 
-import { createQuery } from "@tanstack/solid-query";
 import { CloseX, Expand, Flip, Minimize, Squircle } from "../icons";
-import { createQueryInvalidate, makeInvalidated } from "../utils/events";
 import { createCameraForLabel } from "../utils/media";
-import { createOptionsQuery, getOptions } from "../utils/queries";
+import { createOptionsQuery } from "../utils/queries";
 import { commands } from "../utils/tauri";
 
 namespace CameraWindow {
