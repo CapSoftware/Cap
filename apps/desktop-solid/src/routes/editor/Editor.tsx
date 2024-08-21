@@ -557,7 +557,7 @@ function SettingsSidebar() {
               <For
                 each={
                   [
-                    { type: "pointer", icon: IconCursor },
+                    { type: "pointer", icon: IconCapCursor },
                     { type: "circle", icon: IconCapCircle },
                   ] satisfies Array<{
                     icon: Component;
