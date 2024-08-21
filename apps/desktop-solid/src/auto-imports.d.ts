@@ -30,6 +30,7 @@ declare global {
   const IconLucideMousePointer2: typeof import('~icons/lucide/mouse-pointer2.jsx')['default']
   const IconLucidePencil: typeof import('~icons/lucide/pencil.jsx')['default']
   const IconLucidePenicl: typeof import('~icons/lucide/penicl.jsx')['default']
+  const IconLucidePlay: typeof import('~icons/lucide/play.jsx')['default']
   const IconLucidePlus: typeof import('~icons/lucide/plus.jsx')['default']
   const IconLucideRedo: typeof import('~icons/lucide/redo.jsx')['default']
   const IconLucideRedo2: typeof import('~icons/lucide/redo2.jsx')['default']

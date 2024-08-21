@@ -1,4 +1,4 @@
-import "@cap/ui/style";
+import "./main.css";
 
 const preview: Preview = {
   parameters: {

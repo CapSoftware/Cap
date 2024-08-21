@@ -1,1 +1,1 @@
-module.exports = require("@cap/ui/tailwind")("storybook");
+module.exports = require("@cap/ui-solid/tailwind");
