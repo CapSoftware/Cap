@@ -84,25 +84,25 @@ async getCurrentRecording() : Promise<Result<JsonValue<InProgressRecording | nul
     else return { status: "error", error: e  as any };
 }
 },
-async renderVideo(options: RenderOptions) : Promise<Result<string, string>> {
+async renderVideo(options: RenderOptions, project: ProjectConfiguration) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("render_video", { options }) };
+    return { status: "ok", data: await TAURI_INVOKE("render_video", { options, project }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
-async getRenderedVideo(videoId: string) : Promise<Result<string, string>> {
+async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("get_rendered_video", { videoId }) };
+    return { status: "ok", data: await TAURI_INVOKE("get_rendered_video", { videoId, project }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
-async copyRenderedVideoToClipboard(videoId: string) : Promise<Result<null, string>> {
+async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguration) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("copy_rendered_video_to_clipboard", { videoId }) };
+    return { status: "ok", data: await TAURI_INVOKE("copy_rendered_video_to_clipboard", { videoId, project }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -135,18 +135,28 @@ showCapturesPanel: "show-captures-panel"
 
 /** user-defined types **/
 
-export type Background = { Color: [number, number, number, number] } | { Gradient: { start: [number, number, number, number]; end: [number, number, number, number]; angle: number } }
+export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
+export type AudioConfiguration = { mute: boolean; improve: boolean }
+export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number }
+export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number] }
 export type Bounds = { x: number; y: number; width: number; height: number }
+export type CameraConfiguration = { hide: boolean; mirror: boolean; position: CameraPosition; rounding: number; shadow: number }
+export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
+export type CameraXPosition = "left" | "center" | "right"
+export type CameraYPosition = "top" | "bottom"
 export type CaptureTarget = "screen" | { window: number }
 export type CaptureWindow = { id: number; name: string }
+export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: CursorType }
+export type CursorType = "pointer" | "circle"
 export type DisplaySource = { variant: "screen" } | { variant: "window"; bounds: Bounds }
+export type HotkeysConfiguration = { show: boolean }
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
 export type JsonValue<T> = [T]
+export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
 export type RecordingOptionsChanged = null
-export type RenderOptions = { screen_recording_path: string; webcam_recording_path: string; webcam_size: [number, number]; webcam_position: [number, number]; webcam_style: WebcamStyle; output_size: [number, number]; background: Background }
+export type RenderOptions = { output_path: string; screen_recording_path: string; webcam_recording_path: string; webcam_size: [number, number]; output_size: [number, number] }
 export type ShowCapturesPanel = null
-export type WebcamStyle = { border_radius: number; shadow_color: [number, number, number, number]; shadow_blur: number; shadow_offset: [number, number] }
 
 /** tauri-specta globals **/
 

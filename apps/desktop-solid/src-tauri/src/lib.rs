@@ -2,36 +2,34 @@ mod camera;
 mod display;
 mod ffmpeg;
 mod macos;
+mod project;
 mod recording;
 mod utils;
 mod video_renderer;
 
-use objc2_app_kit::{ NSScreenSaverWindowLevel };
-use recording::{ DisplaySource, InProgressRecording };
-use serde::{ Deserialize, Serialize };
+use mp4::Mp4Reader;
+use objc2_app_kit::NSScreenSaverWindowLevel;
+use project::ProjectConfiguration;
+use recording::{DisplaySource, InProgressRecording};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::{
-    collections::HashMap,
-    marker::PhantomData,
-    path::PathBuf,
-    process::Command,
-    sync::Arc,
-    time::Duration,
-};
-use tauri::{ AppHandle, Manager, State, WebviewWindow };
-use tauri_nspanel::{ cocoa::appkit::NSMainMenuWindowLevel, ManagerExt };
-use tauri_plugin_decorum::WebviewWindowExt;
-use tauri_specta::Event;
-use tokio::{ sync::RwLock, time::sleep };
-use mp4::Mp4Reader;
 use std::fs::File;
 use std::io::BufReader;
+use std::{
+    collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
+    time::Duration,
+};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
+use tauri_plugin_decorum::WebviewWindowExt;
+use tauri_specta::Event;
+use tokio::{sync::RwLock, time::sleep};
 
-use camera::{ create_camera_window, get_cameras };
-use display::{ get_capture_windows, Bounds, CaptureTarget };
-use crate::video_renderer::{ render_video, RenderOptions, WebcamStyle, Background };
-use crate::utils::{ ffmpeg_path_as_str };
+use crate::utils::ffmpeg_path_as_str;
+use crate::video_renderer::{render_video, RenderOptions};
+use camera::{create_camera_window, get_cameras};
+use display::{get_capture_windows, Bounds, CaptureTarget};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -58,33 +56,38 @@ impl App {
         let current_recording = self.current_recording.insert(new_value);
 
         if let DisplaySource::Window { .. } = &current_recording.display_source {
-            match self.handle.get_webview_window(WINDOW_CAPTURE_OCCLUDER_LABEL) {
+            match self
+                .handle
+                .get_webview_window(WINDOW_CAPTURE_OCCLUDER_LABEL)
+            {
                 None => {
                     let monitor = self.handle.primary_monitor().unwrap().unwrap();
 
                     let occluder_window = WebviewWindow::builder(
                         &self.handle,
                         WINDOW_CAPTURE_OCCLUDER_LABEL,
-                        tauri::WebviewUrl::App("/window-capture-occluder".into())
+                        tauri::WebviewUrl::App("/window-capture-occluder".into()),
                     )
-                        .title("Cap Window Capture Occluder")
-                        .maximized(false)
-                        .resizable(false)
-                        .fullscreen(false)
-                        .decorations(false)
-                        .shadow(false)
-                        .always_on_top(true)
-                        .visible_on_all_workspaces(true)
-                        .content_protected(true)
-                        .inner_size(
-                            (monitor.size().width as f64) / monitor.scale_factor(),
-                            (monitor.size().height as f64) / monitor.scale_factor()
-                        )
-                        .position(0.0, 0.0)
-                        .build()
-                        .unwrap();
+                    .title("Cap Window Capture Occluder")
+                    .maximized(false)
+                    .resizable(false)
+                    .fullscreen(false)
+                    .decorations(false)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .visible_on_all_workspaces(true)
+                    .content_protected(true)
+                    .inner_size(
+                        (monitor.size().width as f64) / monitor.scale_factor(),
+                        (monitor.size().height as f64) / monitor.scale_factor(),
+                    )
+                    .position(0.0, 0.0)
+                    .build()
+                    .unwrap();
 
-                    occluder_window.set_window_level(NSScreenSaverWindowLevel as u32).unwrap();
+                    occluder_window
+                        .set_window_level(NSScreenSaverWindowLevel as u32)
+                        .unwrap();
                     occluder_window.set_ignore_cursor_events(true).unwrap();
                     occluder_window.make_transparent().unwrap();
                 }
@@ -147,7 +150,7 @@ async fn get_recording_options(state: MutableState<'_, App>) -> Result<Recording
 #[specta::specta]
 async fn set_recording_options(
     state: MutableState<'_, App>,
-    options: RecordingOptions
+    options: RecordingOptions,
 ) -> Result<(), ()> {
     state.write().await.set_start_recording_options(options);
 
@@ -157,7 +160,10 @@ async fn set_recording_options(
 type Bruh<T> = (T,);
 
 #[derive(Serialize, Type)]
-struct JsonValue<T>(#[serde(skip)] PhantomData<T>, #[specta(type = Bruh<T>)] serde_json::Value);
+struct JsonValue<T>(
+    #[serde(skip)] PhantomData<T>,
+    #[specta(type = Bruh<T>)] serde_json::Value,
+);
 
 impl<T: Serialize> JsonValue<T> {
     fn new(value: &T) -> Self {
@@ -168,7 +174,7 @@ impl<T: Serialize> JsonValue<T> {
 #[tauri::command]
 #[specta::specta]
 async fn get_current_recording(
-    state: MutableState<'_, App>
+    state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<InProgressRecording>>, ()> {
     let state = state.read().await;
     Ok(JsonValue::new(&state.current_recording))
@@ -196,6 +202,7 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         .join(format!("{id}.cap"));
 
     let recording = recording::start(recording_dir, &state.start_recording_options).await;
+
     state.set_current_recording(recording);
 
     Ok(())
@@ -220,7 +227,11 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         .args(["-ss", "0:00:00", "-i"])
         .arg(&current_recording.display.output_path)
         .args(["-frames:v", "1", "-q:v", "2"])
-        .arg(current_recording.recording_dir.join("screenshots/display.jpg"))
+        .arg(
+            current_recording
+                .recording_dir
+                .join("screenshots/display.jpg"),
+        )
         .output()
         .unwrap();
 
@@ -236,36 +247,46 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
 async fn get_rendered_video(
     app: AppHandle,
     video_id: String,
-    state: MutableState<'_, App>
+    project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
-    let recordings_dir = app
+    let video_dir = app
         .path()
         .app_data_dir()
         .unwrap()
         .join("recordings")
         .join(format!("{video_id}.cap"));
-    let video_dir = recordings_dir.join(video_id);
 
+    dbg!(&video_dir);
     if video_dir.exists() {
-        let output_path = video_dir.join("content/output/result.mp4");
+        let output_path = video_dir.join("output/result.mp4");
+        dbg!(&output_path);
         if output_path.exists() {
             Ok(output_path)
         } else {
+            use recording::recording_meta::*;
+
+            let meta: RecordingMeta = serde_json::from_str(
+                &std::fs::read_to_string(video_dir.join("recording-meta.json")).unwrap(),
+            )
+            .unwrap();
+
+            dbg!(&meta);
+
             let render_options = RenderOptions {
+                output_path: output_path.clone(),
                 screen_recording_path: video_dir.join("content/display.mp4"),
                 webcam_recording_path: video_dir.join("content/camera.mp4"),
-                webcam_size: (320, 240),
-                webcam_position: (0.05, 0.85),
-                webcam_style: WebcamStyle {
-                    border_radius: 10.0,
-                    shadow_color: [0.0, 0.0, 0.0, 0.5],
-                    shadow_blur: 5.0,
-                    shadow_offset: (2.0, 2.0),
-                },
-                output_size: (1280, 720),
-                background: Background::Color([0.0, 0.0, 0.0, 1.0]),
+                webcam_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or((0, 0)),
+                // webcam_style: WebcamStyle {
+                //     border_radius: 10.0,
+                //     shadow_color: [0.0, 0.0, 0.0, 0.5],
+                //     shadow_blur: 5.0,
+                //     shadow_offset: (2.0, 2.0),
+                // },
+                output_size: (meta.display.width, meta.display.height),
+                // background: Background::Color([0.0, 0.0, 0.0, 1.0]),
             };
-            render_video(render_options).await?;
+            render_video(render_options, project).await?;
 
             Ok(output_path)
         }
@@ -279,11 +300,11 @@ async fn get_rendered_video(
 async fn copy_rendered_video_to_clipboard(
     app: AppHandle,
     video_id: String,
-    state: MutableState<'_, App>
+    project: ProjectConfiguration,
 ) -> Result<(), String> {
     println!("Copying to clipboard");
 
-    let output_path = match get_rendered_video(app.clone(), video_id.clone(), state).await {
+    let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
         Ok(path) => {
             println!("Successfully retrieved rendered video path: {:?}", path);
             path
@@ -299,8 +320,8 @@ async fn copy_rendered_video_to_clipboard(
     #[cfg(target_os = "macos")]
     {
         use cocoa::appkit::NSPasteboard;
-        use cocoa::base::{ nil, id };
-        use cocoa::foundation::{ NSArray, NSURL, NSString };
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::{NSArray, NSString, NSURL};
         use objc::rc::autoreleasepool;
 
         unsafe {
@@ -308,10 +329,8 @@ async fn copy_rendered_video_to_clipboard(
                 let pasteboard: id = NSPasteboard::generalPasteboard(nil);
                 NSPasteboard::clearContents(pasteboard);
 
-                let url = NSURL::fileURLWithPath_(
-                    nil,
-                    NSString::alloc(nil).init_str(output_path_str)
-                );
+                let url =
+                    NSURL::fileURLWithPath_(nil, NSString::alloc(nil).init_str(output_path_str));
 
                 let objects: id = NSArray::arrayWithObject(nil, url);
 
@@ -328,7 +347,7 @@ async fn copy_rendered_video_to_clipboard(
 async fn get_screen_video_metadata(
     app: AppHandle,
     video_id: String,
-    state: MutableState<'_, App>
+    state: MutableState<'_, App>,
 ) -> Result<(f64, f64), String> {
     let screen_video_path = {
         println!("Getting screen video metadata");
@@ -344,7 +363,10 @@ async fn get_screen_video_metadata(
         println!("Screen video path: {:?}", screen_video_path);
 
         if !screen_video_path.exists() {
-            return Err(format!("Screen video does not exist: {:?}", screen_video_path));
+            return Err(format!(
+                "Screen video does not exist: {:?}",
+                screen_video_path
+            ));
         }
 
         screen_video_path
@@ -357,17 +379,14 @@ async fn get_screen_video_metadata(
 
     println!("File opened successfully: {:?}", file);
 
-    let size =
-        (
-            file
-                .metadata()
-                .map_err(|e| {
-                    println!("Failed to get file metadata: {}", e);
-                    format!("Failed to get file metadata: {}", e)
-                })?
-                .len() as f64
-        ) /
-        (1024.0 * 1024.0);
+    let size = (file
+        .metadata()
+        .map_err(|e| {
+            println!("Failed to get file metadata: {}", e);
+            format!("Failed to get file metadata: {}", e)
+        })?
+        .len() as f64)
+        / (1024.0 * 1024.0);
 
     println!("File size: {} MB", size);
 
@@ -405,7 +424,7 @@ async fn set_fake_window_bounds(
     window: tauri::Window,
     name: String,
     bounds: Bounds,
-    state: tauri::State<'_, FakeWindowBounds>
+    state: tauri::State<'_, FakeWindowBounds>,
 ) -> Result<(), String> {
     let mut state = state.0.write().await;
     let map = state.entry(window.label().to_string()).or_default();
@@ -420,7 +439,7 @@ async fn set_fake_window_bounds(
 async fn remove_fake_window(
     window: tauri::Window,
     name: String,
-    state: tauri::State<'_, FakeWindowBounds>
+    state: tauri::State<'_, FakeWindowBounds>,
 ) -> Result<(), String> {
     let mut state = state.0.write().await;
     let Some(map) = state.get_mut(window.label()) else {
@@ -455,24 +474,24 @@ fn show_previous_recordings_window(app: AppHandle) {
     let window = WebviewWindow::builder(
         &app,
         PREV_RECORDINGS_WINDOW,
-        tauri::WebviewUrl::App("/prev-recordings".into())
+        tauri::WebviewUrl::App("/prev-recordings".into()),
     )
-        .title("Cap Recordings")
-        .maximized(false)
-        .resizable(false)
-        .fullscreen(false)
-        .decorations(false)
-        .shadow(false)
-        .always_on_top(true)
-        .visible_on_all_workspaces(true)
-        .content_protected(true)
-        .inner_size(
-            (monitor.size().width as f64) / monitor.scale_factor(),
-            (monitor.size().height as f64) / monitor.scale_factor()
-        )
-        .position(0.0, 0.0)
-        .build()
-        .unwrap();
+    .title("Cap Recordings")
+    .maximized(false)
+    .resizable(false)
+    .fullscreen(false)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .content_protected(true)
+    .inner_size(
+        (monitor.size().width as f64) / monitor.scale_factor(),
+        (monitor.size().height as f64) / monitor.scale_factor(),
+    )
+    .position(0.0, 0.0)
+    .build()
+    .unwrap();
 
     use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
     use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
@@ -484,10 +503,10 @@ fn show_previous_recordings_window(app: AppHandle) {
     panel.set_level(NSMainMenuWindowLevel + 1);
 
     panel.set_collection_behaviour(
-        NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient |
-            NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace |
-            NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary |
-            NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle
+        NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
     );
 
     // seems like this doesn't work properly -_-
@@ -519,11 +538,10 @@ fn show_previous_recordings_window(app: AppHandle) {
                 let y_min = (window_position.y as f64) + bounds.y * scale_factor;
                 let y_max = (window_position.y as f64) + (bounds.y + bounds.height) * scale_factor;
 
-                if
-                    mouse_position.x >= x_min &&
-                    mouse_position.x <= x_max &&
-                    mouse_position.y >= y_min &&
-                    mouse_position.y <= y_max
+                if mouse_position.x >= x_min
+                    && mouse_position.x <= x_max
+                    && mouse_position.y >= y_min
+                    && mouse_position.y <= y_max
                 {
                     ignore = false;
                     ShowCapturesPanel.emit(&app).ok();
@@ -559,70 +577,70 @@ fn focus_captures_panel(app: AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let specta_builder = tauri_specta::Builder
-        ::new()
-        .commands(
-            tauri_specta::collect_commands![
-                get_recording_options,
-                set_recording_options,
-                create_camera_window,
-                start_recording,
-                stop_recording,
-                get_cameras,
-                get_capture_windows,
-                get_prev_recordings,
-                show_previous_recordings_window,
-                set_fake_window_bounds,
-                remove_fake_window,
-                focus_captures_panel,
-                get_current_recording,
-                render_video,
-                get_rendered_video,
-                copy_rendered_video_to_clipboard,
-                get_screen_video_metadata
-            ]
-        )
-        .events(tauri_specta::collect_events![RecordingOptionsChanged, ShowCapturesPanel]);
+    let specta_builder = tauri_specta::Builder::new()
+        .commands(tauri_specta::collect_commands![
+            get_recording_options,
+            set_recording_options,
+            create_camera_window,
+            start_recording,
+            stop_recording,
+            get_cameras,
+            get_capture_windows,
+            get_prev_recordings,
+            show_previous_recordings_window,
+            set_fake_window_bounds,
+            remove_fake_window,
+            focus_captures_panel,
+            get_current_recording,
+            render_video,
+            get_rendered_video,
+            copy_rendered_video_to_clipboard,
+            get_screen_video_metadata
+        ])
+        .events(tauri_specta::collect_events![
+            RecordingOptionsChanged,
+            ShowCapturesPanel
+        ])
+        .ty::<ProjectConfiguration>();
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds
     specta_builder
-        .export(specta_typescript::Typescript::default(), "../src/utils/tauri.ts")
+        .export(
+            specta_typescript::Typescript::default(),
+            "../src/utils/tauri.ts",
+        )
         .expect("Failed to export typescript bindings");
 
-    tauri::Builder
-        ::default()
+    tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_nspanel::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
 
-            app.manage(
-                Arc::new(
-                    RwLock::new(App {
-                        handle: app.handle().clone(),
-                        start_recording_options: RecordingOptions {
-                            capture_target: CaptureTarget::Screen,
-                            camera_label: None,
-                        },
-                        current_recording: None,
-                        prev_recordings: std::fs
-                            ::read_dir(app.path().app_data_dir().unwrap().join("recordings"))
-                            .map(|d| d.into_iter().collect::<Vec<_>>())
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter_map(|entry| {
-                                let path = entry.unwrap().path();
-                                if path.extension()? == "cap" {
-                                    Some(path)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect(),
-                    })
+            app.manage(Arc::new(RwLock::new(App {
+                handle: app.handle().clone(),
+                start_recording_options: RecordingOptions {
+                    capture_target: CaptureTarget::Screen,
+                    camera_label: None,
+                },
+                current_recording: None,
+                prev_recordings: std::fs::read_dir(
+                    app.path().app_data_dir().unwrap().join("recordings"),
                 )
-            );
+                .map(|d| d.into_iter().collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|entry| {
+                    let path = entry.unwrap().path();
+                    if path.extension()? == "cap" {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            })));
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
 

@@ -36,6 +36,7 @@ declare global {
   const IconLucideRedo: typeof import('~icons/lucide/redo.jsx')['default']
   const IconLucideRedo2: typeof import('~icons/lucide/redo2.jsx')['default']
   const IconLucideRewind: typeof import('~icons/lucide/rewind.jsx')['default']
+  const IconLucideScissors: typeof import('~icons/lucide/scissors.jsx')['default']
   const IconLucideSettings: typeof import('~icons/lucide/settings.jsx')['default']
   const IconLucideShare: typeof import('~icons/lucide/share.jsx')['default']
   const IconLucideSquare: typeof import('~icons/lucide/square.jsx')['default']

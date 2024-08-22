@@ -1,33 +1,33 @@
 use anyhow::Result;
-use bytemuck::{ Pod, Zeroable };
-use serde::{ Deserialize, Serialize };
+use bytemuck::{Pod, Zeroable};
+use futures_intrusive::channel::shared::oneshot_channel;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{ Arc };
-use std::sync::mpsc;
-use std::sync::atomic::{ AtomicUsize, Ordering };
-use futures_intrusive::channel::shared::oneshot_channel;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use wgpu::util::DeviceExt;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
-use crate::ffmpeg::{ FFmpeg, FFmpegRawVideoInput };
+use crate::ffmpeg::{FFmpeg, FFmpegRawVideoInput};
+use crate::project::{BackgroundSource, CameraXPosition, CameraYPosition, ProjectConfiguration};
 use crate::utils::ffmpeg_path_as_str;
 
-use std::io::{ Read, BufReader };
+use std::io::{BufReader, Read};
 use std::process::Command;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RenderOptions {
+    pub output_path: PathBuf,
     pub screen_recording_path: PathBuf,
     pub webcam_recording_path: PathBuf,
     pub webcam_size: (u32, u32),
-    pub webcam_position: (f32, f32),
-    pub webcam_style: WebcamStyle,
+    // pub webcam_style: WebcamStyle,
     pub output_size: (u32, u32),
-    pub background: Background,
+    // pub background: Background,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -41,17 +41,25 @@ pub struct WebcamStyle {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Pod, Zeroable)]
 #[repr(C)]
 pub struct CompositeParams {
-    webcam_position: [f32; 2],
-    webcam_size: [f32; 2],
-    output_size: [f32; 2],
-    border_radius: f32,
-    shadow_color: [f32; 4],
-    shadow_blur: f32,
-    shadow_offset: [f32; 2],
+    // static inputs
     background_start: [f32; 4],
     background_end: [f32; 4],
+
+    shadow_color: [f32; 4],
+    shadow_offset: [f32; 2],
+
+    webcam_position: [f32; 2],
+    webcam_size: [f32; 2],
+
+    screen_padding: f32,
+    screen_rounding: f32,
+    camera_rounding: f32,
+
+    _padding1: f32,
+
+    shadow_blur: f32,
+
     background_angle: f32,
-    _padding: [f32; 9],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -64,17 +72,51 @@ pub enum Background {
     },
 }
 
+#[derive(Debug)]
+pub struct UV<T> {
+    pub u: T,
+    pub v: T,
+}
+
+impl<T> UV<T> {
+    pub fn new(x: T, y: T) -> Self {
+        Self { u: x, v: y }
+    }
+}
+
+impl<T> From<UV<T>> for (T, T) {
+    fn from(xy: UV<T>) -> Self {
+        (xy.u, xy.v)
+    }
+}
+
+impl<T> From<UV<T>> for [T; 2] {
+    fn from(xy: UV<T>) -> Self {
+        [xy.u, xy.v]
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
-pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
+pub async fn render_video(
+    options: RenderOptions,
+    project: ProjectConfiguration,
+) -> Result<PathBuf, String> {
     println!("Initializing wgpu...");
 
-    println!("Size of CompositeParams: {} bytes", std::mem::size_of::<CompositeParams>());
+    println!(
+        "Size of CompositeParams: {} bytes",
+        std::mem::size_of::<CompositeParams>()
+    );
 
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-    let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .unwrap();
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default(), None).await
+        .request_device(&wgpu::DeviceDescriptor::default(), None)
+        .await
         .map_err(|e| e.to_string())?;
 
     println!("Creating output texture...");
@@ -93,7 +135,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             label: Some("output_texture"),
             view_formats: &[],
-        })
+        }),
     );
     let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -156,7 +198,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
                     count: None,
                 },
             ],
-        })
+        }),
     );
 
     let pipeline_layout = device.create_pipeline_layout(
@@ -164,7 +206,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
             label: Some("Render Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
-        })
+        }),
     );
 
     let compilation_options = wgpu::PipelineCompilationOptions {
@@ -186,13 +228,11 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
-                targets: &[
-                    Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                ],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
                 compilation_options,
             }),
             primitive: wgpu::PrimitiveState {
@@ -212,27 +252,94 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
             },
             multiview: None,
             cache: None,
-        })
+        }),
     );
 
     println!("Creating uniform buffer...");
-    let (background_start, background_end, background_angle) = match options.background {
-        Background::Color(color) => (color, color, 0.0),
-        Background::Gradient { start, end, angle } => (start, end, angle),
+    let (background_start, background_end, background_angle) = match &project.background.source {
+        BackgroundSource::Color { value } => (
+            [
+                value[0] as f32 / 256.0,
+                value[1] as f32 / 256.0,
+                value[2] as f32 / 256.0,
+                1.0,
+            ],
+            [
+                value[0] as f32 / 256.0,
+                value[1] as f32 / 256.0,
+                value[2] as f32 / 256.0,
+                1.0,
+            ],
+            0.0,
+        ),
+        BackgroundSource::Gradient {
+            from,
+            to, /*angle*/
+        } => (
+            [
+                from[0] as f32 / 256.0,
+                from[1] as f32 / 256.0,
+                from[2] as f32 / 256.0,
+                1.0,
+            ],
+            [
+                to[0] as f32 / 256.0,
+                to[1] as f32 / 256.0,
+                to[2] as f32 / 256.0,
+                1.0,
+            ],
+            0.0,
+        ),
+        _ => todo!(),
     };
 
+    let webcam_size = UV::new(
+        CAMERA_UV_WIDTH,
+        options.webcam_size.1 as f32 / options.webcam_size.0 as f32 * CAMERA_UV_WIDTH,
+    );
+
+    const CAMERA_PADDING: f32 = 100.0;
+    const CAMERA_UV_WIDTH: f32 = 0.2;
+
+    let camera_padding = UV::new(
+        CAMERA_PADDING / options.output_size.0 as f32,
+        CAMERA_PADDING / options.output_size.1 as f32,
+    );
+
+    let webcam_position = {
+        let x = match &project.camera.position.x {
+            CameraXPosition::Left => camera_padding.u,
+            CameraXPosition::Center => 0.5 - (CAMERA_UV_WIDTH /*webcam_size.u*/ / 2.0),
+            CameraXPosition::Right => 1.0 - camera_padding.u - webcam_size.u, //webcam_size.u,
+        };
+        let y = match &project.camera.position.y {
+            CameraYPosition::Top => camera_padding.v,
+            CameraYPosition::Bottom => 1.0 - camera_padding.v - webcam_size.v, // webcam_size.v,
+        };
+
+        UV::new(x, y)
+    };
+
+    dbg!(&webcam_position);
+    dbg!(&webcam_size);
+
     let uniform_data = CompositeParams {
-        webcam_position: options.webcam_position.into(),
-        webcam_size: (options.webcam_size.0 as f32, options.webcam_size.1 as f32).into(),
-        output_size: (options.output_size.0 as f32, options.output_size.1 as f32).into(),
-        border_radius: options.webcam_style.border_radius,
-        shadow_color: options.webcam_style.shadow_color,
-        shadow_blur: options.webcam_style.shadow_blur,
-        shadow_offset: options.webcam_style.shadow_offset.into(),
+        webcam_position: webcam_position.into(),
+        webcam_size: webcam_size.into(),
+
+        screen_padding: project.background.padding as f32 / 100.0,
+        screen_rounding: project.background.rounding as f32 / 700.0,
+        camera_rounding: project.camera.rounding as f32 / 100.0,
+
+        shadow_color: [0.0, 0.0, 0.0, 0.5],
+        shadow_blur: project.camera.shadow as f32 / 500.0,
+        shadow_offset: [2.0, 2.0],
+
         background_start,
         background_end,
-        background_angle,
-        _padding: [0.0; 9],
+        background_angle: 0.25,
+
+        _padding1: 0.0,
     };
 
     let uniform_buffer = device.create_buffer_init(
@@ -240,7 +347,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
             label: Some("Uniform Buffer"),
             contents: bytemuck::cast_slice(&[uniform_data]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        })
+        }),
     );
 
     println!("Setting up FFmpeg input for screen recording...");
@@ -251,16 +358,14 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
     let webcam_frame_size = (options.webcam_size.0 * options.webcam_size.1 * 4) as usize;
 
     let (tx_image_data, rx_image_data) = mpsc::channel::<Vec<u8>>();
-    let (screen_tx, screen_rx) = mpsc::channel::<Vec<u8>>();
-    let (webcam_tx, webcam_rx) = mpsc::channel::<Vec<u8>>();
+    let (screen_tx, mut screen_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let (webcam_tx, mut webcam_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     let (render_tx, render_rx) = mpsc::channel();
 
-    let base_path = options.screen_recording_path.parent().unwrap();
-    let output_folder = base_path.join("output");
-    std::fs
-        ::create_dir_all(&output_folder)
+    let output_path = options.output_path;
+    let output_folder = output_path.parent().unwrap();
+    std::fs::create_dir_all(&output_folder)
         .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
-    let output_path = output_folder.join("result.mp4");
     let output_path_clone = output_path.clone();
 
     thread::spawn(move || {
@@ -274,7 +379,8 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
             input: "pipe:0".into(),
         });
 
-        ffmpeg.command
+        ffmpeg
+            .command
             .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
             .args(["-codec:v", "libx264", "-preset", "ultrafast"])
             .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
@@ -286,7 +392,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
         loop {
             match rx_image_data.recv() {
                 Ok(frame) => {
-                    println!("Sending image data to FFmpeg");
+                    // println!("Sending image data to FFmpeg");
                     if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
                         eprintln!("Error writing video frame: {:?}", e);
                         break;
@@ -305,21 +411,19 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
 
     let mut screen_command = Command::new(&ffmpeg_binary_path_str);
     screen_command
-        .args(
-            &[
-                "-i",
-                options.screen_recording_path.to_str().unwrap(),
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "rgba",
-                "-s",
-                &format!("{}x{}", options.output_size.0, options.output_size.1),
-                "-c:v",
-                "rawvideo",
-                "pipe:1",
-            ]
-        )
+        .args(&[
+            "-i",
+            options.screen_recording_path.to_str().unwrap(),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-s",
+            &format!("{}x{}", options.output_size.0, options.output_size.1),
+            "-c:v",
+            "rawvideo",
+            "pipe:1",
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
@@ -355,21 +459,19 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
     println!("Setting up FFmpeg input for webcam recording...");
     let mut webcam_command = Command::new(&ffmpeg_binary_path_str);
     webcam_command
-        .args(
-            &[
-                "-i",
-                options.webcam_recording_path.to_str().unwrap(),
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "rgba",
-                "-s",
-                &format!("{}x{}", options.webcam_size.0, options.webcam_size.1),
-                "-c:v",
-                "rawvideo",
-                "pipe:1",
-            ]
-        )
+        .args(&[
+            "-i",
+            options.webcam_recording_path.to_str().unwrap(),
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-s",
+            &format!("{}x{}", options.webcam_size.0, options.webcam_size.1),
+            "-c:v",
+            "rawvideo",
+            "pipe:1",
+        ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
 
@@ -421,7 +523,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             label: Some("Output Buffer"),
             mapped_at_creation: false,
-        })
+        }),
     );
 
     let start_time = Instant::now();
@@ -430,24 +532,16 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
 
     let render_handle: tokio::task::JoinHandle<Result<(), String>> = tokio::spawn(async move {
         'render_loop: loop {
-            let screen_frame = match screen_rx.recv() {
-                Ok(frame) => {
-                    println!("Received screen frame from renderer");
-                    frame
-                }
-                Err(_) => {
-                    break 'render_loop;
-                }
-            };
-            let webcam_frame = match webcam_rx.recv() {
-                Ok(frame) => {
-                    println!("Received webcam frame from renderer");
-                    frame
-                }
-                Err(_) => {
-                    break 'render_loop;
-                }
-            };
+            let (screen_frame, webcam_frame) =
+                match tokio::join!(screen_rx.recv(), webcam_rx.recv()) {
+                    (Some(screen), Some(webcam)) => {
+                        // println!("Received screen frame from renderer");
+                        (screen, webcam)
+                    }
+                    _ => {
+                        break 'render_loop;
+                    }
+                };
 
             let screen_texture = device.create_texture(
                 &(wgpu::TextureDescriptor {
@@ -463,7 +557,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     label: Some("screen_texture"),
                     view_formats: &[],
-                })
+                }),
             );
 
             let webcam_texture = device.create_texture(
@@ -480,7 +574,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     label: Some("webcam_texture"),
                     view_formats: &[],
-                })
+                }),
             );
 
             let screen_view = screen_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -495,7 +589,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
                     min_filter: wgpu::FilterMode::Nearest,
                     mipmap_filter: wgpu::FilterMode::Nearest,
                     ..Default::default()
-                })
+                }),
             );
 
             let bind_group = device.create_bind_group(
@@ -524,7 +618,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
                         },
                     ],
                     label: Some("bind_group"),
-                })
+                }),
             );
 
             queue.write_texture(
@@ -544,7 +638,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
                     width: options.output_size.0,
                     height: options.output_size.1,
                     depth_or_array_layers: 1,
-                }
+                },
             );
 
             queue.write_texture(
@@ -564,34 +658,32 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
                     width: options.webcam_size.0,
                     height: options.webcam_size.1,
                     depth_or_array_layers: 1,
-                }
+                },
             );
 
             {
                 let mut encoder = device.create_command_encoder(
                     &(wgpu::CommandEncoderDescriptor {
                         label: Some("Render Encoder"),
-                    })
+                    }),
                 );
 
                 {
                     let mut render_pass = encoder.begin_render_pass(
                         &(wgpu::RenderPassDescriptor {
                             label: Some("Render Pass"),
-                            color_attachments: &[
-                                Some(wgpu::RenderPassColorAttachment {
-                                    view: &output_view,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                }),
-                            ],
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &output_view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
                             depth_stencil_attachment: None,
                             timestamp_writes: None,
                             occlusion_query_set: None,
-                        })
+                        }),
                     );
 
                     render_pass.set_pipeline(&render_pipeline);
@@ -609,14 +701,14 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
                     size: buffer_size,
                     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                     mapped_at_creation: false,
-                })
+                }),
             );
 
             {
                 let mut encoder = device.create_command_encoder(
                     &(wgpu::CommandEncoderDescriptor {
                         label: Some("Copy Encoder"),
-                    })
+                    }),
                 );
 
                 encoder.copy_texture_to_buffer(
@@ -634,7 +726,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
                             rows_per_image: Some(height),
                         },
                     },
-                    texture_size
+                    texture_size,
                 );
 
                 queue.submit(std::iter::once(encoder.finish()));
@@ -648,7 +740,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
             device.poll(wgpu::Maintain::Wait);
             match rx.receive().await {
                 Some(Ok(())) => {
-                    println!("Buffer mapped successfully");
+                    // println!("Buffer mapped successfully");
                     let data = buffer_slice.get_mapped_range();
                     let padded_data: Vec<u8> = data.to_vec(); // Ensure the type is Vec<u8>
                     let mut image_data = Vec::with_capacity((width * height * 4) as usize);
@@ -661,7 +753,7 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
                         break 'render_loop;
                     }
 
-                    println!("Image data sent to FFmpeg");
+                    // println!("Image data sent to FFmpeg");
                     // Unmap the buffer
                     drop(data);
                     output_buffer.unmap();
@@ -695,9 +787,14 @@ pub async fn render_video(options: RenderOptions) -> Result<PathBuf, String> {
 
     render_handle.await.map_err(|e| e.to_string())??;
 
-    let _ = render_rx.recv().map_err(|e| format!("Render channel error: {:?}", e))?;
+    let _ = render_rx
+        .recv()
+        .map_err(|e| format!("Render channel error: {:?}", e))?;
 
-    println!("Rendering complete. Total frames: {}", frame_count.load(Ordering::SeqCst));
+    println!(
+        "Rendering complete. Total frames: {}",
+        frame_count.load(Ordering::SeqCst)
+    );
 
     let total_frames = frame_count.load(Ordering::SeqCst);
     let total_time = start_time.elapsed();

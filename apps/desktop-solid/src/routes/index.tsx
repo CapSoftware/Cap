@@ -60,6 +60,9 @@ export default function () {
       console.error("Error rendering video:", error);
     }
   }
+
+  commands.showPreviousRecordingsWindow();
+
   return (
     <>
       <button
