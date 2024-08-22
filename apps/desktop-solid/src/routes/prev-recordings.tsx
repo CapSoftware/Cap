@@ -50,6 +50,10 @@ export default function () {
               element: ref,
             });
 
+            commands.getScreenVideoMetadata(recording).then((metadata) => {
+              console.log(metadata);
+            });
+
             createEffect(
               on(i, () => {
                 const bounds = ref()?.getBoundingClientRect();

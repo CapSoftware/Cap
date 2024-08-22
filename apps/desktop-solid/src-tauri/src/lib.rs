@@ -24,6 +24,9 @@ use tauri_nspanel::{ cocoa::appkit::NSMainMenuWindowLevel, ManagerExt };
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
 use tokio::{ sync::RwLock, time::sleep };
+use mp4::Mp4Reader;
+use std::fs::File;
+use std::io::BufReader;
 
 use camera::{ create_camera_window, get_cameras };
 use display::{ get_capture_windows, Bounds, CaptureTarget };
@@ -320,6 +323,80 @@ async fn copy_rendered_video_to_clipboard(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn get_screen_video_metadata(
+    app: AppHandle,
+    video_id: String,
+    state: MutableState<'_, App>
+) -> Result<(f64, f64), String> {
+    let screen_video_path = {
+        println!("Getting screen video metadata");
+
+        let recordings_dir = app
+            .path()
+            .app_data_dir()
+            .unwrap()
+            .join("recordings")
+            .join(format!("{video_id}.cap"));
+        let screen_video_path = recordings_dir.join("content/display.mp4");
+
+        println!("Screen video path: {:?}", screen_video_path);
+
+        if !screen_video_path.exists() {
+            return Err(format!("Screen video does not exist: {:?}", screen_video_path));
+        }
+
+        screen_video_path
+    };
+
+    let file = File::open(&screen_video_path).map_err(|e| {
+        println!("Failed to open video file: {}", e);
+        format!("Failed to open video file: {}", e)
+    })?;
+
+    println!("File opened successfully: {:?}", file);
+
+    let size =
+        (
+            file
+                .metadata()
+                .map_err(|e| {
+                    println!("Failed to get file metadata: {}", e);
+                    format!("Failed to get file metadata: {}", e)
+                })?
+                .len() as f64
+        ) /
+        (1024.0 * 1024.0);
+
+    println!("File size: {} MB", size);
+
+    let reader = BufReader::new(file);
+    let file_size = screen_video_path
+        .metadata()
+        .map_err(|e| {
+            println!("Failed to get file metadata: {}", e);
+            format!("Failed to get file metadata: {}", e)
+        })?
+        .len();
+
+    println!("File size in bytes: {}", file_size);
+
+    let mp4 = Mp4Reader::read_header(reader, file_size).map_err(|e| {
+        println!("Failed to read MP4 header: {}", e);
+        format!("Failed to read MP4 header: {}", e)
+    })?;
+
+    println!("MP4 header read successfully: {:?}", mp4);
+
+    let duration = mp4.duration().as_secs_f64();
+
+    println!("Video duration: {} seconds", duration);
+    println!("Video size: {} MB", size);
+
+    Ok((duration, size))
+}
+
 struct FakeWindowBounds(pub Arc<RwLock<HashMap<String, HashMap<String, Bounds>>>>);
 
 #[tauri::command]
@@ -501,7 +578,8 @@ pub fn run() {
                 get_current_recording,
                 render_video,
                 get_rendered_video,
-                copy_rendered_video_to_clipboard
+                copy_rendered_video_to_clipboard,
+                get_screen_video_metadata
             ]
         )
         .events(tauri_specta::collect_events![RecordingOptionsChanged, ShowCapturesPanel]);

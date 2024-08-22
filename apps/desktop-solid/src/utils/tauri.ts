@@ -107,6 +107,14 @@ async copyRenderedVideoToClipboard(videoId: string) : Promise<Result<null, strin
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async getScreenVideoMetadata(videoId: string) : Promise<Result<[number, number], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_screen_video_metadata", { videoId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 

@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::sync::{ Arc };
 use std::sync::mpsc;
 use std::sync::atomic::{ AtomicUsize, Ordering };
-use tokio::sync::oneshot;
 use futures_intrusive::channel::shared::oneshot_channel;
 use std::thread;
 use wgpu::util::DeviceExt;
