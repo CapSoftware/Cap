@@ -31,6 +31,13 @@ use crate::video_renderer::{render_video, RenderOptions};
 use camera::{create_camera_window, get_cameras};
 use display::{get_capture_windows, Bounds, CaptureTarget};
 
+use ffmpeg_sidecar::{
+    command::ffmpeg_is_installed,
+    download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
+    paths::sidecar_dir,
+    version::ffmpeg_version,
+};
+
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingOptions {
@@ -554,6 +561,35 @@ fn show_previous_recordings_window(app: AppHandle) {
     });
 }
 
+fn handle_ffmpeg_installation() -> Result<(), String> {
+    if ffmpeg_is_installed() {
+        println!("FFmpeg is already installed! 🎉");
+        return Ok(());
+    }
+
+    println!("FFmpeg not found. Attempting to install...");
+    match check_latest_version() {
+        Ok(version) => println!("Latest available version: {}", version),
+        Err(e) => println!("Skipping version check due to error: {e}"),
+    }
+
+    let download_url = ffmpeg_download_url().map_err(|e| e.to_string())?;
+    let destination = sidecar_dir().map_err(|e| e.to_string())?;
+
+    println!("Downloading from: {:?}", download_url);
+    let archive_path =
+        download_ffmpeg_package(download_url, &destination).map_err(|e| e.to_string())?;
+    println!("Downloaded package: {:?}", archive_path);
+
+    println!("Extracting...");
+    unpack_ffmpeg(&archive_path, &destination).map_err(|e| e.to_string())?;
+
+    let version = ffmpeg_version().map_err(|e| e.to_string())?;
+
+    println!("Done! Installed FFmpeg version {} 🏁", version);
+    Ok(())
+}
+
 fn on_recording_options_change(app: &AppHandle, options: &RecordingOptions) {
     match app.get_webview_window(camera::WINDOW_LABEL) {
         Some(window) if options.camera_label.is_none() => {
@@ -617,6 +653,12 @@ pub fn run() {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
+
+            if let Err(error) = handle_ffmpeg_installation() {
+                println!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now");
+                // TODO: UI message instead
+                panic!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now")
+            };
 
             app.manage(Arc::new(RwLock::new(App {
                 handle: app.handle().clone(),
