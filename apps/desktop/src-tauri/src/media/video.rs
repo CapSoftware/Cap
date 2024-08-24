@@ -28,7 +28,7 @@ pub struct VideoCapturer {
 impl VideoCapturer {
     pub const FPS: u32 = 30;
 
-    pub fn new(_width: usize, _height: usize, should_stop: SharedFlag) -> VideoCapturer {
+    pub fn new(_width: usize, _height: usize, resolution: Resolution, should_stop: SharedFlag) -> VideoCapturer {
         let mut capturer = Capturer::new(Options {
             fps: Self::FPS,
             target: None,
@@ -36,7 +36,7 @@ impl VideoCapturer {
             show_highlight: true,
             excluded_targets: None,
             output_type: FrameType::BGRAFrame,
-            output_resolution: Resolution::Captured,
+            output_resolution: resolution,
             crop_area: None,
         });
 
@@ -140,6 +140,7 @@ impl VideoCapturer {
                                             options_clone,
                                             screenshot_path.clone(),
                                             RecordingAssetType::ScreenCapture,
+                                            None
                                         ));
                                         match upload_task.await {
                                             Ok(result) => match result {

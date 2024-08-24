@@ -24,6 +24,16 @@ export interface Device {
   kind: DeviceKind;
 }
 
+export enum Resolution {
+  "480p" = "480p",
+  "720p" = "720p",
+  "1080p" = "1080p",
+  "1440p" = "1440p",
+  "2160p" = "2160p",
+  "4320p" = "4320p",
+  "Captured" = "Captured",
+}
+
 export interface MediaDeviceContextData {
   selectedVideoDevice: Device | null;
   setSelectedVideoDevice: React.Dispatch<React.SetStateAction<Device | null>>;
@@ -32,6 +42,9 @@ export interface MediaDeviceContextData {
   selectedAudioDevice: Device | null;
   setSelectedAudioDevice: React.Dispatch<React.SetStateAction<Device | null>>;
   lastSelectedAudioDevice: Device | null;
+
+  selectedResolution: Resolution;
+  setSelectedResolution: React.Dispatch<React.SetStateAction<Resolution>>;
 
   selectedDisplayType: "screen" | "window" | "area";
   setSelectedDisplayType: React.Dispatch<
@@ -58,6 +71,9 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   );
   const [selectedAudioDevice, setSelectedAudioDevice] = useState<Device | null>(
     null
+  );
+  const [selectedResolution, setSelectedResolution] = useState<Resolution>(
+    Resolution.Captured
   );
   const [selectedDisplayType, setSelectedDisplayType] = useState<
     "screen" | "window" | "area"
@@ -132,6 +148,17 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
     }
   }, []);
 
+  const updateSelectedResolution = (resolution: Resolution) => {
+    if (typeof window === "undefined") return;
+
+    setSelectedResolution(resolution);
+    localStorage.setItem("selected-resolution", resolution.toString());
+
+    if (window.fathom !== undefined) {
+      window.fathom.trackEvent("resolution_change");
+    }
+  };
+
   const updateSelectedDevice = (kind: DeviceKind, device: Device | null) => {
     if (!kind) {
       return;
@@ -168,10 +195,11 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
   };
 
   useEffect(() => {
-    let unlisten: any;
+    let unlistenDevice: any;
+    let unlistenResolution: any;
     const setup = async () => {
       try {
-        unlisten = await listen<{
+        unlistenDevice = await listen<{
           type: string;
           device: Device | null;
         }>("cap://av/set-device", (event) => {
@@ -180,16 +208,25 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
             event.payload.device
           );
         });
+
+        unlistenResolution = await listen<{
+          resolution: string;
+        }>("cap://av/set-resolution", (event) => {
+          updateSelectedResolution(
+            event.payload.resolution as unknown as Resolution
+          );
+        });
       } catch (error) {
-        console.error("Error setting up change-device listener:", error);
+        console.error("Error setting up listeners:", error);
       }
     };
 
     setup();
     return () => {
-      unlisten?.();
+      unlistenDevice?.();
+      unlistenResolution?.();
     };
-  });
+  }, []);
 
   return (
     <MediaDeviceContext.Provider
@@ -201,6 +238,8 @@ export const MediaDeviceProvider: React.FC<React.PropsWithChildren<{}>> = ({
         setSelectedAudioDevice,
         lastSelectedAudioDevice,
         selectedDisplayType,
+        selectedResolution,
+        setSelectedResolution,
         setSelectedDisplayType,
         devices,
         getDevices,

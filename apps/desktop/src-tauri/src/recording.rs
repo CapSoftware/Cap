@@ -1,7 +1,9 @@
 use futures::future::join_all;
+use scap::capturer::Resolution as ScapResolution;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -9,11 +11,14 @@ use std::sync::{
 use tauri::State;
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::Duration;
+use rand::Rng;
+use image::{DynamicImage, GenericImageView};
 
 use crate::app::config;
-use crate::upload::{upload_recording_asset, RecordingAssetType};
+use crate::upload::{get_video_duration, upload_recording_asset, RecordingAssetType};
 
 use crate::media::MediaRecorder;
+use crate::utils::ffmpeg_path_as_str;
 
 pub struct ActiveRecording {
     pub media_process: MediaRecorder,
@@ -43,6 +48,7 @@ pub struct RecordingOptions {
     pub audio_name: String,
     pub aws_region: String,
     pub aws_bucket: String,
+    pub video_resolution: String,
 }
 
 #[tauri::command]
@@ -130,7 +136,8 @@ pub async fn start_dual_recording(
 #[specta::specta]
 pub async fn stop_all_recordings(
     state: State<'_, Arc<Mutex<RecordingState>>>,
-) -> Result<(), String> {
+    is_validation_check: Option<bool>
+) -> Result<String, String> {
     let mut state = state.lock().await;
 
     let Some(mut active_recording) = state.active_recording.take() else {
@@ -145,13 +152,13 @@ pub async fn stop_all_recordings(
         .expect("Failed to stop media recording");
 
     tracing::info!("Uploading stream.m3u8");
-    upload_recording_asset(
+    let upload_result = upload_recording_asset(
         active_recording.recording_options,
         state.data_dir.join("recording/stream.m3u8"),
         RecordingAssetType::CombinedSourcePlaylist,
+        is_validation_check
     )
-    .await
-    .ok();
+    .await;
 
     active_recording.shutdown_flag.store(true, Ordering::SeqCst);
 
@@ -162,7 +169,7 @@ pub async fn stop_all_recordings(
 
     tracing::info!("All recordings and uploads stopped.");
 
-    Ok(())
+    upload_result
 }
 
 fn clean_and_create_dir(dir: &Path) -> Result<(), String> {
@@ -219,6 +226,7 @@ async fn hls_upload_loop(
                     options,
                     file.path().to_owned(),
                     RecordingAssetType::CombinedSourceSegment,
+                    None,
                 )
                 .await
                 .ok();
@@ -246,6 +254,16 @@ async fn prepare_media_recording(
     max_screen_height: usize,
 ) -> Result<MediaRecorder, String> {
     let mut media_recorder = MediaRecorder::new();
+    let video_resolution = match options.video_resolution.as_str() {
+        "480p" => ScapResolution::_480p,
+        "720p" => ScapResolution::_720p,
+        "1080p" => ScapResolution::_1080p,
+        "1440p" => ScapResolution::_1440p,
+        "2160p" => ScapResolution::_2160p,
+        "4320p" => ScapResolution::_4320p,
+        _ => ScapResolution::Captured,
+    };
+
     media_recorder
         .start_media_recording(
             options.clone(),
@@ -254,7 +272,86 @@ async fn prepare_media_recording(
             audio_name.as_ref().map(String::as_str),
             max_screen_width,
             max_screen_height,
+            video_resolution,
         )
         .await?;
     Ok(media_recorder)
+}
+
+pub async fn validate_video_segment(file_path: &Path, num_frames: usize) -> Result<bool, String> {
+    let ffmpeg_binary_path_str = match ffmpeg_path_as_str() {
+        Ok(path) => path.to_owned(),
+        Err(_) => return Ok(false),
+    };
+    let duration = match get_video_duration(file_path) {
+        Ok(d) => d,
+        Err(_) => return Ok(false),
+    };
+    let mut rng = rand::thread_rng();
+    let mut valid_frames = 0;
+
+    for _ in 0..num_frames {
+        let random_time = rng.gen_range(0.0..duration);
+        let temp_path = format!(
+            "{}/frame_{}.png",
+            file_path.parent().unwrap().to_str().unwrap(),
+            random_time.to_string()
+        );
+        let output = match Command::new(&ffmpeg_binary_path_str)
+            .args(&[
+                "-ss",
+                &random_time.to_string(),
+                "-i",
+                file_path.to_str().unwrap(),
+                "-vframes",
+                "1",
+                "-f",
+                "image2",
+                "-vcodec",
+                "png",
+                &temp_path,
+            ])
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return Ok(false),
+        };
+
+        if !output.status.success() {
+            eprintln!("FFmpeg error: {}", String::from_utf8_lossy(&output.stderr));
+            continue;
+        }
+
+        let img = match image::open(&temp_path) {
+            Ok(i) => i,
+            Err(_) => return Ok(false),
+        };
+
+        if is_frame_valid(&img) {
+            valid_frames += 1;
+        }
+        if let Err(_) = std::fs::remove_file(&temp_path) {
+            return Ok(false);
+        }
+    }
+
+    let validity_ratio = valid_frames as f32 / num_frames as f32;
+    Ok(validity_ratio >= 0.8) // Consider the segment valid if at least 80% of frames are valid
+}
+
+fn is_frame_valid(img: &DynamicImage) -> bool {
+    let (width, height) = img.dimensions();
+    let total_pixels = width * height;
+    let mut non_black_pixels = 0;
+
+    for pixel in img.pixels() {
+        let [r, g, b, _] = pixel.2 .0;
+        if r > 10 || g > 10 || b > 10 {
+            non_black_pixels += 1;
+        }
+    }
+
+    let non_black_ratio = non_black_pixels as f32 / total_pixels as f32;
+    println!("non_black_ratio: {}", non_black_ratio);
+    non_black_ratio > 0.05 // Consider the frame valid if more than 5% of pixels are non-black
 }

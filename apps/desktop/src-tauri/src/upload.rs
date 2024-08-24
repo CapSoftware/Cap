@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::str;
 
-use crate::recording::RecordingOptions;
+use crate::recording::{validate_video_segment, RecordingOptions};
 use crate::utils::ffmpeg_path_as_str;
 
 #[derive(serde::Serialize)]
@@ -52,7 +52,16 @@ pub async fn upload_recording_asset(
     options: RecordingOptions,
     file_path: PathBuf,
     file_type: RecordingAssetType,
+    is_validation_check: Option<bool>,
 ) -> Result<String, String> {
+    if is_validation_check.unwrap_or(false) {
+        let is_valid = validate_video_segment(&file_path, 10).await?;
+        if !is_valid {
+            return Err("ERR_INVALID_SEGMENT".to_string());
+        }
+        return Ok("VALID_SEGMENT".to_string());
+    }
+
     tracing::info!("Uploading recording asset {file_type}...");
 
     let file_name = file_path

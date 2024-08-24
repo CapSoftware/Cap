@@ -22,6 +22,16 @@
     "fs:allow-resource-read-recursive",
     "fs:default",
     "decorum:allow-show-snap-overlay",
-    "os:default"
+    "os:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "networkQuality",
+          "cmd": "networkQuality",
+          "args": [{ "validator": "\\S+" }]
+        }
+      ]
+    }
   ]
 }
