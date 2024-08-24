@@ -1,4 +1,5 @@
 import { Command } from "@tauri-apps/plugin-shell";
+import { Resolution } from "../recording/MediaDeviceContext";
 
 interface NetworkQualityResponse {
   base_rtt: number;
@@ -50,7 +51,7 @@ interface Proxy_state {
 export interface NetworkQualityDetails {
   quality: string;
   color: string;
-  resolution: string;
+  resolution: Resolution;
 }
 
 const NETWORK_SPEED_KEY = "networkSpeedMbps";
@@ -88,7 +89,7 @@ export const getNetworkQualityDetails = (
   uploadMbps: number | undefined
 ): NetworkQualityDetails => {
   if (uploadMbps === undefined) {
-    return { quality: "Checking", color: "bg-gray-300", resolution: "" };
+    return { quality: "Checking", color: "bg-gray-300", resolution: "Captured" };
   }
 
   const qualityLevels: [number, NetworkQualityDetails][] = [
@@ -101,7 +102,7 @@ export const getNetworkQualityDetails = (
     qualityLevels.find(([threshold]) => uploadMbps < threshold)?.[1] || {
       quality: "Excellent",
       color: "bg-blue-500",
-      resolution: "4320p",
+      resolution: "Captured",
     }
   );
 };

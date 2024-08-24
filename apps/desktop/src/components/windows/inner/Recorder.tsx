@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Device,
   DeviceKind,
@@ -30,9 +30,13 @@ import { commands } from "@/utils/commands";
 import toast, { Toaster } from "react-hot-toast";
 import { authFetch } from "@/utils/auth/helpers";
 import { NetworkQuality } from "./NetworkQuality";
-import { getNetworkQualityDetails, getUploadSpeed } from "@/utils/network/utils";
+import {
+  getNetworkQualityDetails,
+  getUploadSpeed,
+} from "@/utils/network/utils";
 import { setTrayStopIcon } from "@/utils/tray";
-
+import type { Resolution } from "@/utils/recording/MediaDeviceContext";
+import { ResolutionIcon } from "@/components/icons/Resolution";
 declare global {
   interface Window {
     fathom: any;
@@ -43,6 +47,7 @@ export const Recorder = () => {
   const {
     devices,
     selectedVideoDevice,
+    selectedResolution,
     lastSelectedVideoDevice,
     selectedAudioDevice,
     lastSelectedAudioDevice,
@@ -71,6 +76,11 @@ export const Recorder = () => {
       console.log("Failed to emit cap://av/set-device event:", error)
     );
 
+  const selectResolution = (resolution: Resolution) =>
+    emit("cap://av/set-resolution", { resolution }).catch((error) =>
+      console.log("Failed to emit cap://av/set-resolution event:", error)
+    );
+
   const createDeviceMenuOptions = (kind: DeviceKind) => [
     {
       value: "_",
@@ -83,6 +93,36 @@ export const Recorder = () => {
       .map(({ label }) => ({ value: label, label })),
   ];
 
+  const createResolutionMenuOptions = useCallback(() => {
+    const recommendedResolution = getNetworkQualityDetails(getUploadSpeed());
+
+    const resolutionOptions: Resolution[] = [
+      "480p",
+      "720p",
+      "1080p",
+      "2160p",
+      "1440p",
+      "4320p",
+      "Captured",
+    ];
+    const resolutions = resolutionOptions.map((resolution) => ({
+      value: resolution,
+      label:
+        resolution === "Captured"
+          ? resolution
+          : `${resolution}${
+              resolution === recommendedResolution.resolution
+                ? " (Recommended)"
+                : ""
+            }`,
+    }));
+
+    return [
+      { value: "_", label: "Select Resolution", disabled: true },
+      ...resolutions,
+    ];
+  }, [selectedResolution]);
+
   const handleSelectInputDevice = async (kind: DeviceKind, label: string) => {
     let device: Device | null = null;
     if (label !== "none")
@@ -91,6 +131,10 @@ export const Recorder = () => {
           (device) => device.kind === kind && device.label === label
         ) || null;
     selectDevice(kind, device);
+  };
+
+  const handleSelectResolution = (resolution: Resolution) => {
+    selectResolution(resolution);
   };
 
   const prepareVideoData = async () => {
@@ -166,7 +210,10 @@ export const Recorder = () => {
       console.log("Recording has already started.");
       return;
     }
-    console.log("Starting dual recording... with resolution:", videoData.video_resolution);
+    console.log(
+      "Starting dual recording... with resolution:",
+      videoData.video_resolution
+    );
     setIsRecording(true);
     setStartingRecording(false);
     setHasStartedRecording(true);
@@ -206,9 +253,6 @@ export const Recorder = () => {
     if (isRecording) return;
     try {
       setStartingRecording(true);
-      const uploadMbps = getUploadSpeed();
-      const { resolution } = getNetworkQualityDetails(uploadMbps);
-
       const videoDataBase =
         process.env.NEXT_PUBLIC_LOCAL_MODE &&
         process.env.NEXT_PUBLIC_LOCAL_MODE === "true"
@@ -221,7 +265,7 @@ export const Recorder = () => {
           : await prepareVideoData();
       const videoData = {
         ...videoDataBase,
-        video_resolution: resolution,
+        video_resolution: selectedResolution,
       };
       console.log("Video data :", videoData);
       if (videoData) {
