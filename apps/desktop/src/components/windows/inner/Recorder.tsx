@@ -93,36 +93,6 @@ export const Recorder = () => {
       .map(({ label }) => ({ value: label, label })),
   ];
 
-  const createResolutionMenuOptions = useCallback(() => {
-    const recommendedResolution = getNetworkQualityDetails(getUploadSpeed());
-
-    const resolutionOptions: Resolution[] = [
-      "480p",
-      "720p",
-      "1080p",
-      "2160p",
-      "1440p",
-      "4320p",
-      "Captured",
-    ];
-    const resolutions = resolutionOptions.map((resolution) => ({
-      value: resolution,
-      label:
-        resolution === "Captured"
-          ? resolution
-          : `${resolution}${
-              resolution === recommendedResolution.resolution
-                ? " (Recommended)"
-                : ""
-            }`,
-    }));
-
-    return [
-      { value: "_", label: "Select Resolution", disabled: true },
-      ...resolutions,
-    ];
-  }, [selectedResolution]);
-
   const handleSelectInputDevice = async (kind: DeviceKind, label: string) => {
     let device: Device | null = null;
     if (label !== "none")

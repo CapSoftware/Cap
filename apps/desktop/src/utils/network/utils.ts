@@ -89,20 +89,20 @@ export const getNetworkQualityDetails = (
   uploadMbps: number | undefined
 ): NetworkQualityDetails => {
   if (uploadMbps === undefined) {
-    return { quality: "Checking", color: "bg-gray-300", resolution: "Captured" };
+    return { quality: "Checking", color: "bg-gray-300", resolution: Resolution.Captured };
   }
-
+  // prettier-ignore
   const qualityLevels: [number, NetworkQualityDetails][] = [
-    [1, { quality: "Poor", color: "bg-red-500", resolution: "720p" }],
-    [5, { quality: "Fair", color: "bg-yellow-500", resolution: "720p" }],
-    [15, { quality: "Good", color: "bg-green-500", resolution: "1440p" }],
+    [1, { quality: "Poor", color: "bg-red-500", resolution: Resolution["720p"] }],
+    [5, { quality: "Fair", color: "bg-yellow-500", resolution: Resolution["720p"] }],
+    [15, { quality: "Good", color: "bg-green-500", resolution: Resolution["1440p"] }],
   ];
 
   return (
     qualityLevels.find(([threshold]) => uploadMbps < threshold)?.[1] || {
       quality: "Excellent",
       color: "bg-blue-500",
-      resolution: "Captured",
+      resolution: Resolution.Captured
     }
   );
 };
