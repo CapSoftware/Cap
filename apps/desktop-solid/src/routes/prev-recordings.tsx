@@ -36,7 +36,7 @@ export default function () {
 
   return (
     <div class="w-screen h-screen bg-transparent relative">
-      <div class="absolute left-0 bottom-0 flex flex-col-reverse pl-8 pb-8 gap-8">
+      <div class="absolute left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-8">
         <For each={recordings.data}>
           {(recording, i) => {
             const [ref, setRef] = createSignal<HTMLElement | null>(null);
@@ -112,7 +112,7 @@ export default function () {
                         setExiting(true);
                       }}
                     >
-                      <IconLucideEye class="w-[16px] h-[16px]" />
+                      <IconCapCircleX class="w-[16px] h-[16px]" />
                     </TooltipIconButton>
                     <TooltipIconButton
                       class="absolute left-3 bottom-3"
@@ -126,7 +126,7 @@ export default function () {
                         });
                       }}
                     >
-                      <IconLucidePencil class="size-4" />
+                      <IconCapEditor class="w-[16px] h-[16px]" />
                     </TooltipIconButton>
                     <TooltipIconButton
                       class="absolute right-3 top-3 z-20"
@@ -155,7 +155,7 @@ export default function () {
                         <IconLucideCheck class="w-[16px] h-[16px]" />
                       </Show>
                       <Show when={!isLoading() && !isSuccess()}>
-                        <IconLucideCopy class="w-[16px] h-[16px]" />
+                        <IconCapCopy class="w-[16px] h-[16px]" />
                       </Show>
                     </TooltipIconButton>
                     <TooltipIconButton
@@ -174,15 +174,7 @@ export default function () {
                         }
                       }}
                     >
-                      <Show when={isLoading()}>
-                        <IconLucideLoaderCircle class="w-[16px] h-[16px] animate-spin" />
-                      </Show>
-                      <Show when={isSuccess()}>
-                        <IconLucideCheck class="w-[16px] h-[16px]" />
-                      </Show>
-                      <Show when={!isLoading() && !isSuccess()}>
-                        <IconLucideCheck class="w-[16px] h-[16px]" />
-                      </Show>
+                      <IconCapUpload class="w-[16px] h-[16px]" />
                     </TooltipIconButton>
                     <IconButton
                       class="absolute inset-0 m-auto w-[65px] h-[32px] hover:bg-gray-300 text-[14px]"
