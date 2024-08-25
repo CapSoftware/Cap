@@ -35,7 +35,10 @@ declare global {
   const IconLucideCheck: typeof import('~icons/lucide/check.jsx')['default']
   const IconLucideCopy: typeof import('~icons/lucide/copy.jsx')['default']
   const IconLucideEye: typeof import('~icons/lucide/eye.jsx')['default']
+  const IconLucideLink: typeof import('~icons/lucide/link.jsx')['default']
   const IconLucideLoaderCircle: typeof import('~icons/lucide/loader-circle.jsx')['default']
   const IconLucidePencil: typeof import('~icons/lucide/pencil.jsx')['default']
+  const IconLucideSave: typeof import('~icons/lucide/save.jsx')['default']
   const IconLucideShare: typeof import('~icons/lucide/share.jsx')['default']
+  const IconLucideX: typeof import('~icons/lucide/x.jsx')['default']
 }

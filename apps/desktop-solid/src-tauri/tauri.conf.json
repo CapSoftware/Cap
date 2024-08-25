@@ -12,8 +12,15 @@
     "windows": [
       {
         "title": "desktop-solid",
-        "width": 800,
-        "height": 600
+        "width": 300,
+        "height": 320,
+        "decorations": false,
+        "resizable": false,
+        "maximized": false,
+        "shadow": true,
+        "transparent": true,
+        "acceptFirstMouse": true,
+        "windowEffects": { "effects": ["popover"], "radius": 15.0 }
       }
     ],
     "security": {

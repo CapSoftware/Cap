@@ -654,7 +654,7 @@ pub fn run() {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
-            if let Err(error) = handle_ffmpeg_installation() {
+            if let Err(_error) = handle_ffmpeg_installation() {
                 println!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now");
                 // TODO: UI message instead
                 panic!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now")

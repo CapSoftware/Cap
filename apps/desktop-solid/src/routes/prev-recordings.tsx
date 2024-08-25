@@ -14,7 +14,7 @@ import createPresence from "solid-presence";
 
 import { commands, events } from "../utils/tauri";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { Window } from "@tauri-apps/api/window";
+import Tooltip from "@corvu/tooltip";
 
 export default function () {
   const recordings = createQuery(() => ({
@@ -36,7 +36,7 @@ export default function () {
 
   return (
     <div class="w-screen h-screen bg-transparent relative">
-      <div class="absolute left-0 bottom-0 flex flex-col-reverse w-60 pl-8 pb-8 gap-8">
+      <div class="absolute left-0 bottom-0 flex flex-col-reverse pl-8 pb-8 gap-8">
         <For each={recordings.data}>
           {(recording, i) => {
             const [ref, setRef] = createSignal<HTMLElement | null>(null);
@@ -89,8 +89,9 @@ export default function () {
                   //     closingRecording = recording;
                   //   }
                   // }}
+
                   class={cx(
-                    "w-full h-36 rounded-xl overflow-hidden shadow border border-gray-100/20 relative flex flex-col items-center justify-center",
+                    "w-[300px] h-[172px] rounded-xl overflow-hidden shadow border border-gray-100/20 relative flex flex-col items-center justify-center border-[5px] border-gray-500 ring-[1px]ring-white shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
                     "transition-[transform,opacity] duration-300",
                     exiting()
                       ? "animate-out slide-out-to-left-32 fade-out"
@@ -102,12 +103,21 @@ export default function () {
                     alt="screenshot"
                     src={convertFileSrc(`${recording}/screenshots/display.jpg`)}
                   />
-                  <div class="w-full h-full absolute inset-0 transition-all opacity-0 hover:opacity-100 backdrop-blur hover:backdrop-blur bg-black/50 text-white p-4">
-                    <IconButton class="absolute left-3 top-3">
-                      <IconLucideEye class="size-4" />
-                    </IconButton>
-                    <IconButton
-                      class="absolute right-3 top-3"
+                  <div class="w-full h-full absolute inset-0 transition-all opacity-0 hover:opacity-100 backdrop-blur hover:backdrop-blur bg-gray-500/80 text-white p-4">
+                    <TooltipIconButton
+                      class="absolute left-3 top-3"
+                      tooltipText="Close"
+                      tooltipPlacement="right"
+                      onClick={() => {
+                        setExiting(true);
+                      }}
+                    >
+                      <IconLucideEye class="w-[16px] h-[16px]" />
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      class="absolute left-3 bottom-3"
+                      tooltipText="Edit"
+                      tooltipPlacement="right"
                       onClick={() => {
                         new WebviewWindow("editor", {
                           width: 1440,
@@ -117,13 +127,17 @@ export default function () {
                       }}
                     >
                       <IconLucidePencil class="size-4" />
-                    </IconButton>
-                    <IconButton
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      class="absolute right-3 top-3 z-20"
+                      tooltipText="Copy to Clipboard"
+                      tooltipPlacement="left"
                       onClick={async () => {
                         setIsLoading(true);
                         try {
                           await commands.copyRenderedVideoToClipboard(
-                            recording
+                            recording,
+                            "clipboard"
                           );
                           setIsLoading(false);
                           setIsSuccess(true);
@@ -133,20 +147,58 @@ export default function () {
                           window.alert("Failed to copy to clipboard");
                         }
                       }}
-                      class="absolute left-3 bottom-3 z-20"
                     >
                       <Show when={isLoading()}>
-                        <IconLucideLoaderCircle class="size-4 animate-spin" />
+                        <IconLucideLoaderCircle class="w-[16px] h-[16px] animate-spin" />
                       </Show>
                       <Show when={isSuccess()}>
-                        <IconLucideCheck class="size-4" />
+                        <IconLucideCheck class="w-[16px] h-[16px]" />
                       </Show>
                       <Show when={!isLoading() && !isSuccess()}>
-                        <IconLucideCopy class="size-4" />
+                        <IconLucideCopy class="w-[16px] h-[16px]" />
                       </Show>
-                    </IconButton>
-                    <IconButton class="absolute right-3 bottom-3">
-                      <IconLucideShare class="size-4" />
+                    </TooltipIconButton>
+                    <TooltipIconButton
+                      class="absolute right-3 bottom-3"
+                      tooltipText="Create Shareable Link"
+                      tooltipPlacement="left"
+                      onClick={async () => {
+                        setIsLoading(true);
+                        try {
+                          setIsLoading(false);
+                          setIsSuccess(true);
+                          setTimeout(() => setIsSuccess(false), 2000);
+                        } catch (error) {
+                          setIsLoading(false);
+                          window.alert("Failed to create shareable link");
+                        }
+                      }}
+                    >
+                      <Show when={isLoading()}>
+                        <IconLucideLoaderCircle class="w-[16px] h-[16px] animate-spin" />
+                      </Show>
+                      <Show when={isSuccess()}>
+                        <IconLucideCheck class="w-[16px] h-[16px]" />
+                      </Show>
+                      <Show when={!isLoading() && !isSuccess()}>
+                        <IconLucideCheck class="w-[16px] h-[16px]" />
+                      </Show>
+                    </TooltipIconButton>
+                    <IconButton
+                      class="absolute inset-0 m-auto w-[65px] h-[32px] hover:bg-gray-300 text-[14px]"
+                      onClick={async () => {
+                        setIsLoading(true);
+                        try {
+                          setIsLoading(false);
+                          setIsSuccess(true);
+                          setTimeout(() => setIsSuccess(false), 2000);
+                        } catch (error) {
+                          setIsLoading(false);
+                          window.alert("Failed to save recording");
+                        }
+                      }}
+                    >
+                      Save
                     </IconButton>
                   </div>
                 </div>
@@ -165,10 +217,48 @@ const IconButton = (props: ComponentProps<"button">) => {
       {...props}
       type="button"
       class={cx(
-        "p-2 bg-neutral-800 rounded-full text-neutral-300 text-sm",
+        "w-[28px] h-[28px] bg-gray-100 rounded-full text-neutral-300 text-[12px] flex items-center justify-center p-0 m-0 shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
         props.class
       )}
     />
+  );
+};
+
+const TooltipIconButton = (
+  props: ComponentProps<"button"> & {
+    tooltipText: string;
+    tooltipPlacement: string;
+  }
+) => {
+  return (
+    <Tooltip
+      placement={props.tooltipPlacement as "top" | "bottom" | "left" | "right"}
+      openDelay={0}
+      closeDelay={0}
+      hoverableContent={false}
+      floatingOptions={{
+        offset: 10,
+        flip: true,
+        shift: true,
+      }}
+    >
+      <Tooltip.Trigger as={IconButton} {...props}>
+        {props.children}
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content
+          class="p-2 font-medium"
+          style={{
+            "background-color": "rgba(255, 255, 255, 0.1)",
+            color: "white",
+            "border-radius": "8px",
+            "font-size": "12px",
+          }}
+        >
+          {props.tooltipText}
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip>
   );
 };
 
