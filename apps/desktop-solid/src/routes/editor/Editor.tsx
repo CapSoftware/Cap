@@ -16,6 +16,7 @@ import {
   type ParentProps,
   Show,
   Switch,
+  createEffect,
   createSignal,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
@@ -48,6 +49,7 @@ import {
 } from "../../utils/tauri";
 import { useParams, useSearchParams } from "@solidjs/router";
 import { unwrap } from "solid-js/store";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 export function Editor() {
   return (
@@ -58,14 +60,15 @@ export function Editor() {
 }
 
 function Inner() {
-  // const duation = 1.76;
+  const [params] = useSearchParams<{ path: string }>();
+  const duration = 15;
 
   // const [playback, setPlayback] = createSignal({
   //   playing: false,
   //   time: 0,
   // });
 
-  const [previewTime, setPreviewTime] = createSignal<number>(0);
+  const [previewTime, setPreviewTime] = createSignal<number>();
 
   // let displayRef: HTMLVideoElement;
 
@@ -83,6 +86,14 @@ function Inner() {
   // });
 
   let timelineRef: HTMLDivElement;
+  let videoRef: HTMLVideoElement;
+
+  createEffect(() => {
+    const time = previewTime();
+    if (time !== undefined) videoRef.currentTime = time;
+  });
+
+  let timelineWidth = 0;
 
   return (
     <div
@@ -104,17 +115,7 @@ function Inner() {
                 <EditorButton leftIcon={<IconCapRedo />}>Redo</EditorButton>
               </div>
             </div>
-            <div class="bg-gray-100 flex items-center justify-center flex-1 flex-row object-contain p-4">
-              <div
-                class="max-w-full max-h-full w-full bg-red-500"
-                style={{ "aspect-ratio": 16 / 9 }}
-              >
-                {/*<video
-                  ref={displayRef}
-                  src={convertFileSrc(`${params.path}/content/display.mp4`)}
-                />*/}
-              </div>
-            </div>
+            <div class="bg-gray-100 flex items-center justify-center flex-1 flex-row object-contain p-4" />
             <div class="flex flex-row items-center p-[0.75rem]">
               <div class="flex-1" />
               <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
@@ -137,32 +138,44 @@ function Inner() {
           </div>
           <SettingsSidebar />
         </div>
-        <div class="px-6 py-8 relative">
-          <div
-            class="w-px bg-red-500 absolute left-0 top-3 bottom-0 z-10"
-            style={{
-              transform: `translateX(calc(1.5rem + ${previewTime()}rem))`,
-            }}
-          >
-            <div class="size-2 bg-red-500 rounded-full -ml-1" />
+        <div class="px-[0.75rem] py-[2rem] relative">
+          <Show when={previewTime()}>
+            {(time) => (
+              <div
+                class="w-px bg-black-transparent-20 absolute left-5 top-4 bottom-0 z-10 pointer-events-none"
+                style={{
+                  transform: `translateX(${
+                    (time() / duration) * timelineWidth
+                  }px)`,
+                }}
+              >
+                <div class="size-2 bg-black-transparent-20 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
+              </div>
+            )}
+          </Show>
+          <div class="w-px bg-red-300 absolute left-5 top-4 bottom-0 z-10">
+            <div class="size-2 bg-red-300 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
           </div>
-          <div class="relative h-14 border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden -mx-3">
+          <div class="relative h-[3rem] border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden">
             <div class="bg-blue-300 w-[0.5rem]" />
             <div
               // biome-ignore lint/style/noNonNullAssertion: ref
               ref={timelineRef!}
               class="bg-blue-50 relative w-full h-full flex flex-row items-end justify-end px-[0.5rem] py-[0.25rem]"
               onMouseMove={(e) => {
-                setPreviewTime(
-                  (e.clientX - e.target.clientLeft) / e.target.clientWidth
-                );
+                const { left, width } = e.currentTarget.getBoundingClientRect();
+                timelineWidth = width;
+                setPreviewTime(duration * ((e.clientX - left) / width));
+              }}
+              onMouseLeave={() => {
+                setPreviewTime(undefined);
               }}
             >
               <span class="text-black-transparent-60 text-[0.625rem] font-[500]">
                 0:00
               </span>
               <span class="text-black-transparent-60 text-[0.625rem] font-[500] ml-auto">
-                8:32
+                {Math.floor(duration / 60)}:{Math.round(duration % 60)}
               </span>
             </div>
             <div class="bg-blue-300 w-[0.5rem]" />
