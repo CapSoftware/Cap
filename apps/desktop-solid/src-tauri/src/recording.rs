@@ -33,14 +33,16 @@ pub struct InProgressRecording {
 
 impl InProgressRecording {
     pub async fn stop(&mut self) {
+        self.ffmpeg_process.stop();
+
+        if let Err(e) = self.ffmpeg_process.wait() {
+            eprintln!("Failed to wait for ffmpeg process: {:?}", e);
+        }
+
         self.display.capture.stop();
         if let Some(camera) = &self.camera {
             camera.capture.stop();
         }
-
-        self.ffmpeg_process.stop();
-
-        self.ffmpeg_process.wait();
 
         // let render_options = RenderOptions {
         //     screen_recording_path: self.display.output_path.clone(),

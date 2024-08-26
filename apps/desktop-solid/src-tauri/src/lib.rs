@@ -351,40 +351,39 @@ async fn copy_rendered_video_to_clipboard(
 
 #[tauri::command]
 #[specta::specta]
-async fn get_screen_video_metadata(
+async fn get_video_metadata(
     app: AppHandle,
     video_id: String,
     state: MutableState<'_, App>,
 ) -> Result<(f64, f64), String> {
-    let screen_video_path = {
-        println!("Getting screen video metadata");
+    let video_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap()
+        .join("recordings")
+        .join(format!("{video_id}"));
 
-        let recordings_dir = app
-            .path()
-            .app_data_dir()
-            .unwrap()
-            .join("recordings")
-            .join(format!("{video_id}.cap"));
-        let screen_video_path = recordings_dir.join("content/display.mp4");
+    let screen_video_path = video_dir.join("content/display.mp4");
+    let output_video_path = video_dir.join("output/result.mp4");
 
-        println!("Screen video path: {:?}", screen_video_path);
-
+    let video_path = if output_video_path.exists() {
+        println!("Using output video path: {:?}", output_video_path);
+        output_video_path
+    } else {
+        println!("Using screen video path: {:?}", screen_video_path);
         if !screen_video_path.exists() {
             return Err(format!(
                 "Screen video does not exist: {:?}",
                 screen_video_path
             ));
         }
-
         screen_video_path
     };
 
-    let file = File::open(&screen_video_path).map_err(|e| {
+    let file = File::open(&video_path).map_err(|e| {
         println!("Failed to open video file: {}", e);
         format!("Failed to open video file: {}", e)
     })?;
-
-    println!("File opened successfully: {:?}", file);
 
     let size = (file
         .metadata()
@@ -398,7 +397,7 @@ async fn get_screen_video_metadata(
     println!("File size: {} MB", size);
 
     let reader = BufReader::new(file);
-    let file_size = screen_video_path
+    let file_size = video_path
         .metadata()
         .map_err(|e| {
             println!("Failed to get file metadata: {}", e);
@@ -406,19 +405,15 @@ async fn get_screen_video_metadata(
         })?
         .len();
 
-    println!("File size in bytes: {}", file_size);
-
     let mp4 = Mp4Reader::read_header(reader, file_size).map_err(|e| {
         println!("Failed to read MP4 header: {}", e);
         format!("Failed to read MP4 header: {}", e)
     })?;
 
-    println!("MP4 header read successfully: {:?}", mp4);
-
     let duration = mp4.duration().as_secs_f64();
 
-    println!("Video duration: {} seconds", duration);
-    println!("Video size: {} MB", size);
+    println!("Duration: {} seconds", duration);
+    println!("Size: {} MB", size);
 
     Ok((duration, size))
 }
@@ -631,7 +626,7 @@ pub fn run() {
             render_video,
             get_rendered_video,
             copy_rendered_video_to_clipboard,
-            get_screen_video_metadata
+            get_video_metadata
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

@@ -44,14 +44,31 @@ export default function () {
             const [exiting, setExiting] = createSignal(false);
             const [isLoading, setIsLoading] = createSignal(false);
             const [isSuccess, setIsSuccess] = createSignal(false);
+            const [metadata, setMetadata] = createSignal({
+              duration: 0,
+              size: 0,
+            });
 
             const { present } = createPresence({
               show: () => !exiting(),
               element: ref,
             });
 
-            commands.getScreenVideoMetadata(recording).then((metadata) => {
-              console.log(metadata);
+            createEffect(() => {
+              commands.getVideoMetadata(recording).then((result) => {
+                if (result.status === "ok") {
+                  const [duration, size] = result.data;
+                  console.log(
+                    `Metadata for ${recording}: duration=${duration}, size=${size}`
+                  );
+                  setMetadata({
+                    duration,
+                    size,
+                  });
+                } else {
+                  console.error(`Failed to get metadata: ${result.error}`);
+                }
+              });
             });
 
             createEffect(
@@ -91,7 +108,7 @@ export default function () {
                   // }}
 
                   class={cx(
-                    "w-[300px] h-[172px] rounded-xl overflow-hidden shadow border border-gray-100/20 relative flex flex-col items-center justify-center border-[5px] border-gray-500 ring-[1px]ring-white shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
+                    "w-[300px] h-[172px] rounded-xl overflow-hidden shadow border border-gray-100/20 relative flex flex-col items-center justify-center border-[5px] border-gray-500 ring-[1px]ring-white shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)] group transition-all",
                     "transition-[transform,opacity] duration-300",
                     exiting()
                       ? "animate-out slide-out-to-left-32 fade-out"
@@ -103,7 +120,7 @@ export default function () {
                     alt="screenshot"
                     src={convertFileSrc(`${recording}/screenshots/display.jpg`)}
                   />
-                  <div class="w-full h-full absolute inset-0 transition-all opacity-0 hover:opacity-100 backdrop-blur hover:backdrop-blur bg-gray-500/80 text-white p-4">
+                  <div class="w-full h-full absolute inset-0 transition-all opacity-0 group-hover:opacity-100 backdrop-blur group-hover:backdrop-blur bg-gray-500/80 text-white p-4">
                     <TooltipIconButton
                       class="absolute left-3 top-3"
                       tooltipText="Close"
@@ -192,6 +209,19 @@ export default function () {
                     >
                       Save
                     </IconButton>
+                  </div>
+                  <div
+                    style={{ color: "white", "font-size": "14px" }}
+                    class="absolute bottom-0 left-0 right-0 font-medium bg-gray-500/40 backdrop-blur p-2 flex justify-between items-center group-hover:opacity-0 pointer-events-none transition-all"
+                  >
+                    <p class="flex items-center">
+                      <IconCapCamera class="w-[20px] h-[20px] mr-1" />
+                      {Math.floor(metadata().duration / 60)}:
+                      {Math.floor(metadata().duration % 60)
+                        .toString()
+                        .padStart(2, "0")}
+                    </p>
+                    <p>{metadata().size.toFixed(2)} MB</p>
                   </div>
                 </div>
               </Show>
