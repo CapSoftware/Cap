@@ -214,12 +214,16 @@ function Header() {
           variant="secondary"
           size="md"
           onClick={async () => {
-            console.log({ path: params.path, project: unwrap(state) });
-            await commands.copyRenderedVideoToClipboard(
-              params.path!.split("/").at(-1).split(".")[0],
-              unwrap(state)
-            );
-            console.log("bruh");
+            if (params.path) {
+              const pathParts = params.path.split("/");
+              const fileName = pathParts.at(-1)?.split(".")[0];
+              if (fileName) {
+                await commands.copyRenderedVideoToClipboard(
+                  fileName,
+                  unwrap(state)
+                );
+              }
+            }
           }}
         >
           Render
