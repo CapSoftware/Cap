@@ -108,7 +108,7 @@ export default function () {
                   // }}
 
                   class={cx(
-                    "w-[300px] h-[172px] rounded-xl overflow-hidden shadow border border-gray-100/20 relative flex flex-col items-center justify-center border-[5px] border-gray-500 ring-[1px]ring-white shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)] group transition-all",
+                    "w-[250px] h-[150px] rounded-xl overflow-hidden shadow border border-gray-100/20 relative flex flex-col items-center justify-center border-[5px] border-gray-500 ring-[1px]ring-white shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)] group transition-all",
                     "transition-[transform,opacity] duration-300",
                     exiting()
                       ? "animate-out slide-out-to-left-32 fade-out"
@@ -212,7 +212,7 @@ export default function () {
                   </div>
                   <div
                     style={{ color: "white", "font-size": "14px" }}
-                    class="absolute bottom-0 left-0 right-0 font-medium bg-gray-500/40 backdrop-blur p-2 flex justify-between items-center group-hover:opacity-0 pointer-events-none transition-all"
+                    class="absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center group-hover:opacity-0 pointer-events-none transition-all"
                   >
                     <p class="flex items-center">
                       <IconCapCamera class="w-[20px] h-[20px] mr-1" />
