@@ -65,12 +65,26 @@ fn fs_main(
     @location(0) tex_coords: vec2<f32>,
     @builtin(position) clip_position: vec4<f32>
 ) -> @location(0) vec4<f32> {
+		let border_width = 20.0;
+
 		let origin = vec2<f32>(uniforms.x_offset, 0.0);
-		let size = uniforms.fb_size.xy;
+		let size = uniforms.fb_size.xy - border_width * 2;
+		let position = clip_position.xy - border_width;
 
-		var final_color = crop_texture(clip_position.xy , origin, size);
+		var final_color = crop_texture(position, origin, size);
 
-		final_color = round_corners(final_color, clip_position.xy, size);
+		final_color = round_corners(final_color, position, size);
+
+		let distance_from_center = abs(clip_position.xy - uniforms.fb_size.xy / 2);
+
+		if(distance_from_center.x > size.x / 2 && distance_from_center.x < uniforms.fb_size.x - uniforms.x_offset * 2
+			|| distance_from_center.y > size.y / 2 && distance_from_center.y < uniforms.fb_size.y
+		) {
+			let x_pc = clamp(1.0 - (distance_from_center.x - size.x / 2) / border_width, 0.0, 1.0);
+			let y_pc = clamp(1.0 - (distance_from_center.y - size.y / 2) / border_width, 0.0, 1.0);
+
+			final_color = vec4<f32>(0, 0, 0, 0.75 * x_pc * y_pc);
+		}
 
 		return final_color;
 }

@@ -13,15 +13,15 @@ async fn main() {
 
     project.camera.position.x = cap_project::CameraXPosition::Right;
     project.camera.position.y = cap_project::CameraYPosition::Top;
-    project.camera.rounding = 40;
+    project.camera.rounding = 0;
     project.camera.mirror = false;
 
     project.background.source = BackgroundSource::Gradient {
         from: [71, 133, 255],
         to: [255, 71, 102],
     };
-    project.background.rounding = 10;
-    project.background.padding = 10;
+    project.background.rounding = 0;
+    project.background.padding = 0;
 
     let meta: RecordingMeta = serde_json::from_str(
         &std::fs::read_to_string(project_path.join("recording-meta.json")).unwrap(),
