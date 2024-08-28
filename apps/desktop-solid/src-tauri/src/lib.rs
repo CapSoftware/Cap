@@ -257,7 +257,7 @@ async fn get_rendered_video(
         .app_data_dir()
         .unwrap()
         .join("recordings")
-        .join(format!("{video_id}.cap"));
+        .join(format!("{video_id}"));
 
     dbg!(&video_dir);
     if video_dir.exists() {

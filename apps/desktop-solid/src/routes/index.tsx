@@ -6,6 +6,15 @@ import { createOptionsQuery, createWindowsQuery } from "../utils/queries";
 import { commands, events } from "../utils/tauri";
 import Header from "../components/Header";
 
+import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
+import {
+  EditorButton,
+  MenuItemList,
+  PopperContent,
+  DropdownItem,
+  topLeftAnimateClasses,
+} from "./editor/ui";
+
 export default function () {
   const cameras = createCameras();
   const options = createOptionsQuery();
@@ -20,68 +29,121 @@ export default function () {
     commands.showPreviousRecordingsWindow();
   });
 
-  const screenInputFilePath =
-    "/Users/richie/Library/Application Support/so.cap.desktop-solid/recordings/ac2909e0-2f5e-45ff-95e3-8efb50a56a12.cap/content/display.mp4";
-  const webcamInputFilePath =
-    "/Users/richie/Library/Application Support/so.cap.desktop-solid/recordings/ac2909e0-2f5e-45ff-95e3-8efb50a56a12.cap/content/camera.mp4";
-
-  const settings = {
-    webcamSize: { width: 320, height: 240 },
-    webcamPosition: { x: 10, y: 10 },
-    webcamStyle: { borderRadius: 50, shadow: "rgba(0, 0, 0, 0.5)" },
-    videoOutputSize: { width: 1280, height: 720 },
-    videoBackground: "#000000",
-    videoPadding: 20,
-  };
-
-  async function testRender() {
-    try {
-      const outputFilePath = await commands.renderVideo({
-        screen_recording_path: screenInputFilePath,
-        webcam_recording_path: webcamInputFilePath,
-        webcam_size: [settings.webcamSize.width, settings.webcamSize.height],
-        webcam_position: [
-          settings.webcamPosition.x / 100,
-          settings.webcamPosition.y / 100,
-        ],
-        webcam_style: {
-          border_radius: settings.webcamStyle.borderRadius,
-          shadow_color: [0, 0, 0, 0.5],
-          shadow_blur: 5,
-          shadow_offset: [2, 2],
-        },
-        output_size: [
-          settings.videoOutputSize.width,
-          settings.videoOutputSize.height,
-        ],
-        background: { Color: [0, 0, 0, 1] },
-      });
-      console.log(`Video rendered successfully: ${outputFilePath}`);
-    } catch (error) {
-      console.error("Error rendering video:", error);
-    }
-  }
-
   commands.showPreviousRecordingsWindow();
 
   return (
     <>
       <Header />
       <div class="px-3">
-        <button
-          type="button"
-          onClick={() => commands.showPreviousRecordingsWindow()}
-        >
-          Open prev recordings window
-        </button>
         <Suspense fallback="LOADING">
           <Show when={options.data}>
             {(options) => (
               <>
                 <div class="max-w-64 space-y-4">
                   <div class="flex flex-col gap-1">
+                    <label>Capture</label>
+                    <div class="flex flex-row justify-between gap-1 border border-gray-200 rounded-[8px]">
+                      <button
+                        type="button"
+                        class={cx(
+                          "flex-1",
+                          "screen" === options().captureTarget
+                            ? "bg-neutral-200"
+                            : "bg-neutral-100"
+                        )}
+                        onClick={() =>
+                          commands.setRecordingOptions({
+                            ...options(),
+                            captureTarget: "screen",
+                          })
+                        }
+                      >
+                        Screen
+                      </button>
+                      <Show when={windows.data?.[0]}>
+                        {(window) => (
+                          <KDropdownMenu gutter={8}>
+                            <EditorButton<typeof KDropdownMenu.Trigger>
+                              as={KDropdownMenu.Trigger}
+                              class={cx(
+                                "flex-1",
+                                options().captureTarget !== "screen"
+                                  ? "bg-neutral-200"
+                                  : "bg-neutral-100"
+                              )}
+                            >
+                              Window
+                            </EditorButton>
+                            <KDropdownMenu.Portal>
+                              <PopperContent<typeof KDropdownMenu.Content>
+                                as={KDropdownMenu.Content}
+                                class={cx(
+                                  "w-72 max-h-56",
+                                  topLeftAnimateClasses
+                                )}
+                              >
+                                <MenuItemList<typeof KDropdownMenu.Group>
+                                  as={KDropdownMenu.Group}
+                                  class="flex-1 overflow-y-auto scrollbar-none"
+                                >
+                                  <For each={windows.data}>
+                                    {(window) => (
+                                      <DropdownItem
+                                        onSelect={() => {
+                                          commands.setRecordingOptions({
+                                            ...options(),
+                                            captureTarget: {
+                                              window: window.id,
+                                            },
+                                          });
+                                        }}
+                                      >
+                                        {window.name}
+                                      </DropdownItem>
+                                    )}
+                                  </For>
+                                </MenuItemList>
+                              </PopperContent>
+                            </KDropdownMenu.Portal>
+                          </KDropdownMenu>
+                        )}
+                      </Show>
+                    </div>
+                    <Show
+                      when={(() => {
+                        const captureTarget = options().captureTarget;
+                        if (captureTarget === "screen") return;
+
+                        return {
+                          windows: windows.data,
+                          windowId: captureTarget.window,
+                        };
+                      })()}
+                    >
+                      {(data) => (
+                        <select
+                          class="w-full"
+                          value={data().windowId}
+                          onChange={(e) => {
+                            const o = options();
+                            commands.setRecordingOptions({
+                              ...o,
+                              captureTarget: { window: Number(e.target.value) },
+                            });
+                          }}
+                        >
+                          <For each={data().windows}>
+                            {(window) => (
+                              <option value={window.id}>{window.name}</option>
+                            )}
+                          </For>
+                        </select>
+                      )}
+                    </Show>
+                  </div>
+                  <div class="flex flex-col gap-1">
                     <label>Camera</label>
-                    <div>
+                    <div class="relative">
                       <select
                         class="w-full"
                         value={camera()?.deviceId}
@@ -122,117 +184,31 @@ export default function () {
                       )}
                     </div>
                   </div>
-                  <div>
-                    <label>Capture</label>
-                    <div class="flex flex-row justify-between gap-1">
-                      <button
-                        type="button"
-                        class={cx(
-                          "flex-1",
-                          "screen" === options().captureTarget
-                            ? "bg-neutral-200"
-                            : "bg-neutral-100"
-                        )}
-                        onClick={() =>
-                          commands.setRecordingOptions({
-                            ...options(),
-                            captureTarget: "screen",
-                          })
-                        }
-                      >
-                        Screen
-                      </button>
-                      <Show when={windows.data?.[0]}>
-                        {(window) => (
-                          <button
-                            type="button"
-                            class={cx(
-                              "flex-1",
-                              options().captureTarget !== "screen"
-                                ? "bg-neutral-200"
-                                : "bg-neutral-100"
-                            )}
-                            onClick={() => {
-                              const captureTarget = options();
-                              if (
-                                typeof captureTarget === "object" &&
-                                "window" in captureTarget
-                              )
-                                return;
-
-                              commands.setRecordingOptions({
-                                ...options(),
-                                captureTarget: { window: window().id },
-                              });
-                            }}
-                          >
-                            Window
-                          </button>
-                        )}
-                      </Show>
+                  <div class="flex flex-col gap-1">
+                    <label>Microphone</label>
+                    <div class="flex items-center gap-2">
+                      <select class="w-full">
+                        <option>No Audio</option>
+                      </select>
+                      <button type="button">Off</button>
                     </div>
-                    <Show
-                      when={(() => {
-                        const captureTarget = options().captureTarget;
-                        if (captureTarget === "screen") return;
-
-                        return {
-                          windows: windows.data,
-                          windowId: captureTarget.window,
-                        };
-                      })()}
-                    >
-                      {(data) => (
-                        <select
-                          class="w-full"
-                          value={data().windowId}
-                          onChange={(e) => {
-                            const o = options();
-                            commands.setRecordingOptions({
-                              ...o,
-                              captureTarget: { window: Number(e.target.value) },
-                            });
-                          }}
-                        >
-                          <For each={data().windows}>
-                            {(window) => (
-                              <option value={window.id}>{window.name}</option>
-                            )}
-                          </For>
-                        </select>
-                      )}
-                    </Show>
                   </div>
-                  {
-                    <div>
-                      {!isRecording() ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            commands
-                              .startRecording()
-                              .then(() => setIsRecording(true))
-                          }
-                        >
-                          Start Recording
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            commands
-                              .stopRecording()
-                              .then(() => setIsRecording(false))
-                          }
-                        >
-                          Stop Recording
-                        </button>
-                      )}
-                      <button type="button" onClick={testRender}>
-                        Test Render
-                      </button>
-                    </div>
-                  }
+                  <div class="flex flex-col gap-1">
+                    <button
+                      type="button"
+                      class="bg-blue-500 text-white py-2 rounded"
+                      onClick={() =>
+                        commands
+                          .startRecording()
+                          .then(() => setIsRecording(true))
+                      }
+                    >
+                      Start Recording
+                    </button>
+                    <button type="button" class="text-blue-500">
+                      Open Cap on Web
+                    </button>
+                  </div>
                 </div>
               </>
             )}
