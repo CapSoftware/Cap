@@ -1,15 +1,11 @@
 mod camera;
 mod display;
-mod ffmpeg;
 mod macos;
-mod project;
 mod recording;
-mod utils;
-mod video_renderer;
 
+use cap_project::ProjectConfiguration;
 use mp4::Mp4Reader;
 use objc2_app_kit::NSScreenSaverWindowLevel;
-use project::ProjectConfiguration;
 use recording::{DisplaySource, InProgressRecording};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -26,9 +22,9 @@ use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
 use tokio::{sync::RwLock, time::sleep};
 
-use crate::utils::ffmpeg_path_as_str;
-use crate::video_renderer::{render_video, RenderOptions};
 use camera::{create_camera_window, get_cameras};
+use cap_ffmpeg::ffmpeg_path_as_str;
+use cap_rendering::RenderOptions;
 use display::{get_capture_windows, Bounds, CaptureTarget};
 
 use ffmpeg_sidecar::{
@@ -270,9 +266,7 @@ async fn get_rendered_video(
         if output_path.exists() {
             Ok(output_path)
         } else {
-            use recording::recording_meta::*;
-
-            let meta: RecordingMeta = serde_json::from_str(
+            let meta: cap_project::RecordingMeta = serde_json::from_str(
                 &std::fs::read_to_string(video_dir.join("recording-meta.json")).unwrap(),
             )
             .unwrap();
@@ -283,7 +277,8 @@ async fn get_rendered_video(
                 output_path: output_path.clone(),
                 screen_recording_path: video_dir.join("content/display.mp4"),
                 webcam_recording_path: video_dir.join("content/camera.mp4"),
-                webcam_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or((0, 0)),
+                screen_size: (meta.display.width, meta.display.height),
+                camera_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or((0, 0)),
                 // webcam_style: WebcamStyle {
                 //     border_radius: 10.0,
                 //     shadow_color: [0.0, 0.0, 0.0, 0.5],
@@ -291,7 +286,6 @@ async fn get_rendered_video(
                 //     shadow_offset: (2.0, 2.0),
                 // },
                 output_size: (meta.display.width, meta.display.height),
-                // background: Background::Color([0.0, 0.0, 0.0, 1.0]),
             };
             render_video(render_options, project).await?;
 
@@ -604,6 +598,15 @@ fn on_recording_options_change(app: &AppHandle, options: &RecordingOptions) {
 fn focus_captures_panel(app: AppHandle) {
     let panel = app.get_webview_panel(PREV_RECORDINGS_WINDOW).unwrap();
     panel.make_key_window();
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn render_video(
+    options: RenderOptions,
+    project: ProjectConfiguration,
+) -> Result<PathBuf, String> {
+    cap_rendering::render_video(options, project).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

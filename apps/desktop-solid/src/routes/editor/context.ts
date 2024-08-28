@@ -32,8 +32,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
         // source: { type: "color", value: [255, 0, ] },
         source: {
           type: "gradient",
-          from: [/*71, 133, */ 0, 0, 255],
-          to: [255, 0, 0 /*71, 102*/],
+          from: [71, 133, 255],
+          to: [255, 71, 102],
         },
         blur: 0,
         padding: 10,

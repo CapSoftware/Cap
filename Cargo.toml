@@ -1,3 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["apps/desktop/src-tauri", "apps/desktop-solid/src-tauri"]
+members = [
+	"apps/desktop/src-tauri",
+	"apps/desktop-solid/src-tauri",
+	"crates/rendering",
+	"crates/ffmpeg",
+	"crates/utils",
+	"crates/project",
+]

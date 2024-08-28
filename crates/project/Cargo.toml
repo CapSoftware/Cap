@@ -1,0 +1,8 @@
+[package]
+name = "cap-project"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+specta = { version = "=2.0.0-rc.19", features = ["derive"] }
+serde = { version = "1.0.209", features = ["derive"] }

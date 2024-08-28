@@ -644,7 +644,7 @@ dependencies = [
  "cpal",
  "dirs",
  "dotenvy_macro",
- "ffmpeg-sidecar",
+ "ffmpeg-sidecar 1.1.0 (git+https://github.com/CapSoftware/ffmpeg-sidecar?branch=main)",
  "fix-path-env",
  "futures",
  "image 0.24.9",
@@ -680,6 +680,46 @@ dependencies = [
  "which",
  "winapi",
  "winit",
+]
+
+[[package]]
+name = "cap-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cap-utils",
+ "ffmpeg-sidecar 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "cap-project"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "specta",
+]
+
+[[package]]
+name = "cap-rendering"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "cap-ffmpeg",
+ "cap-project",
+ "futures-intrusive",
+ "nix 0.29.0",
+ "serde",
+ "serde_json",
+ "specta",
+ "tokio",
+ "wgpu",
+]
+
+[[package]]
+name = "cap-utils"
+version = "0.1.0"
+dependencies = [
+ "nix 0.29.0",
 ]
 
 [[package]]
@@ -1419,10 +1459,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "cap-ffmpeg",
+ "cap-project",
+ "cap-rendering",
+ "cap-utils",
  "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
- "ffmpeg-sidecar",
+ "ffmpeg-sidecar 1.1.0 (git+https://github.com/CapSoftware/ffmpeg-sidecar?branch=main)",
  "futures-intrusive",
  "image 0.25.2",
  "mp4",
@@ -1690,6 +1734,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f9bfee30e4dedf0ab8b422f03af778d9612b63f502710fc500a334ebe2de645"
 dependencies = [
  "simd-adler32",
+]
+
+[[package]]
+name = "ffmpeg-sidecar"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bec830aba6cd3da7621c58e8f06727e3b750e8383bcd934d789f2b9c3c4ea595"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]
@@ -5272,9 +5325,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.208"
+version = "1.0.209"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cff085d2cb684faa248efb494c39b68e522822ac0de72ccf08109abde717cfb2"
+checksum = "99fce0ffe7310761ca6bf9faf5115afbc19688edd00171d81b1bb1b116c63e09"
 dependencies = [
  "serde_derive",
 ]
@@ -5292,9 +5345,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.208"
+version = "1.0.209"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24008e81ff7613ed8e5ba0cfaf24e2c2f1e5b8a0495711e44fcd4882fca62bcf"
+checksum = "a5831b979fd7b5439637af1752d535ff49f4860c0f341d1baeb6faf0f4242170"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5314,9 +5367,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.125"
+version = "1.0.127"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83c8e735a073ccf5be70aa8066aa984eaf2fa000db6c8d0100ae605b366d31ed"
+checksum = "8043c06d9f82bd7271361ed64f415fe5e12a77fdb52e573e7f06a516dea329ad"
 dependencies = [
  "itoa 1.0.11",
  "memchr",

@@ -1,22 +1,26 @@
+mod utils;
+pub use utils::*;
+
 use std::{
     ffi::OsString,
-    io::{ Read, Write },
+    io::{Read, Write},
     ops::Deref,
     path::PathBuf,
-    process::{ Child, ChildStdin, Command, Stdio },
-    sync::{ atomic::{ AtomicBool, Ordering }, Arc },
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
-    download::{ check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg },
+    download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
     paths::sidecar_dir,
     version::ffmpeg_version,
 };
 
-use std::io;
-
-use crate::utils::{ create_named_pipe, ffmpeg_path_as_str };
+use cap_utils::create_named_pipe;
 
 pub struct FFmpegProcess {
     pub ffmpeg_stdin: ChildStdin,
@@ -25,14 +29,11 @@ pub struct FFmpegProcess {
 
 impl FFmpegProcess {
     pub fn spawn(mut command: Command) -> Self {
-        let mut cmd = command
-            .stdin(Stdio::piped())
-            .spawn()
-            .unwrap_or_else(|e| {
-                println!("Failed to start FFmpeg: {}", e);
-                println!("Command: {:?}", command);
-                panic!("Failed to start FFmpeg");
-            });
+        let mut cmd = command.stdin(Stdio::piped()).spawn().unwrap_or_else(|e| {
+            println!("Failed to start FFmpeg: {}", e);
+            println!("Command: {:?}", command);
+            panic!("Failed to start FFmpeg");
+        });
 
         let ffmpeg_stdin = cmd.stdin.take().unwrap_or_else(|| {
             println!("Failed to capture FFmpeg stdin");
@@ -61,7 +62,7 @@ impl FFmpegProcess {
 
     pub fn wait_with_timeout(
         &mut self,
-        timeout: std::time::Duration
+        timeout: std::time::Duration,
     ) -> std::io::Result<Option<std::process::ExitStatus>> {
         let start = std::time::Instant::now();
         while start.elapsed() < timeout {
@@ -77,7 +78,7 @@ impl FFmpegProcess {
 
     pub fn read_video_frame(
         &mut self,
-        frame_size: usize
+        frame_size: usize,
     ) -> Result<Option<Vec<u8>>, std::io::Error> {
         let mut buffer = vec![0u8; frame_size];
         match self.cmd.stdout.as_mut().unwrap().read_exact(&mut buffer) {
@@ -95,12 +96,10 @@ impl FFmpegProcess {
         while !remaining.is_empty() {
             match self.ffmpeg_stdin.write(remaining) {
                 Ok(0) => {
-                    return Err(
-                        std::io::Error::new(
-                            std::io::ErrorKind::WriteZero,
-                            "Failed to write data to FFmpeg"
-                        )
-                    );
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "Failed to write data to FFmpeg",
+                    ));
                 }
                 Ok(n) => {
                     remaining = &remaining[n..];
@@ -246,7 +245,12 @@ impl FFmpeg {
 
     pub fn add_output(&mut self, output: FFmpegOutput) {
         match output {
-            FFmpegOutput::File { path, codec, preset, crf } => {
+            FFmpegOutput::File {
+                path,
+                codec,
+                preset,
+                crf,
+            } => {
                 self.command
                     .arg("-i")
                     .arg("pipe:0")
@@ -255,7 +259,11 @@ impl FFmpeg {
                     .args(&["-crf", &crf.to_string()])
                     .arg(path);
             }
-            FFmpegOutput::RawVideo { format, width, height } => {
+            FFmpegOutput::RawVideo {
+                format,
+                width,
+                height,
+            } => {
                 self.command
                     .arg("-i")
                     .arg("pipe:0")
@@ -284,9 +292,8 @@ pub fn handle_ffmpeg_installation() -> Result<(), String> {
     let download_url = ffmpeg_download_url().map_err(|e| e.to_string())?;
     let destination = sidecar_dir().map_err(|e| e.to_string())?;
 
-    let archive_path = download_ffmpeg_package(download_url, &destination).map_err(|e|
-        e.to_string()
-    )?;
+    let archive_path =
+        download_ffmpeg_package(download_url, &destination).map_err(|e| e.to_string())?;
 
     unpack_ffmpeg(&archive_path, &destination).map_err(|e| e.to_string())?;
 

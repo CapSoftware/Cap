@@ -88,10 +88,10 @@ function Inner() {
   let timelineRef: HTMLDivElement;
   let videoRef: HTMLVideoElement;
 
-  createEffect(() => {
-    const time = previewTime();
-    if (time !== undefined) videoRef.currentTime = time;
-  });
+  // createEffect(() => {
+  //   const time = previewTime();
+  //   if (time !== undefined) videoRef.currentTime = time;
+  // });
 
   let timelineWidth = 0;
 

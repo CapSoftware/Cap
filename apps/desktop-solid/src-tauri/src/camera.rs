@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 
 use tauri::{AppHandle, Manager, WebviewUrl};
 
-use crate::ffmpeg::NamedPipeCapture;
+use cap_ffmpeg::NamedPipeCapture;
 
 pub const WINDOW_LABEL: &str = "camera";
 const CAMERA_ROUTE: &str = "/camera";

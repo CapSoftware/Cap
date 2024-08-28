@@ -8,7 +8,8 @@ use scap::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::{ffmpeg::NamedPipeCapture, macos};
+use crate::macos;
+use cap_ffmpeg::NamedPipeCapture;
 
 #[derive(Type, Serialize, Deserialize, Debug, Clone)]
 pub struct Bounds {

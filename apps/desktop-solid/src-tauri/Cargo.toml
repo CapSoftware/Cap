@@ -48,3 +48,8 @@ anyhow = "1.0.86"
 cocoa = "0.26.0"
 objc = "0.2.7"
 mp4 = "0.14.0"
+
+cap-utils = { path = "../../../crates/utils" }
+cap-project = { path = "../../../crates/project" }
+cap-rendering = { path = "../../../crates/rendering" }
+cap-ffmpeg = { path = "../../../crates/ffmpeg" }

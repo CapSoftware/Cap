@@ -1,15 +1,15 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use specta::Type;
 use std::path::PathBuf;
 
 use crate::{
     camera,
     display::{self, get_window_bounds, CaptureTarget},
-    ffmpeg::*,
     Bounds, RecordingOptions,
 };
 
-use crate::video_renderer::RenderOptions;
+use cap_ffmpeg::*;
+use cap_rendering::RenderOptions;
 
 #[derive(Clone, Type, Serialize)]
 #[serde(rename_all = "camelCase", tag = "variant")]
@@ -89,7 +89,7 @@ pub async fn start(
 
     let ffmpeg_process = ffmpeg.start();
 
-    use recording_meta::*;
+    use cap_project::*;
     let meta = RecordingMeta {
         display: Display {
             width: display.input.width,
@@ -216,27 +216,5 @@ async fn start_display_recording(
         input: ffmpeg_input,
         capture,
         output_path,
-    }
-}
-
-pub mod recording_meta {
-    use super::*;
-
-    #[derive(Serialize, Deserialize, Debug)]
-    pub struct Display {
-        pub width: u32,
-        pub height: u32,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    pub struct Camera {
-        pub width: u32,
-        pub height: u32,
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    pub struct RecordingMeta {
-        pub display: Display,
-        pub camera: Option<Camera>,
     }
 }

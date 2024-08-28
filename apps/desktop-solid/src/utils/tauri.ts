@@ -155,7 +155,7 @@ export type JsonValue<T> = [T]
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
 export type RecordingOptionsChanged = null
-export type RenderOptions = { output_path: string; screen_recording_path: string; webcam_recording_path: string; webcam_size: [number, number]; output_size: [number, number] }
+export type RenderOptions = { output_path: string; screen_recording_path: string; webcam_recording_path: string; camera_size: [number, number]; screen_size: [number, number]; output_size: [number, number] }
 export type ShowCapturesPanel = null
 
 /** tauri-specta globals **/
