@@ -28,7 +28,7 @@ export default [
   }),
   Unfonts({
     fontsource: {
-      families: [{ name: "Geist Sans", weights: [500, 700] }],
+      families: [{ name: "Geist Sans", weights: [400, 500, 700] }],
     },
   }),
 ];

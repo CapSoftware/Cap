@@ -18,7 +18,7 @@ import {
 export function Field(props: ParentProps<{ name: string; icon: JSX.Element }>) {
   return (
     <div class="flex flex-col gap-[0.75rem]">
-      <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 text-[0.875rem] font-[500]">
+      <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 text-[0.875rem]">
         {props.icon}
         {props.name}
       </span>
@@ -37,7 +37,7 @@ export function Subfield(
         props.class
       )}
     >
-      <span class="font-medium">
+      <span>
         {props.name}
         {props.required && <span class="text-blue-500 ml-px">*</span>}
       </span>
@@ -148,8 +148,8 @@ export function MenuItem<T extends ValidComponent = "button">(
       {...props}
       class={cx(
         props.class,
-        "flex flex-row shrink-0 items-center gap-[0.375rem] px-[0.675rem] h-[2rem] rounded-[0.5rem] outline-none",
-        "text-[0.875rem] font-[500] text-gray-400 disabled:text-gray-400 ui-highlighted:bg-gray-100 ui-highlighted:text-gray-500"
+        "flex flex-row shrink-0 items-center gap-[0.375rem] px-[0.675rem] h-[2rem] rounded-[0.5rem] outline-none text-nowrap overflow-hidden text-ellipsis w-full max-w-full",
+        "text-[0.875rem] text-gray-400 disabled:text-gray-400 ui-highlighted:bg-gray-100 ui-highlighted:text-gray-500"
       )}
     />
   );
@@ -187,7 +187,7 @@ export function MenuItemList<T extends ValidComponent = "div">(
 
 const editorButtonStyles = cva(
   [
-    "group flex flex-row items-center px-[0.375rem] gap-[0.375rem] h-[2rem] rounded-[0.5rem] font-[500] text-[0.875rem]",
+    "group flex flex-row items-center px-[0.375rem] gap-[0.375rem] h-[2rem] rounded-[0.5rem] text-[0.875rem]",
     "focus-visible:outline outline-2 outline-offset-2 transition-colors duration-100",
   ],
   {
@@ -246,7 +246,10 @@ export function EditorButton<T extends ValidComponent = "button">(
 }
 
 export const dropdownContainerClasses =
-  "flex flex-col rounded-[0.75rem] border border-gray-200 bg-gray-50 shadow-s overflow-y-hidden outline-none";
+  "z-10 flex flex-col rounded-[0.75rem] border border-gray-200 bg-gray-50 shadow-s overflow-y-hidden outline-none";
 
 export const topLeftAnimateClasses =
   "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-left";
+
+export const topRightAnimateClasses =
+  "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-right";

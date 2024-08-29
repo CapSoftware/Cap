@@ -97,7 +97,7 @@ function Inner() {
 
   return (
     <div
-      class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg"
+      class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg leading-5"
       data-tauri-drag-region
     >
       <Header />
@@ -171,10 +171,10 @@ function Inner() {
                 setPreviewTime(undefined);
               }}
             >
-              <span class="text-black-transparent-60 text-[0.625rem] font-[500]">
+              <span class="text-black-transparent-60 text-[0.625rem]">
                 0:00
               </span>
-              <span class="text-black-transparent-60 text-[0.625rem] font-[500] ml-auto">
+              <span class="text-black-transparent-60 text-[0.625rem] ml-auto">
                 {Math.floor(duration / 60)}:{Math.round(duration % 60)}
               </span>
             </div>
@@ -196,7 +196,7 @@ function Header() {
       class="flex flex-row justify-between items-center"
       data-tauri-drag-region
     >
-      <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem] font-[500]">
+      <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]">
         <div class="flex flex-row items-center gap-[0.375rem]">
           <div class="size-[1.5rem] rounded-[0.25rem] bg-gray-500 bg-black" />
           <span>Adria Studio Workspace</span>
@@ -243,7 +243,7 @@ function ShareButton() {
       class="rounded-full h-[2rem] px-[1rem] flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100"
       type="button"
     >
-      <span class="font-[500] text-[0.875rem] text-gray-500">
+      <span class="text-[0.875rem] text-gray-500">
         cap.link/z2ha3dv61q5hrde
       </span>
     </button>
@@ -300,7 +300,7 @@ function SettingsSidebar() {
           <div class="bg-gray-100 w-full h-full" />
         </KTabs.Indicator>
       </KTabs.List>
-      <div class="p-[0.75rem] overflow-y-auto text-[0.875rem] font-[500]">
+      <div class="p-[0.75rem] overflow-y-auto text-[0.875rem]">
         <KTabs.Content value="background" class="flex flex-col gap-[1.5rem]">
           <Field name="Background" icon={<IconCapImage />}>
             <KTabs

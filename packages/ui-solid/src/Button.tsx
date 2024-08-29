@@ -18,10 +18,10 @@ const styles = cva(
           "bg-red-300 text-gray-50 hover:bg-red-400 disabled:bg-red-200 outline-red-300",
       },
       size: {
-        xs: "font-[500] text-[0.75rem] px-[0.5rem] h-[1.25rem] ",
-        sm: "font-[500] text-[0.875rem] px-[0.75rem] h-[1.75rem]",
-        md: "font-[500] text-[0.875rem] px-[1rem] h-[2rem]",
-        lg: "font-[500] text-[0.875rem] px-[1rem] h-[2.25rem]",
+        xs: "font-[400] text-[0.75rem] px-[0.5rem] h-[1.25rem] ",
+        sm: "font-[400] text-[0.875rem] px-[0.75rem] h-[1.75rem]",
+        md: "font-[400] text-[0.875rem] px-[1rem] h-[2rem]",
+        lg: "font-[400] text-[0.875rem] px-[1rem] h-[2.25rem]",
       },
     },
   }

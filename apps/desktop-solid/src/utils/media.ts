@@ -32,7 +32,7 @@ export function createCameras() {
     commands.getCameras()
   );
 
-  createTimer(refetch, 5 * 1000, setInterval);
+  // createTimer(refetch, 5 * 1000, setInterval);
   createEffect(on(devices, refetch));
 
   return () => {
