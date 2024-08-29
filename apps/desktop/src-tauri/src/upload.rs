@@ -1,6 +1,5 @@
 use core::fmt;
 use regex::Regex;
-use reqwest;
 use serde_json::Value as JsonValue;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

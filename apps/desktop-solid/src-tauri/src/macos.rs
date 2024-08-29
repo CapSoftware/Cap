@@ -157,7 +157,7 @@ pub fn get_on_screen_windows() -> Vec<Window> {
                 continue;
             }
 
-            if level == 0 && name != "" {
+            if level == 0 && !name.is_empty() {
                 array.push(Window {
                     name,
                     owner_name,

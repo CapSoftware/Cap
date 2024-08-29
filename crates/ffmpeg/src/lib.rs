@@ -124,7 +124,7 @@ pub struct NamedPipeCapture {
 
 impl NamedPipeCapture {
     pub fn new(path: &PathBuf) -> (Self, Arc<AtomicBool>) {
-        create_named_pipe(&path).unwrap();
+        create_named_pipe(path).unwrap();
 
         let stop = Arc::new(AtomicBool::new(false));
 
@@ -190,7 +190,7 @@ impl ApplyFFmpegArgs for FFmpegRawVideoInput {
         let size = format!("{}x{}", self.width, self.height);
 
         command
-            .args(&["-f", "rawvideo", "-pix_fmt", self.pix_fmt])
+            .args(["-f", "rawvideo", "-pix_fmt", self.pix_fmt])
             .args(["-s", &size])
             .args(["-r", &self.fps.to_string()])
             .args(["-thread_queue_size", "4096", "-i"])
@@ -219,6 +219,12 @@ impl ApplyFFmpegArgs for FFmpegRawAudioSource {
 pub struct FFmpeg {
     pub command: Command,
     source_index: u8,
+}
+
+impl Default for FFmpeg {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FFmpeg {
@@ -254,9 +260,9 @@ impl FFmpeg {
                 self.command
                     .arg("-i")
                     .arg("pipe:0")
-                    .args(&["-c:v", &codec])
-                    .args(&["-preset", &preset])
-                    .args(&["-crf", &crf.to_string()])
+                    .args(["-c:v", &codec])
+                    .args(["-preset", &preset])
+                    .args(["-crf", &crf.to_string()])
                     .arg(path);
             }
             FFmpegOutput::RawVideo {
@@ -267,8 +273,8 @@ impl FFmpeg {
                 self.command
                     .arg("-i")
                     .arg("pipe:0")
-                    .args(&["-f", &format])
-                    .args(&["-s", &format!("{}x{}", width, height)])
+                    .args(["-f", &format])
+                    .args(["-s", &format!("{}x{}", width, height)])
                     .arg("pipe:1");
             }
         }

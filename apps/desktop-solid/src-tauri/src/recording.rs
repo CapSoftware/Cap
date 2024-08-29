@@ -9,7 +9,6 @@ use crate::{
 };
 
 use cap_ffmpeg::*;
-use cap_rendering::RenderOptions;
 
 #[derive(Clone, Type, Serialize)]
 #[serde(rename_all = "camelCase", tag = "variant")]

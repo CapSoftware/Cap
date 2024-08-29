@@ -258,7 +258,7 @@ async fn get_rendered_video(
         .app_data_dir()
         .unwrap()
         .join("recordings")
-        .join(format!("{video_id}"));
+        .join(&video_id);
 
     dbg!(&video_dir);
     if video_dir.exists() {
@@ -466,7 +466,7 @@ async fn get_video_metadata(
         .app_data_dir()
         .unwrap()
         .join("recordings")
-        .join(format!("{video_id}"));
+        .join(&video_id);
 
     let screen_video_path = video_dir.join("content/display.mp4");
     let output_video_path = video_dir.join("output/result.mp4");

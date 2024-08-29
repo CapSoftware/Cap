@@ -251,7 +251,7 @@ async fn prepare_media_recording(
             options.clone(),
             screenshot_dir,
             recording_dir,
-            audio_name.as_ref().map(String::as_str),
+            audio_name.as_deref(),
             max_screen_width,
             max_screen_height,
         )

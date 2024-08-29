@@ -114,7 +114,7 @@ impl AudioCapturer {
             tracing::info!("Audio capturing stopped.");
             Ok(())
         } else {
-            return Err("Original recording was not started".to_string());
+            Err("Original recording was not started".to_string())
         }
     }
 
@@ -166,7 +166,7 @@ impl AudioCapturer {
                     let mut first_frame_time_guard = start_time.try_lock();
 
                     let sample_size = std::mem::size_of::<T>();
-                    let mut bytes = vec![0; data.len() * sample_size];
+                    let mut bytes = vec![0; std::mem::size_of_val(data)];
                     let size = bytes.len();
                     for (dest, source) in bytes.chunks_exact_mut(sample_size).zip(data.iter()) {
                         dest.copy_from_slice(source.to_le_bytes().as_ref());

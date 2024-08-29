@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use wgpu::util::DeviceExt;
-use wgpu::{TextureView, COPY_BYTES_PER_ROW_ALIGNMENT};
+use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use cap_ffmpeg::{ffmpeg_path_as_str, FFmpeg, FFmpegRawVideoInput};
 use cap_project::{BackgroundSource, CameraXPosition, CameraYPosition, ProjectConfiguration};
@@ -102,7 +102,7 @@ pub async fn render_video_to_file(
     let (tx_image_data, rx_image_data) = mpsc::channel::<Vec<u8>>();
 
     let output_folder = output_path.parent().unwrap();
-    std::fs::create_dir_all(&output_folder)
+    std::fs::create_dir_all(output_folder)
         .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
     let output_path_clone = output_path.clone();
 
@@ -301,7 +301,7 @@ pub async fn render_video_to_channel(
 
     let mut screen_command = Command::new(&ffmpeg_binary_path_str);
     screen_command
-        .args(&[
+        .args([
             "-i",
             options.screen_recording_path.to_str().unwrap(),
             "-f",
@@ -349,7 +349,7 @@ pub async fn render_video_to_channel(
     println!("Setting up FFmpeg input for webcam recording...");
     let mut webcam_command = Command::new(&ffmpeg_binary_path_str);
     webcam_command
-        .args(&[
+        .args([
             "-i",
             options.webcam_recording_path.to_str().unwrap(),
             "-f",
@@ -459,7 +459,7 @@ pub async fn render_video_to_channel(
 
     render_handle.await.map_err(|e| e.to_string())??;
 
-    let _ = render_rx
+    render_rx
         .recv()
         .map_err(|e| format!("Render channel error: {:?}", e))?;
 
@@ -528,7 +528,7 @@ impl RenderVideoConstants {
         );
 
         // Calculate the aligned bytes per row
-        let align = COPY_BYTES_PER_ROW_ALIGNMENT as u32;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
         let unpadded_bytes_per_row = options.output_size.0 * 4;
         let padding = (align - (unpadded_bytes_per_row % align)) % align;
         let padded_bytes_per_row = unpadded_bytes_per_row + padding;
@@ -636,10 +636,10 @@ async fn produce_frame(
         &screen_texture_view,
         &render_frame.render_pipeline,
         render_frame::bind_group(
-            &device,
-            &queue,
+            device,
+            queue,
             &render_frame.bind_group_layout,
-            &screen_uniforms_buffer,
+            screen_uniforms_buffer,
             options.screen_size,
             screen_frame,
         ),
@@ -650,10 +650,10 @@ async fn produce_frame(
         &webcam_texture_view,
         &render_frame.render_pipeline,
         render_frame::bind_group(
-            &device,
-            &queue,
+            device,
+            queue,
             &render_frame.bind_group_layout,
-            &camera_uniforms_buffer,
+            camera_uniforms_buffer,
             options.camera_size,
             camera_frame,
         ),
@@ -661,14 +661,14 @@ async fn produce_frame(
 
     do_render_pass(
         &mut encoder,
-        &output_texture_view,
+        output_texture_view,
         &composite.render_pipeline,
         composite::bind_group(
-            &device,
+            device,
             &composite.bind_group_layout,
             &screen_texture_view,
             &webcam_texture_view,
-            &composite_uniforms_buffer,
+            composite_uniforms_buffer,
         ),
     );
 
@@ -689,7 +689,7 @@ async fn produce_frame(
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::ImageCopyBuffer {
-                buffer: &output_buffer,
+                buffer: output_buffer,
                 layout: wgpu::ImageDataLayout {
                     offset: 0,
                     bytes_per_row: Some(*padded_bytes_per_row),
@@ -872,9 +872,9 @@ struct Composite {
 
 impl Composite {
     pub fn new(device: &wgpu::Device) -> Self {
-        let bind_group_layout = composite::bind_group_layout(&device);
+        let bind_group_layout = composite::bind_group_layout(device);
         let render_pipeline =
-            create_shader_render_pipeline(&device, &bind_group_layout, composite::SHADER);
+            create_shader_render_pipeline(device, &bind_group_layout, composite::SHADER);
 
         Self {
             bind_group_layout,
@@ -890,9 +890,9 @@ struct RenderFrame {
 
 impl RenderFrame {
     pub fn new(device: &wgpu::Device) -> Self {
-        let bind_group_layout = render_frame::bind_group_layout(&device);
+        let bind_group_layout = render_frame::bind_group_layout(device);
         let render_pipeline =
-            create_shader_render_pipeline(&device, &bind_group_layout, render_frame::SHADER);
+            create_shader_render_pipeline(device, &bind_group_layout, render_frame::SHADER);
 
         Self {
             bind_group_layout,
@@ -1027,7 +1027,7 @@ fn do_render_pass(
         &(wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &output_view,
+                view: output_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -1040,7 +1040,7 @@ fn do_render_pass(
         }),
     );
 
-    render_pass.set_pipeline(&render_pipeline);
+    render_pass.set_pipeline(render_pipeline);
     render_pass.set_bind_group(0, &bind_group, &[]);
     render_pass.draw(0..3, 0..1);
 }
@@ -1066,7 +1066,7 @@ fn create_shader_render_pipeline(
         layout: Some(&device.create_pipeline_layout(
             &(wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&bind_group_layout],
+                bind_group_layouts: &[bind_group_layout],
                 push_constant_ranges: &[],
             }),
         )),
