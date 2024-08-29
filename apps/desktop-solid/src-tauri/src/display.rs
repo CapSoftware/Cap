@@ -26,10 +26,10 @@ pub struct CaptureWindow {
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", tag = "type")]
 pub enum CaptureTarget {
     Screen,
-    Window(u32),
+    Window { id: u32 },
 }
 
 #[tauri::command]
@@ -67,7 +67,7 @@ pub fn start_capturing(
     dbg!(capture_target);
     let mut capturer = {
         let crop_area = match capture_target {
-            CaptureTarget::Window(window_number) => {
+            CaptureTarget::Window { id: window_number } => {
                 get_window_bounds(*window_number).map(|bounds| Area {
                     size: Size {
                         width: bounds.width,

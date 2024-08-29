@@ -113,7 +113,7 @@ pub async fn start(
         display,
         display_source: match recording_options.capture_target {
             CaptureTarget::Screen => DisplaySource::Screen,
-            CaptureTarget::Window(window_number) => DisplaySource::Window {
+            CaptureTarget::Window { id: window_number } => DisplaySource::Window {
                 bounds: get_window_bounds(window_number).unwrap(),
             },
         },

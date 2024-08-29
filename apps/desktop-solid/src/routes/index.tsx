@@ -44,17 +44,6 @@ export default function () {
 
   commands.showPreviousRecordingsWindow();
 
-  const [display, setDisplay] = createSignal<
-    { type: "Screen" } | { type: "Window"; window: number }
-  >({ type: "Screen" });
-
-  createEffect(() => console.log(display()));
-  const selectedWindow = createMemo(() => {
-    const d = display();
-    if (d.type !== "Window") return;
-    return (windows.data ?? []).find((data) => data.id === d.window);
-  });
-
   return (
     <div class="rounded-[1.5rem]">
       <Header />
@@ -64,6 +53,12 @@ export default function () {
             {(options) => {
               const [windowSelectOpen, setWindowSelectOpen] =
                 createSignal(false);
+
+              const selectedWindow = createMemo(() => {
+                const d = options().captureTarget;
+                if (d.type !== "window") return;
+                return (windows.data ?? []).find((data) => data.id === d.id);
+              });
 
               return (
                 <>
@@ -76,7 +71,11 @@ export default function () {
                     open={windowSelectOpen()}
                     onOpenChange={(o) => {
                       // prevents tab onChange from interfering with dropdown trigger click
-                      if (o === false && display().type === "Screen") return;
+                      if (
+                        o === false &&
+                        options().captureTarget.type === "screen"
+                      )
+                        return;
                       setWindowSelectOpen(o);
                     }}
                     itemComponent={(props) => (
@@ -85,32 +84,42 @@ export default function () {
                         item={props.item}
                       >
                         <KSelect.ItemLabel class="flex-1">
-                          {props.item.rawValue.name}
+                          {props.item.rawValue?.name}
                         </KSelect.ItemLabel>
                       </MenuItem>
                     )}
                     value={selectedWindow() ?? null}
                     onChange={(d) => {
                       if (!d) return;
-                      setDisplay({ type: "Window", window: d.id });
+                      commands.setRecordingOptions({
+                        ...options(),
+                        captureTarget: { type: "window", id: d.id },
+                      });
+                      setWindowSelectOpen(false);
                     }}
                     placement="top-end"
                   >
                     <SwitchTab
-                      value={display().type}
+                      value={options().captureTarget.type}
+                      disabled={isRecording()}
                       onChange={(s) => {
-                        if (display().type === s) return;
-                        if (s === "Screen") setDisplay({ type: "Screen" });
-                        else if (s === "Window") setWindowSelectOpen(true);
+                        console.log({ s });
+                        if (options().captureTarget.type === s) return;
+                        if (s === "screen")
+                          commands.setRecordingOptions({
+                            ...options(),
+                            captureTarget: { type: "screen" },
+                          });
+                        else if (s === "window") setWindowSelectOpen(true);
                       }}
                     >
                       <SwitchTab.List>
-                        <SwitchTab.Trigger value="Screen">
+                        <SwitchTab.Trigger value="screen">
                           Screen
                         </SwitchTab.Trigger>
                         <SwitchTab.Trigger<ValidComponent>
                           as={(p) => <KSelect.Trigger<ValidComponent> {...p} />}
-                          value="Window"
+                          value="window"
                           class="w-full text-nowrap overflow-hidden px-2 group"
                         >
                           <KSelect.Value<CaptureWindow> class="flex flex-row items-center justify-center">
@@ -145,7 +154,16 @@ export default function () {
                       options={cameras()}
                       optionValue="deviceId"
                       optionTextValue="label"
-                      value={cameras()[0]}
+                      placeholder="No Camera"
+                      value={camera()}
+                      disabled={isRecording()}
+                      onChange={(d) => {
+                        if (!d) return;
+                        commands.setRecordingOptions({
+                          ...options(),
+                          cameraLabel: d.label,
+                        });
+                      }}
                       itemComponent={(props) => (
                         <MenuItem<typeof KSelect.Item>
                           as={KSelect.Item}
@@ -157,24 +175,36 @@ export default function () {
                         </MenuItem>
                       )}
                     >
-                      <KSelect.Trigger class="h-[2rem] px-[0.375rem] flex flex-row gap-[0.375rem] border rounded-lg border-gray-200 w-full items-center">
+                      <KSelect.Trigger class="h-[2rem] px-[0.375rem] flex flex-row gap-[0.375rem] border rounded-lg border-gray-200 w-full items-center disabled:text-gray-400 transition-colors">
                         <IconCapCamera class="text-gray-400 size-[1.25rem]" />
-                        <KSelect.Value<MediaDeviceInfo> class="flex-1 text-left">
+                        <KSelect.Value<MediaDeviceInfo> class="flex-1 text-left truncate">
                           {(state) => <>{state.selectedOption().label}</>}
                         </KSelect.Value>
                         <button
                           type="button"
-                          class="px-[0.375rem] bg-blue-50 text-blue-300 rounded-full text-[0.75rem]"
+                          class={cx(
+                            "px-[0.375rem] rounded-full text-[0.75rem]",
+                            camera()
+                              ? "bg-blue-50 text-blue-300"
+                              : "bg-red-50 text-red-300"
+                          )}
                           onPointerDown={(e) => {
+                            if (!camera()) return;
                             e.stopPropagation();
                             e.preventDefault();
                           }}
                           onClick={(e) => {
+                            if (!camera()) return;
                             e.stopPropagation();
                             e.preventDefault();
+
+                            commands.setRecordingOptions({
+                              ...options(),
+                              cameraLabel: null,
+                            });
                           }}
                         >
-                          On
+                          {camera() ? "On" : "Off"}
                         </button>
                       </KSelect.Trigger>
                       <KSelect.Portal>
@@ -196,6 +226,7 @@ export default function () {
                       optionValue="deviceId"
                       optionTextValue="label"
                       placeholder="No Audio"
+                      disabled={isRecording()}
                       itemComponent={(props) => (
                         <MenuItem<typeof KSelect.Item>
                           as={KSelect.Item}
@@ -207,7 +238,7 @@ export default function () {
                         </MenuItem>
                       )}
                     >
-                      <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full">
+                      <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors">
                         <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
                         <KSelect.Value<MediaDeviceInfo> class="flex-1 text-left">
                           {(state) => (
@@ -219,14 +250,26 @@ export default function () {
                         </KSelect.Value>
                         <button
                           type="button"
-                          class="px-[0.375rem] bg-red-50 text-red-300 rounded-full text-[0.75rem]"
+                          class={cx(
+                            "px-[0.375rem] rounded-full text-[0.75rem]",
+                            false
+                              ? "bg-blue-50 text-blue-300"
+                              : "bg-red-50 text-red-300"
+                          )}
                           onPointerDown={(e) => {
+                            if (!camera()) return;
                             e.stopPropagation();
                             e.preventDefault();
                           }}
                           onClick={(e) => {
+                            if (!camera()) return;
                             e.stopPropagation();
                             e.preventDefault();
+
+                            commands.setRecordingOptions({
+                              ...options(),
+                              cameraLabel: null,
+                            });
                           }}
                         >
                           Off
@@ -262,13 +305,20 @@ export default function () {
                     </KSelect>
                   </div>
                   <Button
-                    variant="primary"
+                    variant={isRecording() ? "destructive" : "primary"}
                     size="md"
-                    onClick={() =>
-                      commands.startRecording().then(() => setIsRecording(true))
-                    }
+                    onClick={() => {
+                      if (!isRecording())
+                        commands
+                          .startRecording()
+                          .then(() => setIsRecording(true));
+                      else
+                        commands
+                          .stopRecording()
+                          .then(() => setIsRecording(false));
+                    }}
                   >
-                    Start Recording
+                    {isRecording() ? "Stop Recording" : "Start Recording"}
                   </Button>
                   <button type="button" class="text-gray-400 text-[0.875rem]">
                     Open Cap on Web
