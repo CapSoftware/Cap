@@ -20,7 +20,6 @@ use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RenderOptions {
-    pub output_path: PathBuf,
     pub screen_recording_path: PathBuf,
     pub webcam_recording_path: PathBuf,
     pub camera_size: (u32, u32),
@@ -95,10 +94,69 @@ impl<T> From<UV<T>> for [T; 2] {
     }
 }
 
-pub async fn render_video(
+pub async fn render_video_to_file(
     options: RenderOptions,
     project: ProjectConfiguration,
+    output_path: PathBuf,
 ) -> Result<PathBuf, String> {
+    let (tx_image_data, rx_image_data) = mpsc::channel::<Vec<u8>>();
+
+    let output_folder = output_path.parent().unwrap();
+    std::fs::create_dir_all(&output_folder)
+        .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
+    let output_path_clone = output_path.clone();
+
+    thread::spawn(move || {
+        println!("Starting FFmpeg output process...");
+        let mut ffmpeg = FFmpeg::new();
+        let ffmpeg_input = ffmpeg.add_input(FFmpegRawVideoInput {
+            width: options.output_size.0,
+            height: options.output_size.1,
+            fps: 30,
+            pix_fmt: "rgba",
+            input: "pipe:0".into(),
+        });
+
+        ffmpeg
+            .command
+            .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
+            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
+            .arg("-y")
+            .arg(&output_path_clone);
+
+        let mut ffmpeg_process = ffmpeg.start();
+
+        loop {
+            match rx_image_data.recv() {
+                Ok(frame) => {
+                    // println!("Sending image data to FFmpeg");
+                    if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
+                        eprintln!("Error writing video frame: {:?}", e);
+                        break;
+                    }
+                }
+                Err(_) => {
+                    println!("All frames sent to FFmpeg");
+                    break;
+                }
+            }
+        }
+
+        println!("Stopping FFmpeg process...");
+        ffmpeg_process.stop();
+    });
+
+    render_video_to_channel(options, project, tx_image_data).await?;
+
+    Ok(output_path)
+}
+
+pub async fn render_video_to_channel(
+    options: RenderOptions,
+    project: ProjectConfiguration,
+    sender: mpsc::Sender<Vec<u8>>,
+) -> Result<(), String> {
     println!("Initializing wgpu...");
 
     println!(
@@ -275,57 +333,9 @@ pub async fn render_video(
     let screen_frame_size = (options.screen_size.0 * options.screen_size.1 * 4) as usize;
     let webcam_frame_size = (options.camera_size.0 * options.camera_size.1 * 4) as usize;
 
-    let (tx_image_data, rx_image_data) = mpsc::channel::<Vec<u8>>();
     let (screen_tx, mut screen_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     let (webcam_tx, mut webcam_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     let (render_tx, render_rx) = mpsc::channel();
-
-    let output_path = options.output_path;
-    let output_folder = output_path.parent().unwrap();
-    std::fs::create_dir_all(&output_folder)
-        .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
-    let output_path_clone = output_path.clone();
-
-    thread::spawn(move || {
-        println!("Starting FFmpeg output process...");
-        let mut ffmpeg = FFmpeg::new();
-        let ffmpeg_input = ffmpeg.add_input(FFmpegRawVideoInput {
-            width: options.output_size.0,
-            height: options.output_size.1,
-            fps: 30,
-            pix_fmt: "rgba",
-            input: "pipe:0".into(),
-        });
-
-        ffmpeg
-            .command
-            .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
-            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
-            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-            .arg("-y")
-            .arg(&output_path_clone);
-
-        let mut ffmpeg_process = ffmpeg.start();
-
-        loop {
-            match rx_image_data.recv() {
-                Ok(frame) => {
-                    // println!("Sending image data to FFmpeg");
-                    if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
-                        eprintln!("Error writing video frame: {:?}", e);
-                        break;
-                    }
-                }
-                Err(_) => {
-                    println!("All frames sent to FFmpeg");
-                    break;
-                }
-            }
-        }
-
-        println!("Stopping FFmpeg process...");
-        ffmpeg_process.stop();
-    });
 
     let mut screen_command = Command::new(&ffmpeg_binary_path_str);
     screen_command
@@ -606,7 +616,12 @@ pub async fn render_video(
                         image_data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
                     }
 
-                    if tx_image_data.send(image_data).is_err() {
+                    // println!(
+                    //     "sending frame to channel. width {width}, height {height}, bytes {}",
+                    //     image_data.len()
+                    // );
+
+                    if sender.send(image_data).is_err() {
                         eprintln!("Failed to send processed frame to FFmpeg");
                         break 'render_loop;
                     }
@@ -662,7 +677,7 @@ pub async fn render_video(
         total_time.as_secs_f32()
     );
 
-    Ok(output_path)
+    Ok(())
 }
 
 mod render_frame {

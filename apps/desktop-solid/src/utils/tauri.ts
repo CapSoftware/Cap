@@ -84,14 +84,6 @@ async getCurrentRecording() : Promise<Result<JsonValue<InProgressRecording | nul
     else return { status: "error", error: e  as any };
 }
 },
-async renderVideo(options: RenderOptions, project: ProjectConfiguration) : Promise<Result<string, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("render_video", { options, project }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_rendered_video", { videoId, project }) };
@@ -111,6 +103,14 @@ async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguratio
 async getVideoMetadata(videoId: string) : Promise<Result<[number, number], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_video_metadata", { videoId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async renderVideoToChannel(videoId: string, project: ProjectConfiguration) : Promise<Result<number, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("render_video_to_channel", { videoId, project }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -155,7 +155,6 @@ export type JsonValue<T> = [T]
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
 export type RecordingOptionsChanged = null
-export type RenderOptions = { output_path: string; screen_recording_path: string; webcam_recording_path: string; camera_size: [number, number]; screen_size: [number, number]; output_size: [number, number] }
 export type ShowCapturesPanel = null
 
 /** tauri-specta globals **/

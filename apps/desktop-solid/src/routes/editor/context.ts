@@ -56,6 +56,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       "background" | "camera" | "transcript" | "audio" | "cursor" | "hotkeys"
     >("camera");
 
+    const [canvasRef, setCanvasRef] = createSignal<HTMLCanvasElement | null>(
+      null
+    );
+
     return {
       dialog,
       setDialog,
@@ -63,6 +67,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       setState,
       selectedTab,
       setSelectedTab,
+      canvasRef,
+      setCanvasRef,
     };
     // biome-ignore lint/style/noNonNullAssertion: context
   },

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta};
-use cap_rendering::render_video;
+use cap_rendering::render_video_to_file;
 
 #[tokio::main]
 async fn main() {
@@ -28,9 +28,8 @@ async fn main() {
     )
     .unwrap();
 
-    render_video(
+    render_video_to_file(
         cap_rendering::RenderOptions {
-            output_path: project_path.join("output/result.mp4"),
             screen_recording_path: project_path.join("content/display.mp4"),
             webcam_recording_path: project_path.join("content/camera.mp4"),
             camera_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or_default(),
@@ -38,6 +37,7 @@ async fn main() {
             output_size: (1920, 1080),
         },
         project,
+        project_path.join("output/result.mp4"),
     )
     .await
     .ok();

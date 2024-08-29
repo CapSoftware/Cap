@@ -12,6 +12,7 @@ use serde_json::json;
 use specta::Type;
 use std::fs::File;
 use std::io::BufReader;
+use std::sync::mpsc::Receiver;
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
@@ -24,7 +25,7 @@ use tokio::{sync::RwLock, time::sleep};
 
 use camera::{create_camera_window, get_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
-use cap_rendering::RenderOptions;
+use cap_rendering::{render_video_to_file, RenderOptions};
 use display::{get_capture_windows, Bounds, CaptureTarget};
 
 use ffmpeg_sidecar::{
@@ -274,7 +275,6 @@ async fn get_rendered_video(
             dbg!(&meta);
 
             let render_options = RenderOptions {
-                output_path: output_path.clone(),
                 screen_recording_path: video_dir.join("content/display.mp4"),
                 webcam_recording_path: video_dir.join("content/camera.mp4"),
                 screen_size: (meta.display.width, meta.display.height),
@@ -287,13 +287,124 @@ async fn get_rendered_video(
                 // },
                 output_size: (meta.display.width, meta.display.height),
             };
-            render_video(render_options, project).await?;
+            render_video_to_file(render_options, project, output_path.clone()).await?;
 
             Ok(output_path)
         }
     } else {
         Err(format!("Video directory does not exist: {:?}", video_dir))
     }
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn render_video_to_channel(
+    app: AppHandle,
+    video_id: String,
+    project: ProjectConfiguration,
+) -> Result<u16, String> {
+    let video_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap()
+        .join("recordings")
+        .join(format!("{video_id}.cap"));
+
+    if !video_dir.exists() {
+        println!("Video path {} not found!", video_dir.display());
+        return Err(format!("Video path {} not found!", video_dir.display()));
+    }
+
+    let meta: cap_project::RecordingMeta = serde_json::from_str(
+        &std::fs::read_to_string(video_dir.join("recording-meta.json")).unwrap(),
+    )
+    .unwrap();
+
+    const OUTPUT_SIZE: (u32, u32) = (1920, 1080);
+
+    let render_options = RenderOptions {
+        screen_recording_path: video_dir.join("content/display.mp4"),
+        webcam_recording_path: video_dir.join("content/camera.mp4"),
+        screen_size: (meta.display.width, meta.display.height),
+        camera_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or((0, 0)),
+        // webcam_style: WebcamStyle {
+        //     border_radius: 10.0,
+        //     shadow_color: [0.0, 0.0, 0.0, 0.5],
+        //     shadow_blur: 5.0,
+        //     shadow_offset: (2.0, 2.0),
+        // },
+        output_size: OUTPUT_SIZE,
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    let port = {
+        use axum::{
+            extract::{
+                ws::{Message, WebSocket, WebSocketUpgrade},
+                State,
+            },
+            response::IntoResponse,
+            routing::get,
+        };
+        use tokio::sync::Mutex;
+
+        type RouterState = Arc<Mutex<Option<Receiver<Vec<u8>>>>>;
+
+        async fn ws_handler(
+            ws: WebSocketUpgrade,
+            State(rx): State<RouterState>,
+        ) -> impl IntoResponse {
+            let rx = rx.lock().await.take().unwrap();
+            ws.on_upgrade(move |socket| handle_socket(socket, rx))
+        }
+
+        async fn handle_socket(mut socket: WebSocket, rx: Receiver<Vec<u8>>) {
+            println!("socket connection established");
+            // let mut i = 0;
+            let now = std::time::Instant::now();
+            while let Ok(chunk) = rx.recv() {
+                let now = std::time::Instant::now();
+
+                // let img = image::DynamicImage::ImageRgba8(
+                //     image::ImageBuffer::from_raw(OUTPUT_SIZE.0, OUTPUT_SIZE.1, chunk).unwrap(),
+                // );
+
+                // let mut buf: Vec<u8> = Vec::new();
+                // let encoder = image::codecs::jpeg::JpegEncoder::new(&mut buf);
+                // img.to_rgb8().write_with_encoder(encoder).unwrap();
+
+                // let elapsed = now.elapsed();
+                // println!("Encoded image to jpeg: {elapsed:.2?}");
+
+                socket.send(Message::Binary(chunk)).await.unwrap();
+            }
+            let elapsed = now.elapsed();
+            println!("Sent frames in {elapsed:.2?}");
+        }
+
+        let router = axum::Router::new()
+            .route("/frames-ws", get(ws_handler))
+            .with_state(Arc::new(Mutex::new(Some(rx))));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, router.into_make_service())
+                .await
+                .unwrap();
+        });
+
+        port
+    };
+
+    tokio::spawn(async move {
+        cap_rendering::render_video_to_channel(render_options, project, tx)
+            .await
+            .unwrap();
+    });
+
+    Ok(port)
 }
 
 #[tauri::command]
@@ -600,14 +711,15 @@ fn focus_captures_panel(app: AppHandle) {
     panel.make_key_window();
 }
 
-#[tauri::command]
-#[specta::specta]
-async fn render_video(
-    options: RenderOptions,
-    project: ProjectConfiguration,
-) -> Result<PathBuf, String> {
-    cap_rendering::render_video(options, project).await
-}
+// #[tauri::command]
+// #[specta::specta]
+// async fn render_video(
+//     options: RenderOptions,
+//     project: ProjectConfiguration,
+//     output_path: PathBuf
+// ) -> Result<PathBuf, String> {
+//     cap_rendering::render_video_to_file(options, project).await
+// }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -626,10 +738,11 @@ pub fn run() {
             remove_fake_window,
             focus_captures_panel,
             get_current_recording,
-            render_video,
+            // render_video,
             get_rendered_video,
             copy_rendered_video_to_clipboard,
-            get_video_metadata
+            get_video_metadata,
+            render_video_to_channel
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

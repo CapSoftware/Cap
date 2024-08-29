@@ -53,3 +53,4 @@ cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
 cap-rendering = { path = "../../../crates/rendering" }
 cap-ffmpeg = { path = "../../../crates/ffmpeg" }
+axum = { version = "0.7.5", features = ["ws"] }

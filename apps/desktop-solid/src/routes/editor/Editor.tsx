@@ -18,6 +18,7 @@ import {
   Switch,
   createEffect,
   createSignal,
+  onMount,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
@@ -49,7 +50,7 @@ import {
 } from "../../utils/tauri";
 import { useParams, useSearchParams } from "@solidjs/router";
 import { unwrap } from "solid-js/store";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc } from "@tauri-apps/api/core";
 
 export function Editor() {
   return (
@@ -58,6 +59,11 @@ export function Editor() {
     </EditorContextProvider>
   );
 }
+
+const OUTPUT_SIZE = {
+  width: 1920,
+  height: 1080,
+};
 
 function Inner() {
   const [params] = useSearchParams<{ path: string }>();
@@ -95,6 +101,8 @@ function Inner() {
 
   let timelineWidth = 0;
 
+  const { setCanvasRef } = useEditorContext();
+
   return (
     <div
       class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg leading-5"
@@ -115,7 +123,15 @@ function Inner() {
                 <EditorButton leftIcon={<IconCapRedo />}>Redo</EditorButton>
               </div>
             </div>
-            <div class="bg-gray-100 flex items-center justify-center flex-1 flex-row object-contain p-4" />
+            <div class="bg-gray-100 flex items-center justify-center flex-1 flex-row object-contain p-4">
+              <canvas
+                class="bg-blue-50 w-full"
+                ref={setCanvasRef}
+                id="canvas"
+                width={OUTPUT_SIZE.width}
+                height={OUTPUT_SIZE.height}
+              />
+            </div>
             <div class="flex flex-row items-center p-[0.75rem]">
               <div class="flex-1" />
               <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
@@ -189,7 +205,7 @@ function Inner() {
 
 function Header() {
   const [params] = useSearchParams<{ path: string }>();
-  const { state } = useEditorContext();
+  const { state, canvasRef } = useEditorContext();
 
   return (
     <header
@@ -214,16 +230,45 @@ function Header() {
           variant="secondary"
           size="md"
           onClick={async () => {
-            if (params.path) {
-              const pathParts = params.path.split("/");
-              const fileName = pathParts.at(-1)?.split(".")[0];
-              if (fileName) {
-                await commands.copyRenderedVideoToClipboard(
-                  fileName,
-                  unwrap(state)
-                );
-              }
-            }
+            if (!params.path) return;
+            const pathParts = params.path.split("/");
+
+            const fileName = pathParts.at(-1)?.split(".")[0];
+            if (!fileName) return;
+
+            const canvas = canvasRef();
+            if (!canvas) return;
+
+            // const img = new Image();
+
+            const result = await commands.renderVideoToChannel(
+              fileName,
+              unwrap(state)
+            );
+            if (result.status === "error") return;
+            const port = result.data;
+
+            const ws = new WebSocket(`ws://localhost:${port}/frames-ws`);
+            ws.binaryType = "arraybuffer";
+
+            ws.onmessage = (event) => {
+              const ctx = canvas.getContext("2d");
+              if (!ctx) return;
+
+              const clamped = new Uint8ClampedArray(event.data);
+              const imageData = new ImageData(
+                clamped,
+                OUTPUT_SIZE.width,
+                OUTPUT_SIZE.height
+              );
+
+              ctx.putImageData(imageData, 0, 0);
+            };
+
+            const channel = new Channel<Array<number>>();
+            channel.onmessage = (array) => {
+              console.log("channel", array.length);
+            };
           }}
         >
           Render
