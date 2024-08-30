@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta};
-use cap_rendering::render_video_to_file;
+use cap_rendering::{render_video_to_file, OnTheFlyVideoDecoderActor};
 
 #[tokio::main]
 async fn main() {
@@ -38,6 +38,8 @@ async fn main() {
         },
         project,
         project_path.join("output/result.mp4"),
+        OnTheFlyVideoDecoderActor::new(project_path.join("content/display.mp4").clone()),
+        OnTheFlyVideoDecoderActor::new(project_path.join("content/camera.mp4").clone()),
     )
     .await
     .ok();

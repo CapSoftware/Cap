@@ -6,18 +6,14 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, sync_channel, Sender};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use wgpu::util::DeviceExt;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
-use cap_ffmpeg::{ffmpeg_path_as_str, FFmpeg, FFmpegRawVideoInput};
+use cap_ffmpeg::{FFmpeg, FFmpegRawVideoInput};
 use cap_project::{BackgroundSource, CameraXPosition, CameraYPosition, ProjectConfiguration};
 
-use std::io::{BufReader, Read};
-use std::process::Command;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
