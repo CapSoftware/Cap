@@ -115,6 +115,14 @@ async renderVideoToChannel(videoId: string, project: ProjectConfiguration) : Pro
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async createEditorInstance(videoId: string) : Promise<Result<number, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("create_editor_instance", { videoId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -123,9 +131,11 @@ async renderVideoToChannel(videoId: string, project: ProjectConfiguration) : Pro
 
 export const events = __makeEvents__<{
 recordingOptionsChanged: RecordingOptionsChanged,
+renderFrameEvent: RenderFrameEvent,
 showCapturesPanel: ShowCapturesPanel
 }>({
 recordingOptionsChanged: "recording-options-changed",
+renderFrameEvent: "render-frame-event",
 showCapturesPanel: "show-captures-panel"
 })
 
@@ -155,6 +165,7 @@ export type JsonValue<T> = [T]
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
 export type RecordingOptionsChanged = null
+export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type ShowCapturesPanel = null
 
 /** tauri-specta globals **/

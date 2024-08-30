@@ -17,10 +17,15 @@ import {
   Show,
   Switch,
   createEffect,
+  createResource,
   createSignal,
+  on,
   onMount,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
+import { createReconnectingWS } from "@solid-primitives/websocket";
+import { throttle } from "@solid-primitives/scheduled";
+import { trackDeep } from "@solid-primitives/deep";
 
 import {
   ASPECT_RATIOS,
@@ -44,11 +49,12 @@ import {
 } from "./ui";
 import {
   commands,
+  events,
   type AspectRatio,
   type BackgroundSource,
   type CursorType,
 } from "../../utils/tauri";
-import { useParams, useSearchParams } from "@solidjs/router";
+import { createAsync, useParams, useSearchParams } from "@solidjs/router";
 import { unwrap } from "solid-js/store";
 import { Channel, convertFileSrc } from "@tauri-apps/api/core";
 
@@ -74,6 +80,7 @@ function Inner() {
   //   time: 0,
   // });
 
+  const [playbackTime, setPlaybackTime] = createSignal<number>(0);
   const [previewTime, setPreviewTime] = createSignal<number>();
 
   // let displayRef: HTMLVideoElement;
@@ -101,7 +108,58 @@ function Inner() {
 
   let timelineWidth = 0;
 
-  const { setCanvasRef } = useEditorContext();
+  const { canvasRef, setCanvasRef, state } = useEditorContext();
+
+  onMount(() => {
+    commands
+      .createEditorInstance(params.path.split("/").at(-1)?.split(".")[0]!)
+      .then((result) => {
+        if (result.status !== "ok") return;
+        const ws = new WebSocket(`ws://localhost:${result.data}/frames-ws`);
+
+        ws.binaryType = "arraybuffer";
+
+        ws.onmessage = (event) => {
+          const ctx = canvasRef()?.getContext("2d");
+          if (!ctx) return;
+
+          const clamped = new Uint8ClampedArray(event.data);
+          const imageData = new ImageData(
+            clamped,
+            OUTPUT_SIZE.width,
+            OUTPUT_SIZE.height
+          );
+
+          ctx.putImageData(imageData, 0, 0);
+        };
+      });
+  });
+
+  const renderFrame = throttle((time: number) => {
+    events.renderFrameEvent.emit({
+      frame_number: Math.floor(time * 30),
+      project: state,
+    });
+  }, 10);
+
+  createEffect(
+    on(previewTime, () => {
+      const p = previewTime();
+      if (p === undefined) renderFrame(playbackTime());
+      else renderFrame(p);
+    })
+  );
+
+  createEffect(
+    on(
+      () => {
+        trackDeep(state);
+      },
+      () => {
+        renderFrame(playbackTime());
+      }
+    )
+  );
 
   return (
     <div
@@ -169,7 +227,14 @@ function Inner() {
               </div>
             )}
           </Show>
-          <div class="w-px bg-red-300 absolute left-5 top-4 bottom-0 z-10">
+          <div
+            class="w-px bg-red-300 absolute left-5 top-4 bottom-0 z-10"
+            style={{
+              transform: `translateX(${
+                (playbackTime() / duration) * timelineWidth
+              }px)`,
+            }}
+          >
             <div class="size-2 bg-red-300 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
           </div>
           <div class="relative h-[3rem] border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden">
@@ -178,6 +243,11 @@ function Inner() {
               // biome-ignore lint/style/noNonNullAssertion: ref
               ref={timelineRef!}
               class="bg-blue-50 relative w-full h-full flex flex-row items-end justify-end px-[0.5rem] py-[0.25rem]"
+              onMouseDown={(e) => {
+                const { left, width } = e.currentTarget.getBoundingClientRect();
+                timelineWidth = width;
+                setPlaybackTime(duration * ((e.clientX - left) / width));
+              }}
               onMouseMove={(e) => {
                 const { left, width } = e.currentTarget.getBoundingClientRect();
                 timelineWidth = width;
@@ -236,39 +306,7 @@ function Header() {
             const fileName = pathParts.at(-1)?.split(".")[0];
             if (!fileName) return;
 
-            const canvas = canvasRef();
-            if (!canvas) return;
-
-            // const img = new Image();
-
-            const result = await commands.renderVideoToChannel(
-              fileName,
-              unwrap(state)
-            );
-            if (result.status === "error") return;
-            const port = result.data;
-
-            const ws = new WebSocket(`ws://localhost:${port}/frames-ws`);
-            ws.binaryType = "arraybuffer";
-
-            ws.onmessage = (event) => {
-              const ctx = canvas.getContext("2d");
-              if (!ctx) return;
-
-              const clamped = new Uint8ClampedArray(event.data);
-              const imageData = new ImageData(
-                clamped,
-                OUTPUT_SIZE.width,
-                OUTPUT_SIZE.height
-              );
-
-              ctx.putImageData(imageData, 0, 0);
-            };
-
-            const channel = new Channel<Array<number>>();
-            channel.onmessage = (array) => {
-              console.log("channel", array.length);
-            };
+            commands.renderVideoToChannel(fileName, unwrap(state));
           }}
         >
           Render

@@ -12,6 +12,7 @@ use serde_json::json;
 use specta::Type;
 use std::fs::File;
 use std::io::BufReader;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
@@ -25,7 +26,10 @@ use tokio::{sync::RwLock, time::sleep};
 
 use camera::{create_camera_window, get_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
-use cap_rendering::{render_video_to_file, RenderOptions};
+use cap_rendering::{
+    create_uniforms_buffers, produce_frame, render_video_to_file, OnTheFlyVideoDecoderActor,
+    RenderOptions, RenderVideoConstants,
+};
 use display::{get_capture_windows, Bounds, CaptureTarget};
 
 use ffmpeg_sidecar::{
@@ -253,47 +257,215 @@ async fn get_rendered_video(
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
-    let video_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap()
-        .join("recordings")
-        .join(&video_id);
+    let editor_instance = EditorInstance::get(&app, video_id).await;
 
-    dbg!(&video_dir);
-    if video_dir.exists() {
-        let output_path = video_dir.join("output/result.mp4");
-        dbg!(&output_path);
-        if output_path.exists() {
-            Ok(output_path)
-        } else {
-            let meta: cap_project::RecordingMeta = serde_json::from_str(
-                &std::fs::read_to_string(video_dir.join("recording-meta.json")).unwrap(),
-            )
-            .unwrap();
+    render_video_to_file(
+        editor_instance.render_constants.options.clone(),
+        project,
+        editor_instance.path.join("output/result.mp4"),
+        editor_instance.screen_decoder.clone(),
+        editor_instance.camera_decoder.clone(),
+    )
+    .await?;
 
-            dbg!(&meta);
+    Ok(editor_instance.path.clone())
+}
 
-            let render_options = RenderOptions {
-                screen_recording_path: video_dir.join("content/display.mp4"),
-                webcam_recording_path: video_dir.join("content/camera.mp4"),
-                screen_size: (meta.display.width, meta.display.height),
-                camera_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or((0, 0)),
-                // webcam_style: WebcamStyle {
-                //     border_radius: 10.0,
-                //     shadow_color: [0.0, 0.0, 0.0, 0.5],
-                //     shadow_blur: 5.0,
-                //     shadow_offset: (2.0, 2.0),
-                // },
-                output_size: (meta.display.width, meta.display.height),
-            };
-            render_video_to_file(render_options, project, output_path.clone()).await?;
+#[derive(Deserialize, specta::Type, tauri_specta::Event, Debug, Clone)]
+struct RenderFrameEvent {
+    frame_number: u32,
+    project: ProjectConfiguration,
+}
 
-            Ok(output_path)
+struct EditorInstance {
+    pub path: PathBuf,
+    pub screen_decoder: OnTheFlyVideoDecoderActor,
+    pub camera_decoder: OnTheFlyVideoDecoderActor,
+    pub frame_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    pub ws_port: u16,
+    pub render_constants: Arc<RenderVideoConstants>,
+}
+
+impl EditorInstance {
+    pub async fn new(app: &AppHandle, video_id: String) -> Self {
+        let path = app
+            .path()
+            .app_data_dir()
+            .unwrap()
+            .join("recordings")
+            .join(format!("{video_id}.cap"));
+
+        if !path.exists() {
+            println!("Video path {} not found!", path.display());
+            // return Err(format!("Video path {} not found!", path.display()));
+            panic!("Video path {} not found!", path.display());
         }
-    } else {
-        Err(format!("Video directory does not exist: {:?}", video_dir))
+
+        let meta: cap_project::RecordingMeta = serde_json::from_str(
+            &std::fs::read_to_string(path.join("recording-meta.json")).unwrap(),
+        )
+        .unwrap();
+
+        const OUTPUT_SIZE: (u32, u32) = (1920, 1080);
+
+        let render_options = RenderOptions {
+            screen_recording_path: path.join("content/display.mp4"),
+            webcam_recording_path: path.join("content/camera.mp4"),
+            screen_size: (meta.display.width, meta.display.height),
+            camera_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or((0, 0)),
+            // webcam_style: WebcamStyle {
+            //     border_radius: 10.0,
+            //     shadow_color: [0.0, 0.0, 0.0, 0.5],
+            //     shadow_blur: 5.0,
+            //     shadow_offset: (2.0, 2.0),
+            // },
+            output_size: OUTPUT_SIZE,
+        };
+
+        let screen_decoder =
+            OnTheFlyVideoDecoderActor::new(path.join("content/display.mp4").clone());
+        let camera_decoder =
+            OnTheFlyVideoDecoderActor::new(path.join("content/camera.mp4").clone());
+
+        let (frame_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let ws_port = {
+            use axum::{
+                extract::{
+                    ws::{Message, WebSocket, WebSocketUpgrade},
+                    State,
+                },
+                response::IntoResponse,
+                routing::get,
+            };
+            use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
+
+            type RouterState = Arc<Mutex<UnboundedReceiver<Vec<u8>>>>;
+
+            async fn ws_handler(
+                ws: WebSocketUpgrade,
+                State(state): State<RouterState>,
+            ) -> impl IntoResponse {
+                // let rx = rx.lock().await.take().unwrap();
+                ws.on_upgrade(move |socket| handle_socket(socket, state))
+            }
+
+            async fn handle_socket(mut socket: WebSocket, state: RouterState) {
+                let mut rx = state.lock().await;
+                println!("socket connection established");
+                let now = std::time::Instant::now();
+
+                loop {
+                    tokio::select! {
+                        _ = socket.recv() => {
+                            break;
+                        }
+                        msg = rx.recv() => {
+                            if let Some(chunk) = msg {
+                                socket.send(Message::Binary(chunk)).await.unwrap();
+                            }
+                        }
+                    }
+                }
+                let elapsed = now.elapsed();
+                println!("Websocket closing after {elapsed:.2?}");
+            }
+
+            let router = axum::Router::new()
+                .route("/frames-ws", get(ws_handler))
+                .with_state(Arc::new(Mutex::new(rx)));
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                axum::serve(listener, router.into_make_service())
+                    .await
+                    .unwrap();
+            });
+
+            port
+        };
+
+        let render_constants = Arc::new(RenderVideoConstants::new(render_options).await.unwrap());
+
+        RenderFrameEvent::listen_any(app, {
+            let screen_decoder = screen_decoder.clone();
+            let camera_decoder = camera_decoder.clone();
+            let render_constants = render_constants.clone();
+            let frame_tx = frame_tx.clone();
+
+            let rendering = Arc::new(AtomicBool::new(false));
+
+            move |e| {
+                let screen_decoder = screen_decoder.clone();
+                let camera_decoder = camera_decoder.clone();
+                let render_constants = render_constants.clone();
+                let frame_tx = frame_tx.clone();
+
+                if rendering.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                let rendering = rendering.clone();
+                tokio::spawn(async move {
+                    rendering.store(true, Ordering::Relaxed);
+
+                    let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
+                        create_uniforms_buffers(&render_constants, &e.payload.project);
+
+                    let now = std::time::Instant::now();
+                    let screen_frame = screen_decoder.get_frame(e.payload.frame_number).unwrap();
+                    let camera_frame = camera_decoder.get_frame(e.payload.frame_number).unwrap();
+                    println!("decoded inputs in {:.2?}", now.elapsed());
+
+                    let now = std::time::Instant::now();
+                    let frame = produce_frame(
+                        &render_constants,
+                        &screen_uniforms_buffer,
+                        screen_frame,
+                        &camera_uniforms_buffer,
+                        camera_frame,
+                        &composite_uniforms_buffer,
+                    )
+                    .await
+                    .unwrap();
+
+                    println!("produced frame in {:.2?}", now.elapsed());
+                    rendering.store(false, Ordering::Relaxed);
+
+                    frame_tx.send(frame).unwrap();
+                });
+            }
+        });
+
+        Self {
+            path,
+            screen_decoder,
+            camera_decoder,
+            frame_tx,
+            ws_port,
+            render_constants,
+        }
     }
+
+    pub async fn get(app: &AppHandle, video_id: String) -> Arc<Self> {
+        match app.try_state::<Arc<EditorInstance>>() {
+            Some(state) => (*state).clone(),
+            None => {
+                let instance = Arc::new(EditorInstance::new(app, video_id).await);
+                app.manage(instance.clone());
+                instance
+            }
+        }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn create_editor_instance(app: AppHandle, video_id: String) -> Result<u16, String> {
+    let editor_instance = EditorInstance::get(&app, video_id).await;
+
+    Ok(editor_instance.ws_port)
 }
 
 #[tauri::command]
@@ -303,92 +475,20 @@ async fn render_video_to_channel(
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<u16, String> {
-    let video_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap()
-        .join("recordings")
-        .join(format!("{video_id}.cap"));
+    let editor_instance = EditorInstance::get(&app, video_id).await;
 
-    if !video_dir.exists() {
-        println!("Video path {} not found!", video_dir.display());
-        return Err(format!("Video path {} not found!", video_dir.display()));
-    }
-
-    let meta: cap_project::RecordingMeta = serde_json::from_str(
-        &std::fs::read_to_string(video_dir.join("recording-meta.json")).unwrap(),
-    )
-    .unwrap();
-
-    const OUTPUT_SIZE: (u32, u32) = (1920, 1080);
-
-    let render_options = RenderOptions {
-        screen_recording_path: video_dir.join("content/display.mp4"),
-        webcam_recording_path: video_dir.join("content/camera.mp4"),
-        screen_size: (meta.display.width, meta.display.height),
-        camera_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or((0, 0)),
-        // webcam_style: WebcamStyle {
-        //     border_radius: 10.0,
-        //     shadow_color: [0.0, 0.0, 0.0, 0.5],
-        //     shadow_blur: 5.0,
-        //     shadow_offset: (2.0, 2.0),
-        // },
-        output_size: OUTPUT_SIZE,
-    };
-
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    let port = {
-        use axum::{
-            extract::{
-                ws::{Message, WebSocket, WebSocketUpgrade},
-                State,
-            },
-            response::IntoResponse,
-            routing::get,
-        };
-        use tokio::sync::Mutex;
-
-        type RouterState = Arc<Mutex<Option<Receiver<Vec<u8>>>>>;
-
-        async fn ws_handler(
-            ws: WebSocketUpgrade,
-            State(rx): State<RouterState>,
-        ) -> impl IntoResponse {
-            let rx = rx.lock().await.take().unwrap();
-            ws.on_upgrade(move |socket| handle_socket(socket, rx))
-        }
-
-        async fn handle_socket(mut socket: WebSocket, rx: Receiver<Vec<u8>>) {
-            println!("socket connection established");
-            // let mut i = 0;
-            let now = std::time::Instant::now();
-            while let Ok(chunk) = rx.recv() {
-                socket.send(Message::Binary(chunk)).await.unwrap();
-            }
-            let elapsed = now.elapsed();
-            println!("Sent frames in {elapsed:.2?}");
-        }
-
-        let router = axum::Router::new()
-            .route("/frames-ws", get(ws_handler))
-            .with_state(Arc::new(Mutex::new(Some(rx))));
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move {
-            axum::serve(listener, router.into_make_service())
-                .await
-                .unwrap();
-        });
-
-        port
-    };
+    let port = editor_instance.ws_port;
 
     tokio::spawn(async move {
-        cap_rendering::render_video_to_channel(render_options, project, tx)
-            .await
-            .unwrap();
+        cap_rendering::render_video_to_channel(
+            editor_instance.render_constants.options.clone(),
+            project,
+            editor_instance.frame_tx.clone(),
+            editor_instance.screen_decoder.clone(),
+            editor_instance.camera_decoder.clone(),
+        )
+        .await
+        .unwrap();
     });
 
     Ok(port)
@@ -729,11 +829,13 @@ pub fn run() {
             get_rendered_video,
             copy_rendered_video_to_clipboard,
             get_video_metadata,
-            render_video_to_channel
+            render_video_to_channel,
+            create_editor_instance
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
-            ShowCapturesPanel
+            ShowCapturesPanel,
+            RenderFrameEvent
         ])
         .ty::<ProjectConfiguration>();
 

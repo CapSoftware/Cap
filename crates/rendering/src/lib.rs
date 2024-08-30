@@ -7,6 +7,7 @@ use specta::Type;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{channel, sync_channel, Sender};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use wgpu::util::DeviceExt;
@@ -99,15 +100,17 @@ pub async fn render_video_to_file(
     options: RenderOptions,
     project: ProjectConfiguration,
     output_path: PathBuf,
+    screen_recording_decoder: OnTheFlyVideoDecoderActor,
+    camera_recording_decoder: OnTheFlyVideoDecoderActor,
 ) -> Result<PathBuf, String> {
-    let (tx_image_data, rx_image_data) = mpsc::channel::<Vec<u8>>();
+    let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
     let output_folder = output_path.parent().unwrap();
     std::fs::create_dir_all(output_folder)
         .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
     let output_path_clone = output_path.clone();
 
-    thread::spawn(move || {
+    tokio::spawn(async move {
         println!("Starting FFmpeg output process...");
         let mut ffmpeg = FFmpeg::new();
         let ffmpeg_input = ffmpeg.add_input(FFmpegRawVideoInput {
@@ -129,15 +132,15 @@ pub async fn render_video_to_file(
         let mut ffmpeg_process = ffmpeg.start();
 
         loop {
-            match rx_image_data.recv() {
-                Ok(frame) => {
+            match rx_image_data.recv().await {
+                Some(frame) => {
                     // println!("Sending image data to FFmpeg");
                     if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
                         eprintln!("Error writing video frame: {:?}", e);
                         break;
                     }
                 }
-                Err(_) => {
+                None => {
                     println!("All frames sent to FFmpeg");
                     break;
                 }
@@ -148,17 +151,22 @@ pub async fn render_video_to_file(
         ffmpeg_process.stop();
     });
 
-    render_video_to_channel(options, project, tx_image_data).await?;
+    render_video_to_channel(
+        options,
+        project,
+        tx_image_data,
+        screen_recording_decoder,
+        camera_recording_decoder,
+    )
+    .await?;
 
     Ok(output_path)
 }
 
-pub async fn render_video_to_channel(
-    options: RenderOptions,
-    project: ProjectConfiguration,
-    sender: mpsc::Sender<Vec<u8>>,
-) -> Result<(), String> {
-    let constants = RenderVideoConstants::new(options).await?;
+pub fn create_uniforms_buffers(
+    constants: &RenderVideoConstants,
+    project: &ProjectConfiguration,
+) -> (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer) {
     let options = &constants.options;
 
     let (background_start, background_end, _background_angle) = match &project.background.source {
@@ -224,33 +232,23 @@ pub async fn render_video_to_channel(
         UV::new(x, y)
     };
 
-    let screen_uniforms_buffer = constants.device.create_buffer_init(
-        &(wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[render_frame::Uniforms {
-                fb_size: [options.screen_size.0 as f32, options.screen_size.1 as f32],
-                border_pc: project.background.rounding as f32,
-                x_offset: 0.0,
-                mirror: false as u32,
-                _padding: [0.0],
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        }),
-    );
+    let screen_uniforms_buffer = render_frame::Uniforms {
+        fb_size: [options.screen_size.0 as f32, options.screen_size.1 as f32],
+        border_pc: project.background.rounding as f32,
+        x_offset: 0.0,
+        mirror: false as u32,
+        _padding: [0.0],
+    }
+    .to_buffer(&constants.device);
 
-    let camera_uniforms_buffer = constants.device.create_buffer_init(
-        &(wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer 2"),
-            contents: bytemuck::cast_slice(&[render_frame::Uniforms {
-                fb_size: [options.camera_size.1 as f32, options.camera_size.1 as f32],
-                border_pc: project.camera.rounding as f32,
-                x_offset: (options.camera_size.0 - options.camera_size.1) as f32 / 2.0,
-                mirror: project.camera.mirror as u32,
-                _padding: [0.0],
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        }),
-    );
+    let camera_uniforms_buffer = render_frame::Uniforms {
+        fb_size: [options.camera_size.1 as f32, options.camera_size.1 as f32],
+        border_pc: project.camera.rounding as f32,
+        x_offset: (options.camera_size.0 - options.camera_size.1) as f32 / 2.0,
+        mirror: project.camera.mirror as u32,
+        _padding: [0.0],
+    }
+    .to_buffer(&constants.device);
 
     let screen_xy = (
         options.output_size.0 as f32 / 2.0,
@@ -289,6 +287,25 @@ pub async fn render_video_to_channel(
         }),
     );
 
+    (
+        screen_uniforms_buffer,
+        camera_uniforms_buffer,
+        composite_uniforms_buffer,
+    )
+}
+
+pub async fn render_video_to_channel(
+    options: RenderOptions,
+    project: ProjectConfiguration,
+    sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    screen_recording_decoder: OnTheFlyVideoDecoderActor,
+    camera_recording_decoder: OnTheFlyVideoDecoderActor,
+) -> Result<(), String> {
+    let constants = RenderVideoConstants::new(options).await?;
+
+    let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
+        create_uniforms_buffers(&constants, &project);
+
     println!("Setting up FFmpeg input for screen recording...");
 
     ffmpeg_next::init().unwrap();
@@ -296,15 +313,12 @@ pub async fn render_video_to_channel(
     let (screen_tx, mut screen_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     let (camera_tx, mut camera_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
-    let screen_recording_path = constants.options.screen_recording_path.clone();
-
     thread::spawn(move || {
         let now = Instant::now();
-        let mut decoder = OnTheFlyVideoDecoder::new(&screen_recording_path);
 
         let mut i = 0;
         loop {
-            match decoder.get_frame(i) {
+            match screen_recording_decoder.get_frame(i) {
                 Some(frame) => {
                     if screen_tx.send(frame).is_err() {
                         println!("Error sending screen frame to renderer");
@@ -324,14 +338,12 @@ pub async fn render_video_to_channel(
 
     println!("Setting up FFmpeg input for webcam recording...");
 
-    let camera_recording_path = constants.options.webcam_recording_path.clone();
     thread::spawn(move || {
         let now = Instant::now();
-        let mut decoder = OnTheFlyVideoDecoder::new(&camera_recording_path);
 
         let mut i = 0;
         loop {
-            match decoder.get_frame(i) {
+            match camera_recording_decoder.get_frame(i) {
                 Some(frame) => {
                     if camera_tx.send(frame).is_err() {
                         println!("Error sending screen frame to renderer");
@@ -430,7 +442,7 @@ pub async fn get_frame_cli(ffmpeg: &str, path: &Path, frame: u32) -> Vec<u8> {
     output.stdout
 }
 
-struct RenderVideoConstants {
+pub struct RenderVideoConstants {
     pub _instance: wgpu::Instance,
     pub _adapter: wgpu::Adapter,
     pub queue: wgpu::Queue,
@@ -517,7 +529,7 @@ impl RenderVideoConstants {
     }
 }
 
-async fn produce_frame(
+pub async fn produce_frame(
     RenderVideoConstants {
         device,
         options,
@@ -694,6 +706,18 @@ mod render_frame {
         pub x_offset: f32,
         pub mirror: u32,
         pub _padding: [f32; 1],
+    }
+
+    impl Uniforms {
+        pub fn to_buffer(self, device: &wgpu::Device) -> wgpu::Buffer {
+            device.create_buffer_init(
+                &(wgpu::util::BufferInitDescriptor {
+                    label: Some("Uniform Buffer"),
+                    contents: bytemuck::cast_slice(&[self]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                }),
+            )
+        }
     }
 
     pub const SHADER: &str = include_str!("shaders/render-frame.wgsl");
@@ -1080,6 +1104,7 @@ struct OnTheFlyVideoDecoder {
 
 impl OnTheFlyVideoDecoder {
     fn new(path: &PathBuf) -> Self {
+        println!("creating decoder for {}", path.display());
         let ictx = ffmpeg_next::format::input(path).unwrap();
 
         let input_stream = ictx
@@ -1141,7 +1166,6 @@ impl OnTheFlyVideoDecoder {
                 ((frame_number as f32 / self.frame_rate.numerator() as f32) * 1_000_000.0) as i64;
             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
-            println!("seeking to {position}");
             self.decoder.flush();
             self.input.seek(position, ..position).unwrap();
         }
@@ -1170,6 +1194,45 @@ impl OnTheFlyVideoDecoder {
         }
 
         None
+    }
+}
+
+enum OnTheFlyVideoDecoderActorMessage {
+    GetFrame(u32, Sender<Option<Vec<u8>>>),
+}
+
+#[derive(Clone)]
+pub struct OnTheFlyVideoDecoderActor {
+    tx: Sender<OnTheFlyVideoDecoderActorMessage>,
+}
+
+impl OnTheFlyVideoDecoderActor {
+    pub fn new(path: PathBuf) -> Self {
+        let (tx, rx) = channel();
+
+        thread::spawn(move || {
+            let mut decoder = OnTheFlyVideoDecoder::new(&path);
+
+            loop {
+                match rx.recv() {
+                    Ok(OnTheFlyVideoDecoderActorMessage::GetFrame(frame_number, sender)) => {
+                        let frame = decoder.get_frame(frame_number);
+                        sender.send(frame).unwrap();
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self { tx }
+    }
+
+    pub fn get_frame(&self, frame_number: u32) -> Option<Vec<u8>> {
+        let (tx, rx) = channel();
+        self.tx
+            .send(OnTheFlyVideoDecoderActorMessage::GetFrame(frame_number, tx))
+            .unwrap();
+        rx.recv().unwrap()
     }
 }
 
