@@ -1094,8 +1094,8 @@ struct OnTheFlyVideoDecoder {
     temp_frame: ffmpeg_next::frame::Video,
     time_base: ffmpeg_next::Rational,
     frame_rate: ffmpeg_next::Rational,
-    last_frame: Option<u32>,
-    cached_frames: HashMap<u32, Vec<u8>>,
+    last_frame: Option<(u32, Vec<u8>)>,
+    // cached_frames: HashMap<u32, Vec<u8>>,
 }
 
 impl OnTheFlyVideoDecoder {
@@ -1143,7 +1143,7 @@ impl OnTheFlyVideoDecoder {
             time_base,
             frame_rate,
             last_frame: None,
-            cached_frames: Default::default(),
+            // cached_frames: Default::default(),
         }
     }
 
@@ -1151,12 +1151,14 @@ impl OnTheFlyVideoDecoder {
     // - cache frames
     // - cache I frame positions to know whether seeking is actually necessary when going backwards
     fn get_frame(&mut self, frame_number: u32) -> Option<Vec<u8>> {
-        if let Some(cached) = self.cached_frames.get(&frame_number) {
-            return Some(cached.clone());
+        if let Some((last_frame_number, frame)) = &self.last_frame {
+            if *last_frame_number == frame_number {
+                return Some(frame.clone());
+            }
         }
 
         if self.last_frame.is_some()
-            && (frame_number <= 0 || frame_number <= self.last_frame.unwrap())
+            && (frame_number <= 0 || frame_number <= self.last_frame.as_ref().unwrap().0)
         {
             let timestamp_us =
                 ((frame_number as f32 / self.frame_rate.numerator() as f32) * 1_000_000.0) as i64;
@@ -1180,7 +1182,7 @@ impl OnTheFlyVideoDecoder {
 
                     let frame = rgb_frame.data(0).to_vec();
 
-                    self.last_frame = Some(current_frame);
+                    self.last_frame = Some((current_frame, frame.clone()));
 
                     if current_frame == frame_number {
                         return Some(frame);

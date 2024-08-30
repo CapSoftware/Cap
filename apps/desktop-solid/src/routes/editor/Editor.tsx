@@ -73,7 +73,7 @@ const OUTPUT_SIZE = {
 
 function Inner() {
   const [params] = useSearchParams<{ path: string }>();
-  const duration = 15;
+  const duration = 10;
 
   // const [playback, setPlayback] = createSignal({
   //   playing: false,
