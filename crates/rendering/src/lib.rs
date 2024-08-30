@@ -1,10 +1,11 @@
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
+use ffmpeg_next::{frame, rescale, Rational, Rescale};
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
@@ -290,126 +291,75 @@ pub async fn render_video_to_channel(
 
     println!("Setting up FFmpeg input for screen recording...");
 
-    let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
-
-    let screen_frame_size = (options.screen_size.0 * options.screen_size.1 * 4) as usize;
-    let webcam_frame_size = (options.camera_size.0 * options.camera_size.1 * 4) as usize;
+    ffmpeg_next::init().unwrap();
 
     let (screen_tx, mut screen_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-    let (webcam_tx, mut webcam_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-    let (render_tx, render_rx) = mpsc::channel();
+    let (camera_tx, mut camera_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
-    let mut screen_command = Command::new(&ffmpeg_binary_path_str);
-    screen_command
-        .args([
-            "-i",
-            options.screen_recording_path.to_str().unwrap(),
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgba",
-            "-s",
-            &format!("{}x{}", options.screen_size.0, options.screen_size.1),
-            "-c:v",
-            "rawvideo",
-            "pipe:1",
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+    let screen_recording_path = constants.options.screen_recording_path.clone();
 
     thread::spawn(move || {
-        let mut screen_output = screen_command
-            .spawn()
-            .expect("Failed to spawn screen FFmpeg process");
+        let now = Instant::now();
+        let mut decoder = OnTheFlyVideoDecoder::new(&screen_recording_path);
 
-        let mut reader = BufReader::new(screen_output.stdout.take().unwrap());
-        let mut buffer = vec![0u8; screen_frame_size];
-
+        let mut i = 0;
         loop {
-            match reader.read_exact(&mut buffer) {
-                Ok(_) => {
-                    if screen_tx.send(buffer.clone()).is_err() {
+            match decoder.get_frame(i) {
+                Some(frame) => {
+                    if screen_tx.send(frame).is_err() {
                         println!("Error sending screen frame to renderer");
                         break;
                     }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                None => {
                     println!("Reached end of screen stream");
                     break;
                 }
-                Err(e) => {
-                    println!("Error reading screen frame: {:?}", e);
-                    break;
-                }
             }
+            i += 1;
         }
-        let _ = screen_output.kill();
+
+        println!("done decoding screen in {:.2?}", now.elapsed())
     });
 
     println!("Setting up FFmpeg input for webcam recording...");
-    let mut webcam_command = Command::new(&ffmpeg_binary_path_str);
-    webcam_command
-        .args([
-            "-i",
-            options.webcam_recording_path.to_str().unwrap(),
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgba",
-            "-s",
-            &format!("{}x{}", options.camera_size.0, options.camera_size.1),
-            "-c:v",
-            "rawvideo",
-            "pipe:1",
-        ])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null());
 
+    let camera_recording_path = constants.options.webcam_recording_path.clone();
     thread::spawn(move || {
-        let mut webcam_output = webcam_command
-            .spawn()
-            .expect("Failed to spawn webcam FFmpeg process");
+        let now = Instant::now();
+        let mut decoder = OnTheFlyVideoDecoder::new(&camera_recording_path);
 
-        let mut reader = BufReader::new(webcam_output.stdout.take().unwrap());
-        let mut buffer = vec![0u8; webcam_frame_size];
-
+        let mut i = 0;
         loop {
-            match reader.read_exact(&mut buffer) {
-                Ok(_) => {
-                    if webcam_tx.send(buffer.clone()).is_err() {
-                        println!("Error sending webcam frame to renderer");
+            match decoder.get_frame(i) {
+                Some(frame) => {
+                    if camera_tx.send(frame).is_err() {
+                        println!("Error sending screen frame to renderer");
                         break;
                     }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    println!("Reached end of webcam stream");
-                    break;
-                }
-                Err(e) => {
-                    println!("Error reading webcam frame: {:?}", e);
+                None => {
+                    println!("Reached end of screen stream");
                     break;
                 }
             }
+            i += 1;
         }
-        let _ = webcam_output.kill();
+
+        println!("done decoding camera in {:.2?}", now.elapsed())
     });
 
     let start_time = Instant::now();
-    let frame_count = Arc::new(AtomicUsize::new(0));
-    let frame_count_clone = Arc::clone(&frame_count);
 
-    let render_handle: tokio::task::JoinHandle<Result<(), String>> = tokio::spawn(async move {
-        'render_loop: loop {
-            let (screen_frame, camera_frame) =
-                match tokio::join!(screen_rx.recv(), webcam_rx.recv()) {
-                    (Some(screen), Some(webcam)) => {
-                        // println!("Received screen frame from renderer");
-                        (screen, webcam)
-                    }
-                    _ => {
-                        break 'render_loop;
-                    }
-                };
+    let render_handle: tokio::task::JoinHandle<Result<u32, String>> = tokio::spawn(async move {
+        let mut frame_count = 0;
+
+        loop {
+            let (Some(screen_frame), Some(camera_frame)) =
+                tokio::join!(screen_rx.recv(), camera_rx.recv())
+            else {
+                break;
+            };
 
             let frame = match produce_frame(
                 &constants,
@@ -424,51 +374,33 @@ pub async fn render_video_to_channel(
                 Ok(frame) => frame,
                 Err(e) => {
                     eprintln!("{e}");
-                    break 'render_loop;
+                    break;
                 }
             };
 
-            println!(
-                "sending frame to channel. width {}, height {}, bytes {}",
-                constants.options.output_size.0,
-                constants.options.output_size.1,
-                frame.len()
-            );
-
             if sender.send(frame).is_err() {
                 eprintln!("Failed to send processed frame to FFmpeg");
-                break 'render_loop;
+                break;
             }
 
-            frame_count_clone.fetch_add(1, Ordering::SeqCst);
-            if frame_count_clone.load(Ordering::SeqCst) % 30 == 0 {
+            frame_count += 1;
+            if frame_count % 30 == 0 {
                 let elapsed = start_time.elapsed();
                 println!(
                     "Processed {} frames in {:?} seconds",
-                    frame_count_clone.load(Ordering::SeqCst),
+                    frame_count,
                     elapsed.as_secs_f32()
                 );
             }
         }
 
         println!("Render loop exited");
-        println!("Sending stop signal");
-        let _ = render_tx.send(());
-        Ok(())
+
+        Ok(frame_count)
     });
 
-    render_handle.await.map_err(|e| e.to_string())??;
+    let total_frames = render_handle.await.map_err(|e| e.to_string())??;
 
-    render_rx
-        .recv()
-        .map_err(|e| format!("Render channel error: {:?}", e))?;
-
-    println!(
-        "Rendering complete. Total frames: {}",
-        frame_count.load(Ordering::SeqCst)
-    );
-
-    let total_frames = frame_count.load(Ordering::SeqCst);
     let total_time = start_time.elapsed();
     println!(
         "Render complete. Processed {} frames in {:?} seconds",
@@ -477,6 +409,25 @@ pub async fn render_video_to_channel(
     );
 
     Ok(())
+}
+
+pub async fn get_frame_cli(ffmpeg: &str, path: &Path, frame: u32) -> Vec<u8> {
+    let mut cmd = tokio::process::Command::new(ffmpeg);
+    let cmd = cmd
+        .arg("-i")
+        .arg(path)
+        .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-c:v", "rawvideo"])
+        .args(["-vf", &format!(r#"select=eq(n\,{frame})"#), "-vframes", "1"])
+        .arg("pipe:1");
+
+    let output = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .unwrap();
+
+    output.stdout
 }
 
 struct RenderVideoConstants {
@@ -1113,4 +1064,117 @@ fn srgb_to_linear(c: u16) -> f32 {
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
     }
+}
+
+struct OnTheFlyVideoDecoder {
+    input: ffmpeg_next::format::context::Input,
+    decoder: ffmpeg_next::codec::decoder::Video,
+    scaler: ffmpeg_next::software::scaling::context::Context,
+    input_stream_index: usize,
+    temp_frame: ffmpeg_next::frame::Video,
+    time_base: ffmpeg_next::Rational,
+    frame_rate: ffmpeg_next::Rational,
+    last_frame: Option<u32>,
+    cached_frames: HashMap<u32, Vec<u8>>,
+}
+
+impl OnTheFlyVideoDecoder {
+    fn new(path: &PathBuf) -> Self {
+        let ictx = ffmpeg_next::format::input(path).unwrap();
+
+        let input_stream = ictx
+            .streams()
+            .best(ffmpeg_next::media::Type::Video)
+            .ok_or("Could not find a video stream")
+            .unwrap();
+        let input_stream_index = input_stream.index();
+        let time_base = input_stream.time_base();
+        let frame_rate = input_stream.rate();
+
+        // Create a decoder for the video stream
+        let decoder =
+            ffmpeg_next::codec::context::Context::from_parameters(input_stream.parameters())
+                .unwrap()
+                .decoder()
+                .video()
+                .unwrap();
+
+        use ffmpeg_next::format::Pixel;
+        use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
+
+        let scaler = Context::get(
+            decoder.format(),
+            decoder.width(),
+            decoder.height(),
+            Pixel::RGBA,
+            decoder.width(),
+            decoder.height(),
+            Flags::BILINEAR,
+        )
+        .unwrap();
+
+        Self {
+            input: ictx,
+            decoder,
+            scaler,
+            input_stream_index,
+            temp_frame: ffmpeg_next::frame::Video::empty(),
+            time_base,
+            frame_rate,
+            last_frame: None,
+            cached_frames: Default::default(),
+        }
+    }
+
+    // TODO: optimisations
+    // - cache frames
+    // - cache I frame positions to know whether seeking is actually necessary when going backwards
+    fn get_frame(&mut self, frame_number: u32) -> Option<Vec<u8>> {
+        if let Some(cached) = self.cached_frames.get(&frame_number) {
+            return Some(cached.clone());
+        }
+
+        if self.last_frame.is_some()
+            && (frame_number <= 0 || frame_number <= self.last_frame.unwrap())
+        {
+            let timestamp_us =
+                ((frame_number as f32 / self.frame_rate.numerator() as f32) * 1_000_000.0) as i64;
+            let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
+
+            println!("seeking to {position}");
+            self.decoder.flush();
+            self.input.seek(position, ..position).unwrap();
+        }
+
+        for (stream, packet) in self.input.packets() {
+            if stream.index() == self.input_stream_index {
+                let current_frame =
+                    ts_to_frame(packet.pts().unwrap(), self.time_base, self.frame_rate);
+
+                self.decoder.send_packet(&packet).unwrap();
+
+                while self.decoder.receive_frame(&mut self.temp_frame).is_ok() {
+                    // Convert the frame to RGB
+                    let mut rgb_frame = frame::Video::empty();
+                    self.scaler.run(&self.temp_frame, &mut rgb_frame).unwrap();
+
+                    let frame = rgb_frame.data(0).to_vec();
+
+                    self.last_frame = Some(current_frame);
+
+                    if current_frame == frame_number {
+                        return Some(frame);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
+fn ts_to_frame(ts: i64, time_base: Rational, frame_rate: Rational) -> u32 {
+    // dbg!((ts, time_base, frame_rate));
+    ((ts * time_base.numerator() as i64 * frame_rate.numerator() as i64)
+        / (time_base.denominator() as i64 * frame_rate.denominator() as i64)) as u32
 }

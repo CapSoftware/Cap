@@ -364,19 +364,6 @@ async fn render_video_to_channel(
             // let mut i = 0;
             let now = std::time::Instant::now();
             while let Ok(chunk) = rx.recv() {
-                let now = std::time::Instant::now();
-
-                // let img = image::DynamicImage::ImageRgba8(
-                //     image::ImageBuffer::from_raw(OUTPUT_SIZE.0, OUTPUT_SIZE.1, chunk).unwrap(),
-                // );
-
-                // let mut buf: Vec<u8> = Vec::new();
-                // let encoder = image::codecs::jpeg::JpegEncoder::new(&mut buf);
-                // img.to_rgb8().write_with_encoder(encoder).unwrap();
-
-                // let elapsed = now.elapsed();
-                // println!("Encoded image to jpeg: {elapsed:.2?}");
-
                 socket.send(Message::Binary(chunk)).await.unwrap();
             }
             let elapsed = now.elapsed();

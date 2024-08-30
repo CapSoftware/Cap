@@ -31,7 +31,7 @@ nokhwa = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1",
 ] }
 nokhwa-bindings-macos = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1" }
 nix = { version = "0.29.0", features = ["fs"] }
-tokio = { version = "1.39.2", features = ["macros"] }
+tokio = { version = "1.39.2", features = ["macros", "process"] }
 uuid = { version = "1.10.0", features = ["v4"] }
 scap = { git = "https://github.com/CapSoftware/scap" }
 objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
