@@ -755,6 +755,7 @@ fn show_previous_recordings_window(app: AppHandle) {
     .shadow(false)
     .always_on_top(true)
     .visible_on_all_workspaces(true)
+    .accept_first_mouse(true)
     .content_protected(true)
     .inner_size(
         (monitor.size().width as f64) / monitor.scale_factor(),
@@ -823,6 +824,14 @@ fn show_previous_recordings_window(app: AppHandle) {
             window.set_ignore_cursor_events(ignore).ok();
         }
     });
+}
+
+#[tauri::command]
+#[specta::specta]
+fn close_previous_recordings_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window(PREV_RECORDINGS_WINDOW) {
+        window.close().ok();
+    }
 }
 
 fn handle_ffmpeg_installation() -> Result<(), String> {
@@ -958,6 +967,7 @@ pub fn run() {
             get_capture_windows,
             get_prev_recordings,
             show_previous_recordings_window,
+            close_previous_recordings_window,
             set_fake_window_bounds,
             remove_fake_window,
             focus_captures_panel,

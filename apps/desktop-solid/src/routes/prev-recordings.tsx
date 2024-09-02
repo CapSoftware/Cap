@@ -16,6 +16,7 @@ import Tooltip from "@corvu/tooltip";
 import { Button } from "@cap/ui-solid";
 
 import { commands, events } from "../utils/tauri";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export default function () {
   const recordings = createQuery(() => ({
@@ -37,6 +38,9 @@ export default function () {
 
   const [showAll, setShowAll] = createSignal(false);
   const [showMoreRef, setShowMoreRef] = createSignal<HTMLElement | null>(null);
+  const [removedCount, setRemovedCount] = createSignal(0);
+  const [hasClosedWindow, setHasClosedWindow] = createSignal(false);
+
   const visibleRecordings = () =>
     showAll() ? recordings.data : recordings.data?.slice(0, 5);
 
@@ -168,7 +172,16 @@ export default function () {
                           tooltipPlacement="right"
                           onClick={() => {
                             setExiting(true);
+                            setRemovedCount(removedCount() + 1);
+                            if (
+                              removedCount() === visibleRecordings()?.length &&
+                              !hasClosedWindow()
+                            ) {
+                              commands.closePreviousRecordingsWindow();
+                              setHasClosedWindow(true);
+                            }
                           }}
+                          disabled={hasClosedWindow()}
                         >
                           <IconCapCircleX class="size-[1rem]" />
                         </TooltipIconButton>
