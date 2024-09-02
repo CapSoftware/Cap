@@ -22,6 +22,7 @@ import {
   MenuItem,
   topRightAnimateClasses,
 } from "./editor/ui";
+import { useNavigate } from "@solidjs/router";
 
 export default function () {
   const cameras = createCameras();

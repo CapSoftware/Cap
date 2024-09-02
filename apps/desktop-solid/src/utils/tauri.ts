@@ -57,6 +57,9 @@ async getPrevRecordings() : Promise<Result<string[], null>> {
 async showPreviousRecordingsWindow() : Promise<void> {
     await TAURI_INVOKE("show_previous_recordings_window");
 },
+async closePreviousRecordingsWindow() : Promise<void> {
+    await TAURI_INVOKE("close_previous_recordings_window");
+},
 async setFakeWindowBounds(name: string, bounds: Bounds) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_fake_window_bounds", { name, bounds }) };
