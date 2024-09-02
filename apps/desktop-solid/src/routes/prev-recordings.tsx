@@ -42,7 +42,9 @@ export default function () {
   const [hasClosedWindow, setHasClosedWindow] = createSignal(false);
 
   const visibleRecordings = () =>
-    showAll() ? recordings.data : recordings.data?.slice(0, 5);
+    showAll()
+      ? recordings.data?.slice().reverse()
+      : recordings.data?.slice(0, 5).reverse();
 
   return (
     <div class="w-screen h-[100vh] bg-transparent relative">
