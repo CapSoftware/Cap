@@ -43,7 +43,9 @@ export default function () {
   const [hasClosedWindow, setHasClosedWindow] = createSignal(false);
 
   const visibleRecordings = () =>
-    showAll() ? recordings.data : recordings.data?.slice(0, 5);
+    showAll()
+      ? recordings.data?.slice().reverse()
+      : recordings.data?.slice(0, 5).reverse();
 
   createFakeWindowBounds(showMoreRef, () => "show-more-btn");
 
