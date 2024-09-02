@@ -2,6 +2,7 @@ import { createQuery } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
+  type Accessor,
   type ComponentProps,
   For,
   Show,
@@ -14,9 +15,9 @@ import createPresence from "solid-presence";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Tooltip from "@corvu/tooltip";
 import { Button } from "@cap/ui-solid";
+import { createElementBounds } from "@solid-primitives/bounds";
 
 import { commands, events } from "../utils/tauri";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export default function () {
   const recordings = createQuery(() => ({
@@ -43,6 +44,8 @@ export default function () {
 
   const visibleRecordings = () =>
     showAll() ? recordings.data : recordings.data?.slice(0, 5);
+
+  createFakeWindowBounds(showMoreRef, () => "show-more-btn");
 
   return (
     <div class="w-screen h-[100vh] bg-transparent relative">
@@ -98,24 +101,7 @@ export default function () {
                 });
               });
 
-              createEffect(
-                on([i, showMoreRef], () => {
-                  const bounds = ref()?.getBoundingClientRect();
-                  const showMoreBounds = showMoreRef()?.getBoundingClientRect();
-                  if (!bounds || !showMoreBounds) return;
-
-                  commands.setFakeWindowBounds(recording, {
-                    x: bounds.x,
-                    y: bounds.y,
-                    width: bounds.width,
-                    height: bounds.height + showMoreBounds.height,
-                  });
-                })
-              );
-
-              onCleanup(() => {
-                commands.removeFakeWindow(recording);
-              });
+              createFakeWindowBounds(ref, () => recording);
 
               return (
                 <Show when={present()}>
@@ -177,7 +163,7 @@ export default function () {
                               removedCount() === visibleRecordings()?.length &&
                               !hasClosedWindow()
                             ) {
-                              commands.closePreviousRecordingsWindow();
+                              window.close();
                               setHasClosedWindow(true);
                             }
                           }}
@@ -368,3 +354,23 @@ const TooltipIconButton = (
     </Tooltip>
   );
 };
+
+function createFakeWindowBounds(
+  ref: () => HTMLElement | undefined | null,
+  key: Accessor<string>
+) {
+  const bounds = createElementBounds(ref);
+
+  createEffect(() => {
+    commands.setFakeWindowBounds(key(), {
+      x: bounds.left ?? 0,
+      y: bounds.top ?? 0,
+      width: bounds.width ?? 0,
+      height: bounds.height ?? 0,
+    });
+  });
+
+  onCleanup(() => {
+    commands.removeFakeWindow(key());
+  });
+}

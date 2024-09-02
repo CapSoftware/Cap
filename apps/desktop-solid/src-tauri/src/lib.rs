@@ -900,28 +900,14 @@ async fn render_to_file(
     project: ProjectConfiguration,
     progress_channel: tauri::ipc::Channel<RenderProgress>,
 ) {
-    let video_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap()
-        .join("recordings")
-        .join(format!("{video_id}.cap"));
-
-    let screen_recording_path = video_dir.join("content/display.mp4");
-    let camera_recording_path = video_dir.join("content/camera.mp4");
+    let editor_instance = EditorInstance::get(&app, video_id).await;
 
     cap_rendering::render_video_to_file(
-        RenderOptions {
-            screen_recording_path: screen_recording_path.clone(),
-            camera_recording_path: camera_recording_path.clone(),
-            camera_size: (1920, 1080),
-            screen_size: (3456, 2234),
-            output_size: (1920, 1080),
-        },
+        editor_instance.render_constants.options.clone(),
         project,
         output_path,
-        OnTheFlyVideoDecoderActor::new(screen_recording_path),
-        OnTheFlyVideoDecoderActor::new(camera_recording_path),
+        editor_instance.screen_decoder.clone(),
+        editor_instance.camera_decoder.clone(),
         move |current_frame| {
             progress_channel
                 .send(RenderProgress::FrameRendered { current_frame })
