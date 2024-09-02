@@ -16,7 +16,10 @@ tauri-build = { version = "2.0.0-rc", features = [] }
 swift-rs = { version = "1.0.6", features = ["build"] }
 
 [dependencies]
-tauri = { version = "2.0.0-rc", features = [ "macos-private-api", "protocol-asset"] }
+tauri = { version = "2.0.0-rc", features = [
+	"macos-private-api",
+	"protocol-asset",
+] }
 tauri-plugin-shell = "2.0.0-rc"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -55,3 +58,4 @@ cap-project = { path = "../../../crates/project" }
 cap-rendering = { path = "../../../crates/rendering" }
 cap-ffmpeg = { path = "../../../crates/ffmpeg" }
 axum = { version = "0.7.5", features = ["ws"] }
+tauri-plugin-dialog = "2.0.0-rc.0"

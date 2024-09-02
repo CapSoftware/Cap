@@ -25,7 +25,7 @@ import { Dynamic } from "solid-js/web";
 import { throttle } from "@solid-primitives/scheduled";
 import { trackDeep } from "@solid-primitives/deep";
 import { useSearchParams } from "@solidjs/router";
-import { unwrap } from "solid-js/store";
+import { createStore, reconcile, unwrap } from "solid-js/store";
 import { createElementBounds } from "@solid-primitives/bounds";
 
 import {
@@ -52,6 +52,7 @@ import {
 import {
   commands,
   events,
+  type RenderProgress,
   type AspectRatio,
   type BackgroundSource,
   type CursorType,
@@ -71,7 +72,6 @@ const OUTPUT_SIZE = {
 };
 
 function Inner() {
-  const [params] = useSearchParams<{ path: string }>();
   const duration = 10;
 
   // const [playback, setPlayback] = createSignal({
@@ -115,9 +115,7 @@ function Inner() {
   const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
   const timelineBounds = createElementBounds(timelineRef);
 
-  const { canvasRef, setCanvasRef, state } = useEditorContext();
-
-  const videoId = () => params.path.split("/").at(-1)?.split(".")[0]!;
+  const { canvasRef, setCanvasRef, state, videoId } = useEditorContext();
 
   onMount(() => {
     commands.createEditorInstance(videoId()).then((result) => {
@@ -332,27 +330,89 @@ function Header() {
         class="flex flex-row gap-4 font-medium items-center"
         data-tauri-drag-region
       >
-        <Button
-          variant="secondary"
-          size="md"
-          onClick={async () => {
-            if (!params.path) return;
-            const pathParts = params.path.split("/");
-
-            const fileName = pathParts.at(-1)?.split(".")[0];
-            if (!fileName) return;
-
-            commands.renderVideoToChannel(fileName, unwrap(state));
-          }}
-        >
-          Render
-        </Button>
         <ShareButton />
-        <Button variant="primary" size="md">
-          Save
-        </Button>
+        <ExportButton />
       </div>
     </header>
+  );
+}
+
+import { save } from "@tauri-apps/plugin-dialog";
+import { Channel } from "@tauri-apps/api/core";
+
+function ExportButton() {
+  const { videoId, state: project } = useEditorContext();
+
+  const [state, setState] = createStore<
+    | { open: false; type: "idle" }
+    | ({ open: boolean } & (
+        | { type: "inProgress"; progress: number }
+        | { type: "finished"; path: string }
+      ))
+  >({ open: false, type: "idle" });
+
+  return (
+    <>
+      <Button
+        variant="primary"
+        size="md"
+        onClick={() => {
+          save({
+            filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
+          }).then((p) => {
+            if (!p) return;
+
+            setState(
+              reconcile({ open: true, type: "inProgress", progress: 0 })
+            );
+
+            const progress = new Channel<RenderProgress>();
+            progress.onmessage = (p) => {
+              if (p.type === "FrameRendered" && state.type === "inProgress")
+                setState({ progress: p.current_frame });
+            };
+
+            return commands
+              .renderToFile(p, videoId(), project, progress)
+              .then(() => {
+                setState({ ...state, type: "finished", path: p });
+              });
+          });
+        }}
+      >
+        Export
+      </Button>
+      <Dialog.Root
+        open={state.open}
+        onOpenChange={(o) => {
+          if (!o) setState(reconcile({ ...state, open: false }));
+        }}
+      >
+        <DialogContent
+          title="Export Recording"
+          confirm={
+            <Show when={state.type === "finished" && state}>
+              {(state) => (
+                <Button
+                  onClick={() => {
+                    commands.openInFinder(state().path);
+                  }}
+                >
+                  Open in Finder
+                </Button>
+              )}
+            </Show>
+          }
+        >
+          <Switch>
+            <Match when={state.type === "finished"}>Finished exporting</Match>
+            <Match when={state.type === "inProgress" && state}>
+              {(state) => <>Processed {state().progress} frames</>}
+            </Match>
+          </Switch>
+        </DialogContent>
+      </Dialog.Root>
+    </>
   );
 }
 

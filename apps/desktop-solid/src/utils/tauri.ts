@@ -84,6 +84,9 @@ async getCurrentRecording() : Promise<Result<JsonValue<InProgressRecording | nul
     else return { status: "error", error: e  as any };
 }
 },
+async renderToFile(outputPath: string, videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<void> {
+    await TAURI_INVOKE("render_to_file", { outputPath, videoId, project, progressChannel });
+},
 async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_rendered_video", { videoId, project }) };
@@ -132,6 +135,9 @@ async stopPlayback(videoId: string) : Promise<void> {
 },
 async setPlayheadPosition(videoId: string, frameNumber: number) : Promise<void> {
     await TAURI_INVOKE("set_playhead_position", { videoId, frameNumber });
+},
+async openInFinder(path: string) : Promise<void> {
+    await TAURI_INVOKE("open_in_finder", { path });
 }
 }
 
@@ -178,6 +184,7 @@ export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
 export type RecordingOptionsChanged = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
+export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type ShowCapturesPanel = null
 
 /** tauri-specta globals **/

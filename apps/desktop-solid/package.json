@@ -25,6 +25,7 @@
     "@solidjs/start": "^1.0.6",
     "@tanstack/solid-query": "^5.51.21",
     "@tauri-apps/api": ">=2.0.0-rc.0",
+    "@tauri-apps/plugin-dialog": "2.0.0-rc.1",
     "@tauri-apps/plugin-fs": "2.0.0-rc.0",
     "@tauri-apps/plugin-shell": ">=2.0.0-rc.0",
     "@types/react-tooltip": "^4.2.4",

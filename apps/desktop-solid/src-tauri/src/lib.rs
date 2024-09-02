@@ -267,6 +267,7 @@ async fn get_rendered_video(
         editor_instance.path.join("output/result.mp4"),
         editor_instance.screen_decoder.clone(),
         editor_instance.camera_decoder.clone(),
+        |_| {},
     )
     .await?;
 
@@ -332,7 +333,7 @@ impl EditorInstance {
 
         let render_options = RenderOptions {
             screen_recording_path: path.join("content/display.mp4"),
-            webcam_recording_path: path.join("content/camera.mp4"),
+            camera_recording_path: path.join("content/camera.mp4"),
             screen_size: (meta.display.width, meta.display.height),
             camera_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or((0, 0)),
             // webcam_style: WebcamStyle {
@@ -912,15 +913,53 @@ fn focus_captures_panel(app: AppHandle) {
     panel.make_key_window();
 }
 
-// #[tauri::command]
-// #[specta::specta]
-// async fn render_video(
-//     options: RenderOptions,
-//     project: ProjectConfiguration,
-//     output_path: PathBuf
-// ) -> Result<PathBuf, String> {
-//     cap_rendering::render_video_to_file(options, project).await
-// }
+#[derive(Serialize, Deserialize, specta::Type, Clone)]
+#[serde(tag = "type")]
+enum RenderProgress {
+    Starting { total_frames: u32 },
+    FrameRendered { current_frame: u32 },
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn render_to_file(
+    app: AppHandle,
+    output_path: PathBuf,
+    video_id: String,
+    project: ProjectConfiguration,
+    progress_channel: tauri::ipc::Channel<RenderProgress>,
+) {
+    let video_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap()
+        .join("recordings")
+        .join(format!("{video_id}.cap"));
+
+    let screen_recording_path = video_dir.join("content/display.mp4");
+    let camera_recording_path = video_dir.join("content/camera.mp4");
+
+    cap_rendering::render_video_to_file(
+        RenderOptions {
+            screen_recording_path: screen_recording_path.clone(),
+            camera_recording_path: camera_recording_path.clone(),
+            camera_size: (1920, 1080),
+            screen_size: (3456, 2234),
+            output_size: (1920, 1080),
+        },
+        project,
+        output_path,
+        OnTheFlyVideoDecoderActor::new(screen_recording_path),
+        OnTheFlyVideoDecoderActor::new(camera_recording_path),
+        move |current_frame| {
+            progress_channel
+                .send(RenderProgress::FrameRendered { current_frame })
+                .ok();
+        },
+    )
+    .await
+    .ok();
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -932,6 +971,16 @@ async fn set_playhead_position(app: AppHandle, video_id: String, frame_number: u
             state.playhead_position = frame_number;
         })
         .await;
+}
+
+#[tauri::command]
+#[specta::specta]
+fn open_in_finder(path: PathBuf) {
+    Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn()
+        .expect("Failed to open in Finder");
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -951,7 +1000,7 @@ pub fn run() {
             remove_fake_window,
             focus_captures_panel,
             get_current_recording,
-            // render_video,
+            render_to_file,
             get_rendered_video,
             copy_rendered_video_to_clipboard,
             get_video_metadata,
@@ -959,7 +1008,8 @@ pub fn run() {
             create_editor_instance,
             start_playback,
             stop_playback,
-            set_playhead_position
+            set_playhead_position,
+            open_in_finder
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -980,6 +1030,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_nspanel::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);

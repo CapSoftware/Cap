@@ -3,6 +3,7 @@ import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import type { AspectRatio, ProjectConfiguration } from "../../utils/tauri";
+import { useSearchParams } from "@solidjs/router";
 
 export const ASPECT_RATIOS = {
   wide: { name: "Wide", ratio: [16, 9] },
@@ -60,6 +61,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       null
     );
 
+    const [params] = useSearchParams<{ path: string }>();
+
+    const videoId = () => params.path.split("/").at(-1)?.split(".")[0]!;
+
     return {
       dialog,
       setDialog,
@@ -69,6 +74,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       setSelectedTab,
       canvasRef,
       setCanvasRef,
+      videoId,
     };
     // biome-ignore lint/style/noNonNullAssertion: context
   },

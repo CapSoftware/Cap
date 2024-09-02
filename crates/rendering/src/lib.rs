@@ -19,7 +19,7 @@ use std::time::Instant;
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RenderOptions {
     pub screen_recording_path: PathBuf,
-    pub webcam_recording_path: PathBuf,
+    pub camera_recording_path: PathBuf,
     pub camera_size: (u32, u32),
     pub screen_size: (u32, u32),
     // pub webcam_style: WebcamStyle,
@@ -98,6 +98,7 @@ pub async fn render_video_to_file(
     output_path: PathBuf,
     screen_recording_decoder: OnTheFlyVideoDecoderActor,
     camera_recording_decoder: OnTheFlyVideoDecoderActor,
+    on_progress: impl Fn(u32) + Send + 'static,
 ) -> Result<PathBuf, String> {
     let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -127,10 +128,14 @@ pub async fn render_video_to_file(
 
         let mut ffmpeg_process = ffmpeg.start();
 
+        let mut frame_count = 0;
         loop {
             match rx_image_data.recv().await {
                 Some(frame) => {
                     // println!("Sending image data to FFmpeg");
+                    on_progress(frame_count);
+
+                    frame_count += 1;
                     if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
                         eprintln!("Error writing video frame: {:?}", e);
                         break;

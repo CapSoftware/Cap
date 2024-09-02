@@ -18,6 +18,7 @@
     "core:window:allow-set-position",
     "core:webview:allow-create-webview-window",
     "shell:default",
-    "fs:default"
+    "fs:default",
+    "dialog:allow-save"
   ]
 }

@@ -31,7 +31,7 @@ async fn main() {
     render_video_to_file(
         cap_rendering::RenderOptions {
             screen_recording_path: project_path.join("content/display.mp4"),
-            webcam_recording_path: project_path.join("content/camera.mp4"),
+            camera_recording_path: project_path.join("content/camera.mp4"),
             camera_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or_default(),
             screen_size: (meta.display.width, meta.display.height),
             output_size: (1920, 1080),
@@ -40,6 +40,7 @@ async fn main() {
         project_path.join("output/result.mp4"),
         OnTheFlyVideoDecoderActor::new(project_path.join("content/display.mp4").clone()),
         OnTheFlyVideoDecoderActor::new(project_path.join("content/camera.mp4").clone()),
+        |_| {},
     )
     .await
     .ok();
