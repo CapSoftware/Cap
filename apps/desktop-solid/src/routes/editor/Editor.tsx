@@ -13,19 +13,20 @@ import {
   For,
   type JSX,
   Match,
-  type ParentProps,
   Show,
   Switch,
   createEffect,
-  createResource,
+  createMemo,
   createSignal,
   on,
   onMount,
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import { createReconnectingWS } from "@solid-primitives/websocket";
 import { throttle } from "@solid-primitives/scheduled";
 import { trackDeep } from "@solid-primitives/deep";
+import { useSearchParams } from "@solidjs/router";
+import { unwrap } from "solid-js/store";
+import { createElementBounds } from "@solid-primitives/bounds";
 
 import {
   ASPECT_RATIOS,
@@ -34,6 +35,7 @@ import {
 } from "./context";
 import {
   Dialog,
+  DialogContent,
   DropdownItem,
   EditorButton,
   Field,
@@ -54,9 +56,6 @@ import {
   type BackgroundSource,
   type CursorType,
 } from "../../utils/tauri";
-import { createAsync, useParams, useSearchParams } from "@solidjs/router";
-import { unwrap } from "solid-js/store";
-import { Channel, convertFileSrc } from "@tauri-apps/api/core";
 
 export function Editor() {
   return (
@@ -81,6 +80,14 @@ function Inner() {
   // });
 
   const [playbackTime, setPlaybackTime] = createSignal<number>(0);
+
+  onMount(() => {
+    events.editorStateChanged.listen((e) => {
+      renderFrame.clear();
+      setPlaybackTime(e.payload.playhead_position / 30);
+    });
+  });
+
   const [previewTime, setPreviewTime] = createSignal<number>();
 
   // let displayRef: HTMLVideoElement;
@@ -98,7 +105,6 @@ function Inner() {
   //     displayRef.currentTime = playback().time;
   // });
 
-  let timelineRef: HTMLDivElement;
   let videoRef: HTMLVideoElement;
 
   // createEffect(() => {
@@ -106,33 +112,34 @@ function Inner() {
   //   if (time !== undefined) videoRef.currentTime = time;
   // });
 
-  let timelineWidth = 0;
+  const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
+  const timelineBounds = createElementBounds(timelineRef);
 
   const { canvasRef, setCanvasRef, state } = useEditorContext();
 
+  const videoId = () => params.path.split("/").at(-1)?.split(".")[0]!;
+
   onMount(() => {
-    commands
-      .createEditorInstance(params.path.split("/").at(-1)?.split(".")[0]!)
-      .then((result) => {
-        if (result.status !== "ok") return;
-        const ws = new WebSocket(`ws://localhost:${result.data}/frames-ws`);
+    commands.createEditorInstance(videoId()).then((result) => {
+      if (result.status !== "ok") return;
+      const ws = new WebSocket(`ws://localhost:${result.data}/frames-ws`);
 
-        ws.binaryType = "arraybuffer";
+      ws.binaryType = "arraybuffer";
 
-        ws.onmessage = (event) => {
-          const ctx = canvasRef()?.getContext("2d");
-          if (!ctx) return;
+      ws.onmessage = (event) => {
+        const ctx = canvasRef()?.getContext("2d");
+        if (!ctx) return;
 
-          const clamped = new Uint8ClampedArray(event.data);
-          const imageData = new ImageData(
-            clamped,
-            OUTPUT_SIZE.width,
-            OUTPUT_SIZE.height
-          );
+        const clamped = new Uint8ClampedArray(event.data);
+        const imageData = new ImageData(
+          clamped,
+          OUTPUT_SIZE.width,
+          OUTPUT_SIZE.height
+        );
 
-          ctx.putImageData(imageData, 0, 0);
-        };
-      });
+        ctx.putImageData(imageData, 0, 0);
+      };
+    });
   });
 
   const renderFrame = throttle((time: number) => {
@@ -142,11 +149,16 @@ function Inner() {
     });
   }, 10);
 
+  const frameNumberToRender = createMemo(() => {
+    const preview = previewTime();
+    if (preview !== undefined) return preview;
+    return playbackTime();
+  });
+
   createEffect(
-    on(previewTime, () => {
-      const p = previewTime();
-      if (p === undefined) renderFrame(playbackTime());
-      else renderFrame(p);
+    on(frameNumberToRender, (number) => {
+      if (playing()) return;
+      renderFrame(number);
     })
   );
 
@@ -160,6 +172,8 @@ function Inner() {
       }
     )
   );
+
+  const [playing, setPlaying] = createSignal(false);
 
   return (
     <div
@@ -195,7 +209,29 @@ function Inner() {
               <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
                 <span>0:00.00</span>
                 <IconCapFrameFirst class="size-[1.2rem]" />
-                <IconCapStopCircle class="size-[1.5rem]" />
+                {!playing() ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      commands
+                        .startPlayback(videoId(), state)
+                        .then(() => setPlaying(true))
+                    }
+                  >
+                    <IconCapPlayCircle class="size-[1.5rem]" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      commands
+                        .stopPlayback(videoId())
+                        .then(() => setPlaying(false))
+                    }
+                  >
+                    <IconCapStopCircle class="size-[1.5rem]" />
+                  </button>
+                )}
                 <IconCapFrameLast class="size-[1rem]" />
                 <span>8:32.16</span>
               </div>
@@ -219,7 +255,7 @@ function Inner() {
                 class="w-px bg-black-transparent-20 absolute left-5 top-4 bottom-0 z-10 pointer-events-none"
                 style={{
                   transform: `translateX(${
-                    (time() / duration) * timelineWidth
+                    (time() / duration) * (timelineBounds.width ?? 0)
                   }px)`,
                 }}
               >
@@ -231,7 +267,7 @@ function Inner() {
             class="w-px bg-red-300 absolute left-5 top-4 bottom-0 z-10"
             style={{
               transform: `translateX(${
-                (playbackTime() / duration) * timelineWidth
+                (playbackTime() / duration) * (timelineBounds.width ?? 0)
               }px)`,
             }}
           >
@@ -240,17 +276,17 @@ function Inner() {
           <div class="relative h-[3rem] border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden">
             <div class="bg-blue-300 w-[0.5rem]" />
             <div
-              // biome-ignore lint/style/noNonNullAssertion: ref
-              ref={timelineRef!}
+              ref={setTimelineRef}
               class="bg-blue-50 relative w-full h-full flex flex-row items-end justify-end px-[0.5rem] py-[0.25rem]"
               onMouseDown={(e) => {
                 const { left, width } = e.currentTarget.getBoundingClientRect();
-                timelineWidth = width;
-                setPlaybackTime(duration * ((e.clientX - left) / width));
+                commands.setPlayheadPosition(
+                  videoId(),
+                  Math.round(30 * duration * ((e.clientX - left) / width))
+                );
               }}
               onMouseMove={(e) => {
                 const { left, width } = e.currentTarget.getBoundingClientRect();
-                timelineWidth = width;
                 setPreviewTime(duration * ((e.clientX - left) / width));
               }}
               onMouseLeave={() => {
@@ -1020,17 +1056,5 @@ function Dialogs() {
         )}
       </Show>
     </Dialog.Root>
-  );
-}
-
-function DialogContent(
-  props: ParentProps<{ title: string; confirm: JSX.Element }>
-) {
-  return (
-    <>
-      <Dialog.Header title={props.title} />
-      <Dialog.Content>{props.children}</Dialog.Content>
-      <Dialog.Footer>{props.confirm}</Dialog.Footer>
-    </>
   );
 }

@@ -5,10 +5,19 @@ import {
   currentMonitor,
   getCurrentWindow,
 } from "@tauri-apps/api/window";
-import { Show, createEffect, createResource, createSignal, on } from "solid-js";
+import {
+  type ComponentProps,
+  Show,
+  Suspense,
+  createEffect,
+  createResource,
+  createSignal,
+  on,
+} from "solid-js";
 import { createStore } from "solid-js/store";
+import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
+import { cx } from "cva";
 
-import { CloseX, Expand, Flip, Minimize, Squircle } from "../icons";
 import { createCameraForLabel } from "../utils/media";
 import { createOptionsQuery } from "../utils/queries";
 import { commands } from "../utils/tauri";
@@ -41,79 +50,73 @@ export default function () {
   createEffect(on(() => state.size, resizeWindow));
 
   return (
-    <Show when={options.data}>
-      {(options) => (
-        <div
-          data-tauri-drag-region
-          class="cursor-move group w-screen h-screen bg-gray-200 m-0 p-0 relative overflow-hidden flex items-center justify-center outline-none focus:outline-none border-2 border-sm border-gray-300"
-          style={{ "border-radius": cameraBorderRadius(state) }}
-        >
-          <div class="opacity-0 group-hover:opacity-100 absolute top-5 left-1/2 transform -translate-x-1/2 bg-gray-800 bg-opacity-75 backdrop-blur-sm rounded-xl z-20 grid grid-cols-4 overflow-hidden transition-opacity">
-            <div
-              onClick={() => {
-                commands.setRecordingOptions({
-                  ...options(),
-                  cameraLabel: null,
-                });
-              }}
-              class="h-full flex items-center justify-center p-2 hover:bg-gray-900"
-            >
-              <div>
-                <CloseX class="w-5 h-5 stroke-gray-200" />
-              </div>
-            </div>
-            <div
-              onClick={() => {
-                setState("size", (s) => (s === "sm" ? "lg" : "sm"));
-              }}
-              class="h-full flex items-center justify-center p-2 hover:bg-gray-900"
-            >
-              <div>
-                {state.size === "sm" ? (
-                  <Expand class="w-5 h-5 stroke-gray-200" />
-                ) : (
-                  <Minimize class="w-5 h-5 stroke-gray-200" />
+    <Suspense fallback={<div class="w-screen h-screen bg-red-400" />}>
+      <Show when={options.data}>
+        {(options) => (
+          <div
+            data-tauri-drag-region
+            class="cursor-move group w-screen h-screen relative flex flex-col"
+            style={{ "border-radius": cameraBorderRadius(state) }}
+          >
+            <div class="h-16" data-tauri-drag-region />
+            <div class="flex flex-col flex-1 relative" data-tauri-drag-region>
+              <video
+                data-tauri-drag-region
+                autoplay
+                playsinline
+                muted
+                class={cx(
+                  "w-full h-full object-cover pointer-events-none border-none shadow-lg",
+                  state.shape === "round" ? "rounded-full" : "rounded-3xl"
                 )}
-              </div>
-            </div>
-            <div
-              onClick={() =>
-                setState("shape", (s) => (s === "round" ? "square" : "round"))
-              }
-              class="h-full flex items-center justify-center p-2 hover:bg-gray-900"
-            >
-              {state.shape === "round" ? (
-                <div>
-                  <Squircle class="w-5 h-5 stroke-gray-200" />
+                style={{
+                  transform: state.mirrored ? "scaleX(1)" : "scaleX(-1)",
+                }}
+                ref={cameraPreviewRef}
+              />
+              <div class="flex flex-row items-center justify-center absolute -top-14 inset-x-0">
+                <div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-500 border border-white-transparent-20 text-gray-400">
+                  <ControlButton
+                    onClick={() => {
+                      commands.setRecordingOptions({
+                        ...options(),
+                        cameraLabel: null,
+                      });
+                    }}
+                  >
+                    <IconCapCircleX class="size-5.5" />
+                  </ControlButton>
+                  <ControlButton
+                    pressed={state.size === "lg"}
+                    onClick={() => {
+                      setState("size", (s) => (s === "sm" ? "lg" : "sm"));
+                    }}
+                  >
+                    <IconCapEnlarge class="size-5.5" />
+                  </ControlButton>
+                  <ControlButton
+                    pressed={state.shape === "square"}
+                    onClick={() =>
+                      setState("shape", (s) =>
+                        s === "round" ? "square" : "round"
+                      )
+                    }
+                  >
+                    <IconCapSquare class="size-5.5" />
+                  </ControlButton>
+                  <ControlButton
+                    pressed={state.mirrored}
+                    onClick={() => setState("mirrored", (m) => !m)}
+                  >
+                    <IconCapArrows class="size-5.5" />
+                  </ControlButton>
                 </div>
-              ) : (
-                <span class="w-3 h-3 bg-gray-200 rounded-full" />
-              )}
-            </div>
-            <div
-              onClick={() => setState("mirrored", (m) => !m)}
-              class="h-full flex items-center justify-center p-2 hover:bg-gray-900"
-            >
-              <div>
-                <Flip class="w-5 h-5 stroke-gray-200" />
               </div>
             </div>
           </div>
-
-          <video
-            data-tauri-drag-region
-            autoplay
-            playsinline
-            muted
-            class={
-              "absolute top-0 left-0 w-full h-full object-cover pointer-events-none"
-            }
-            style={{ transform: state.mirrored ? "scaleX(1)" : "scaleX(-1)" }}
-            ref={cameraPreviewRef}
-          />
-        </div>
-      )}
-    </Show>
+        )}
+      </Show>
+    </Suspense>
   );
 }
 
@@ -123,19 +126,18 @@ function cameraBorderRadius(state: CameraWindow.State) {
   return "4rem";
 }
 
+const BAR_HEIGHT = 56;
 async function resizeWindow(size: CameraWindow.Size) {
   const monitor = await currentMonitor();
 
   const windowWidth = size === "sm" ? 230 : 400;
-  const windowHeight = size === "sm" ? 230 : 400;
+  const windowHeight = windowWidth + BAR_HEIGHT;
 
   if (!monitor) return;
 
   const scalingFactor = monitor.scaleFactor;
   const x = 100;
   const y = monitor.size.height / scalingFactor - windowHeight - 100;
-
-  console.log(scalingFactor, x, y, windowWidth, windowHeight, monitor);
 
   const currentWindow = getCurrentWindow();
   currentWindow.setSize(new LogicalSize(windowWidth, windowHeight));
@@ -166,4 +168,32 @@ function createCameraPreview(deviceId: () => string | undefined) {
   });
 
   return [setCameraRef] as const;
+}
+
+// {
+//   "title": "Cap Permissions",
+//   "label": "permissions",
+//   "width": 400,
+//   "height": 400,
+//   "decorations": false,
+//   "resizable": false,
+//   "maximized": false,
+//   "shadow": true,
+//   "transparent": true,
+//   "acceptFirstMouse": true,
+//   "url": "/permissions-macos"
+// }
+
+function ControlButton(
+  props: Omit<ComponentProps<typeof KToggleButton>, "type" | "class"> & {
+    active?: boolean;
+  }
+) {
+  return (
+    <KToggleButton
+      type="button"
+      class="p-2 ui-pressed:bg-white-transparent-5 ui-pressed:text-gray-50 rounded-lg"
+      {...props}
+    />
+  );
 }

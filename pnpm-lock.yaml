@@ -135,6 +135,9 @@ importers:
       '@kobalte/core':
         specifier: ^0.13.4
         version: 0.13.4(solid-js@1.8.21)
+      '@solid-primitives/bounds':
+        specifier: ^0.0.122
+        version: 0.0.122(solid-js@1.8.21)
       '@solid-primitives/context':
         specifier: ^0.2.3
         version: 0.2.3(solid-js@1.8.21)
@@ -4808,6 +4811,11 @@ packages:
     resolution: {integrity: sha512-IHk53BVw6MPMi2Gsn+hCng8rFA3ZmR3Rk7GllxDUW9qFJl/hiSvskn7XldkECapQVkIg/1dHpMAxI9xSTaLLSA==}
     engines: {node: '>=14.0.0'}
 
+  '@solid-primitives/bounds@0.0.122':
+    resolution: {integrity: sha512-kUq/IprOdFr/rg2upon5lQGOoTnDAmxQS4ASKK2l+VwoKSctdPwgu/4qJxEITZikL+nB0myYZzBZWptySV0cRg==}
+    peerDependencies:
+      solid-js: ^1.6.12
+
   '@solid-primitives/context@0.2.3':
     resolution: {integrity: sha512-6/e8qu9qJf48FJ+sxc/B782NdgFw5TvI8+r6U0gHizumfZcWZg8FAJqvRZAiwlygkUNiTQOGTeO10LVbMm0kvg==}
     peerDependencies:
@@ -4989,11 +4997,11 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@8.3.0-beta.0':
-    resolution: {integrity: sha512-8DePr6K1t6PAqQ5N5FXYpSXoM6aJTQWt0pMu1Zhy8QUYXGB0IDBbvVzUJK2q2/yL4Hecf4G0KJTQAeYOpFqS0w==}
+  '@storybook/builder-vite@8.3.0-beta.1':
+    resolution: {integrity: sha512-7FtBmpriEva+z3gCBGiWZONv2eOh47bJkEBHkk4TTPn9mUvcO1nL9QzBb7dw5km9lgpvbgF04PCMPP0f9+fdAw==}
     peerDependencies:
       '@preact/preset-vite': '*'
-      storybook: ^8.3.0-beta.0
+      storybook: ^8.3.0-beta.1
       typescript: '>= 4.3.x'
       vite: ^4.0.0 || ^5.0.0
       vite-plugin-glimmerx: '*'
@@ -5016,10 +5024,10 @@ packages:
     peerDependencies:
       storybook: ^8.2.9
 
-  '@storybook/csf-plugin@8.3.0-beta.0':
-    resolution: {integrity: sha512-CpXUFgNkwB9JwNE95QEL4mLRUyY/2uZbj+rEAn/5fBn0jCwbyOqaMG4wcgyvzaYa3dgWzJlXzz0qBr+zqW1PJw==}
+  '@storybook/csf-plugin@8.3.0-beta.1':
+    resolution: {integrity: sha512-fEh01YeyW1gTxwRwbqFuwWyaunSk0DB4w8MrVZDi3xquIQcWBJ47W2RyqJcXxbj8Xd9ssSsqnOf+cNmYtUtOIQ==}
     peerDependencies:
-      storybook: ^8.3.0-beta.0
+      storybook: ^8.3.0-beta.1
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -16864,6 +16872,14 @@ snapshots:
       '@smithy/types': 2.12.0
       tslib: 2.6.2
 
+  '@solid-primitives/bounds@0.0.122(solid-js@1.8.21)':
+    dependencies:
+      '@solid-primitives/event-listener': 2.3.3(solid-js@1.8.21)
+      '@solid-primitives/resize-observer': 2.0.26(solid-js@1.8.21)
+      '@solid-primitives/static-store': 0.0.8(solid-js@1.8.21)
+      '@solid-primitives/utils': 6.2.3(solid-js@1.8.21)
+      solid-js: 1.8.21
+
   '@solid-primitives/context@0.2.3(solid-js@1.8.21)':
     dependencies:
       solid-js: 1.8.21
@@ -17114,9 +17130,9 @@ snapshots:
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
 
-  '@storybook/builder-vite@8.3.0-beta.0(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))':
+  '@storybook/builder-vite@8.3.0-beta.1(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))':
     dependencies:
-      '@storybook/csf-plugin': 8.3.0-beta.0(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))
+      '@storybook/csf-plugin': 8.3.0-beta.1(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))
       '@types/find-cache-dir': 3.2.1
       browser-assert: 1.2.1
       es-module-lexer: 1.5.4
@@ -17175,7 +17191,7 @@ snapshots:
       storybook: 8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10)
       unplugin: 1.12.1
 
-  '@storybook/csf-plugin@8.3.0-beta.0(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))':
+  '@storybook/csf-plugin@8.3.0-beta.1(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))':
     dependencies:
       storybook: 8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10)
       unplugin: 1.12.1
@@ -24386,7 +24402,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6)):
     dependencies:
-      '@storybook/builder-vite': 8.3.0-beta.0(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))
+      '@storybook/builder-vite': 8.3.0-beta.1(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))
     transitivePeerDependencies:
       - '@preact/preset-vite'
       - storybook

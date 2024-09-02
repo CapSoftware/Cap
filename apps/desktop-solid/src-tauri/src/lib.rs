@@ -3,39 +3,42 @@ mod display;
 mod macos;
 mod recording;
 
+use camera::{create_camera_window, get_cameras};
+use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
+use cap_rendering::{
+    create_uniforms_buffers, produce_frame, render_video_to_file, OnTheFlyVideoDecoderActor,
+    RenderOptions, RenderVideoConstants,
+};
+use display::{get_capture_windows, Bounds, CaptureTarget};
+use ffmpeg_sidecar::{
+    command::ffmpeg_is_installed,
+    download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
+    paths::sidecar_dir,
+    version::ffmpeg_version,
+};
 use mp4::Mp4Reader;
 use objc2_app_kit::NSScreenSaverWindowLevel;
 use recording::{DisplaySource, InProgressRecording};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::fs::File;
 use std::io::BufReader;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
 };
+use std::{fs::File, future::Future};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
-use tokio::{sync::RwLock, time::sleep};
-
-use camera::{create_camera_window, get_cameras};
-use cap_ffmpeg::ffmpeg_path_as_str;
-use cap_rendering::{
-    create_uniforms_buffers, produce_frame, render_video_to_file, OnTheFlyVideoDecoderActor,
-    RenderOptions, RenderVideoConstants,
-};
-use display::{get_capture_windows, Bounds, CaptureTarget};
-
-use ffmpeg_sidecar::{
-    command::ffmpeg_is_installed,
-    download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
-    paths::sidecar_dir,
-    version::ffmpeg_version,
+use tokio::{
+    join,
+    sync::{Mutex, RwLock},
+    task::JoinHandle,
+    time::{sleep, Instant},
 };
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -276,13 +279,33 @@ struct RenderFrameEvent {
     project: ProjectConfiguration,
 }
 
+struct EditorState {
+    playhead_position: u32,
+    playback_task: Option<JoinHandle<()>>,
+}
+
+#[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
+struct EditorStateChanged {
+    playhead_position: u32,
+}
+
+impl EditorStateChanged {
+    fn new(s: &EditorState) -> Self {
+        Self {
+            playhead_position: s.playhead_position,
+        }
+    }
+}
+
 struct EditorInstance {
+    app: AppHandle,
     pub path: PathBuf,
     pub screen_decoder: OnTheFlyVideoDecoderActor,
     pub camera_decoder: OnTheFlyVideoDecoderActor,
     pub frame_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     pub ws_port: u16,
     pub render_constants: Arc<RenderVideoConstants>,
+    pub state: Mutex<EditorState>,
 }
 
 impl EditorInstance {
@@ -413,8 +436,12 @@ impl EditorInstance {
                         create_uniforms_buffers(&render_constants, &e.payload.project);
 
                     let now = std::time::Instant::now();
-                    let screen_frame = screen_decoder.get_frame(e.payload.frame_number).unwrap();
-                    let camera_frame = camera_decoder.get_frame(e.payload.frame_number).unwrap();
+                    let (Some(screen_frame), Some(camera_frame)) = join!(
+                        (screen_decoder.get_frame(e.payload.frame_number)),
+                        camera_decoder.get_frame(e.payload.frame_number)
+                    ) else {
+                        return;
+                    };
                     println!("decoded inputs in {:.2?}", now.elapsed());
 
                     let now = std::time::Instant::now();
@@ -432,18 +459,23 @@ impl EditorInstance {
                     println!("produced frame in {:.2?}", now.elapsed());
                     rendering.store(false, Ordering::Relaxed);
 
-                    frame_tx.send(frame).unwrap();
+                    frame_tx.send(frame).ok();
                 });
             }
         });
 
         Self {
+            app: app.clone(),
             path,
             screen_decoder,
             camera_decoder,
             frame_tx,
             ws_port,
             render_constants,
+            state: Mutex::new(EditorState {
+                playhead_position: 0,
+                playback_task: None,
+            }),
         }
     }
 
@@ -456,6 +488,89 @@ impl EditorInstance {
                 instance
             }
         }
+    }
+
+    pub async fn modify_and_emit_state(&self, modify: impl Fn(&mut EditorState)) {
+        let mut state = self.state.lock().await;
+        modify(&mut state);
+        EditorStateChanged::new(&state).emit(&self.app).ok();
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfiguration) {
+    let editor_instance = EditorInstance::get(&app, video_id).await;
+
+    let Ok(mut state) = editor_instance.state.try_lock() else {
+        return;
+    };
+
+    let start_frame_number = state.playhead_position;
+
+    let fps = 30.0;
+
+    let editor_instance = editor_instance.clone();
+    let prev = state.playback_task.replace(tokio::spawn(async move {
+        let start = Instant::now();
+        let mut frame_number = start_frame_number;
+
+        let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
+            create_uniforms_buffers(&editor_instance.render_constants, &project);
+
+        loop {
+            let now = std::time::Instant::now();
+            let (Some(screen_frame), Some(camera_frame)) = join!(
+                editor_instance.screen_decoder.get_frame(frame_number),
+                editor_instance.camera_decoder.get_frame(frame_number)
+            ) else {
+                break;
+            };
+            println!("decoded inputs in {:.2?}", now.elapsed());
+
+            let now = std::time::Instant::now();
+            let frame = produce_frame(
+                &editor_instance.render_constants,
+                &screen_uniforms_buffer,
+                screen_frame,
+                &camera_uniforms_buffer,
+                camera_frame,
+                &composite_uniforms_buffer,
+            )
+            .await
+            .unwrap();
+
+            println!("produced frame in {:.2?}", now.elapsed());
+
+            editor_instance.frame_tx.send(frame).ok();
+
+            editor_instance
+                .modify_and_emit_state(|state| {
+                    state.playhead_position = frame_number;
+                })
+                .await;
+
+            tokio::time::sleep_until(start + Duration::from_secs_f32(frame_number as f32 / fps))
+                .await;
+
+            frame_number += 1;
+        }
+    }));
+
+    if let Some(prev) = prev {
+        prev.abort();
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn stop_playback(app: AppHandle, video_id: String) {
+    let editor_instance = EditorInstance::get(&app, video_id).await;
+
+    let mut state = editor_instance.state.lock().await;
+
+    if let Some(playback) = state.playback_task.take() {
+        playback.abort();
     }
 }
 
@@ -807,6 +922,18 @@ fn focus_captures_panel(app: AppHandle) {
 //     cap_rendering::render_video_to_file(options, project).await
 // }
 
+#[tauri::command]
+#[specta::specta]
+async fn set_playhead_position(app: AppHandle, video_id: String, frame_number: u32) {
+    let editor_instance = EditorInstance::get(&app, video_id).await;
+
+    editor_instance
+        .modify_and_emit_state(|state| {
+            state.playhead_position = frame_number;
+        })
+        .await;
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -829,12 +956,16 @@ pub fn run() {
             copy_rendered_video_to_clipboard,
             get_video_metadata,
             render_video_to_channel,
-            create_editor_instance
+            create_editor_instance,
+            start_playback,
+            stop_playback,
+            set_playhead_position
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
             ShowCapturesPanel,
-            RenderFrameEvent
+            RenderFrameEvent,
+            EditorStateChanged
         ])
         .ty::<ProjectConfiguration>();
 

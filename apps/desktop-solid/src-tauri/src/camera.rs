@@ -10,7 +10,7 @@ use cap_ffmpeg::NamedPipeCapture;
 
 pub const WINDOW_LABEL: &str = "camera";
 const CAMERA_ROUTE: &str = "/camera";
-const WINDOW_SIZE: f64 = 230.0;
+const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
 #[tauri::command]
 #[specta::specta]
@@ -28,12 +28,14 @@ pub fn create_camera_window(app: AppHandle) {
         .title("Cap Camera")
         .maximized(false)
         .resizable(false)
+        .shadow(false)
         .fullscreen(false)
         .decorations(false)
         .always_on_top(true)
         .content_protected(true)
         .visible_on_all_workspaces(true)
-        .inner_size(WINDOW_SIZE, WINDOW_SIZE)
+        .min_inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
+        .inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
         .position(
             100.0,
             (monitor.size().height as f64) / monitor.scale_factor() - WINDOW_SIZE - 100.0,

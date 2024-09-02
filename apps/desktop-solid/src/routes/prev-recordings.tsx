@@ -11,10 +11,11 @@ import {
   onCleanup,
 } from "solid-js";
 import createPresence from "solid-presence";
-
-import { commands, events } from "../utils/tauri";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Tooltip from "@corvu/tooltip";
+import { Button } from "@cap/ui-solid";
+
+import { commands, events } from "../utils/tauri";
 
 export default function () {
   const recordings = createQuery(() => ({
@@ -110,10 +111,10 @@ export default function () {
                   // }}
                   style={{
                     "border-color": "rgba(255, 255, 255, 0.2)",
-                    "box-shadow": "0px 2px 4px rgba(18, 22, 31, 0.12)",
+                    // "box-shadow": "0px 2px 4px rgba(18, 22, 31, 0.12)",
                   }}
                   class={cx(
-                    "w-[260px] h-[150px] p-[4px] bg-gray-500 rounded-[12px] overflow-hidden shadow border-[1px] group transition-all relative",
+                    "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500 rounded-[12px] overflow-hidden shadow border-[1px] group transition-all relative",
                     "transition-[transform,opacity] duration-300",
                     exiting()
                       ? "animate-out slide-out-to-left-32 fade-out"
@@ -139,19 +140,19 @@ export default function () {
                         onError={() => setImageExists(false)}
                       />
                     </Show>
-                    <div class="w-full h-full absolute inset-0 transition-all opacity-0 group-hover:opacity-100 backdrop-blur group-hover:backdrop-blur bg-gray-500/80 text-white p-4">
+                    <div class="w-full h-full absolute inset-0 transition-all opacity-0 group-hover:opacity-100 backdrop-blur group-hover:backdrop-blur bg-gray-500/80 text-white p-2">
                       <TooltipIconButton
-                        class="absolute left-3 top-3"
+                        class="absolute left-3 top-3 z-20"
                         tooltipText="Close"
                         tooltipPlacement="right"
                         onClick={() => {
                           setExiting(true);
                         }}
                       >
-                        <IconCapCircleX class="w-[16px] h-[16px]" />
+                        <IconCapCircleX class="size-[1rem]" />
                       </TooltipIconButton>
                       <TooltipIconButton
-                        class="absolute left-3 bottom-3"
+                        class="absolute left-3 bottom-3 z-20"
                         tooltipText="Edit"
                         tooltipPlacement="right"
                         onClick={() => {
@@ -162,7 +163,7 @@ export default function () {
                           });
                         }}
                       >
-                        <IconCapEditor class="w-[16px] h-[16px]" />
+                        <IconCapEditor class="size-[1rem]" />
                       </TooltipIconButton>
                       <TooltipIconButton
                         class="absolute right-3 top-3 z-20"
@@ -211,13 +212,13 @@ export default function () {
                         }}
                       >
                         <Show when={isLoading()}>
-                          <IconLucideLoaderCircle class="w-[16px] h-[16px] animate-spin" />
+                          <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
                         </Show>
                         <Show when={isSuccess()}>
-                          <IconLucideCheck class="w-[16px] h-[16px]" />
+                          <IconLucideCheck class="size-[1rem]" />
                         </Show>
                         <Show when={!isLoading() && !isSuccess()}>
-                          <IconCapCopy class="w-[16px] h-[16px]" />
+                          <IconCapCopy class="size-[1rem]" />
                         </Show>
                       </TooltipIconButton>
                       <TooltipIconButton
@@ -236,24 +237,27 @@ export default function () {
                           }
                         }}
                       >
-                        <IconCapUpload class="w-[16px] h-[16px]" />
+                        <IconCapUpload class="size-[1rem]" />
                       </TooltipIconButton>
-                      <IconButton
-                        class="absolute inset-0 m-auto w-[65px] h-[32px] hover:bg-gray-300 text-[14px]"
-                        onClick={async () => {
-                          setIsLoading(true);
-                          try {
-                            setIsLoading(false);
-                            setIsSuccess(true);
-                            setTimeout(() => setIsSuccess(false), 2000);
-                          } catch (error) {
-                            setIsLoading(false);
-                            window.alert("Failed to save recording");
-                          }
-                        }}
-                      >
-                        Save
-                      </IconButton>
+                      <div class="absolute inset-0 flex items-center justify-center">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={async () => {
+                            setIsLoading(true);
+                            try {
+                              setIsLoading(false);
+                              setIsSuccess(true);
+                              setTimeout(() => setIsSuccess(false), 2000);
+                            } catch (error) {
+                              setIsLoading(false);
+                              window.alert("Failed to save recording");
+                            }
+                          }}
+                        >
+                          Save
+                        </Button>
+                      </div>
                     </div>
                     <div
                       style={{ color: "white", "font-size": "14px" }}
@@ -285,7 +289,7 @@ const IconButton = (props: ComponentProps<"button">) => {
       {...props}
       type="button"
       class={cx(
-        "w-[28px] h-[28px] bg-gray-100 rounded-full text-neutral-300 text-[12px] flex items-center justify-center p-0 m-0 shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
+        "p-[0.325rem] bg-gray-100 rounded-full text-neutral-300 text-[12px] shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
         props.class
       )}
     />
@@ -329,19 +333,3 @@ const TooltipIconButton = (
     </Tooltip>
   );
 };
-
-const LoaderIcon = (props: ComponentProps<"svg">) => (
-  <svg
-    {...props}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="2"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    class="animate-spin"
-  >
-    <circle cx="12" cy="12" r="10" />
-    <path d="M4 12a8 8 0 018-8" />
-  </svg>
-);

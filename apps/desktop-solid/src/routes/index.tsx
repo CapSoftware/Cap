@@ -3,30 +3,25 @@ import {
   For,
   Show,
   Suspense,
-  ValidComponent,
+  type ValidComponent,
   createEffect,
   createMemo,
   createSignal,
 } from "solid-js";
 import { Select as KSelect } from "@kobalte/core/select";
-import { SwitchTab } from "@cap/ui-solid";
+import { SwitchTab, Button } from "@cap/ui-solid";
 
 import { createCameraForLabel, createCameras } from "../utils/media";
 import { createOptionsQuery, createWindowsQuery } from "../utils/queries";
-import { CaptureWindow, commands, events } from "../utils/tauri";
+import { type CaptureWindow, commands, events } from "../utils/tauri";
 import Header from "../components/Header";
-
-import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
 import {
-  EditorButton,
   MenuItemList,
   PopperContent,
-  DropdownItem,
   topLeftAnimateClasses,
   MenuItem,
   topRightAnimateClasses,
 } from "./editor/ui";
-import { Button } from "@cap/ui-solid";
 
 export default function () {
   const cameras = createCameras();
@@ -44,11 +39,23 @@ export default function () {
 
   commands.showPreviousRecordingsWindow();
 
+  // const navigate = useNavigate();
+  // navigate("/recording-permissions");
+
   return (
-    <div class="rounded-[1.5rem]">
+    <div class="rounded-[1.5rem] bg-gray-50 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden">
       <Header />
-      <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400]">
-        <Suspense fallback="LOADING">
+
+      <Suspense
+        fallback={
+          <div class="w-full h-full flex items-center justify-center bg-gray-100">
+            <div class="p-[0.5rem] rounded-2xl border border-gray-200 bg-gray-50">
+              <IconCapLogo class="size-[4rem]" />
+            </div>
+          </div>
+        }
+      >
+        <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400]">
           <Show when={options.data}>
             {(options) => {
               const [windowSelectOpen, setWindowSelectOpen] =
@@ -327,8 +334,8 @@ export default function () {
               );
             }}
           </Show>
-        </Suspense>
-      </div>
+        </div>
+      </Suspense>
     </div>
   );
 }

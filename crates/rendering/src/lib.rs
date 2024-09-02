@@ -309,12 +309,12 @@ pub async fn render_video_to_channel(
     let (screen_tx, mut screen_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     let (camera_tx, mut camera_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
-    thread::spawn(move || {
+    tokio::spawn(async move {
         let now = Instant::now();
 
         let mut i = 0;
         loop {
-            match screen_recording_decoder.get_frame(i) {
+            match screen_recording_decoder.get_frame(i).await {
                 Some(frame) => {
                     if screen_tx.send(frame).is_err() {
                         println!("Error sending screen frame to renderer");
@@ -334,12 +334,12 @@ pub async fn render_video_to_channel(
 
     println!("Setting up FFmpeg input for webcam recording...");
 
-    thread::spawn(move || {
+    tokio::spawn(async move {
         let now = Instant::now();
 
         let mut i = 0;
         loop {
-            match camera_recording_decoder.get_frame(i) {
+            match camera_recording_decoder.get_frame(i).await {
                 Some(frame) => {
                     if camera_tx.send(frame).is_err() {
                         println!("Error sending screen frame to renderer");
@@ -664,7 +664,7 @@ pub async fn produce_frame(
     let buffer_slice = output_buffer.slice(..);
     let (tx, rx) = oneshot_channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-        tx.send(result).unwrap();
+        tx.send(result).ok();
     });
     device.poll(wgpu::Maintain::Wait);
 
@@ -785,7 +785,7 @@ mod render_frame {
                 address_mode_v: wgpu::AddressMode::ClampToEdge,
                 address_mode_w: wgpu::AddressMode::ClampToEdge,
                 mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Linear,
                 mipmap_filter: wgpu::FilterMode::Nearest,
                 ..Default::default()
             }),
@@ -949,7 +949,7 @@ mod composite {
                 address_mode_v: wgpu::AddressMode::ClampToEdge,
                 address_mode_w: wgpu::AddressMode::ClampToEdge,
                 mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Linear,
                 mipmap_filter: wgpu::FilterMode::Nearest,
                 ..Default::default()
             }),
@@ -1196,7 +1196,7 @@ impl OnTheFlyVideoDecoder {
 }
 
 enum OnTheFlyVideoDecoderActorMessage {
-    GetFrame(u32, Sender<Option<Vec<u8>>>),
+    GetFrame(u32, tokio::sync::oneshot::Sender<Option<Vec<u8>>>),
 }
 
 #[derive(Clone)]
@@ -1215,7 +1215,7 @@ impl OnTheFlyVideoDecoderActor {
                 match rx.recv() {
                     Ok(OnTheFlyVideoDecoderActorMessage::GetFrame(frame_number, sender)) => {
                         let frame = decoder.get_frame(frame_number);
-                        sender.send(frame).unwrap();
+                        sender.send(frame).ok();
                     }
                     Err(_) => break,
                 }
@@ -1225,12 +1225,12 @@ impl OnTheFlyVideoDecoderActor {
         Self { tx }
     }
 
-    pub fn get_frame(&self, frame_number: u32) -> Option<Vec<u8>> {
-        let (tx, rx) = channel();
+    pub async fn get_frame(&self, frame_number: u32) -> Option<Vec<u8>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
         self.tx
             .send(OnTheFlyVideoDecoderActorMessage::GetFrame(frame_number, tx))
             .unwrap();
-        rx.recv().unwrap()
+        rx.await.unwrap()
     }
 }
 

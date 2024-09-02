@@ -123,6 +123,15 @@ async createEditorInstance(videoId: string) : Promise<Result<number, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async startPlayback(videoId: string, project: ProjectConfiguration) : Promise<void> {
+    await TAURI_INVOKE("start_playback", { videoId, project });
+},
+async stopPlayback(videoId: string) : Promise<void> {
+    await TAURI_INVOKE("stop_playback", { videoId });
+},
+async setPlayheadPosition(videoId: string, frameNumber: number) : Promise<void> {
+    await TAURI_INVOKE("set_playhead_position", { videoId, frameNumber });
 }
 }
 
@@ -130,10 +139,12 @@ async createEditorInstance(videoId: string) : Promise<Result<number, string>> {
 
 
 export const events = __makeEvents__<{
+editorStateChanged: EditorStateChanged,
 recordingOptionsChanged: RecordingOptionsChanged,
 renderFrameEvent: RenderFrameEvent,
 showCapturesPanel: ShowCapturesPanel
 }>({
+editorStateChanged: "editor-state-changed",
 recordingOptionsChanged: "recording-options-changed",
 renderFrameEvent: "render-frame-event",
 showCapturesPanel: "show-captures-panel"
@@ -159,6 +170,7 @@ export type CaptureWindow = { id: number; name: string }
 export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: CursorType }
 export type CursorType = "pointer" | "circle"
 export type DisplaySource = { variant: "screen" } | { variant: "window"; bounds: Bounds }
+export type EditorStateChanged = { playhead_position: number }
 export type HotkeysConfiguration = { show: boolean }
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
 export type JsonValue<T> = [T]

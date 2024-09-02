@@ -1,11 +1,10 @@
 import { Button } from "@cap/ui-solid";
-import { Button as KButton } from "@kobalte/core/button";
 import { Dialog as KDialog } from "@kobalte/core/dialog";
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { Polymorphic, PolymorphicProps } from "@kobalte/core/polymorphic";
+import { Polymorphic, type PolymorphicProps } from "@kobalte/core/polymorphic";
 import { Slider as KSlider } from "@kobalte/core/slider";
 import { Switch as KSwitch } from "@kobalte/core/switch";
-import { cva, cx, VariantProps } from "cva";
+import { cva, cx, type VariantProps } from "cva";
 import {
   type ComponentProps,
   type JSX,
@@ -84,11 +83,13 @@ export function Input(props: ComponentProps<"input">) {
 }
 
 export const Dialog = {
-  Root(props: ComponentProps<typeof KDialog>) {
+  Root(props: ComponentProps<typeof KDialog> & { hideOverlay?: boolean }) {
     return (
       <KDialog {...props}>
         <KDialog.Portal>
-          <KDialog.Overlay class="fixed inset-0 z-50 bg-black-transparent-80 ui-expanded:animate-in ui-expanded:fade-in ui-closed:animate-out ui-closed:fade-out" />
+          {!props.hideOverlay && (
+            <KDialog.Overlay class="fixed inset-0 z-50 bg-black-transparent-80 ui-expanded:animate-in ui-expanded:fade-in ui-closed:animate-out ui-closed:fade-out" />
+          )}
           <div class="fixed inset-0 z-50 flex items-center justify-center">
             <KDialog.Content class="z-50 divide-y text-sm rounded-[1.25rem] overflow-hidden max-w-96 border border-gray-200 bg-gray-50 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95">
               {props.children}
@@ -126,17 +127,29 @@ export const Dialog = {
       </div>
     );
   },
-  Header(props: { title: string }) {
+  Header(props: { title: string } & ComponentProps<"div">) {
     return (
-      <div class="h-[3.5rem] px-[1rem] flex flex-row items-center">
-        <KDialog.Title class="font-semibold">{props.title}</KDialog.Title>
+      <div {...props} class="h-[3.5rem] px-[1rem] flex flex-row items-center">
+        <KDialog.Title>{props.title}</KDialog.Title>
       </div>
     );
   },
   Content(props: ComponentProps<"div">) {
-    return <div class={cx("p-[1rem] flex flex-col", props.class)} {...props} />;
+    return <div {...props} class={cx("p-[1rem] flex flex-col", props.class)} />;
   },
 };
+
+export function DialogContent(
+  props: ParentProps<{ title: string; confirm: JSX.Element; class?: string }>
+) {
+  return (
+    <>
+      <Dialog.Header title={props.title} />
+      <Dialog.Content class={props.class}>{props.children}</Dialog.Content>
+      <Dialog.Footer>{props.confirm}</Dialog.Footer>
+    </>
+  );
+}
 
 export function MenuItem<T extends ValidComponent = "button">(
   _props: ComponentProps<T>

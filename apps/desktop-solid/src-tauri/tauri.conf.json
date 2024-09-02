@@ -9,18 +9,18 @@
     "frontendDist": "../.output/public"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "desktop-solid",
+        "title": "Cap",
         "width": 300,
-        "height": 320,
+        "height": 325,
         "decorations": false,
         "resizable": false,
         "maximized": false,
         "shadow": true,
         "transparent": true,
-        "acceptFirstMouse": true,
-        "windowEffects": { "effects": ["popover"], "radius": 15.0 }
+        "acceptFirstMouse": true
       }
     ],
     "security": {
