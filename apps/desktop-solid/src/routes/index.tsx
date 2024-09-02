@@ -30,7 +30,6 @@ export default function () {
 
   const camera = createCameraForLabel(() => options.data?.cameraLabel ?? "");
 
-  // temporary
   const [isRecording, setIsRecording] = createSignal(false);
 
   events.showCapturesPanel.listen(() => {
@@ -50,7 +49,7 @@ export default function () {
         fallback={
           <div class="w-full h-full flex items-center justify-center bg-gray-100">
             <div class="p-[0.5rem] rounded-2xl border border-gray-200 bg-gray-50">
-              <IconCapLogo class="size-[4rem]" />
+              <IconCapLogo class="size-[4rem] animate-spin" />
             </div>
           </div>
         }

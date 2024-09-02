@@ -35,10 +35,14 @@ export default function () {
     recordings.refetch();
   });
 
+  const [showAll, setShowAll] = createSignal(false);
+  const visibleRecordings = () =>
+    showAll() ? recordings.data : recordings.data?.slice(0, 5);
+
   return (
     <div class="w-screen h-screen bg-transparent relative">
       <div class="absolute left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4">
-        <For each={recordings.data}>
+        <For each={visibleRecordings()}>
           {(recording, i) => {
             const [ref, setRef] = createSignal<HTMLElement | null>(null);
 
@@ -278,6 +282,20 @@ export default function () {
             );
           }}
         </For>
+        <Show when={recordings.data && recordings.data.length > 5}>
+          <div class="w-full absolute bottom-[30px] left-[20px] flex justify-center z-30">
+            <Button
+              class="w-full max-w-[260px]"
+              variant="secondary"
+              size="md"
+              onClick={() => setShowAll(!showAll())}
+            >
+              {showAll()
+                ? "Show less"
+                : `Show ${recordings.data!.length - 5} more`}
+            </Button>
+          </div>
+        </Show>
       </div>
     </div>
   );
