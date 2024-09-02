@@ -1,5 +1,6 @@
 mod camera;
 mod display;
+mod editor;
 mod macos;
 mod recording;
 
@@ -7,8 +8,8 @@ use camera::{create_camera_window, get_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
 use cap_rendering::{
-    create_uniforms_buffers, produce_frame, render_video_to_file, OnTheFlyVideoDecoderActor,
-    RenderOptions, RenderVideoConstants,
+    create_uniforms_buffers, render_video_to_file, OnTheFlyVideoDecoderActor, RenderOptions,
+    RenderVideoConstants,
 };
 use display::{get_capture_windows, Bounds, CaptureTarget};
 use ffmpeg_sidecar::{
@@ -23,13 +24,13 @@ use recording::{DisplaySource, InProgressRecording};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::fs::File;
 use std::io::BufReader;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
 };
-use std::{fs::File, future::Future};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
@@ -303,8 +304,8 @@ struct EditorInstance {
     pub path: PathBuf,
     pub screen_decoder: OnTheFlyVideoDecoderActor,
     pub camera_decoder: OnTheFlyVideoDecoderActor,
-    pub frame_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     pub ws_port: u16,
+    pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
     pub state: Mutex<EditorState>,
 }
@@ -411,56 +412,51 @@ impl EditorInstance {
 
         let render_constants = Arc::new(RenderVideoConstants::new(render_options).await.unwrap());
 
+        let renderer = Arc::new(editor::Renderer::spawn(render_constants.clone(), frame_tx));
+
         RenderFrameEvent::listen_any(app, {
             let screen_decoder = screen_decoder.clone();
             let camera_decoder = camera_decoder.clone();
             let render_constants = render_constants.clone();
-            let frame_tx = frame_tx.clone();
 
             let rendering = Arc::new(AtomicBool::new(false));
+            let renderer = renderer.clone();
 
             move |e| {
                 let screen_decoder = screen_decoder.clone();
                 let camera_decoder = camera_decoder.clone();
                 let render_constants = render_constants.clone();
-                let frame_tx = frame_tx.clone();
 
                 if rendering.load(Ordering::Relaxed) {
                     return;
                 }
 
                 let rendering = rendering.clone();
+                let renderer = renderer.clone();
                 tokio::spawn(async move {
                     rendering.store(true, Ordering::Relaxed);
 
                     let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
                         create_uniforms_buffers(&render_constants, &e.payload.project);
 
-                    let now = std::time::Instant::now();
                     let (Some(screen_frame), Some(camera_frame)) = join!(
                         (screen_decoder.get_frame(e.payload.frame_number)),
                         camera_decoder.get_frame(e.payload.frame_number)
                     ) else {
                         return;
                     };
-                    println!("decoded inputs in {:.2?}", now.elapsed());
 
-                    let now = std::time::Instant::now();
-                    let frame = produce_frame(
-                        &render_constants,
-                        &screen_uniforms_buffer,
-                        screen_frame,
-                        &camera_uniforms_buffer,
-                        camera_frame,
-                        &composite_uniforms_buffer,
-                    )
-                    .await
-                    .unwrap();
+                    renderer
+                        .render_frame(
+                            screen_frame,
+                            camera_frame,
+                            screen_uniforms_buffer,
+                            camera_uniforms_buffer,
+                            composite_uniforms_buffer,
+                        )
+                        .await;
 
-                    println!("produced frame in {:.2?}", now.elapsed());
                     rendering.store(false, Ordering::Relaxed);
-
-                    frame_tx.send(frame).ok();
                 });
             }
         });
@@ -470,8 +466,8 @@ impl EditorInstance {
             path,
             screen_decoder,
             camera_decoder,
-            frame_tx,
             ws_port,
+            renderer,
             render_constants,
             state: Mutex::new(EditorState {
                 playhead_position: 0,
@@ -514,36 +510,29 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
     let editor_instance = editor_instance.clone();
     let prev = state.playback_task.replace(tokio::spawn(async move {
         let start = Instant::now();
-        let mut frame_number = start_frame_number;
-
-        let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
-            create_uniforms_buffers(&editor_instance.render_constants, &project);
+        let mut frame_number = start_frame_number + 1;
 
         loop {
-            let now = std::time::Instant::now();
+            let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
+                create_uniforms_buffers(&editor_instance.render_constants, &project);
+
             let (Some(screen_frame), Some(camera_frame)) = join!(
                 editor_instance.screen_decoder.get_frame(frame_number),
                 editor_instance.camera_decoder.get_frame(frame_number)
             ) else {
                 break;
             };
-            println!("decoded inputs in {:.2?}", now.elapsed());
 
-            let now = std::time::Instant::now();
-            let frame = produce_frame(
-                &editor_instance.render_constants,
-                &screen_uniforms_buffer,
-                screen_frame,
-                &camera_uniforms_buffer,
-                camera_frame,
-                &composite_uniforms_buffer,
-            )
-            .await
-            .unwrap();
-
-            println!("produced frame in {:.2?}", now.elapsed());
-
-            editor_instance.frame_tx.send(frame).ok();
+            editor_instance
+                .renderer
+                .render_frame(
+                    screen_frame,
+                    camera_frame,
+                    screen_uniforms_buffer,
+                    camera_uniforms_buffer,
+                    composite_uniforms_buffer,
+                )
+                .await;
 
             editor_instance
                 .modify_and_emit_state(|state| {
@@ -551,8 +540,7 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
                 })
                 .await;
 
-            tokio::time::sleep_until(start + Duration::from_secs_f32(frame_number as f32 / fps))
-                .await;
+            tokio::time::sleep_until(start + Duration::from_secs_f32(1.0 / fps)).await;
 
             frame_number += 1;
         }
@@ -581,32 +569,6 @@ async fn create_editor_instance(app: AppHandle, video_id: String) -> Result<u16,
     let editor_instance = EditorInstance::get(&app, video_id).await;
 
     Ok(editor_instance.ws_port)
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn render_video_to_channel(
-    app: AppHandle,
-    video_id: String,
-    project: ProjectConfiguration,
-) -> Result<u16, String> {
-    let editor_instance = EditorInstance::get(&app, video_id).await;
-
-    let port = editor_instance.ws_port;
-
-    tokio::spawn(async move {
-        cap_rendering::render_video_to_channel(
-            editor_instance.render_constants.options.clone(),
-            project,
-            editor_instance.frame_tx.clone(),
-            editor_instance.screen_decoder.clone(),
-            editor_instance.camera_decoder.clone(),
-        )
-        .await
-        .unwrap();
-    });
-
-    Ok(port)
 }
 
 #[tauri::command]
@@ -1004,7 +966,6 @@ pub fn run() {
             get_rendered_video,
             copy_rendered_video_to_clipboard,
             get_video_metadata,
-            render_video_to_channel,
             create_editor_instance,
             start_playback,
             stop_playback,

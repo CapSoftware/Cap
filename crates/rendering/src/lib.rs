@@ -1169,6 +1169,8 @@ impl OnTheFlyVideoDecoder {
                 ((frame_number as f32 / self.frame_rate.numerator() as f32) * 1_000_000.0) as i64;
             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
+            println!("seeeking to {position} for frame {frame_number}");
+
             self.decoder.flush();
             self.input.seek(position, ..position).unwrap();
         }

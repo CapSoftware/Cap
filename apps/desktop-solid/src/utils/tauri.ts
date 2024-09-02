@@ -111,14 +111,6 @@ async getVideoMetadata(videoId: string) : Promise<Result<[number, number], strin
     else return { status: "error", error: e  as any };
 }
 },
-async renderVideoToChannel(videoId: string, project: ProjectConfiguration) : Promise<Result<number, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("render_video_to_channel", { videoId, project }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 async createEditorInstance(videoId: string) : Promise<Result<number, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("create_editor_instance", { videoId }) };
