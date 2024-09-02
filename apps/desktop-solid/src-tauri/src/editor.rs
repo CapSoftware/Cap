@@ -102,9 +102,9 @@ impl EditorHandle {
 pub enum RendererMessage {
     RenderFrame {
         screen_frame: Vec<u8>,
-        camera_frame: Vec<u8>,
+        camera_frame: Option<Vec<u8>>,
         screen_uniforms_buffer: wgpu::Buffer,
-        camera_uniforms_buffer: wgpu::Buffer,
+        camera_uniforms_buffer: Option<wgpu::Buffer>,
         composite_uniforms_buffer: wgpu::Buffer,
         finished: oneshot::Sender<()>,
     },
@@ -167,9 +167,9 @@ impl Renderer {
                             let frame = produce_frame(
                                 &render_constants,
                                 &screen_uniforms_buffer,
-                                screen_frame,
-                                &camera_uniforms_buffer,
-                                camera_frame,
+                                &screen_frame,
+                                camera_uniforms_buffer.as_ref(),
+                                camera_frame.as_ref(),
                                 &composite_uniforms_buffer,
                             )
                             .await
@@ -193,9 +193,9 @@ impl RendererHandle {
     pub async fn render_frame(
         &self,
         screen_frame: Vec<u8>,
-        camera_frame: Vec<u8>,
+        camera_frame: Option<Vec<u8>>,
         screen_uniforms_buffer: wgpu::Buffer,
-        camera_uniforms_buffer: wgpu::Buffer,
+        camera_uniforms_buffer: Option<wgpu::Buffer>,
         composite_uniforms_buffer: wgpu::Buffer,
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();

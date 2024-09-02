@@ -18,13 +18,9 @@ use std::time::Instant;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RenderOptions {
-    pub screen_recording_path: PathBuf,
-    pub camera_recording_path: PathBuf,
-    pub camera_size: (u32, u32),
+    pub camera_size: Option<(u32, u32)>,
     pub screen_size: (u32, u32),
-    // pub webcam_style: WebcamStyle,
     pub output_size: (u32, u32),
-    // pub background: Background,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -96,8 +92,8 @@ pub async fn render_video_to_file(
     options: RenderOptions,
     project: ProjectConfiguration,
     output_path: PathBuf,
-    screen_recording_decoder: OnTheFlyVideoDecoderActor,
-    camera_recording_decoder: OnTheFlyVideoDecoderActor,
+    screen_recording_decoder: VideoDecoderActor,
+    camera_recording_decoder: Option<VideoDecoderActor>,
     on_progress: impl Fn(u32) + Send + 'static,
 ) -> Result<PathBuf, String> {
     let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
@@ -167,7 +163,7 @@ pub async fn render_video_to_file(
 pub fn create_uniforms_buffers(
     constants: &RenderVideoConstants,
     project: &ProjectConfiguration,
-) -> (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer) {
+) -> (wgpu::Buffer, Option<wgpu::Buffer>, wgpu::Buffer) {
     let options = &constants.options;
 
     let (background_start, background_end, _background_angle) = match &project.background.source {
@@ -242,14 +238,16 @@ pub fn create_uniforms_buffers(
     }
     .to_buffer(&constants.device);
 
-    let camera_uniforms_buffer = render_frame::Uniforms {
-        fb_size: [options.camera_size.1 as f32, options.camera_size.1 as f32],
-        border_pc: project.camera.rounding as f32,
-        x_offset: (options.camera_size.0 - options.camera_size.1) as f32 / 2.0,
-        mirror: project.camera.mirror as u32,
-        _padding: [0.0],
-    }
-    .to_buffer(&constants.device);
+    let camera_uniforms_buffer = options.camera_size.map(|camera_size| {
+        render_frame::Uniforms {
+            fb_size: [camera_size.1 as f32, camera_size.1 as f32],
+            border_pc: project.camera.rounding as f32,
+            x_offset: (camera_size.0 - camera_size.1) as f32 / 2.0,
+            mirror: project.camera.mirror as u32,
+            _padding: [0.0],
+        }
+        .to_buffer(&constants.device)
+    });
 
     let screen_xy = (
         options.output_size.0 as f32 / 2.0,
@@ -259,7 +257,9 @@ pub fn create_uniforms_buffers(
 
     let output_ratio = options.output_size.0 as f32 / options.output_size.1 as f32;
     let screen_ratio = options.screen_size.0 as f32 / options.screen_size.1 as f32;
-    let camera_ratio = options.camera_size.0 as f32 / options.camera_size.1 as f32;
+    let camera_ratio = options
+        .camera_size
+        .map(|camera_size| camera_size.0 as f32 / camera_size.1 as f32);
 
     let screen_size_uv = UV::new(screen_scale * (screen_ratio / output_ratio), screen_scale);
 
@@ -275,12 +275,16 @@ pub fn create_uniforms_buffers(
             label: Some("Uniform Buffer 2"),
             contents: bytemuck::cast_slice(&[composite::Uniforms {
                 screen_bounds: [screen_uv.u, screen_uv.v, screen_size_uv.u, screen_size_uv.v],
-                webcam_bounds: [
-                    webcam_position.u,
-                    webcam_position.v,
-                    CAMERA_UV_WIDTH * (camera_ratio / output_ratio),
-                    CAMERA_UV_WIDTH,
-                ],
+                webcam_bounds: camera_ratio
+                    .map(|camera_ratio| {
+                        [
+                            webcam_position.u,
+                            webcam_position.v,
+                            CAMERA_UV_WIDTH * (camera_ratio / output_ratio),
+                            CAMERA_UV_WIDTH,
+                        ]
+                    })
+                    .unwrap_or([0.0, 0.0, 0.0, 0.0]),
                 background_start,
                 background_end,
             }]),
@@ -299,8 +303,8 @@ pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
     sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    screen_recording_decoder: OnTheFlyVideoDecoderActor,
-    camera_recording_decoder: OnTheFlyVideoDecoderActor,
+    screen_recording_decoder: VideoDecoderActor,
+    camera_recording_decoder: Option<VideoDecoderActor>,
 ) -> Result<(), String> {
     let constants = RenderVideoConstants::new(options).await?;
 
@@ -312,7 +316,6 @@ pub async fn render_video_to_channel(
     ffmpeg_next::init().unwrap();
 
     let (screen_tx, mut screen_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-    let (camera_tx, mut camera_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
     tokio::spawn(async move {
         let now = Instant::now();
@@ -337,29 +340,34 @@ pub async fn render_video_to_channel(
         println!("done decoding screen in {:.2?}", now.elapsed())
     });
 
-    println!("Setting up FFmpeg input for webcam recording...");
+    let mut camera_rx = camera_recording_decoder.map(|camera_recording_decoder| {
+        println!("Setting up FFmpeg input for webcam recording...");
+        let (camera_tx, mut camera_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
-    tokio::spawn(async move {
-        let now = Instant::now();
+        tokio::spawn(async move {
+            let now = Instant::now();
 
-        let mut i = 0;
-        loop {
-            match camera_recording_decoder.get_frame(i).await {
-                Some(frame) => {
-                    if camera_tx.send(frame).is_err() {
-                        println!("Error sending screen frame to renderer");
+            let mut i = 0;
+            loop {
+                match camera_recording_decoder.get_frame(i).await {
+                    Some(frame) => {
+                        if camera_tx.send(frame).is_err() {
+                            println!("Error sending screen frame to renderer");
+                            break;
+                        }
+                    }
+                    None => {
+                        println!("Reached end of screen stream");
                         break;
                     }
                 }
-                None => {
-                    println!("Reached end of screen stream");
-                    break;
-                }
+                i += 1;
             }
-            i += 1;
-        }
 
-        println!("done decoding camera in {:.2?}", now.elapsed())
+            println!("done decoding camera in {:.2?}", now.elapsed())
+        });
+
+        camera_rx
     });
 
     let start_time = Instant::now();
@@ -368,18 +376,20 @@ pub async fn render_video_to_channel(
         let mut frame_count = 0;
 
         loop {
-            let (Some(screen_frame), Some(camera_frame)) =
-                tokio::join!(screen_rx.recv(), camera_rx.recv())
-            else {
+            let Some(screen_frame) = screen_rx.recv().await else {
                 break;
+            };
+            let camera_frame = match &mut camera_rx {
+                Some(rx) => rx.recv().await,
+                _ => break,
             };
 
             let frame = match produce_frame(
                 &constants,
                 &screen_uniforms_buffer,
-                screen_frame,
-                &camera_uniforms_buffer,
-                camera_frame,
+                &screen_frame,
+                camera_uniforms_buffer.as_ref(),
+                camera_frame.as_ref(),
                 &composite_uniforms_buffer,
             )
             .await
@@ -546,9 +556,9 @@ pub async fn produce_frame(
         ..
     }: &RenderVideoConstants,
     screen_uniforms_buffer: &wgpu::Buffer,
-    screen_frame: Vec<u8>,
-    camera_uniforms_buffer: &wgpu::Buffer,
-    camera_frame: Vec<u8>,
+    screen_frame: &Vec<u8>,
+    camera_uniforms_buffer: Option<&wgpu::Buffer>,
+    camera_frame: Option<&Vec<u8>>,
     composite_uniforms_buffer: &wgpu::Buffer,
 ) -> Result<Vec<u8>, String> {
     let mut encoder = device.create_command_encoder(
@@ -579,8 +589,8 @@ pub async fn produce_frame(
     let webcam_texture = device.create_texture(
         &(wgpu::TextureDescriptor {
             size: wgpu::Extent3d {
-                width: options.camera_size.0,
-                height: options.camera_size.1,
+                width: options.camera_size.map(|s| s.0).unwrap_or(1),
+                height: options.camera_size.map(|s| s.1).unwrap_or(1),
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -609,19 +619,23 @@ pub async fn produce_frame(
         ),
     );
 
-    do_render_pass(
-        &mut encoder,
-        &webcam_texture_view,
-        &render_frame.render_pipeline,
-        render_frame::bind_group(
-            device,
-            queue,
-            &render_frame.bind_group_layout,
-            camera_uniforms_buffer,
-            options.camera_size,
-            camera_frame,
-        ),
-    );
+    if let (Some(camera_size), Some(camera_frame), Some(buffer)) =
+        (options.camera_size, camera_frame, camera_uniforms_buffer)
+    {
+        do_render_pass(
+            &mut encoder,
+            &webcam_texture_view,
+            &render_frame.render_pipeline,
+            render_frame::bind_group(
+                device,
+                queue,
+                &render_frame.bind_group_layout,
+                buffer,
+                camera_size,
+                camera_frame,
+            ),
+        );
+    }
 
     do_render_pass(
         &mut encoder,
@@ -763,7 +777,7 @@ mod render_frame {
         layout: &wgpu::BindGroupLayout,
         uniform_buffer: &wgpu::Buffer,
         frame_size: (u32, u32),
-        frame_data: Vec<u8>,
+        frame_data: &Vec<u8>,
     ) -> wgpu::BindGroup {
         let texture = device.create_texture(
             &(wgpu::TextureDescriptor {
@@ -824,7 +838,7 @@ mod render_frame {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &frame_data,
+            frame_data,
             wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(frame_size.0 * 4),
@@ -1207,11 +1221,11 @@ enum OnTheFlyVideoDecoderActorMessage {
 }
 
 #[derive(Clone)]
-pub struct OnTheFlyVideoDecoderActor {
+pub struct VideoDecoderActor {
     tx: Sender<OnTheFlyVideoDecoderActorMessage>,
 }
 
-impl OnTheFlyVideoDecoderActor {
+impl VideoDecoderActor {
     pub fn new(path: PathBuf) -> Self {
         let (tx, rx) = channel();
 

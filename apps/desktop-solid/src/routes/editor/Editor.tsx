@@ -74,11 +74,6 @@ const OUTPUT_SIZE = {
 function Inner() {
   const duration = 10;
 
-  // const [playback, setPlayback] = createSignal({
-  //   playing: false,
-  //   time: 0,
-  // });
-
   const [playbackTime, setPlaybackTime] = createSignal<number>(0);
 
   onMount(() => {
@@ -89,28 +84,6 @@ function Inner() {
   });
 
   const [previewTime, setPreviewTime] = createSignal<number>();
-
-  // let displayRef: HTMLVideoElement;
-
-  // createEffect(() => {
-  //   if (playback().playing) {
-  //     displayRef.play();
-  //   } else {
-  //     displayRef.pause();
-  //   }
-  // });
-
-  // createEffect(() => {
-  //   if (playback().time !== displayRef.currentTime)
-  //     displayRef.currentTime = playback().time;
-  // });
-
-  let videoRef: HTMLVideoElement;
-
-  // createEffect(() => {
-  //   const time = previewTime();
-  //   if (time !== undefined) videoRef.currentTime = time;
-  // });
 
   const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
   const timelineBounds = createElementBounds(timelineRef);

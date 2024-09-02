@@ -8,8 +8,8 @@ use camera::{create_camera_window, get_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
 use cap_rendering::{
-    create_uniforms_buffers, render_video_to_file, OnTheFlyVideoDecoderActor, RenderOptions,
-    RenderVideoConstants,
+    create_uniforms_buffers, render_video_to_file, RenderOptions, RenderVideoConstants,
+    VideoDecoderActor,
 };
 use display::{get_capture_windows, Bounds, CaptureTarget};
 use ffmpeg_sidecar::{
@@ -248,7 +248,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
 
     state.prev_recordings.push(current_recording.recording_dir);
 
-    ShowCapturesPanel.emit(&app);
+    ShowCapturesPanel.emit(&app).ok();
 
     Ok(())
 }
@@ -302,8 +302,8 @@ impl EditorStateChanged {
 struct EditorInstance {
     app: AppHandle,
     pub path: PathBuf,
-    pub screen_decoder: OnTheFlyVideoDecoderActor,
-    pub camera_decoder: OnTheFlyVideoDecoderActor,
+    pub screen_decoder: VideoDecoderActor,
+    pub camera_decoder: Option<VideoDecoderActor>,
     pub ws_port: u16,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
@@ -333,23 +333,15 @@ impl EditorInstance {
         const OUTPUT_SIZE: (u32, u32) = (1920, 1080);
 
         let render_options = RenderOptions {
-            screen_recording_path: path.join("content/display.mp4"),
-            camera_recording_path: path.join("content/camera.mp4"),
             screen_size: (meta.display.width, meta.display.height),
-            camera_size: meta.camera.map(|c| (c.width, c.height)).unwrap_or((0, 0)),
-            // webcam_style: WebcamStyle {
-            //     border_radius: 10.0,
-            //     shadow_color: [0.0, 0.0, 0.0, 0.5],
-            //     shadow_blur: 5.0,
-            //     shadow_offset: (2.0, 2.0),
-            // },
+            camera_size: meta.camera.map(|c| (c.width, c.height)), //.unwrap_or((0, 0)),
             output_size: OUTPUT_SIZE,
         };
 
-        let screen_decoder =
-            OnTheFlyVideoDecoderActor::new(path.join("content/display.mp4").clone());
-        let camera_decoder =
-            OnTheFlyVideoDecoderActor::new(path.join("content/camera.mp4").clone());
+        let screen_decoder = VideoDecoderActor::new(path.join("content/display.mp4").clone());
+        let camera_decoder = meta
+            .camera
+            .map(|_| VideoDecoderActor::new(path.join("content/camera.mp4").clone()));
 
         let (frame_tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -439,11 +431,14 @@ impl EditorInstance {
                     let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
                         create_uniforms_buffers(&render_constants, &e.payload.project);
 
-                    let (Some(screen_frame), Some(camera_frame)) = join!(
-                        (screen_decoder.get_frame(e.payload.frame_number)),
-                        camera_decoder.get_frame(e.payload.frame_number)
-                    ) else {
+                    let Some(screen_frame) = screen_decoder.get_frame(e.payload.frame_number).await
+                    else {
                         return;
+                    };
+
+                    let camera_frame = match camera_decoder {
+                        Some(d) => d.get_frame(e.payload.frame_number).await,
+                        None => None,
                     };
 
                     renderer
@@ -516,11 +511,14 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
             let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
                 create_uniforms_buffers(&editor_instance.render_constants, &project);
 
-            let (Some(screen_frame), Some(camera_frame)) = join!(
-                editor_instance.screen_decoder.get_frame(frame_number),
-                editor_instance.camera_decoder.get_frame(frame_number)
-            ) else {
+            let Some(screen_frame) = editor_instance.screen_decoder.get_frame(frame_number).await
+            else {
                 break;
+            };
+
+            let camera_frame = match &editor_instance.camera_decoder {
+                Some(d) => d.get_frame(frame_number).await,
+                None => None,
             };
 
             editor_instance
