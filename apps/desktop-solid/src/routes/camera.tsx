@@ -136,12 +136,12 @@ async function resizeWindow(size: CameraWindow.Size) {
   if (!monitor) return;
 
   const scalingFactor = monitor.scaleFactor;
-  const x = 100;
+  const x = monitor.size.width / scalingFactor - windowWidth - 100;
   const y = monitor.size.height / scalingFactor - windowHeight - 100;
 
   const currentWindow = getCurrentWindow();
   currentWindow.setSize(new LogicalSize(windowWidth, windowHeight));
-  currentWindow.setPosition(new LogicalPosition(x / scalingFactor, y));
+  currentWindow.setPosition(new LogicalPosition(x, y));
 }
 
 function createCameraPreview(deviceId: () => string | undefined) {
