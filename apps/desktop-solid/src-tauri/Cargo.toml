@@ -59,3 +59,7 @@ cap-rendering = { path = "../../../crates/rendering" }
 cap-ffmpeg = { path = "../../../crates/ffmpeg" }
 axum = { version = "0.7.5", features = ["ws"] }
 tauri-plugin-dialog = "2.0.0-rc.0"
+tracing = "0.1.40"
+cpal = "0.15.3"
+indexmap = "2.5.0"
+num-traits = "0.2.19"

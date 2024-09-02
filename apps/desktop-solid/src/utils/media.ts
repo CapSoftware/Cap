@@ -29,7 +29,7 @@ export function createCameras() {
   const devices = createDevices();
 
   const [rustCameras, { refetch }] = createResource(() =>
-    commands.getCameras()
+    commands.listCameras()
   );
 
   // createTimer(refetch, 5 * 1000, setInterval);

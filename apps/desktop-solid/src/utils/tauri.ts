@@ -40,11 +40,14 @@ async stopRecording() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async getCameras() : Promise<string[]> {
-    return await TAURI_INVOKE("get_cameras");
+async listCameras() : Promise<string[]> {
+    return await TAURI_INVOKE("list_cameras");
 },
-async getCaptureWindows() : Promise<CaptureWindow[]> {
-    return await TAURI_INVOKE("get_capture_windows");
+async listCaptureWindows() : Promise<CaptureWindow[]> {
+    return await TAURI_INVOKE("list_capture_windows");
+},
+async listAudioDevices() : Promise<string[]> {
+    return await TAURI_INVOKE("list_audio_devices");
 },
 async getPrevRecordings() : Promise<Result<string[], null>> {
     try {
@@ -176,7 +179,7 @@ export type HotkeysConfiguration = { show: boolean }
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
 export type JsonValue<T> = [T]
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
-export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null }
+export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "FrameRendered"; current_frame: number }

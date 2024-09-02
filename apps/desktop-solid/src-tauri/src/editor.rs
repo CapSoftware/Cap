@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cap_project::ProjectConfiguration;
 use cap_rendering::{produce_frame, RenderVideoConstants};
 use tokio::{
-    sync::{mpsc, oneshot, watch},
+    sync::{mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -73,7 +73,6 @@ impl Editor {
             }
             EditorMessage::PreviewFrame(frame_number) => {
                 if self.playing {
-                    return;
                 }
             }
         }

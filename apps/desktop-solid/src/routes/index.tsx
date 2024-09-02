@@ -12,7 +12,11 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { SwitchTab, Button } from "@cap/ui-solid";
 
 import { createCameraForLabel, createCameras } from "../utils/media";
-import { createOptionsQuery, createWindowsQuery } from "../utils/queries";
+import {
+  createAudioDevicesQuery,
+  createOptionsQuery,
+  createWindowsQuery,
+} from "../utils/queries";
 import { type CaptureWindow, commands, events } from "../utils/tauri";
 import Header from "../components/Header";
 import {
@@ -28,6 +32,7 @@ export default function () {
   const cameras = createCameras();
   const options = createOptionsQuery();
   const windows = createWindowsQuery();
+  const audioDevices = createAudioDevicesQuery();
 
   const camera = createCameraForLabel(() => options.data?.cameraLabel ?? "");
 
@@ -66,6 +71,13 @@ export default function () {
                 if (d.type !== "window") return;
                 return (windows.data ?? []).find((data) => data.id === d.id);
               });
+
+              const audioDevice = () =>
+                audioDevices.data?.find(
+                  (d) => d.name === options().audioInputName
+                );
+
+              createEffect(() => console.log(audioDevice()));
 
               return (
                 <>
@@ -228,76 +240,64 @@ export default function () {
                   </div>
                   <div class="flex flex-col gap-[0.25rem] items-stretch">
                     <label class="text-gray-400">Microphone</label>
-                    <KSelect<MediaDeviceInfo>
-                      options={cameras()}
-                      optionValue="deviceId"
-                      optionTextValue="label"
+                    <KSelect<{ name: string }>
+                      options={audioDevices.data ?? []}
+                      optionValue="name"
+                      optionTextValue="name"
                       placeholder="No Audio"
+                      value={audioDevice()}
                       disabled={isRecording()}
+                      onChange={(item) => {
+                        if (!item) return;
+                        commands.setRecordingOptions({
+                          ...options(),
+                          audioInputName: item.name,
+                        });
+                      }}
                       itemComponent={(props) => (
                         <MenuItem<typeof KSelect.Item>
                           as={KSelect.Item}
                           item={props.item}
                         >
                           <KSelect.ItemLabel class="flex-1">
-                            {props.item.rawValue.label}
+                            {props.item.rawValue.name}
                           </KSelect.ItemLabel>
                         </MenuItem>
                       )}
                     >
                       <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors">
                         <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
-                        <KSelect.Value<MediaDeviceInfo> class="flex-1 text-left">
-                          {(state) => (
-                            <>
-                              No Audio
-                              {/* {state.selectedOption().label} */}
-                            </>
-                          )}
+                        <KSelect.Value<{
+                          name: string;
+                        }> class="flex-1 text-left truncate">
+                          {(state) => <>{state.selectedOption().name}</>}
                         </KSelect.Value>
                         <button
                           type="button"
                           class={cx(
                             "px-[0.375rem] rounded-full text-[0.75rem]",
-                            false
+                            options().audioInputName
                               ? "bg-blue-50 text-blue-300"
                               : "bg-red-50 text-red-300"
                           )}
                           onPointerDown={(e) => {
-                            if (!camera()) return;
+                            if (!options().audioInputName) return;
                             e.stopPropagation();
                             e.preventDefault();
                           }}
                           onClick={(e) => {
-                            if (!camera()) return;
+                            if (!options().audioInputName) return;
                             e.stopPropagation();
                             e.preventDefault();
 
                             commands.setRecordingOptions({
                               ...options(),
-                              cameraLabel: null,
+                              audioInputName: null,
                             });
                           }}
                         >
-                          Off
+                          {options().audioInputName ? "On" : "Off"}
                         </button>
-
-                        {false && (
-                          <button
-                            type="button"
-                            class="px-[0.375rem] bg-blue-50 text-blue-300 rounded-full text-[0.75rem]"
-                            onPointerDown={(e) => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                            }}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                            }}
-                          >
-                            On
-                          </button>
-                        )}
                       </KSelect.Trigger>
                       <KSelect.Portal>
                         <PopperContent<typeof KSelect.Content>

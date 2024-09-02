@@ -1,17 +1,18 @@
+mod audio;
 mod camera;
 mod display;
 mod editor;
 mod macos;
 mod recording;
 
-use camera::{create_camera_window, get_cameras};
+use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
 use cap_rendering::{
     create_uniforms_buffers, render_video_to_file, RenderOptions, RenderVideoConstants,
     VideoDecoderActor,
 };
-use display::{get_capture_windows, Bounds, CaptureTarget};
+use display::{list_capture_windows, Bounds, CaptureTarget};
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
     download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
@@ -36,7 +37,6 @@ use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
 use tokio::{
-    join,
     sync::{Mutex, RwLock},
     task::JoinHandle,
     time::{sleep, Instant},
@@ -47,6 +47,7 @@ use tokio::{
 pub struct RecordingOptions {
     capture_target: CaptureTarget,
     camera_label: Option<String>,
+    audio_input_name: Option<String>,
 }
 
 #[derive(specta::Type, Serialize)]
@@ -938,6 +939,14 @@ fn open_in_finder(path: PathBuf) {
         .expect("Failed to open in Finder");
 }
 
+#[tauri::command]
+#[specta::specta]
+fn list_audio_devices() -> Vec<String> {
+    let devices = audio::get_input_devices();
+
+    devices.keys().cloned().collect()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -947,8 +956,9 @@ pub fn run() {
             create_camera_window,
             start_recording,
             stop_recording,
-            get_cameras,
-            get_capture_windows,
+            list_cameras,
+            list_capture_windows,
+            list_audio_devices,
             get_prev_recordings,
             show_previous_recordings_window,
             close_previous_recordings_window,
@@ -1001,6 +1011,7 @@ pub fn run() {
                 start_recording_options: RecordingOptions {
                     capture_target: CaptureTarget::Screen,
                     camera_label: None,
+                    audio_input_name: None
                 },
                 current_recording: None,
                 prev_recordings: std::fs::read_dir(

@@ -3,6 +3,7 @@ use specta::Type;
 use std::path::PathBuf;
 
 use crate::{
+    audio::{self, AudioCapturer},
     camera,
     display::{self, get_window_bounds, CaptureTarget},
     Bounds, RecordingOptions,
@@ -28,7 +29,12 @@ pub struct InProgressRecording {
     pub display_source: DisplaySource,
     #[serde(skip)]
     pub camera: Option<FFmpegCaptureOutput<FFmpegRawVideoInput>>,
+    #[serde(skip)]
+    pub audio: Option<(FFmpegCaptureOutput<FFmpegRawAudioInput>, AudioCapturer)>,
 }
+
+unsafe impl Send for InProgressRecording {}
+unsafe impl Sync for InProgressRecording {}
 
 impl InProgressRecording {
     pub async fn stop(&mut self) {
@@ -42,28 +48,9 @@ impl InProgressRecording {
         if let Some(camera) = &self.camera {
             camera.capture.stop();
         }
-
-        // let render_options = RenderOptions {
-        //     screen_recording_path: self.display.output_path.clone(),
-        //     webcam_recording_path: self
-        //         .camera
-        //         .as_ref()
-        //         .map_or(PathBuf::new(), |c| c.output_path.clone()),
-        //     webcam_size: (320, 240),
-        //     // webcam_style: WebcamStyle {
-        //     //     border_radius: 10.0,
-        //     //     shadow_color: [0.0, 0.0, 0.0, 0.5],
-        //     //     shadow_blur: 5.0,
-        //     //     shadow_offset: (2.0, 2.0),
-        //     // },
-        //     output_size: (1280, 720),
-        //     // background: Background::Color([0.0, 0.0, 0.0, 1.0]),
-        // };
-
-        // Call render_video
-        // if let Err(e) = render_video(render_options).await {
-        //     eprintln!("Error rendering video: {:?}", e);
-        // }
+        if let Some(audio) = &mut self.audio {
+            audio.1.stop().ok();
+        }
     }
 }
 
@@ -85,6 +72,7 @@ pub async fn start(
 
     let camera = start_camera_recording(&content_dir, recording_options, &mut ffmpeg).await;
     let display = start_display_recording(&content_dir, recording_options, &mut ffmpeg).await;
+    let audio = start_audio_recording(&content_dir, recording_options, &mut ffmpeg).await;
 
     let ffmpeg_process = ffmpeg.start();
 
@@ -117,6 +105,7 @@ pub async fn start(
             },
         },
         camera,
+        audio,
     }
 }
 
@@ -216,4 +205,49 @@ async fn start_display_recording(
         capture,
         output_path,
     }
+}
+
+async fn start_audio_recording(
+    content_path: &PathBuf,
+    recording_options: &RecordingOptions,
+    ffmpeg: &mut FFmpeg,
+) -> Option<(FFmpegCaptureOutput<FFmpegRawAudioInput>, AudioCapturer)> {
+    let Some(mut capturer) = recording_options
+        .audio_input_name
+        .as_ref()
+        .and_then(|name| audio::AudioCapturer::init(name))
+    else {
+        return None;
+    };
+
+    let pipe_path = content_path.join("audio-input.pipe");
+    let output_path = content_path.join("audio-input.mp3");
+
+    let capture = audio::start_capturing(&mut capturer, pipe_path.clone());
+
+    let ffmpeg_input = ffmpeg.add_input(FFmpegRawAudioInput {
+        input: pipe_path.into_os_string(),
+        sample_format: capturer.sample_format().to_string(),
+        sample_rate: capturer.sample_rate(),
+        channels: capturer.channels(),
+    });
+
+    ffmpeg
+        .command
+        .args(["-f", "mp3", "-map", &format!("{}:a", ffmpeg_input.index)])
+        .args(["-b:a", "128k", "-async", "1", "-vn"])
+        .args([
+            "-af",
+            "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
+        ])
+        .arg(&output_path);
+
+    Some((
+        FFmpegCaptureOutput {
+            input: ffmpeg_input,
+            capture,
+            output_path,
+        },
+        capturer,
+    ))
 }

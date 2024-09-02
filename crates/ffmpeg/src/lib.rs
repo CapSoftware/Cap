@@ -198,14 +198,14 @@ impl ApplyFFmpegArgs for FFmpegRawVideoInput {
     }
 }
 
-pub struct FFmpegRawAudioSource {
+pub struct FFmpegRawAudioInput {
     pub sample_format: String,
     pub sample_rate: u32,
     pub channels: u16,
     pub input: OsString,
 }
 
-impl ApplyFFmpegArgs for FFmpegRawAudioSource {
+impl ApplyFFmpegArgs for FFmpegRawAudioInput {
     fn apply_ffmpeg_args(&self, command: &mut Command) {
         command
             .args(["-f", &self.sample_format])

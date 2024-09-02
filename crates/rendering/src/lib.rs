@@ -5,7 +5,7 @@ use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use wgpu::util::DeviceExt;
@@ -342,7 +342,7 @@ pub async fn render_video_to_channel(
 
     let mut camera_rx = camera_recording_decoder.map(|camera_recording_decoder| {
         println!("Setting up FFmpeg input for webcam recording...");
-        let (camera_tx, mut camera_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (camera_tx, camera_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
         tokio::spawn(async move {
             let now = Instant::now();
@@ -432,25 +432,6 @@ pub async fn render_video_to_channel(
     );
 
     Ok(())
-}
-
-pub async fn get_frame_cli(ffmpeg: &str, path: &Path, frame: u32) -> Vec<u8> {
-    let mut cmd = tokio::process::Command::new(ffmpeg);
-    let cmd = cmd
-        .arg("-i")
-        .arg(path)
-        .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-c:v", "rawvideo"])
-        .args(["-vf", &format!(r#"select=eq(n\,{frame})"#), "-vframes", "1"])
-        .arg("pipe:1");
-
-    let output = cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .await
-        .unwrap();
-
-    output.stdout
 }
 
 pub struct RenderVideoConstants {

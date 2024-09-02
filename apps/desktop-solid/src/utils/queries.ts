@@ -6,7 +6,7 @@ import { reconcile } from "solid-js/store";
 
 export const getWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
-  queryFn: () => commands.getCaptureWindows(),
+  queryFn: () => commands.listCaptureWindows(),
   reconcile: "id",
 });
 
@@ -26,6 +26,14 @@ export const getCurrentRecording = queryOptions({
   },
 });
 
+export const listAudioDevices = queryOptions({
+  queryKey: ["audioDevices"] as const,
+  queryFn: async () => {
+    return (await commands.listAudioDevices()).map((name) => ({ name }));
+  },
+  reconcile: "name",
+});
+
 export function createOptionsQuery() {
   const options = createQuery(() => getOptions);
   createQueryInvalidate(options, "recordingOptionsChanged");
@@ -38,4 +46,11 @@ export function createWindowsQuery() {
   createTimer(() => windows.refetch(), 1000, setInterval);
 
   return windows;
+}
+
+export function createAudioDevicesQuery() {
+  const devices = createQuery(() => listAudioDevices);
+  createTimer(() => devices.refetch(), 1000, setInterval);
+
+  return devices;
 }

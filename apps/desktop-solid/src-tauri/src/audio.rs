@@ -1,13 +1,14 @@
+use cap_ffmpeg::NamedPipeCapture;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SizedSample, Stream, SupportedStreamConfig};
 use indexmap::IndexMap;
 use num_traits::ToBytes;
-use std::{future::Future, path::PathBuf, sync::Arc};
+use std::sync::atomic::Ordering;
+use std::time::Instant;
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::oneshot;
 use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
-
-use super::{Instant, SharedFlag, SharedInstant};
-use crate::utils;
 
 type SampleReceiver = mpsc::Receiver<Arc<Vec<u8>>>;
 
@@ -15,30 +16,22 @@ pub struct AudioCapturer {
     device: Device,
     pub device_name: String,
     config: SupportedStreamConfig,
-    should_stop: SharedFlag,
     sample_receiver: Option<SampleReceiver>,
     stream: Option<Stream>,
+    // event_rx: Option<mpsc::Receiver<()>>,
 }
-
 unsafe impl Send for AudioCapturer {}
 unsafe impl Sync for AudioCapturer {}
 
 impl AudioCapturer {
-    pub fn init(custom_device: Option<&str>, should_stop: SharedFlag) -> Option<Self> {
+    pub fn init(custom_device: &str) -> Option<Self> {
         tracing::debug!("Custom device: {:?}", custom_device);
-
-        if custom_device == Some("None") {
-            return None;
-        }
 
         let mut devices = get_input_devices();
 
-        let maybe_device = match custom_device {
-            None => {
-                let maybe_name = devices.first().map(|(name, _)| name.clone());
-                maybe_name.and_then(|device_name| devices.swap_remove_entry(&device_name))
-            }
-            Some(device_name) => devices.swap_remove_entry(device_name),
+        let maybe_device = {
+            let maybe_name = devices.first().map(|(name, _)| name.clone());
+            maybe_name.and_then(|device_name| devices.swap_remove_entry(&device_name))
         };
 
         maybe_device.map(|(name, (device, config))| {
@@ -48,7 +41,6 @@ impl AudioCapturer {
                 config,
                 device,
                 device_name: name,
-                should_stop,
                 sample_receiver: None,
                 stream: None,
             }
@@ -61,18 +53,18 @@ impl AudioCapturer {
         tracing::info!("Sample format: {}", self.sample_format());
     }
 
-    pub fn start(&mut self, start_time: SharedInstant) -> Result<(), String> {
+    pub fn start(&mut self, start_time_tx: oneshot::Sender<Instant>) -> Result<(), String> {
         tracing::trace!("Building input stream...");
 
         let (receiver, stream) = (match self.config.sample_format() {
-            SampleFormat::I8 => self.build_stream::<i8>(start_time),
-            SampleFormat::I16 => self.build_stream::<i16>(start_time),
-            SampleFormat::I32 => self.build_stream::<i32>(start_time),
-            SampleFormat::U8 => self.build_stream::<u8>(start_time),
-            SampleFormat::U16 => self.build_stream::<u16>(start_time),
-            SampleFormat::U32 => self.build_stream::<u32>(start_time),
-            SampleFormat::F32 => self.build_stream::<f32>(start_time),
-            SampleFormat::F64 => self.build_stream::<f64>(start_time),
+            SampleFormat::I8 => self.build_stream::<i8>(start_time_tx),
+            SampleFormat::I16 => self.build_stream::<i16>(start_time_tx),
+            SampleFormat::I32 => self.build_stream::<i32>(start_time_tx),
+            SampleFormat::U8 => self.build_stream::<u8>(start_time_tx),
+            SampleFormat::U16 => self.build_stream::<u16>(start_time_tx),
+            SampleFormat::U32 => self.build_stream::<u32>(start_time_tx),
+            SampleFormat::F32 => self.build_stream::<f32>(start_time_tx),
+            SampleFormat::F64 => self.build_stream::<f64>(start_time_tx),
             _ => unreachable!(),
         })?;
 
@@ -84,31 +76,6 @@ impl AudioCapturer {
         self.stream = Some(stream);
         self.sample_receiver = Some(receiver);
         Ok(())
-    }
-
-    pub fn collect_samples(&mut self, destination: PathBuf) -> impl Future<Output = ()> + 'static {
-        tracing::trace!("Starting audio channel senders...");
-        let mut receiver = self
-            .sample_receiver
-            .take()
-            .expect("Audio sample collection already started!");
-        let should_stop = self.should_stop.clone();
-
-        async move {
-            let mut pipe = File::create(destination).await.unwrap();
-
-            while let Some(bytes) = receiver.recv().await {
-                pipe.write_all(&bytes)
-                    .await
-                    .expect("Failed to write audio data to FFmpeg stdin");
-
-                if should_stop.get() {
-                    receiver.close();
-                }
-            }
-
-            let _ = pipe.sync_all().await;
-        }
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
@@ -156,18 +123,21 @@ impl AudioCapturer {
         }
     }
 
-    fn build_stream<T>(&self, start_time: SharedInstant) -> Result<(SampleReceiver, Stream), String>
+    fn build_stream<T>(
+        &self,
+        start_time_tx: oneshot::Sender<Instant>,
+    ) -> Result<(SampleReceiver, Stream), String>
     where
         T: SizedSample + ToBytes<Bytes: AsRef<[u8]>>,
     {
         let (sender, receiver) = mpsc::channel(2048);
 
+        let mut start_time_tx = Some(start_time_tx);
+
         self.device
             .build_input_stream(
                 &self.config.clone().into(),
                 move |data: &[T], _| {
-                    let mut first_frame_time_guard = start_time.try_lock();
-
                     let sample_size = std::mem::size_of::<T>();
                     let mut bytes = vec![0; std::mem::size_of_val(data)];
                     let size = bytes.len();
@@ -178,13 +148,11 @@ impl AudioCapturer {
                     let sample_data = Arc::new(bytes);
                     match sender.try_send(sample_data) {
                         Ok(_) => {
-                            if let Ok(ref mut start_time_option) = first_frame_time_guard {
-                                if start_time_option.is_none() {
-                                    **start_time_option = Some(Instant::now());
+                            if let Some(start_time_option) = start_time_tx.take() {
+                                start_time_option.send(Instant::now());
 
-                                    tracing::info!("Audio sample size: {size}");
-                                    tracing::trace!("Audio start time captured");
-                                }
+                                tracing::info!("Audio sample size: {size}");
+                                tracing::trace!("Audio start time captured");
                             }
                         }
                         Err(TrySendError::Full(_)) => {
@@ -213,7 +181,7 @@ pub fn get_input_devices() -> IndexMap<String, (Device, SupportedStreamConfig)> 
     let get_usable_device = |device: Device| {
         device
             .supported_input_configs()
-            .map_err(utils::log_debug_error)
+            // .map_err(utils::log_debug_error)
             .ok()
             .and_then(|mut configs| {
                 configs.find(|c| match c.sample_format() {
@@ -253,4 +221,37 @@ pub fn get_input_devices() -> IndexMap<String, (Device, SupportedStreamConfig)> 
     }
 
     device_map
+}
+
+pub fn start_capturing(capturer: &mut AudioCapturer, pipe_path: PathBuf) -> NamedPipeCapture {
+    let (capture, is_stopped) = NamedPipeCapture::new(&pipe_path);
+
+    let (tx, _) = oneshot::channel();
+
+    capturer.start(tx).unwrap();
+
+    println!("Starting audio channel senders...");
+    let mut receiver = capturer
+        .sample_receiver
+        .take()
+        .expect("Audio sample collection already started!");
+
+    tokio::spawn(async move {
+        let mut pipe = File::create(&pipe_path).await.unwrap();
+
+        while let Some(bytes) = receiver.recv().await {
+            if is_stopped.load(Ordering::Relaxed) {
+                println!("Stopping receiving camera frames");
+                return;
+            }
+
+            pipe.write_all(&bytes).await.unwrap();
+        }
+
+        println!("Done receiving audio frames");
+
+        let _ = pipe.sync_all().await;
+    });
+
+    capture
 }
