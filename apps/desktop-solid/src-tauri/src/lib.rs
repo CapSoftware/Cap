@@ -851,12 +851,18 @@ async fn get_video_metadata(
     video_id: String,
     state: MutableState<'_, App>,
 ) -> Result<(f64, f64), String> {
+    let video_id = if video_id.ends_with(".cap") {
+        video_id.trim_end_matches(".cap").to_string()
+    } else {
+        video_id
+    };
+
     let video_dir = app
         .path()
         .app_data_dir()
         .unwrap()
         .join("recordings")
-        .join(&video_id);
+        .join(format!("{}.cap", video_id));
 
     let screen_video_path = video_dir.join("content/display.mp4");
     let output_video_path = video_dir.join("output/result.mp4");
@@ -906,9 +912,6 @@ async fn get_video_metadata(
     })?;
 
     let duration = mp4.duration().as_secs_f64();
-
-    println!("Duration: {} seconds", duration);
-    println!("Size: {} MB", size);
 
     Ok((duration, size))
 }
@@ -1114,6 +1117,7 @@ fn focus_captures_panel(app: AppHandle) {
 #[serde(tag = "type")]
 enum RenderProgress {
     Starting { total_frames: u32 },
+    EstimatedTotalFrames { total_frames: u32 },
     FrameRendered { current_frame: u32 },
 }
 
@@ -1126,6 +1130,13 @@ async fn render_to_file(
     project: ProjectConfiguration,
     progress_channel: tauri::ipc::Channel<RenderProgress>,
 ) {
+    let (duration, _size) = get_video_metadata(app.clone(), video_id.clone(), app.state())
+        .await
+        .unwrap();
+
+    // 30 FPS (calculated for output video)
+    let total_frames = (duration * 30.0).round() as u32;
+
     let editor_instance = EditorInstance::get(&app, video_id).await;
 
     render_to_file_impl(
@@ -1135,6 +1146,11 @@ async fn render_to_file(
         editor_instance.screen_decoder.clone(),
         editor_instance.camera_decoder.clone(),
         move |current_frame| {
+            if current_frame == 0 {
+                progress_channel
+                    .send(RenderProgress::EstimatedTotalFrames { total_frames })
+                    .ok();
+            }
             progress_channel
                 .send(RenderProgress::FrameRendered { current_frame })
                 .ok();

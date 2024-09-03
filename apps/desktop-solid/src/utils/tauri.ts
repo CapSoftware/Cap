@@ -182,7 +182,7 @@ export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
-export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
+export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type ShowCapturesPanel = null
 
 /** tauri-specta globals **/

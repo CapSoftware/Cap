@@ -319,7 +319,7 @@ function ExportButton() {
   const [state, setState] = createStore<
     | { open: false; type: "idle" }
     | ({ open: boolean } & (
-        | { type: "inProgress"; progress: number }
+        | { type: "inProgress"; progress: number; totalFrames: number }
         | { type: "finished"; path: string }
       ))
   >({ open: false, type: "idle" });
@@ -336,13 +336,25 @@ function ExportButton() {
             if (!p) return;
 
             setState(
-              reconcile({ open: true, type: "inProgress", progress: 0 })
+              reconcile({
+                open: true,
+                type: "inProgress",
+                progress: 0,
+                totalFrames: 0,
+              })
             );
 
             const progress = new Channel<RenderProgress>();
             progress.onmessage = (p) => {
               if (p.type === "FrameRendered" && state.type === "inProgress")
                 setState({ progress: p.current_frame });
+              if (
+                p.type === "EstimatedTotalFrames" &&
+                state.type === "inProgress"
+              ) {
+                console.log("Total frames: ", p.total_frames);
+                setState({ totalFrames: p.total_frames });
+              }
             };
 
             return commands
@@ -380,7 +392,21 @@ function ExportButton() {
           <Switch>
             <Match when={state.type === "finished"}>Finished exporting</Match>
             <Match when={state.type === "inProgress" && state}>
-              {(state) => <>Processed {state().progress} frames</>}
+              {(state) => (
+                <>
+                  <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    <div
+                      class="bg-blue-300 h-2.5 rounded-full"
+                      style={{
+                        width: `${Math.min(
+                          (state().progress / (state().totalFrames || 1)) * 100,
+                          100
+                        )}%`,
+                      }}
+                    ></div>
+                  </div>
+                </>
+              )}
             </Match>
           </Switch>
         </DialogContent>
