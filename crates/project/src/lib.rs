@@ -20,4 +20,6 @@ pub struct Camera {
 pub struct RecordingMeta {
     pub display: Display,
     pub camera: Option<Camera>,
+    #[serde(default)]
+    pub has_audio: bool,
 }

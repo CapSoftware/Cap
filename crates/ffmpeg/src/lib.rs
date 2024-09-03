@@ -191,8 +191,8 @@ impl ApplyFFmpegArgs for FFmpegRawVideoInput {
 
         command
             .args(["-f", "rawvideo", "-pix_fmt", self.pix_fmt])
-            .args(["-s", &size])
-            .args(["-r", &self.fps.to_string()])
+            .args(["-s", &size, "-use_wallclock_as_timestamps", "1"])
+            // .args(["-r", &self.fps.to_string()])
             .args(["-thread_queue_size", "4096", "-i"])
             .arg(&self.input);
     }

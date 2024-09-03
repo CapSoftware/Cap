@@ -12,6 +12,7 @@ use cap_rendering::{
     create_uniforms_buffers, render_video_to_file, RenderOptions, RenderVideoConstants,
     VideoDecoderActor,
 };
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use display::{list_capture_windows, Bounds, CaptureTarget};
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
@@ -25,19 +26,19 @@ use recording::{DisplaySource, InProgressRecording};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::fs::File;
 use std::io::BufReader;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
 };
+use std::{fs::File, pin};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
 use tokio::{
-    sync::{Mutex, RwLock},
+    sync::{watch, Mutex, Notify, RwLock},
     task::JoinHandle,
     time::{sleep, Instant},
 };
@@ -284,7 +285,7 @@ struct RenderFrameEvent {
 
 struct EditorState {
     playhead_position: u32,
-    playback_task: Option<JoinHandle<()>>,
+    playback_task: Option<watch::Sender<bool>>,
 }
 
 #[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
@@ -305,6 +306,7 @@ struct EditorInstance {
     pub path: PathBuf,
     pub screen_decoder: VideoDecoderActor,
     pub camera_decoder: Option<VideoDecoderActor>,
+    pub audio: Option<Arc<Vec<f32>>>,
     pub ws_port: u16,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
@@ -343,6 +345,28 @@ impl EditorInstance {
         let camera_decoder = meta
             .camera
             .map(|_| VideoDecoderActor::new(path.join("content/camera.mp4").clone()));
+
+        let audio = meta.has_audio.then(|| {
+            let audio_path = path.join("content/audio-input.mp3");
+
+            let stdout = Command::new("ffmpeg")
+                .arg("-i")
+                .arg(audio_path)
+                .args(["-f", "f32le", "-acodec", "pcm_f32le"])
+                .args(["-ar", "44100", "-ac", "2", "-"])
+                .output()
+                .unwrap()
+                .stdout;
+
+            let audio = stdout
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect::<Vec<_>>();
+
+            println!("audio buffer length: {}", audio.len());
+
+            Arc::new(audio)
+        });
 
         let (frame_tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -465,6 +489,7 @@ impl EditorInstance {
             ws_port,
             renderer,
             render_constants,
+            audio,
             state: Mutex::new(EditorState {
                 playhead_position: 0,
                 playback_task: None,
@@ -502,51 +527,114 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
     let start_frame_number = state.playhead_position;
 
     let fps = 30.0;
+    let duration = 10.0;
 
     let editor_instance = editor_instance.clone();
-    let prev = state.playback_task.replace(tokio::spawn(async move {
+
+    let (stop_tx, mut stop_rx) = watch::channel(false);
+
+    let prev = state.playback_task.replace(stop_tx.clone());
+
+    tokio::spawn(async move {
         let start = Instant::now();
+        let audio = editor_instance.audio.clone();
+
+        let handle = tokio::runtime::Handle::current();
+
+        stop_rx.borrow_and_update();
+
+        let mut _stop_rx = stop_rx.clone();
+        std::thread::spawn(move || {
+            let Some(data) = audio else {
+                return;
+            };
+
+            let host = cpal::default_host();
+            let device = host.default_output_device().unwrap();
+            let supported_config = device
+                .default_output_config()
+                .expect("Failed to get default output format");
+            let config = supported_config.config();
+
+            dbg!(supported_config.sample_format());
+
+            let mut i =
+                (data.len() as f32 * (start_frame_number as f32 / (fps * duration))) as usize;
+            let stream = device
+                .build_output_stream(
+                    &config,
+                    move |buffer: &mut [f32], _info| {
+                        for sample in buffer.iter_mut() {
+                            *sample = data.get(i).cloned().unwrap_or(0.0);
+                            i += 1;
+                        }
+                    },
+                    |_| {},
+                    None,
+                )
+                .unwrap();
+
+            stream.play().unwrap();
+
+            handle.block_on(_stop_rx.changed()).ok();
+
+            stream.pause().ok();
+            drop(stream);
+        });
+
         let mut frame_number = start_frame_number + 1;
 
         loop {
-            let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
-                create_uniforms_buffers(&editor_instance.render_constants, &project);
-
-            let Some(screen_frame) = editor_instance.screen_decoder.get_frame(frame_number).await
-            else {
+            if frame_number as f32 > fps * duration {
                 break;
             };
 
-            let camera_frame = match &editor_instance.camera_decoder {
-                Some(d) => d.get_frame(frame_number).await,
-                None => None,
-            };
+            let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
+                create_uniforms_buffers(&editor_instance.render_constants, &project);
 
-            editor_instance
-                .renderer
-                .render_frame(
-                    screen_frame,
-                    camera_frame,
-                    screen_uniforms_buffer,
-                    camera_uniforms_buffer,
-                    composite_uniforms_buffer,
-                )
-                .await;
+            tokio::select! {
+                _ = stop_rx.changed() => {
+                   break;
+                },
+                Some(screen_frame) = editor_instance.screen_decoder.get_frame(frame_number) => {
+                    let camera_frame = match &editor_instance.camera_decoder {
+                        Some(d) => d.get_frame(frame_number).await,
+                        None => None,
+                    };
 
-            editor_instance
-                .modify_and_emit_state(|state| {
-                    state.playhead_position = frame_number;
-                })
-                .await;
+                    editor_instance
+                        .renderer
+                        .render_frame(
+                            screen_frame,
+                            camera_frame,
+                            screen_uniforms_buffer,
+                            camera_uniforms_buffer,
+                            composite_uniforms_buffer,
+                        )
+                        .await;
 
-            tokio::time::sleep_until(start + Duration::from_secs_f32(1.0 / fps)).await;
+                    editor_instance
+                        .modify_and_emit_state(|state| {
+                            state.playhead_position = frame_number;
+                        })
+                        .await;
 
-            frame_number += 1;
+                    tokio::time::sleep_until(start + Duration::from_secs_f32(1.0 / fps)).await;
+
+                    frame_number += 1;
+                }
+                else => {
+                    break;
+                }
+            }
         }
-    }));
+
+        println!("playback done");
+        stop_tx.send(true).ok();
+    });
 
     if let Some(prev) = prev {
-        prev.abort();
+        prev.send(true).ok();
     }
 }
 
@@ -557,8 +645,8 @@ async fn stop_playback(app: AppHandle, video_id: String) {
 
     let mut state = editor_instance.state.lock().await;
 
-    if let Some(playback) = state.playback_task.take() {
-        playback.abort();
+    if let Some(sender) = state.playback_task.take() {
+        sender.send(true).ok();
     }
 }
 

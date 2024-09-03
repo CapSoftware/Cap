@@ -149,7 +149,7 @@ impl AudioCapturer {
                     match sender.try_send(sample_data) {
                         Ok(_) => {
                             if let Some(start_time_option) = start_time_tx.take() {
-                                start_time_option.send(Instant::now());
+                                start_time_option.send(Instant::now()).ok();
 
                                 tracing::info!("Audio sample size: {size}");
                                 tracing::trace!("Audio start time captured");

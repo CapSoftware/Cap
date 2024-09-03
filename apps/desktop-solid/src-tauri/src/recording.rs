@@ -86,6 +86,7 @@ pub async fn start(
             width: camera.input.width,
             height: camera.input.height,
         }),
+        has_audio: audio.is_some(),
     };
 
     std::fs::write(

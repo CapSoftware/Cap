@@ -1086,7 +1086,7 @@ fn srgb_to_linear(c: u16) -> f32 {
     }
 }
 
-struct OnTheFlyVideoDecoder {
+struct VideoDecoder {
     input: ffmpeg_next::format::context::Input,
     decoder: ffmpeg_next::codec::decoder::Video,
     scaler: ffmpeg_next::software::scaling::context::Context,
@@ -1098,7 +1098,7 @@ struct OnTheFlyVideoDecoder {
     // cached_frames: HashMap<u32, Vec<u8>>,
 }
 
-impl OnTheFlyVideoDecoder {
+impl VideoDecoder {
     fn new(path: &PathBuf) -> Self {
         println!("creating decoder for {}", path.display());
         let ictx = ffmpeg_next::format::input(path).unwrap();
@@ -1197,13 +1197,13 @@ impl OnTheFlyVideoDecoder {
     }
 }
 
-enum OnTheFlyVideoDecoderActorMessage {
+enum VideoDecoderActorMessage {
     GetFrame(u32, tokio::sync::oneshot::Sender<Option<Vec<u8>>>),
 }
 
 #[derive(Clone)]
 pub struct VideoDecoderActor {
-    tx: Sender<OnTheFlyVideoDecoderActorMessage>,
+    tx: Sender<VideoDecoderActorMessage>,
 }
 
 impl VideoDecoderActor {
@@ -1211,11 +1211,11 @@ impl VideoDecoderActor {
         let (tx, rx) = channel();
 
         thread::spawn(move || {
-            let mut decoder = OnTheFlyVideoDecoder::new(&path);
+            let mut decoder = VideoDecoder::new(&path);
 
             loop {
                 match rx.recv() {
-                    Ok(OnTheFlyVideoDecoderActorMessage::GetFrame(frame_number, sender)) => {
+                    Ok(VideoDecoderActorMessage::GetFrame(frame_number, sender)) => {
                         let frame = decoder.get_frame(frame_number);
                         sender.send(frame).ok();
                     }
@@ -1230,7 +1230,7 @@ impl VideoDecoderActor {
     pub async fn get_frame(&self, frame_number: u32) -> Option<Vec<u8>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.tx
-            .send(OnTheFlyVideoDecoderActorMessage::GetFrame(frame_number, tx))
+            .send(VideoDecoderActorMessage::GetFrame(frame_number, tx))
             .unwrap();
         rx.await.unwrap()
     }
