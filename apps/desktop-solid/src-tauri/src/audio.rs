@@ -18,7 +18,6 @@ pub struct AudioCapturer {
     config: SupportedStreamConfig,
     sample_receiver: Option<SampleReceiver>,
     stream: Option<Stream>,
-    // event_rx: Option<mpsc::Receiver<()>>,
 }
 unsafe impl Send for AudioCapturer {}
 unsafe impl Sync for AudioCapturer {}

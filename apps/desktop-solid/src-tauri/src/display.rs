@@ -1,4 +1,9 @@
-use std::{io::Write, path::PathBuf, sync::atomic::Ordering};
+use std::{
+    io::{BufWriter, Write},
+    path::PathBuf,
+    sync::atomic::Ordering,
+    time::Instant,
+};
 
 use scap::{
     capturer::{Area, Capturer, Options, Point, Resolution, Size},
@@ -101,9 +106,7 @@ pub fn start_capturing(
     std::thread::spawn(move || {
         capturer.start_capture();
 
-        println!("Opening pipe");
         let mut file = std::fs::File::create(&pipe_path).unwrap();
-        println!("Pipe opened");
 
         loop {
             if is_stopped.load(Ordering::Relaxed) {
@@ -111,7 +114,8 @@ pub fn start_capturing(
                 return;
             }
 
-            match capturer.get_next_frame() {
+            let frame = capturer.get_next_frame();
+            match frame {
                 Ok(Frame::BGRA(frame)) => {
                     file.write_all(&frame.data).ok();
                 }
@@ -119,6 +123,8 @@ pub fn start_capturing(
             }
         }
     });
+
+    tokio::spawn(async move {});
 
     ((width, height), capture)
 }

@@ -9,10 +9,12 @@ use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
 use cap_rendering::{
-    create_uniforms_buffers, render_video_to_file, RenderOptions, RenderVideoConstants,
-    VideoDecoderActor,
+    create_uniforms_buffers, RenderOptions, RenderVideoConstants, VideoDecoderActor,
 };
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+    SampleFormat, SizedSample,
+};
 use display::{list_capture_windows, Bounds, CaptureTarget};
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
@@ -21,12 +23,13 @@ use ffmpeg_sidecar::{
     version::ffmpeg_version,
 };
 use mp4::Mp4Reader;
+use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
 use recording::{DisplaySource, InProgressRecording};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
@@ -264,17 +267,123 @@ async fn get_rendered_video(
 ) -> Result<PathBuf, String> {
     let editor_instance = EditorInstance::get(&app, video_id).await;
 
-    render_video_to_file(
+    render_to_file_impl(
         editor_instance.render_constants.options.clone(),
         project,
         editor_instance.path.join("output/result.mp4"),
         editor_instance.screen_decoder.clone(),
         editor_instance.camera_decoder.clone(),
         |_| {},
+        editor_instance.audio.clone(),
     )
     .await?;
 
     Ok(editor_instance.path.clone())
+}
+
+async fn render_to_file_impl(
+    options: RenderOptions,
+    project: ProjectConfiguration,
+    output_path: PathBuf,
+    screen_recording_decoder: VideoDecoderActor,
+    camera_recording_decoder: Option<VideoDecoderActor>,
+    on_progress: impl Fn(u32) + Send + 'static,
+    audio: Option<Arc<Vec<f64>>>,
+) -> Result<PathBuf, String> {
+    let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+
+    let output_folder = output_path.parent().unwrap();
+    std::fs::create_dir_all(output_folder)
+        .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
+    let output_path_clone = output_path.clone();
+
+    tokio::spawn(async move {
+        println!("Starting FFmpeg output process...");
+        let mut ffmpeg = cap_ffmpeg::FFmpeg::new();
+
+        let audio_path = if let Some(audio) = &audio {
+            let dir = tempfile::tempdir().unwrap();
+            let file_path = dir.path().join("audio.raw");
+            let mut file = std::fs::File::create(&file_path).unwrap();
+
+            file.write_all(
+                audio
+                    .iter()
+                    .flat_map(|f| f.to_le_bytes())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
+            .unwrap();
+
+            ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
+                input: file_path.clone().into_os_string(),
+                sample_format: "f64le".to_string(),
+                sample_rate: 44100,
+                channels: 2,
+            });
+
+            Some((file_path, file, dir))
+        } else {
+            None
+        };
+
+        ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
+            width: options.output_size.0,
+            height: options.output_size.1,
+            fps: 60,
+            pix_fmt: "rgba",
+            input: "pipe:0".into(),
+        });
+
+        ffmpeg
+            .command
+            .args([
+                "-f", "mp4", /*, "-map", &format!("{}:v", ffmpeg_input.index) */
+            ])
+            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
+            .arg("-y")
+            .arg(&output_path_clone);
+
+        let mut ffmpeg_process = ffmpeg.start();
+
+        let mut frame_count = 0;
+        loop {
+            match rx_image_data.recv().await {
+                Some(frame) => {
+                    // println!("Sending image data to FFmpeg");
+                    on_progress(frame_count);
+
+                    frame_count += 1;
+                    if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
+                        eprintln!("Error writing video frame: {:?}", e);
+                        break;
+                    }
+                }
+                None => {
+                    println!("All frames sent to FFmpeg");
+                    break;
+                }
+            }
+        }
+
+        ffmpeg_process.stop();
+
+        if let Some((audio_path, _, _)) = audio_path {
+            std::fs::remove_file(audio_path).ok();
+        }
+    });
+
+    cap_rendering::render_video_to_channel(
+        options,
+        project,
+        tx_image_data,
+        screen_recording_decoder,
+        camera_recording_decoder,
+    )
+    .await?;
+
+    Ok(output_path)
 }
 
 #[derive(Deserialize, specta::Type, tauri_specta::Event, Debug, Clone)]
@@ -306,7 +415,7 @@ struct EditorInstance {
     pub path: PathBuf,
     pub screen_decoder: VideoDecoderActor,
     pub camera_decoder: Option<VideoDecoderActor>,
-    pub audio: Option<Arc<Vec<f32>>>,
+    pub audio: Option<Arc<Vec<f64>>>,
     pub ws_port: u16,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
@@ -352,15 +461,15 @@ impl EditorInstance {
             let stdout = Command::new("ffmpeg")
                 .arg("-i")
                 .arg(audio_path)
-                .args(["-f", "f32le", "-acodec", "pcm_f32le"])
+                .args(["-f", "f64le", "-acodec", "pcm_f64le"])
                 .args(["-ar", "44100", "-ac", "2", "-"])
                 .output()
                 .unwrap()
                 .stdout;
 
             let audio = stdout
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .chunks_exact(8)
+                .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
                 .collect::<Vec<_>>();
 
             println!("audio buffer length: {}", audio.len());
@@ -526,7 +635,7 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
 
     let start_frame_number = state.playhead_position;
 
-    let fps = 30.0;
+    let fps = 60.0;
     let duration = 10.0;
 
     let editor_instance = editor_instance.clone();
@@ -543,43 +652,73 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
 
         stop_rx.borrow_and_update();
 
-        let mut _stop_rx = stop_rx.clone();
-        std::thread::spawn(move || {
-            let Some(data) = audio else {
-                return;
-            };
+        std::thread::spawn({
+            let mut stop_rx = stop_rx.clone();
+            move || {
+                let Some(data) = audio else {
+                    return;
+                };
 
-            let host = cpal::default_host();
-            let device = host.default_output_device().unwrap();
-            let supported_config = device
-                .default_output_config()
-                .expect("Failed to get default output format");
-            let config = supported_config.config();
+                let host = cpal::default_host();
+                let device = host.default_output_device().unwrap();
+                let supported_config = device
+                    .default_output_config()
+                    .expect("Failed to get default output format");
+                let config = supported_config.config();
 
-            dbg!(supported_config.sample_format());
+                let i = data.len() as f32 * (start_frame_number as f32 / (fps * duration));
 
-            let mut i =
-                (data.len() as f32 * (start_frame_number as f32 / (fps * duration))) as usize;
-            let stream = device
-                .build_output_stream(
-                    &config,
-                    move |buffer: &mut [f32], _info| {
-                        for sample in buffer.iter_mut() {
-                            *sample = data.get(i).cloned().unwrap_or(0.0);
-                            i += 1;
-                        }
-                    },
-                    |_| {},
-                    None,
-                )
-                .unwrap();
+                macro_rules! convert {
+                    ($t:ty) => {
+                        |f| (f * <$t>::MAX as f64) as $t
+                    };
+                }
+                let shared_data = (&device, &config, data, i as usize);
+                let stream = match supported_config.sample_format() {
+                    SampleFormat::I8 => create_stream::<i8>(shared_data, convert!(i8)),
+                    SampleFormat::I16 => create_stream::<i16>(shared_data, convert!(i16)),
+                    SampleFormat::I32 => create_stream::<i32>(shared_data, convert!(i32)),
+                    SampleFormat::I64 => create_stream::<i64>(shared_data, convert!(i64)),
+                    SampleFormat::U8 => create_stream::<u8>(shared_data, convert!(u8)),
+                    SampleFormat::U16 => create_stream::<u16>(shared_data, convert!(u16)),
+                    SampleFormat::U32 => create_stream::<u32>(shared_data, convert!(u32)),
+                    SampleFormat::U64 => create_stream::<u64>(shared_data, convert!(u64)),
+                    SampleFormat::F32 => create_stream::<f32>(shared_data, |f| f as f32),
+                    SampleFormat::F64 => create_stream::<f64>(shared_data, |f| f),
+                    _ => unimplemented!(),
+                };
 
-            stream.play().unwrap();
+                fn create_stream<T: SizedSample + 'static>(
+                    (device, config, data, mut i): (
+                        &cpal::Device,
+                        &cpal::StreamConfig,
+                        Arc<Vec<f64>>,
+                        usize,
+                    ),
+                    convert: fn(f64) -> T,
+                ) -> cpal::Stream {
+                    device
+                        .build_output_stream(
+                            config,
+                            move |buffer, _info| {
+                                for sample in buffer.iter_mut() {
+                                    *sample = convert(data.get(i).cloned().unwrap_or(0.0));
+                                    i += 1;
+                                }
+                            },
+                            |_| {},
+                            None,
+                        )
+                        .unwrap()
+                }
 
-            handle.block_on(_stop_rx.changed()).ok();
+                stream.play().unwrap();
 
-            stream.pause().ok();
-            drop(stream);
+                handle.block_on(stop_rx.changed()).ok();
+
+                stream.pause().ok();
+                drop(stream);
+            }
         });
 
         let mut frame_number = start_frame_number + 1;
@@ -989,7 +1128,7 @@ async fn render_to_file(
 ) {
     let editor_instance = EditorInstance::get(&app, video_id).await;
 
-    cap_rendering::render_video_to_file(
+    render_to_file_impl(
         editor_instance.render_constants.options.clone(),
         project,
         output_path,
@@ -1000,6 +1139,7 @@ async fn render_to_file(
                 .send(RenderProgress::FrameRendered { current_frame })
                 .ok();
         },
+        editor_instance.audio.clone(),
     )
     .await
     .ok();

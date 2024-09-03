@@ -11,7 +11,6 @@ use std::thread;
 use wgpu::util::DeviceExt;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
-use cap_ffmpeg::{FFmpeg, FFmpegRawVideoInput};
 use cap_project::{BackgroundSource, CameraXPosition, CameraYPosition, ProjectConfiguration};
 
 use std::time::Instant;
@@ -86,78 +85,6 @@ impl<T> From<UV<T>> for [T; 2] {
     fn from(xy: UV<T>) -> Self {
         [xy.u, xy.v]
     }
-}
-
-pub async fn render_video_to_file(
-    options: RenderOptions,
-    project: ProjectConfiguration,
-    output_path: PathBuf,
-    screen_recording_decoder: VideoDecoderActor,
-    camera_recording_decoder: Option<VideoDecoderActor>,
-    on_progress: impl Fn(u32) + Send + 'static,
-) -> Result<PathBuf, String> {
-    let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-
-    let output_folder = output_path.parent().unwrap();
-    std::fs::create_dir_all(output_folder)
-        .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
-    let output_path_clone = output_path.clone();
-
-    tokio::spawn(async move {
-        println!("Starting FFmpeg output process...");
-        let mut ffmpeg = FFmpeg::new();
-        let ffmpeg_input = ffmpeg.add_input(FFmpegRawVideoInput {
-            width: options.output_size.0,
-            height: options.output_size.1,
-            fps: 30,
-            pix_fmt: "rgba",
-            input: "pipe:0".into(),
-        });
-
-        ffmpeg
-            .command
-            .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
-            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
-            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-            .arg("-y")
-            .arg(&output_path_clone);
-
-        let mut ffmpeg_process = ffmpeg.start();
-
-        let mut frame_count = 0;
-        loop {
-            match rx_image_data.recv().await {
-                Some(frame) => {
-                    // println!("Sending image data to FFmpeg");
-                    on_progress(frame_count);
-
-                    frame_count += 1;
-                    if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
-                        eprintln!("Error writing video frame: {:?}", e);
-                        break;
-                    }
-                }
-                None => {
-                    println!("All frames sent to FFmpeg");
-                    break;
-                }
-            }
-        }
-
-        println!("Stopping FFmpeg process...");
-        ffmpeg_process.stop();
-    });
-
-    render_video_to_channel(
-        options,
-        project,
-        tx_image_data,
-        screen_recording_decoder,
-        camera_recording_decoder,
-    )
-    .await?;
-
-    Ok(output_path)
 }
 
 pub fn create_uniforms_buffers(
@@ -381,7 +308,7 @@ pub async fn render_video_to_channel(
             };
             let camera_frame = match &mut camera_rx {
                 Some(rx) => rx.recv().await,
-                _ => break,
+                None => None,
             };
 
             let frame = match produce_frame(
@@ -407,7 +334,7 @@ pub async fn render_video_to_channel(
             }
 
             frame_count += 1;
-            if frame_count % 30 == 0 {
+            if frame_count % 60 == 0 {
                 let elapsed = start_time.elapsed();
                 println!(
                     "Processed {} frames in {:?} seconds",

@@ -181,7 +181,7 @@ async fn start_display_recording(
         input: pipe_path.into_os_string(),
         width,
         height,
-        fps: display::FPS,
+        fps: 0,
         pix_fmt: "bgra",
     });
 
@@ -190,14 +190,11 @@ async fn start_display_recording(
         .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
         .args(["-codec:v", "libx264", "-preset", "ultrafast"])
         .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-        .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
-        .args(["-movflags", "frag_keyframe+empty_moov"])
+        // .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
+        // .args(["-movflags", "frag_keyframe+empty_moov"])
         .args([
             "-vf",
-            &format!(
-                "fps={},scale=in_range=full:out_range=limited",
-                ffmpeg_input.fps
-            ),
+            &format!("fps={},scale=in_range=full:out_range=limited", display::FPS),
         ])
         .arg(&output_path);
 
