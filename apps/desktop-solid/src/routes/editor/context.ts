@@ -21,6 +21,9 @@ export type CurrentDialog =
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
+export const DEFAULT_FROM = [71, 133, 255] satisfies [number, number, number];
+export const DEFAULT_TO = [255, 71, 102] satisfies [number, number, number];
+
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
   () => {
     const [dialog, setDialog] = createSignal<DialogState>({
@@ -33,8 +36,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
         // source: { type: "color", value: [255, 0, ] },
         source: {
           type: "gradient",
-          from: [71, 133, 255],
-          to: [255, 71, 102],
+          from: DEFAULT_FROM,
+          to: DEFAULT_TO,
         },
         blur: 0,
         padding: 10,

@@ -30,6 +30,8 @@ import { createElementBounds } from "@solid-primitives/bounds";
 
 import {
   ASPECT_RATIOS,
+  DEFAULT_FROM,
+  DEFAULT_TO,
   EditorContextProvider,
   useEditorContext,
 } from "./context";
@@ -534,15 +536,15 @@ function SettingsSidebar() {
                   case "color": {
                     setState("background", "source", {
                       type: "color",
-                      value: [255, 0, 0],
+                      value: DEFAULT_FROM,
                     });
                     return;
                   }
                   case "gradient": {
                     setState("background", "source", {
                       type: "gradient",
-                      from: [255, 0, 0],
-                      to: [0, 255, 0],
+                      from: DEFAULT_FROM,
+                      to: DEFAULT_TO,
                     });
                     return;
                   }
@@ -626,43 +628,61 @@ function SettingsSidebar() {
                   <span>Click to select or drag and drop image</span>
                 </button>
               </KTabs.Content>
-              <KTabs.Content
-                value="color"
-                class="flex flex-row items-center gap-[0.75rem]"
-              >
-                <div
-                  class="size-[3rem] rounded-[0.5rem]"
-                  style={{ "background-color": "#4785FF" }}
-                />
-                <input
-                  class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem]"
-                  value="#4785FF"
-                />
+              <KTabs.Content value="color">
+                <Show
+                  when={
+                    state.background.source.type === "color" &&
+                    state.background.source
+                  }
+                >
+                  {(source) => (
+                    <RgbInput
+                      value={source().value}
+                      onChange={(value) =>
+                        setState("background", "source", {
+                          type: "color",
+                          value,
+                        })
+                      }
+                    />
+                  )}
+                </Show>
               </KTabs.Content>
               <KTabs.Content
                 value="gradient"
                 class="flex flex-row items-center gap-[1.5rem]"
               >
-                <div class="flex flex-row items-center gap-[0.75rem]">
-                  <div
-                    class="size-[3rem] rounded-[0.5rem]"
-                    style={{ "background-color": "#4785FF" }}
-                  />
-                  <input
-                    class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem]"
-                    value="#4785FF"
-                  />
-                </div>
-                <div class="flex flex-row items-center gap-[0.75rem]">
-                  <div
-                    class="size-[3rem] rounded-[0.5rem]"
-                    style={{ "background-color": "#FF4766" }}
-                  />
-                  <input
-                    class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem]"
-                    value="#FF4766"
-                  />
-                </div>
+                <Show
+                  when={
+                    state.background.source.type === "gradient" &&
+                    state.background.source
+                  }
+                >
+                  {(source) => (
+                    <>
+                      <RgbInput
+                        value={source().from}
+                        onChange={(from) =>
+                          setState("background", "source", {
+                            type: "gradient",
+                            from,
+                            to: source().to,
+                          })
+                        }
+                      />
+                      <RgbInput
+                        value={source().to}
+                        onChange={(to) =>
+                          setState("background", "source", {
+                            type: "gradient",
+                            from: source().from,
+                            to,
+                          })
+                        }
+                      />
+                    </>
+                  )}
+                </Show>
               </KTabs.Content>
             </KTabs>
           </Field>
@@ -1151,4 +1171,57 @@ function Dialogs() {
       </Show>
     </Dialog.Root>
   );
+}
+
+function RgbInput(props: {
+  value: [number, number, number];
+  onChange: (value: [number, number, number]) => void;
+}) {
+  const [text, setText] = createSignal(rgbToHex(props.value));
+  let prevHex = rgbToHex(props.value);
+
+  return (
+    <div class="flex flex-row items-center gap-[0.75rem]">
+      <div
+        class="size-[3rem] rounded-[0.5rem]"
+        style={{
+          "background-color": rgbToHex(props.value),
+        }}
+      />
+      <input
+        class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem]"
+        value={text()}
+        onFocus={() => {
+          prevHex = rgbToHex(props.value);
+        }}
+        onInput={(e) => {
+          setText(e.currentTarget.value);
+
+          const value = hexToRgb(e.target.value);
+          if (value) props.onChange(value);
+        }}
+        onBlur={(e) => {
+          const value = hexToRgb(e.target.value);
+          if (value) props.onChange(value);
+          else {
+            setText(prevHex);
+            props.onChange(hexToRgb(text())!);
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+function rgbToHex(rgb: [number, number, number]) {
+  return `#${rgb
+    .map((c) => c.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase()}`;
+}
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const match = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+  if (!match) return null;
+  return match.slice(1).map((c) => Number.parseInt(c, 16)) as any;
 }
