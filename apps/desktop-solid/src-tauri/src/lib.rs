@@ -465,10 +465,7 @@ impl EditorInstance {
                 .arg("-i")
                 .arg(audio_path)
                 .args(["-f", "f64le", "-acodec", "pcm_f64le"])
-                .args([
-                    "-ar",
-                    &48000.to_string(), /*&audio.sample_rate.to_string() */
-                ])
+                .args(["-ar", &audio.sample_rate.to_string()])
                 .args(["-ac", &audio.channels.to_string(), "-"])
                 .output()
                 .unwrap()
@@ -483,7 +480,7 @@ impl EditorInstance {
 
             AudioData {
                 buffer: Arc::new(buffer),
-                sample_rate: 48000, //audio.sample_rate,
+                sample_rate: audio.sample_rate,
             }
         });
 
@@ -694,9 +691,6 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
                     // Simple linear interpolation
                     let index = clock as usize;
                     let frac = clock.fract();
-                    if frac != 0.0 {
-                        println!("frac: {}", frac);
-                    }
                     let current = data[index];
                     let next = data[(index + 1) % data.len()];
                     Some(current * (1.0 - frac) + next * frac)
@@ -730,6 +724,7 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
                             move |buffer: &mut [T], _info| {
                                 for sample in buffer.iter_mut() {
                                     let Some(s) = next_sample() else {
+                                        *sample = T::EQUILIBRIUM;
                                         continue;
                                     };
                                     let value = cpal::Sample::from_sample::<f64>(s);

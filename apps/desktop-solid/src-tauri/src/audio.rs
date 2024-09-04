@@ -25,7 +25,7 @@ pub struct AudioCapturer {
 unsafe impl Send for AudioCapturer {}
 unsafe impl Sync for AudioCapturer {}
 
-const MAX_CHANNELS: u16 = 1;
+const MAX_CHANNELS: u16 = 2;
 
 impl AudioCapturer {
     pub fn init(name: &str) -> Option<Self> {
