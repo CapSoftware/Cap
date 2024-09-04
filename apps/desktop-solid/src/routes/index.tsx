@@ -26,7 +26,6 @@ import {
   MenuItem,
   topRightAnimateClasses,
 } from "./editor/ui";
-import { useNavigate } from "@solidjs/router";
 
 export default function () {
   const cameras = createCameras();
@@ -356,9 +355,13 @@ export default function () {
                   >
                     {isRecording() ? "Stop Recording" : "Start Recording"}
                   </Button>
-                  <button type="button" class="text-gray-400 text-[0.875rem]">
+                  <a
+                    href="https://cap.so/dashboard"
+                    target="_blank"
+                    class="text-gray-400 text-[0.875rem] mx-auto hover:text-gray-500 hover:underline"
+                  >
                     Open Cap on Web
-                  </button>
+                  </a>
                 </>
               );
             }}
