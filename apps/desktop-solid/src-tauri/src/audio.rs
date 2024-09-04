@@ -1,21 +1,24 @@
 use cap_ffmpeg::NamedPipeCapture;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, SizedSample, Stream, SupportedStreamConfig};
+use cpal::{Device, SampleFormat, SizedSample, Stream, StreamConfig, SupportedStreamConfig};
 use indexmap::IndexMap;
 use num_traits::ToBytes;
+use std::fs::File;
+use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use std::{path::PathBuf, sync::Arc};
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::oneshot;
-use tokio::{fs::File, io::AsyncWriteExt, sync::mpsc};
+use tokio::sync::{oneshot, watch};
 
 type SampleReceiver = mpsc::Receiver<Arc<Vec<u8>>>;
 
 pub struct AudioCapturer {
     device: Device,
     pub device_name: String,
-    config: SupportedStreamConfig,
+    pub supported_config: SupportedStreamConfig,
+    pub config: StreamConfig,
     sample_receiver: Option<SampleReceiver>,
     stream: Option<Stream>,
 }
@@ -23,27 +26,27 @@ unsafe impl Send for AudioCapturer {}
 unsafe impl Sync for AudioCapturer {}
 
 impl AudioCapturer {
-    pub fn init(custom_device: &str) -> Option<Self> {
-        tracing::debug!("Custom device: {:?}", custom_device);
+    pub fn init(name: &str) -> Option<Self> {
+        println!("Custom device: {}", name);
 
-        let mut devices = get_input_devices();
+        get_input_devices()
+            .swap_remove(name)
+            .map(|(device, supported_config)| {
+                println!("Using audio device: {}", name);
 
-        let maybe_device = {
-            let maybe_name = devices.first().map(|(name, _)| name.clone());
-            maybe_name.and_then(|device_name| devices.swap_remove_entry(&device_name))
-        };
+                let mut config = supported_config.config();
 
-        maybe_device.map(|(name, (device, config))| {
-            tracing::info!("Using audio device: {}", name);
+                config.channels = config.channels.min(2);
 
-            Self {
-                config,
-                device,
-                device_name: name,
-                sample_receiver: None,
-                stream: None,
-            }
-        })
+                Self {
+                    config,
+                    supported_config,
+                    device,
+                    device_name: name.to_string(),
+                    sample_receiver: None,
+                    stream: None,
+                }
+            })
     }
 
     pub fn log_info(&self) {
@@ -55,7 +58,7 @@ impl AudioCapturer {
     pub fn start(&mut self, start_time_tx: oneshot::Sender<Instant>) -> Result<(), String> {
         tracing::trace!("Building input stream...");
 
-        let (receiver, stream) = (match self.config.sample_format() {
+        let (receiver, stream) = (match self.supported_config.sample_format() {
             SampleFormat::I8 => self.build_stream::<i8>(start_time_tx),
             SampleFormat::I16 => self.build_stream::<i16>(start_time_tx),
             SampleFormat::I32 => self.build_stream::<i32>(start_time_tx),
@@ -100,16 +103,16 @@ impl AudioCapturer {
     }
 
     pub fn sample_rate(&self) -> u32 {
-        self.config.sample_rate().0
+        self.config.sample_rate.0
     }
 
     pub fn channels(&self) -> u16 {
-        self.config.channels()
+        self.config.channels
     }
 
     // Returns ffmpeg sample format ID and sample size in bytes
     pub fn sample_format(&self) -> &str {
-        match self.config.sample_format() {
+        match self.supported_config.sample_format() {
             SampleFormat::I8 => "s8",
             SampleFormat::I16 => "s16le",
             SampleFormat::I32 => "s32le",
@@ -222,10 +225,14 @@ pub fn get_input_devices() -> IndexMap<String, (Device, SupportedStreamConfig)> 
     device_map
 }
 
-pub fn start_capturing(capturer: &mut AudioCapturer, pipe_path: PathBuf) -> NamedPipeCapture {
+pub async fn start_capturing(
+    capturer: &mut AudioCapturer,
+    pipe_path: PathBuf,
+    start_writing_rx: watch::Receiver<bool>,
+) -> (NamedPipeCapture, Instant) {
     let (capture, is_stopped) = NamedPipeCapture::new(&pipe_path);
 
-    let (tx, _) = oneshot::channel();
+    let (tx, rx) = oneshot::channel();
 
     capturer.start(tx).unwrap();
 
@@ -236,7 +243,9 @@ pub fn start_capturing(capturer: &mut AudioCapturer, pipe_path: PathBuf) -> Name
         .expect("Audio sample collection already started!");
 
     tokio::spawn(async move {
-        let mut pipe = File::create(&pipe_path).await.unwrap();
+        println!("Opening audio pipe...");
+        let mut pipe = File::create(&pipe_path).unwrap();
+        println!("Audio pipe opened");
 
         while let Some(bytes) = receiver.recv().await {
             if is_stopped.load(Ordering::Relaxed) {
@@ -244,13 +253,17 @@ pub fn start_capturing(capturer: &mut AudioCapturer, pipe_path: PathBuf) -> Name
                 return;
             }
 
-            pipe.write_all(&bytes).await.unwrap();
+            if !*start_writing_rx.borrow() {
+                continue;
+            }
+
+            pipe.write_all(&bytes).unwrap();
         }
 
         println!("Done receiving audio frames");
 
-        let _ = pipe.sync_all().await;
+        pipe.sync_all().ok();
     });
 
-    capture
+    (capture, rx.await.unwrap())
 }

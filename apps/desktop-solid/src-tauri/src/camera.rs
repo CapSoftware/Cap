@@ -1,8 +1,8 @@
 use nokhwa::utils::CameraFormat;
 use serde::Serialize;
 use specta::Type;
-use std::{io::Write, path::PathBuf, sync::atomic::Ordering};
-use tokio::sync::oneshot;
+use std::{fs::File, io::Write, path::PathBuf, sync::atomic::Ordering, time::Instant};
+use tokio::sync::{oneshot, watch};
 
 use tauri::{AppHandle, Manager, WebviewUrl};
 
@@ -75,13 +75,19 @@ pub struct CameraInfo {
     pub description: String,
 }
 
+struct CaptureStarted {}
+
 pub async fn start_capturing(
     pipe_path: PathBuf,
     camera_info: nokhwa::utils::CameraInfo,
-) -> (CameraFormat, NamedPipeCapture) {
+    mut start_writing_rx: watch::Receiver<bool>,
+) -> (CameraFormat, NamedPipeCapture, Instant) {
     let (video_info_tx, video_info_rx) = oneshot::channel();
 
     let (capture, is_stopped) = NamedPipeCapture::new(&pipe_path);
+
+    let (start_tx, start_rx) = oneshot::channel();
+    let (frame_tx, mut frame_rx) = watch::channel(None);
 
     std::thread::spawn(move || {
         use nokhwa::{pixel_format::*, utils::*, *};
@@ -102,20 +108,42 @@ pub async fn start_capturing(
 
         camera.open_stream().unwrap();
 
-        println!("Opening pipe");
-        let mut file = std::fs::File::create(&pipe_path).unwrap();
-        println!("Pipe opened");
+        let mut start_tx = Some(start_tx);
 
-        println!("Receiving frames");
         loop {
             if is_stopped.load(Ordering::Relaxed) {
                 println!("Stopping receiving camera frames");
                 return;
             }
             let frame = camera.frame().unwrap();
-            file.write_all(frame.buffer()).ok();
+
+            if let Some(start_tx) = start_tx.take() {
+                start_tx.send(Instant::now()).unwrap();
+            }
+
+            if *start_writing_rx.borrow_and_update() {
+                frame_tx.send(Some(frame)).ok();
+            }
         }
     });
 
-    (video_info_rx.await.unwrap(), capture)
+    tokio::spawn(async move {
+        frame_rx.borrow_and_update();
+
+        let mut file = File::create(&pipe_path).unwrap();
+
+        loop {
+            frame_rx.changed().await.unwrap();
+
+            if let Some(frame) = &*frame_rx.borrow() {
+                file.write_all(frame.buffer()).ok();
+            }
+        }
+    });
+
+    (
+        video_info_rx.await.unwrap(),
+        capture,
+        start_rx.await.unwrap(),
+    )
 }

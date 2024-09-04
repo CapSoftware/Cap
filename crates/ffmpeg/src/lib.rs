@@ -177,16 +177,19 @@ pub trait ApplyFFmpegArgs {
     fn apply_ffmpeg_args(&self, command: &mut Command);
 }
 
+#[derive(Debug, Default)]
 pub struct FFmpegRawVideoInput {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
     pub pix_fmt: &'static str,
     pub input: OsString,
+    // pub offset: f64,
 }
 
 impl ApplyFFmpegArgs for FFmpegRawVideoInput {
     fn apply_ffmpeg_args(&self, command: &mut Command) {
+        dbg!(&self);
         let size = format!("{}x{}", self.width, self.height);
 
         command
@@ -199,27 +202,40 @@ impl ApplyFFmpegArgs for FFmpegRawVideoInput {
             command.args(["-r", &self.fps.to_string()]);
         }
 
+        // if self.offset != 0.0 {
+        //     command.args(["-itsoffset", &self.offset.to_string()]);
+        // }
+
         command
             .args(["-thread_queue_size", "4096", "-i"])
             .arg(&self.input);
     }
 }
 
+#[derive(Debug, Default)]
 pub struct FFmpegRawAudioInput {
     pub sample_format: String,
     pub sample_rate: u32,
     pub channels: u16,
     pub input: OsString,
+    // pub offset: f64,
 }
 
 impl ApplyFFmpegArgs for FFmpegRawAudioInput {
     fn apply_ffmpeg_args(&self, command: &mut Command) {
+        dbg!(&self);
         command
             .args(["-f", &self.sample_format])
             .args(["-ar", &self.sample_rate.to_string()])
             .args(["-ac", &self.channels.to_string()])
-            .args(["-thread_queue_size", "4096", "-i"])
-            .arg(&self.input);
+            .args(["-use_wallclock_as_timestamps", "1"])
+            .args(["-thread_queue_size", "4096", "-i"]);
+
+        // if self.offset != 0.0 {
+        //     command.args(["-itsoffset", &self.offset.to_string()]);
+        // }
+
+        command.arg(&self.input);
     }
 }
 

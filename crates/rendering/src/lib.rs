@@ -125,7 +125,6 @@ pub async fn render_video_to_channel(
 ) -> Result<(), String> {
     let constants = RenderVideoConstants::new(options).await?;
 
-
     println!("Setting up FFmpeg input for screen recording...");
 
     ffmpeg_next::init().unwrap();
@@ -625,8 +624,6 @@ pub async fn produce_frame(
         );
 
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        println!("camera frame size: {}", camera_frame.len());
 
         queue.write_texture(
             wgpu::ImageCopyTexture {

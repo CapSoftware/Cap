@@ -1,4 +1,5 @@
 use std::{
+    fs::File,
     io::{BufWriter, Write},
     path::PathBuf,
     sync::atomic::Ordering,
@@ -12,6 +13,10 @@ use scap::{
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use tokio::{
+    io::AsyncWriteExt,
+    sync::{oneshot, watch},
+};
 
 use crate::macos;
 use cap_ffmpeg::NamedPipeCapture;
@@ -65,10 +70,11 @@ pub fn list_capture_windows() -> Vec<CaptureWindow> {
 
 pub const FPS: u32 = 30;
 
-pub fn start_capturing(
+pub async fn start_capturing(
     pipe_path: PathBuf,
     capture_target: &CaptureTarget,
-) -> ((u32, u32), NamedPipeCapture) {
+    start_writing_rx: watch::Receiver<bool>,
+) -> ((u32, u32), NamedPipeCapture, Instant) {
     dbg!(capture_target);
     let mut capturer = {
         let crop_area = match capture_target {
@@ -103,11 +109,14 @@ pub fn start_capturing(
 
     let (capture, is_stopped) = NamedPipeCapture::new(&pipe_path);
 
+    let (tx, rx) = oneshot::channel();
+
+    let (frame_tx, mut frame_rx) = watch::channel(vec![]);
+
     std::thread::spawn(move || {
         capturer.start_capture();
 
-        let mut file = std::fs::File::create(&pipe_path).unwrap();
-
+        let mut start_time = Some(tx);
         loop {
             if is_stopped.load(Ordering::Relaxed) {
                 println!("Stopping receiving capture frames");
@@ -115,18 +124,38 @@ pub fn start_capturing(
             }
 
             let frame = capturer.get_next_frame();
+
+            if let Some(tx) = start_time.take() {
+                tx.send(Instant::now()).ok();
+            }
+
+            if !*start_writing_rx.borrow() {
+                continue;
+            }
+
             match frame {
                 Ok(Frame::BGRA(frame)) => {
-                    file.write_all(&frame.data).ok();
+                    frame_tx.send(frame.data).ok();
                 }
                 _ => println!("Failed to get frame"),
             }
         }
     });
 
-    tokio::spawn(async move {});
+    tokio::spawn(async move {
+        frame_rx.borrow_and_update();
 
-    ((width, height), capture)
+        let mut file = File::create(&pipe_path).unwrap();
+
+        loop {
+            frame_rx.changed().await.unwrap();
+
+            let frame = frame_rx.borrow();
+            file.write_all(&frame).ok();
+        }
+    });
+
+    ((width, height), capture, rx.await.unwrap())
 }
 
 pub fn get_window_bounds(window_number: u32) -> Option<Bounds> {

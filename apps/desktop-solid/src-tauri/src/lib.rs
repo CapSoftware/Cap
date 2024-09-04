@@ -286,7 +286,7 @@ async fn render_to_file_impl(
     screen_recording_decoder: VideoDecoderActor,
     camera_recording_decoder: Option<VideoDecoderActor>,
     on_progress: impl Fn(u32) + Send + 'static,
-    audio: Option<Arc<Vec<f64>>>,
+    audio: Option<AudioData>,
 ) -> Result<PathBuf, String> {
     let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -306,6 +306,7 @@ async fn render_to_file_impl(
 
             file.write_all(
                 audio
+                    .buffer
                     .iter()
                     .flat_map(|f| f.to_le_bytes())
                     .collect::<Vec<_>>()
@@ -317,7 +318,7 @@ async fn render_to_file_impl(
                 input: file_path.clone().into_os_string(),
                 sample_format: "f64le".to_string(),
                 sample_rate: 44100,
-                channels: 2,
+                channels: 1,
             });
 
             Some((file_path, file, dir))
@@ -328,7 +329,7 @@ async fn render_to_file_impl(
         ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
             width: options.output_size.0,
             height: options.output_size.1,
-            fps: 60,
+            fps: 30,
             pix_fmt: "rgba",
             input: "pipe:0".into(),
         });
@@ -408,12 +409,18 @@ impl EditorStateChanged {
     }
 }
 
+#[derive(Clone)]
+struct AudioData {
+    pub buffer: Arc<Vec<f64>>,
+    pub sample_rate: u32,
+}
+
 struct EditorInstance {
     app: AppHandle,
     pub path: PathBuf,
     pub screen_decoder: VideoDecoderActor,
     pub camera_decoder: Option<VideoDecoderActor>,
-    pub audio: Option<Arc<Vec<f64>>>,
+    pub audio: Option<AudioData>,
     pub ws_port: u16,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
@@ -422,57 +429,58 @@ struct EditorInstance {
 
 impl EditorInstance {
     pub async fn new(app: &AppHandle, video_id: String) -> Self {
-        let path = app
+        let project_path = app
             .path()
             .app_data_dir()
             .unwrap()
             .join("recordings")
             .join(format!("{video_id}.cap"));
 
-        if !path.exists() {
-            println!("Video path {} not found!", path.display());
+        if !project_path.exists() {
+            println!("Video path {} not found!", project_path.display());
             // return Err(format!("Video path {} not found!", path.display()));
-            panic!("Video path {} not found!", path.display());
+            panic!("Video path {} not found!", project_path.display());
         }
 
-        let meta: cap_project::RecordingMeta = serde_json::from_str(
-            &std::fs::read_to_string(path.join("recording-meta.json")).unwrap(),
-        )
-        .unwrap();
+        let meta = cap_project::RecordingMeta::load_for_project(&project_path);
 
         const OUTPUT_SIZE: (u32, u32) = (1920, 1080);
 
         let render_options = RenderOptions {
             screen_size: (meta.display.width, meta.display.height),
-            camera_size: meta.camera.map(|c| (c.width, c.height)), //.unwrap_or((0, 0)),
+            camera_size: meta.camera.as_ref().map(|c| (c.width, c.height)), //.unwrap_or((0, 0)),
             output_size: OUTPUT_SIZE,
         };
 
-        let screen_decoder = VideoDecoderActor::new(path.join("content/display.mp4").clone());
+        let screen_decoder = VideoDecoderActor::new(project_path.join(meta.display.path).clone());
         let camera_decoder = meta
             .camera
-            .map(|_| VideoDecoderActor::new(path.join("content/camera.mp4").clone()));
+            .map(|camera| VideoDecoderActor::new(project_path.join(camera.path).clone()));
 
-        let audio = meta.has_audio.then(|| {
-            let audio_path = path.join("content/audio-input.mp3");
+        let audio = meta.audio.map(|audio| {
+            let audio_path = project_path.join(audio.path);
 
             let stdout = Command::new("ffmpeg")
                 .arg("-i")
                 .arg(audio_path)
                 .args(["-f", "f64le", "-acodec", "pcm_f64le"])
-                .args(["-ar", "44100", "-ac", "2", "-"])
+                .args(["-ar", &audio.sample_rate.to_string()])
+                .args(["-ac", &audio.channels.to_string(), "-"])
                 .output()
                 .unwrap()
                 .stdout;
 
-            let audio = stdout
+            let buffer = stdout
                 .chunks_exact(8)
                 .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
                 .collect::<Vec<_>>();
 
-            println!("audio buffer length: {}", audio.len());
+            println!("audio buffer length: {}", buffer.len());
 
-            Arc::new(audio)
+            AudioData {
+                buffer: Arc::new(buffer),
+                sample_rate: audio.sample_rate,
+            }
         });
 
         let (frame_tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -586,7 +594,7 @@ impl EditorInstance {
 
         Self {
             app: app.clone(),
-            path,
+            path: project_path,
             screen_decoder,
             camera_decoder,
             ws_port,
@@ -649,7 +657,7 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
         std::thread::spawn({
             let mut stop_rx = stop_rx.clone();
             move || {
-                let Some(data) = audio else {
+                let Some(audio) = audio else {
                     return;
                 };
 
@@ -660,44 +668,60 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
                     .expect("Failed to get default output format");
                 let config = supported_config.config();
 
-                let i = data.len() as f32 * (start_frame_number as f32 / (fps * duration));
+                let data = audio.buffer.clone();
 
-                macro_rules! convert {
-                    ($t:ty) => {
-                        |f| (f * <$t>::MAX as f64) as $t
-                    };
-                }
-                let shared_data = (&device, &config, data, i as usize);
+                let mut clock =
+                    data.len() as f64 * (start_frame_number as f64 / (fps * duration) as f64);
+
+                let resample_ratio = audio.sample_rate as f64 / config.sample_rate.0 as f64;
+
+                let next_sample = move || {
+                    clock = clock + resample_ratio;
+
+                    if clock >= data.len() as f64 {
+                        return None;
+                    }
+
+                    // Simple linear interpolation
+                    let index = clock as usize;
+                    let frac = clock.fract();
+                    let current = data[index];
+                    let next = data[(index + 1) % data.len()];
+                    Some(current * (1.0 - frac) + next * frac)
+                };
+
+                let shared_data = (&device, &config, next_sample);
                 let stream = match supported_config.sample_format() {
-                    SampleFormat::I8 => create_stream::<i8>(shared_data, convert!(i8)),
-                    SampleFormat::I16 => create_stream::<i16>(shared_data, convert!(i16)),
-                    SampleFormat::I32 => create_stream::<i32>(shared_data, convert!(i32)),
-                    SampleFormat::I64 => create_stream::<i64>(shared_data, convert!(i64)),
-                    SampleFormat::U8 => create_stream::<u8>(shared_data, convert!(u8)),
-                    SampleFormat::U16 => create_stream::<u16>(shared_data, convert!(u16)),
-                    SampleFormat::U32 => create_stream::<u32>(shared_data, convert!(u32)),
-                    SampleFormat::U64 => create_stream::<u64>(shared_data, convert!(u64)),
-                    SampleFormat::F32 => create_stream::<f32>(shared_data, |f| f as f32),
-                    SampleFormat::F64 => create_stream::<f64>(shared_data, |f| f),
+                    SampleFormat::I8 => create_stream::<i8>(shared_data),
+                    SampleFormat::I16 => create_stream::<i16>(shared_data),
+                    SampleFormat::I32 => create_stream::<i32>(shared_data),
+                    SampleFormat::I64 => create_stream::<i64>(shared_data),
+                    SampleFormat::U8 => create_stream::<u8>(shared_data),
+                    SampleFormat::U16 => create_stream::<u16>(shared_data),
+                    SampleFormat::U32 => create_stream::<u32>(shared_data),
+                    SampleFormat::U64 => create_stream::<u64>(shared_data),
+                    SampleFormat::F32 => create_stream::<f32>(shared_data),
+                    SampleFormat::F64 => create_stream::<f64>(shared_data),
                     _ => unimplemented!(),
                 };
 
-                fn create_stream<T: SizedSample + 'static>(
-                    (device, config, data, mut i): (
+                fn create_stream<T: SizedSample + cpal::FromSample<f64> + 'static>(
+                    (device, config, mut next_sample): (
                         &cpal::Device,
                         &cpal::StreamConfig,
-                        Arc<Vec<f64>>,
-                        usize,
+                        impl FnMut() -> Option<f64> + Send + 'static,
                     ),
-                    convert: fn(f64) -> T,
                 ) -> cpal::Stream {
                     device
                         .build_output_stream(
                             config,
-                            move |buffer, _info| {
+                            move |buffer: &mut [T], _info| {
                                 for sample in buffer.iter_mut() {
-                                    *sample = convert(data.get(i).cloned().unwrap_or(0.0));
-                                    i += 1;
+                                    let Some(s) = next_sample() else {
+                                        continue;
+                                    };
+                                    let value = cpal::Sample::from_sample::<f64>(s);
+                                    *sample = value;
                                 }
                             },
                             |_| {},
