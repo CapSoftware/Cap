@@ -146,6 +146,29 @@ function Inner() {
 
   const [playing, setPlaying] = createSignal(false);
 
+  const togglePlayback = () => {
+    if (playing()) {
+      commands.stopPlayback(videoId()).then(() => setPlaying(false));
+    } else {
+      commands.startPlayback(videoId(), state).then(() => setPlaying(true));
+    }
+  };
+
+  createEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && e.target === document.body) {
+        e.preventDefault();
+        togglePlayback();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  });
+
   return (
     <div
       class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg leading-5"
