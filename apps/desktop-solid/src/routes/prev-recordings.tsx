@@ -77,7 +77,6 @@ export default function () {
               const [metadata, setMetadata] = createSignal({
                 duration: 0,
                 size: 0,
-                total_frames: 0,
               });
 
               const [imageExists, setImageExists] = createSignal(true);
@@ -90,14 +89,13 @@ export default function () {
               createEffect(() => {
                 commands.getVideoMetadata(recording).then((result) => {
                   if (result.status === "ok") {
-                    const [duration, size, total_frames] = result.data;
+                    const [duration, size] = result.data;
                     console.log(
                       `Metadata for ${recording}: duration=${duration}, size=${size}`
                     );
                     setMetadata({
                       duration,
                       size,
-                      total_frames,
                     });
                   } else {
                     console.error(`Failed to get metadata: ${result.error}`);
@@ -167,7 +165,7 @@ export default function () {
                               removedCount() === visibleRecordings()?.length &&
                               !hasClosedWindow()
                             ) {
-                              window.close();
+                              commands.closePreviousRecordingsWindow();
                               setHasClosedWindow(true);
                             }
                           }}
