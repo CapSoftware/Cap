@@ -100,7 +100,7 @@ pub async fn start(
             input: capture.path().clone().into_os_string(),
             width,
             height,
-            fps: 30,
+            fps: 0,
             pix_fmt: "bgra",
             // offset: start_time.duration_since(latest_start_time).as_secs_f64(),
             ..Default::default()
