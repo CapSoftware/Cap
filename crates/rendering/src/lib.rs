@@ -53,7 +53,7 @@ pub struct CompositeParams {
     background_angle: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Copy)]
 pub enum Background {
     Color([f32; 4]),
     Gradient {
@@ -61,6 +61,35 @@ pub enum Background {
         end: [f32; 4],
         angle: f32,
     },
+}
+
+impl From<BackgroundSource> for Background {
+    fn from(value: BackgroundSource) -> Self {
+        match value {
+            BackgroundSource::Color { value } => Background::Color([
+                srgb_to_linear(value[0]),
+                srgb_to_linear(value[1]),
+                srgb_to_linear(value[2]),
+                1.0,
+            ]),
+            BackgroundSource::Gradient { from, to } => Background::Gradient {
+                start: [
+                    srgb_to_linear(from[0]),
+                    srgb_to_linear(from[1]),
+                    srgb_to_linear(from[2]),
+                    1.0,
+                ],
+                end: [
+                    srgb_to_linear(to[0]),
+                    srgb_to_linear(to[1]),
+                    srgb_to_linear(to[2]),
+                    1.0,
+                ],
+                angle: 0.0,
+            },
+            _ => unimplemented!(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -87,145 +116,6 @@ impl<T> From<UV<T>> for [T; 2] {
     }
 }
 
-pub fn create_uniforms_buffers(
-    constants: &RenderVideoConstants,
-    project: &ProjectConfiguration,
-) -> (wgpu::Buffer, Option<wgpu::Buffer>, wgpu::Buffer) {
-    let options = &constants.options;
-
-    let (background_start, background_end, _background_angle) = match &project.background.source {
-        BackgroundSource::Color { value } => (
-            [
-                srgb_to_linear(value[0]),
-                srgb_to_linear(value[1]),
-                srgb_to_linear(value[2]),
-                1.0,
-            ],
-            [
-                srgb_to_linear(value[0]),
-                srgb_to_linear(value[1]),
-                srgb_to_linear(value[2]),
-                1.0,
-            ],
-            0.0,
-        ),
-        BackgroundSource::Gradient {
-            from,
-            to, /*angle*/
-        } => (
-            [
-                srgb_to_linear(from[0]),
-                srgb_to_linear(from[1]),
-                srgb_to_linear(from[2]),
-                1.0,
-            ],
-            [
-                srgb_to_linear(to[0]),
-                srgb_to_linear(to[1]),
-                srgb_to_linear(to[2]),
-                1.0,
-            ],
-            0.0,
-        ),
-        _ => todo!(),
-    };
-
-    const CAMERA_PADDING: f32 = 50.0;
-    const CAMERA_UV_WIDTH: f32 = 0.3;
-
-    let camera_padding = UV::new(
-        CAMERA_PADDING / options.output_size.0 as f32,
-        CAMERA_PADDING / options.output_size.1 as f32,
-    );
-
-    let webcam_size = options.output_size.1 as f32 * CAMERA_UV_WIDTH;
-
-    let webcam_position = {
-        let x = match &project.camera.position.x {
-            CameraXPosition::Left => camera_padding.u,
-            CameraXPosition::Center => 0.5 - (webcam_size / options.output_size.0 as f32) / 2.0,
-            CameraXPosition::Right => {
-                1.0 - camera_padding.u - webcam_size / options.output_size.0 as f32
-            }
-        };
-        let y = match &project.camera.position.y {
-            CameraYPosition::Top => camera_padding.v,
-            CameraYPosition::Bottom => 1.0 - CAMERA_UV_WIDTH - camera_padding.v,
-        };
-
-        UV::new(x, y)
-    };
-
-    let screen_uniforms_buffer = render_frame::Uniforms {
-        fb_size: [options.screen_size.0 as f32, options.screen_size.1 as f32],
-        border_pc: project.background.rounding as f32,
-        x_offset: 0.0,
-        mirror: false as u32,
-        _padding: [0.0],
-    }
-    .to_buffer(&constants.device);
-
-    let camera_uniforms_buffer = options.camera_size.map(|camera_size| {
-        render_frame::Uniforms {
-            fb_size: [camera_size.1 as f32, camera_size.1 as f32],
-            border_pc: project.camera.rounding as f32,
-            x_offset: (camera_size.0 - camera_size.1) as f32 / 2.0,
-            mirror: project.camera.mirror as u32,
-            _padding: [0.0],
-        }
-        .to_buffer(&constants.device)
-    });
-
-    let screen_xy = (
-        options.output_size.0 as f32 / 2.0,
-        options.output_size.1 as f32 / 2.0,
-    );
-    let screen_scale = 1.0 - project.background.padding as f32 / 100.0;
-
-    let output_ratio = options.output_size.0 as f32 / options.output_size.1 as f32;
-    let screen_ratio = options.screen_size.0 as f32 / options.screen_size.1 as f32;
-    let camera_ratio = options
-        .camera_size
-        .map(|camera_size| camera_size.0 as f32 / camera_size.1 as f32);
-
-    let screen_size_uv = UV::new(screen_scale * (screen_ratio / output_ratio), screen_scale);
-
-    let screen_uv = UV::new(
-        ((screen_xy.0 / options.output_size.0 as f32) - 0.5)
-            + (1.0 - screen_scale) / 2.0
-            + (screen_scale - screen_size_uv.u) / 2.0,
-        ((screen_xy.1 / options.output_size.1 as f32) - 0.5) + (1.0 - screen_scale) / 2.0,
-    );
-
-    let composite_uniforms_buffer = constants.device.create_buffer_init(
-        &(wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer 2"),
-            contents: bytemuck::cast_slice(&[composite::Uniforms {
-                screen_bounds: [screen_uv.u, screen_uv.v, screen_size_uv.u, screen_size_uv.v],
-                webcam_bounds: camera_ratio
-                    .map(|camera_ratio| {
-                        [
-                            webcam_position.u,
-                            webcam_position.v,
-                            CAMERA_UV_WIDTH * (camera_ratio / output_ratio),
-                            CAMERA_UV_WIDTH,
-                        ]
-                    })
-                    .unwrap_or([0.0, 0.0, 0.0, 0.0]),
-                background_start,
-                background_end,
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        }),
-    );
-
-    (
-        screen_uniforms_buffer,
-        camera_uniforms_buffer,
-        composite_uniforms_buffer,
-    )
-}
-
 pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
@@ -235,8 +125,6 @@ pub async fn render_video_to_channel(
 ) -> Result<(), String> {
     let constants = RenderVideoConstants::new(options).await?;
 
-    let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
-        create_uniforms_buffers(&constants, &project);
 
     println!("Setting up FFmpeg input for screen recording...");
 
@@ -302,6 +190,9 @@ pub async fn render_video_to_channel(
     let render_handle: tokio::task::JoinHandle<Result<u32, String>> = tokio::spawn(async move {
         let mut frame_count = 0;
 
+        let uniforms = ProjectUniforms::new(&constants, &project);
+        let background = Background::from(project.background.source);
+
         loop {
             let Some(screen_frame) = screen_rx.recv().await else {
                 break;
@@ -313,11 +204,10 @@ pub async fn render_video_to_channel(
 
             let frame = match produce_frame(
                 &constants,
-                &screen_uniforms_buffer,
                 &screen_frame,
-                camera_uniforms_buffer.as_ref(),
                 camera_frame.as_ref(),
-                &composite_uniforms_buffer,
+                background,
+                &uniforms,
             )
             .await
             {
@@ -367,8 +257,8 @@ pub struct RenderVideoConstants {
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub options: RenderOptions,
-    pub render_frame: RenderFrame,
-    pub composite: Composite,
+    pub composite_video_frame_pipeline: CompositeVideoFramePipeline,
+    pub gradient_or_color_pipeline: GradientOrColorPipeline,
     pub output_texture: wgpu::Texture,
     pub output_texture_view: wgpu::TextureView,
     pub output_texture_size: wgpu::Extent3d,
@@ -430,8 +320,8 @@ impl RenderVideoConstants {
         );
 
         Ok(Self {
-            composite: Composite::new(&device),
-            render_frame: RenderFrame::new(&device),
+            composite_video_frame_pipeline: CompositeVideoFramePipeline::new(&device),
+            gradient_or_color_pipeline: GradientOrColorPipeline::new(&device),
             _instance: instance,
             _adapter: adapter,
             queue,
@@ -448,26 +338,126 @@ impl RenderVideoConstants {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ProjectUniforms {
+    display: CompositeVideoFrameUniforms,
+    camera: Option<CompositeVideoFrameUniforms>,
+}
+
+const CAMERA_PADDING: f32 = 50.0;
+const CAMERA_UV_WIDTH: f32 = 0.3;
+
+const SCREEN_MAX_PADDING: f32 = 0.4;
+
+impl ProjectUniforms {
+    pub fn new(constants: &RenderVideoConstants, project: &ProjectConfiguration) -> Self {
+        let options = &constants.options;
+        let output_size = [options.output_size.0 as f32, options.output_size.1 as f32];
+
+        let display = {
+            let frame_size = [options.screen_size.0 as f32, options.screen_size.1 as f32];
+            let frame_aspect = frame_size[0] / frame_size[1];
+            let min_axis = frame_size[0].min(frame_size[1]);
+            let y_padding =
+                project.background.padding as f32 / 100.0 * SCREEN_MAX_PADDING * output_size[1];
+
+            let target_height = (output_size[1] - y_padding) - y_padding;
+            let target_width = target_height * frame_aspect;
+            let target_left_bounds = (output_size[0] - target_width) / 2.0;
+            let target_bounds = [
+                target_left_bounds,
+                y_padding,
+                output_size[0] - target_left_bounds,
+                output_size[1] - y_padding,
+            ];
+            let target_size = [target_bounds[2] - target_bounds[0], target_height];
+            let min_target_axis = target_size[0].min(target_size[1]);
+
+            CompositeVideoFrameUniforms {
+                output_size,
+                frame_size,
+                crop_bounds: [0.0, 0.0, frame_size[0], frame_size[1]],
+                target_bounds,
+                target_size,
+                rounding_px: project.background.rounding as f32 / 100.0 * 0.5 * min_target_axis,
+                ..Default::default()
+            }
+        };
+
+        let camera = options
+            .camera_size
+            .filter(|_| !project.camera.hide)
+            .map(|camera_size| {
+                let frame_size = [camera_size.0 as f32, camera_size.1 as f32];
+                let min_axis = frame_size[0].min(frame_size[1]);
+
+                let size = [
+                    min_axis * CAMERA_UV_WIDTH + CAMERA_PADDING,
+                    min_axis * CAMERA_UV_WIDTH + CAMERA_PADDING,
+                ];
+
+                let position = {
+                    let x = match &project.camera.position.x {
+                        CameraXPosition::Left => CAMERA_PADDING,
+                        CameraXPosition::Center => output_size[0] / 2.0 - (size[0]) / 2.0,
+                        CameraXPosition::Right => output_size[0] - CAMERA_PADDING - size[0],
+                    };
+                    let y = match &project.camera.position.y {
+                        CameraYPosition::Top => CAMERA_PADDING,
+                        CameraYPosition::Bottom => output_size[1] - size[1] - CAMERA_PADDING,
+                    };
+
+                    [x, y]
+                };
+
+                let target_bounds = [
+                    position[0],
+                    position[1],
+                    position[0] + size[0],
+                    position[1] + size[1],
+                ];
+
+                CompositeVideoFrameUniforms {
+                    output_size,
+                    frame_size,
+                    crop_bounds: [
+                        (frame_size[0] - frame_size[1]) / 2.0,
+                        0.0,
+                        frame_size[0] - (frame_size[0] - frame_size[1]) / 2.0,
+                        frame_size[1],
+                    ],
+                    target_bounds,
+                    target_size: [
+                        target_bounds[2] - target_bounds[0],
+                        target_bounds[3] - target_bounds[1],
+                    ],
+                    rounding_px: project.camera.rounding as f32 / 100.0 * 0.5 * size[0],
+                    mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
+                    ..Default::default()
+                }
+            });
+
+        Self { display, camera }
+    }
+}
+
 pub async fn produce_frame(
     RenderVideoConstants {
         device,
         options,
-        render_frame,
-        composite,
+        composite_video_frame_pipeline,
+        gradient_or_color_pipeline,
         queue,
-        output_texture,
-        output_texture_view,
         output_texture_size,
         output_buffer,
         padded_bytes_per_row,
         unpadded_bytes_per_row,
         ..
     }: &RenderVideoConstants,
-    screen_uniforms_buffer: &wgpu::Buffer,
     screen_frame: &Vec<u8>,
-    camera_uniforms_buffer: Option<&wgpu::Buffer>,
     camera_frame: Option<&Vec<u8>>,
-    composite_uniforms_buffer: &wgpu::Buffer,
+    background: Background,
+    uniforms: &ProjectUniforms,
 ) -> Result<Vec<u8>, String> {
     let mut encoder = device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
@@ -475,88 +465,230 @@ pub async fn produce_frame(
         }),
     );
 
-    let screen_texture = device.create_texture(
-        &(wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: options.screen_size.0,
-                height: options.screen_size.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            label: Some("texture"),
-            view_formats: &[],
-        }),
+    let output_texture_desc = wgpu::TextureDescriptor {
+        size: wgpu::Extent3d {
+            width: options.output_size.0,
+            height: options.output_size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC,
+        label: Some("Intermediate Texture"),
+        view_formats: &[],
+    };
+
+    let textures = (
+        device.create_texture(&output_texture_desc),
+        device.create_texture(&output_texture_desc),
     );
 
-    let screen_texture_view = screen_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let textures = (&textures.0, &textures.1);
 
-    let webcam_texture = device.create_texture(
-        &(wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: options.camera_size.map(|s| s.0).unwrap_or(1),
-                height: options.camera_size.map(|s| s.1).unwrap_or(1),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            label: Some("webcam texture"),
-            view_formats: &[],
-        }),
+    let texture_views = (
+        textures
+            .0
+            .create_view(&wgpu::TextureViewDescriptor::default()),
+        textures
+            .1
+            .create_view(&wgpu::TextureViewDescriptor::default()),
     );
 
-    let webcam_texture_view = webcam_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let texture_views = (&texture_views.0, &texture_views.1);
 
-    do_render_pass(
-        &mut encoder,
-        &screen_texture_view,
-        &render_frame.render_pipeline,
-        render_frame::bind_group(
-            device,
-            queue,
-            &render_frame.bind_group_layout,
-            screen_uniforms_buffer,
-            options.screen_size,
-            screen_frame,
-        ),
-    );
+    let mut output_is_left = true;
 
-    if let (Some(camera_size), Some(camera_frame), Some(buffer)) =
-        (options.camera_size, camera_frame, camera_uniforms_buffer)
     {
         do_render_pass(
             &mut encoder,
-            &webcam_texture_view,
-            &render_frame.render_pipeline,
-            render_frame::bind_group(
+            get_either(texture_views, output_is_left),
+            &gradient_or_color_pipeline.render_pipeline,
+            gradient_or_color_pipeline.bind_group(
                 device,
-                queue,
-                &render_frame.bind_group_layout,
-                buffer,
-                camera_size,
-                camera_frame,
+                &GradientOrColorUniforms::from(background).to_buffer(device),
             ),
         );
+
+        output_is_left = !output_is_left;
     }
 
-    do_render_pass(
-        &mut encoder,
-        output_texture_view,
-        &composite.render_pipeline,
-        composite::bind_group(
-            device,
-            &composite.bind_group_layout,
-            &screen_texture_view,
-            &webcam_texture_view,
-            composite_uniforms_buffer,
-        ),
-    );
+    {
+        let frame_size = options.screen_size;
+
+        let texture = device.create_texture(
+            &(wgpu::TextureDescriptor {
+                size: wgpu::Extent3d {
+                    width: options.screen_size.0,
+                    height: options.screen_size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_DST,
+                label: Some("Screen Frame texture"),
+                view_formats: &[],
+            }),
+        );
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            screen_frame,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(options.screen_size.0 * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: frame_size.0,
+                height: frame_size.1,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // let padding = 30.0;
+        // let frame_size = (frame_size.0 as f32, frame_size.1 as f32);
+        // let output_size = (options.output_size.0 as f32, options.output_size.1 as f32);
+        // let x_scale = output_size.0 / frame_size.0;
+        // let target_bounds = [
+        //     padding,
+        //     padding,
+        //     output_size.0 - padding,
+        //     frame_size.1 * x_scale - padding * x_scale,
+        // ];
+        // let target_size = [
+        //     target_bounds[2] - target_bounds[0],
+        //     target_bounds[3] - target_bounds[1],
+        // ];
+        // let rounding_pc = 0.1;
+        // let rounding_px = f32::min(target_size[0], target_size[1]) * 0.5 * rounding_pc;
+
+        do_render_pass(
+            &mut encoder,
+            get_either(texture_views, output_is_left),
+            &composite_video_frame_pipeline.render_pipeline,
+            composite_video_frame_pipeline.bind_group(
+                device,
+                &uniforms.display.to_buffer(device),
+                // &dbg!(CompositeVideoFrameUniforms {
+                //     output_size: [output_size.0, output_size.1],
+                //     frame_size: [frame_size.0, frame_size.1],
+                //     crop_bounds: [0.0, 0.0, frame_size.0, frame_size.1],
+                //     target_bounds,
+                //     target_size,
+                //     rounding_px,
+                //     ..Default::default()
+                // })
+                // .to_buffer(device),
+                &texture_view,
+                get_either(texture_views, !output_is_left),
+            ),
+        );
+
+        output_is_left = !output_is_left;
+    }
+
+    if let (Some(camera_size), Some(camera_frame), Some(uniforms)) =
+        (options.camera_size, camera_frame, &uniforms.camera)
+    {
+        let texture = device.create_texture(
+            &(wgpu::TextureDescriptor {
+                size: wgpu::Extent3d {
+                    width: camera_size.0,
+                    height: camera_size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_DST,
+                label: Some("Camera texture"),
+                view_formats: &[],
+            }),
+        );
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        println!("camera frame size: {}", camera_frame.len());
+
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            camera_frame,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(camera_size.0 * 4),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: camera_size.0,
+                height: camera_size.1,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // let padding = 30.0;
+        // let frame_size = (camera_size.0 as f32, camera_size.1 as f32);
+        // let output_size = (options.output_size.0 as f32, options.output_size.1 as f32);
+        // let x_scale = output_size.0 / frame_size.0;
+        // let target_bounds = [padding, padding, 300.0, 300.0];
+        // let target_size = [
+        //     target_bounds[2] - target_bounds[0],
+        //     target_bounds[3] - target_bounds[1],
+        // ];
+        // let rounding_pc = 0.1;
+        // let rounding_px = f32::min(target_size[0], target_size[1]) * 0.5 * rounding_pc;
+
+        do_render_pass(
+            &mut encoder,
+            get_either(texture_views, output_is_left),
+            &composite_video_frame_pipeline.render_pipeline,
+            composite_video_frame_pipeline.bind_group(
+                device,
+                &uniforms.to_buffer(device),
+                // &dbg!(CompositeVideoFrameUniforms {
+                //     output_size: [output_size.0, output_size.1],
+                //     frame_size: [frame_size.0, frame_size.1],
+                //     crop_bounds: [
+                //         (frame_size.0 - frame_size.1) / 2.0,
+                //         0.0,
+                //         frame_size.0 - (frame_size.0 - frame_size.1) / 2.0,
+                //         frame_size.1
+                //     ],
+                //     target_bounds,
+                //     target_size,
+                //     rounding_px,
+                //     ..Default::default()
+                // })
+                // .to_buffer(device),
+                &texture_view,
+                get_either(texture_views, !output_is_left),
+            ),
+        );
+
+        output_is_left = !output_is_left;
+    }
 
     queue.submit(std::iter::once(encoder.finish()));
 
@@ -569,7 +701,7 @@ pub async fn produce_frame(
 
         encoder.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
-                texture: output_texture,
+                texture: get_either(textures, !output_is_left),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -618,36 +750,56 @@ pub async fn produce_frame(
     Ok(image_data)
 }
 
-mod render_frame {
-    use super::*;
+struct CompositeVideoFramePipeline {
+    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub render_pipeline: wgpu::RenderPipeline,
+}
 
-    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
-    #[repr(C)]
-    pub struct Uniforms {
-        pub fb_size: [f32; 2],
-        pub border_pc: f32,
-        pub x_offset: f32,
-        pub mirror: u32,
-        pub _padding: [f32; 1],
+#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
+#[repr(C)]
+struct CompositeVideoFrameUniforms {
+    pub crop_bounds: [f32; 4],
+    pub target_bounds: [f32; 4],
+    pub output_size: [f32; 2],
+    pub frame_size: [f32; 2],
+    pub velocity_uv: [f32; 2],
+    pub target_size: [f32; 2],
+    pub rounding_px: f32,
+    pub mirror_x: f32,
+    _padding: [f32; 3],
+}
+
+impl CompositeVideoFrameUniforms {
+    fn to_buffer(self, device: &wgpu::Device) -> wgpu::Buffer {
+        device.create_buffer_init(
+            &(wgpu::util::BufferInitDescriptor {
+                label: Some("CompositeVideoFrameUniforms Buffer"),
+                contents: bytemuck::cast_slice(&[self]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }),
+        )
     }
+}
 
-    impl Uniforms {
-        pub fn to_buffer(self, device: &wgpu::Device) -> wgpu::Buffer {
-            device.create_buffer_init(
-                &(wgpu::util::BufferInitDescriptor {
-                    label: Some("Uniform Buffer"),
-                    contents: bytemuck::cast_slice(&[self]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                }),
-            )
+impl CompositeVideoFramePipeline {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let bind_group_layout = Self::bind_group_layout(device);
+        let render_pipeline =
+            create_shader_render_pipeline(device, &bind_group_layout, Self::shader());
+
+        Self {
+            bind_group_layout,
+            render_pipeline,
         }
     }
 
-    pub const SHADER: &str = include_str!("shaders/render-frame.wgsl");
+    fn shader() -> &'static str {
+        include_str!("shaders/composite-video-frame.wgsl")
+    }
 
-    pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Bind Group Layout"),
+            label: Some("composite-video-frame.wgsl Bind Group Layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -672,190 +824,16 @@ mod render_frame {
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        })
-    }
-
-    pub fn bind_group(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        layout: &wgpu::BindGroupLayout,
-        uniform_buffer: &wgpu::Buffer,
-        frame_size: (u32, u32),
-        frame_data: &Vec<u8>,
-    ) -> wgpu::BindGroup {
-        let texture = device.create_texture(
-            &(wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width: frame_size.0,
-                    height: frame_size.1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                label: Some("texture"),
-                view_formats: &[],
-            }),
-        );
-
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let sampler = device.create_sampler(
-            &(wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Nearest,
-                ..Default::default()
-            }),
-        );
-
-        let bind_group = device.create_bind_group(
-            &(wgpu::BindGroupDescriptor {
-                layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&texture_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-                label: Some("bind_group"),
-            }),
-        );
-
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            frame_data,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(frame_size.0 * 4),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d {
-                width: frame_size.0,
-                height: frame_size.1,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        bind_group
-    }
-}
-
-struct Composite {
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    pub render_pipeline: wgpu::RenderPipeline,
-}
-
-impl Composite {
-    pub fn new(device: &wgpu::Device) -> Self {
-        let bind_group_layout = composite::bind_group_layout(device);
-        let render_pipeline =
-            create_shader_render_pipeline(device, &bind_group_layout, composite::SHADER);
-
-        Self {
-            bind_group_layout,
-            render_pipeline,
-        }
-    }
-}
-
-struct RenderFrame {
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    pub render_pipeline: wgpu::RenderPipeline,
-}
-
-impl RenderFrame {
-    pub fn new(device: &wgpu::Device) -> Self {
-        let bind_group_layout = render_frame::bind_group_layout(device);
-        let render_pipeline =
-            create_shader_render_pipeline(device, &bind_group_layout, render_frame::SHADER);
-
-        Self {
-            bind_group_layout,
-            render_pipeline,
-        }
-    }
-}
-
-mod composite {
-    use super::*;
-
-    #[derive(Debug, Clone, Copy, Pod, Zeroable)]
-    #[repr(C)]
-    pub struct Uniforms {
-        pub screen_bounds: [f32; 4],
-        pub webcam_bounds: [f32; 4],
-        pub background_start: [f32; 4],
-        pub background_end: [f32; 4],
-    }
-
-    pub const SHADER: &str = include_str!("shaders/composite.wgsl");
-
-    pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Composite Everything Bind Group Layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
@@ -864,11 +842,11 @@ mod composite {
     }
 
     pub fn bind_group(
+        &self,
         device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        one: &wgpu::TextureView,
-        two: &wgpu::TextureView,
         uniforms: &wgpu::Buffer,
+        frame: &wgpu::TextureView,
+        intermediate: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         let sampler = device.create_sampler(
             &(wgpu::SamplerDescriptor {
@@ -884,7 +862,7 @@ mod composite {
 
         let bind_group = device.create_bind_group(
             &(wgpu::BindGroupDescriptor {
-                layout,
+                layout: &self.bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -892,21 +870,110 @@ mod composite {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(one),
+                        resource: wgpu::BindingResource::TextureView(frame),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
+                        resource: wgpu::BindingResource::TextureView(intermediate),
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
-                        resource: wgpu::BindingResource::TextureView(two),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
                         resource: wgpu::BindingResource::Sampler(&sampler),
                     },
                 ],
+                label: Some("bind_group"),
+            }),
+        );
+
+        bind_group
+    }
+}
+
+struct GradientOrColorPipeline {
+    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub render_pipeline: wgpu::RenderPipeline,
+}
+
+#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
+#[repr(C)]
+struct GradientOrColorUniforms {
+    pub start: [f32; 4],
+    pub end: [f32; 4],
+    pub angle: f32,
+    _padding: [f32; 3],
+}
+
+impl GradientOrColorUniforms {
+    fn to_buffer(self, device: &wgpu::Device) -> wgpu::Buffer {
+        device.create_buffer_init(
+            &(wgpu::util::BufferInitDescriptor {
+                label: Some("GradientOrColorUniforms Buffer"),
+                contents: bytemuck::cast_slice(&[self]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }),
+        )
+    }
+}
+
+impl From<Background> for GradientOrColorUniforms {
+    fn from(value: Background) -> Self {
+        match value {
+            Background::Color(color) => Self {
+                start: color,
+                end: color,
+                angle: 0.0,
+                _padding: [0.0; 3],
+            },
+            Background::Gradient { start, end, angle } => Self {
+                start,
+                end,
+                angle,
+                _padding: [0.0; 3],
+            },
+        }
+    }
+}
+
+impl GradientOrColorPipeline {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let bind_group_layout = Self::bind_group_layout(device);
+        let render_pipeline =
+            create_shader_render_pipeline(device, &bind_group_layout, Self::shader());
+
+        Self {
+            bind_group_layout,
+            render_pipeline,
+        }
+    }
+
+    fn shader() -> &'static str {
+        include_str!("shaders/gradient-or-color.wgsl")
+    }
+
+    fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("composite-video-frame.wgsl Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        })
+    }
+
+    pub fn bind_group(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer) -> wgpu::BindGroup {
+        let bind_group = device.create_bind_group(
+            &(wgpu::BindGroupDescriptor {
+                layout: &self.bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms.as_entire_binding(),
+                }],
                 label: Some("bind_group"),
             }),
         );
@@ -1167,4 +1234,12 @@ fn ts_to_frame(ts: i64, time_base: Rational, frame_rate: Rational) -> u32 {
     // dbg!((ts, time_base, frame_rate));
     ((ts * time_base.numerator() as i64 * frame_rate.numerator() as i64)
         / (time_base.denominator() as i64 * frame_rate.denominator() as i64)) as u32
+}
+
+fn get_either<T>((a, b): (T, T), left: bool) -> T {
+    if left {
+        a
+    } else {
+        b
+    }
 }

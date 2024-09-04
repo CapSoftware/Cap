@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use cap_project::ProjectConfiguration;
-use cap_rendering::{produce_frame, RenderVideoConstants};
+use cap_project::{BackgroundSource, ProjectConfiguration};
+use cap_rendering::{produce_frame, ProjectUniforms, RenderVideoConstants};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
@@ -71,10 +71,7 @@ impl Editor {
 
                 self.playing = play;
             }
-            EditorMessage::PreviewFrame(frame_number) => {
-                if self.playing {
-                }
-            }
+            EditorMessage::PreviewFrame(frame_number) => if self.playing {},
         }
     }
 }
@@ -102,9 +99,8 @@ pub enum RendererMessage {
     RenderFrame {
         screen_frame: Vec<u8>,
         camera_frame: Option<Vec<u8>>,
-        screen_uniforms_buffer: wgpu::Buffer,
-        camera_uniforms_buffer: Option<wgpu::Buffer>,
-        composite_uniforms_buffer: wgpu::Buffer,
+        background: BackgroundSource,
+        uniforms: ProjectUniforms,
         finished: oneshot::Sender<()>,
     },
 }
@@ -146,9 +142,8 @@ impl Renderer {
                     RendererMessage::RenderFrame {
                         screen_frame,
                         camera_frame,
-                        screen_uniforms_buffer,
-                        camera_uniforms_buffer,
-                        composite_uniforms_buffer,
+                        background,
+                        uniforms,
                         finished,
                     } => {
                         if let Some(task) = frame_task.as_ref() {
@@ -165,11 +160,10 @@ impl Renderer {
                         frame_task = Some(tokio::spawn(async move {
                             let frame = produce_frame(
                                 &render_constants,
-                                &screen_uniforms_buffer,
                                 &screen_frame,
-                                camera_uniforms_buffer.as_ref(),
                                 camera_frame.as_ref(),
-                                &composite_uniforms_buffer,
+                                cap_rendering::Background::from(background),
+                                &uniforms,
                             )
                             .await
                             .unwrap();
@@ -193,18 +187,16 @@ impl RendererHandle {
         &self,
         screen_frame: Vec<u8>,
         camera_frame: Option<Vec<u8>>,
-        screen_uniforms_buffer: wgpu::Buffer,
-        camera_uniforms_buffer: Option<wgpu::Buffer>,
-        composite_uniforms_buffer: wgpu::Buffer,
+        background: BackgroundSource,
+        uniforms: ProjectUniforms,
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();
 
         self.send(RendererMessage::RenderFrame {
             screen_frame,
             camera_frame,
-            screen_uniforms_buffer,
-            camera_uniforms_buffer,
-            composite_uniforms_buffer,
+            background,
+            uniforms,
             finished: finished_tx,
         })
         .await;

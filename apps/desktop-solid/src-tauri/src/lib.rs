@@ -8,9 +8,7 @@ mod recording;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
-use cap_rendering::{
-    create_uniforms_buffers, RenderOptions, RenderVideoConstants, VideoDecoderActor,
-};
+use cap_rendering::{ProjectUniforms, RenderOptions, RenderVideoConstants, VideoDecoderActor};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     SampleFormat, SizedSample,
@@ -562,9 +560,6 @@ impl EditorInstance {
                 tokio::spawn(async move {
                     rendering.store(true, Ordering::Relaxed);
 
-                    let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
-                        create_uniforms_buffers(&render_constants, &e.payload.project);
-
                     let Some(screen_frame) = screen_decoder.get_frame(e.payload.frame_number).await
                     else {
                         return;
@@ -579,9 +574,8 @@ impl EditorInstance {
                         .render_frame(
                             screen_frame,
                             camera_frame,
-                            screen_uniforms_buffer,
-                            camera_uniforms_buffer,
-                            composite_uniforms_buffer,
+                            e.payload.project.background.source.clone(),
+                            ProjectUniforms::new(&render_constants, &e.payload.project),
                         )
                         .await;
 
@@ -722,14 +716,12 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
         });
 
         let mut frame_number = start_frame_number + 1;
+        let uniforms = ProjectUniforms::new(&editor_instance.render_constants, &project);
 
         loop {
             if frame_number as f32 > fps * duration {
                 break;
             };
-
-            let (screen_uniforms_buffer, camera_uniforms_buffer, composite_uniforms_buffer) =
-                create_uniforms_buffers(&editor_instance.render_constants, &project);
 
             tokio::select! {
                 _ = stop_rx.changed() => {
@@ -746,9 +738,8 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
                         .render_frame(
                             screen_frame,
                             camera_frame,
-                            screen_uniforms_buffer,
-                            camera_uniforms_buffer,
-                            composite_uniforms_buffer,
+                            project.background.source.clone(),
+                            uniforms.clone()
                         )
                         .await;
 

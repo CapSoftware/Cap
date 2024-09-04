@@ -674,10 +674,16 @@ function SettingsSidebar() {
           <Field name="Camera" icon={<IconCapCamera />}>
             <div class="flex flex-col gap-[0.75rem]">
               <Subfield name="Hide Camera">
-                <Toggle />
+                <Toggle
+                  checked={state.camera.hide}
+                  onChange={(hide) => setState("camera", "hide", hide)}
+                />
               </Subfield>
               <Subfield name="Mirror Camera">
-                <Toggle />
+                <Toggle
+                  checked={state.camera.mirror}
+                  onChange={(mirror) => setState("camera", "mirror", mirror)}
+                />
               </Subfield>
               <div>
                 <Subfield name="Camera Position" class="mt-[0.75rem]" />

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta};
-use cap_rendering::{render_video_to_file, VideoDecoderActor};
+use cap_rendering::VideoDecoderActor;
 
 #[tokio::main]
 async fn main() {
