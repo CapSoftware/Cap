@@ -413,6 +413,7 @@ impl EditorStateChanged {
 struct AudioData {
     pub buffer: Arc<Vec<f64>>,
     pub sample_rate: u32,
+    // pub channels: u18
 }
 
 struct EditorInstance {
@@ -464,7 +465,10 @@ impl EditorInstance {
                 .arg("-i")
                 .arg(audio_path)
                 .args(["-f", "f64le", "-acodec", "pcm_f64le"])
-                .args(["-ar", &audio.sample_rate.to_string()])
+                .args([
+                    "-ar",
+                    &48000.to_string(), /*&audio.sample_rate.to_string() */
+                ])
                 .args(["-ac", &audio.channels.to_string(), "-"])
                 .output()
                 .unwrap()
@@ -479,7 +483,7 @@ impl EditorInstance {
 
             AudioData {
                 buffer: Arc::new(buffer),
-                sample_rate: audio.sample_rate,
+                sample_rate: 48000, //audio.sample_rate,
             }
         });
 
@@ -666,7 +670,11 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
                 let supported_config = device
                     .default_output_config()
                     .expect("Failed to get default output format");
-                let config = supported_config.config();
+                let mut config = supported_config.config();
+                config.channels = 1;
+
+                dbg!(audio.sample_rate);
+                dbg!(&config);
 
                 let data = audio.buffer.clone();
 
@@ -674,6 +682,7 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
                     data.len() as f64 * (start_frame_number as f64 / (fps * duration) as f64);
 
                 let resample_ratio = audio.sample_rate as f64 / config.sample_rate.0 as f64;
+                dbg!(resample_ratio);
 
                 let next_sample = move || {
                     clock = clock + resample_ratio;
@@ -685,6 +694,9 @@ async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfig
                     // Simple linear interpolation
                     let index = clock as usize;
                     let frac = clock.fract();
+                    if frac != 0.0 {
+                        println!("frac: {}", frac);
+                    }
                     let current = data[index];
                     let next = data[(index + 1) % data.len()];
                     Some(current * (1.0 - frac) + next * frac)

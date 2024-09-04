@@ -25,6 +25,8 @@ pub struct AudioCapturer {
 unsafe impl Send for AudioCapturer {}
 unsafe impl Sync for AudioCapturer {}
 
+const MAX_CHANNELS: u16 = 1;
+
 impl AudioCapturer {
     pub fn init(name: &str) -> Option<Self> {
         println!("Custom device: {}", name);
@@ -36,7 +38,7 @@ impl AudioCapturer {
 
                 let mut config = supported_config.config();
 
-                config.channels = config.channels.min(2);
+                config.channels = config.channels.min(MAX_CHANNELS);
 
                 Self {
                     config,
