@@ -34,7 +34,7 @@ use std::{
     time::Duration,
 };
 use std::{fs::File, pin};
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Manager, State, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
@@ -420,6 +420,7 @@ struct AudioData {
 struct EditorInstance {
     app: AppHandle,
     pub path: PathBuf,
+    pub id: String,
     pub screen_decoder: VideoDecoderActor,
     pub camera_decoder: Option<VideoDecoderActor>,
     pub audio: Option<AudioData>,
@@ -596,6 +597,7 @@ impl EditorInstance {
 
         Self {
             app: app.clone(),
+            id: video_id,
             path: project_path,
             screen_decoder,
             camera_decoder,
@@ -611,14 +613,44 @@ impl EditorInstance {
     }
 
     pub async fn get(app: &AppHandle, video_id: String) -> Arc<Self> {
-        match app.try_state::<Arc<EditorInstance>>() {
-            Some(state) => (*state).clone(),
+        let map = match app.try_state::<Arc<Mutex<HashMap<String, Arc<Self>>>>>() {
+            Some(s) => (*s).clone(),
             None => {
-                let instance = Arc::new(EditorInstance::new(app, video_id).await);
-                app.manage(instance.clone());
+                let map = Arc::new(Mutex::new(HashMap::new()));
+                app.manage(map.clone());
+                map
+            }
+        };
+
+        let mut map = map.lock().await;
+
+        use std::collections::hash_map::Entry;
+        match map.entry(video_id.clone()) {
+            Entry::Occupied(o) => o.get().clone(),
+            Entry::Vacant(v) => {
+                let instance = Arc::new(Self::new(app, video_id).await);
+                v.insert(instance.clone());
                 instance
             }
         }
+    }
+
+    pub async fn dispose(&self) {
+        let Some(map) = self
+            .app
+            .try_state::<Arc<Mutex<HashMap<String, Arc<Self>>>>>()
+        else {
+            return;
+        };
+
+        let mut state = self.state.lock().await;
+        println!("got state");
+        if let Some(sender) = state.playback_task.take() {
+            println!("stopping playback");
+            sender.send(true).ok();
+        };
+
+        map.lock().await.remove(&self.id);
     }
 
     pub async fn modify_and_emit_state(&self, modify: impl Fn(&mut EditorState)) {
@@ -1305,6 +1337,20 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+        		let label = window.label();
+        		if label.starts_with("editor-") {
+		          	if let WindowEvent::CloseRequested {..} = event {
+										let id = label.strip_prefix("editor-").unwrap().to_string();
+
+										let app = window.app_handle().clone();
+
+										tokio::spawn(async move {
+												EditorInstance::get(&app, id).await.dispose().await;
+										});
+								}
+          	}
+				})
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

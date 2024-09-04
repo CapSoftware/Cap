@@ -68,7 +68,7 @@ pub fn list_capture_windows() -> Vec<CaptureWindow> {
         .collect::<Vec<_>>()
 }
 
-pub const FPS: u32 = 30;
+pub const FPS: u32 = 60;
 
 pub async fn start_capturing(
     pipe_path: PathBuf,
@@ -97,7 +97,7 @@ pub async fn start_capturing(
             fps: FPS,
             show_highlight: true,
             output_type: FrameType::BGRAFrame,
-            output_resolution: Resolution::Captured,
+            output_resolution: Resolution::_2160p,
             crop_area,
             ..Default::default()
         };

@@ -178,11 +178,17 @@ export default function () {
                           tooltipText="Edit"
                           tooltipPlacement="right"
                           onClick={() => {
-                            new WebviewWindow("editor", {
-                              width: 1150,
-                              height: 800,
-                              url: `/editor?path=${recording}`,
-                            });
+                            new WebviewWindow(
+                              `editor-${recording
+                                .split("/")
+                                .at(-1)
+                                ?.split(".")[0]!}`,
+                              {
+                                width: 1150,
+                                height: 800,
+                                url: `/editor?path=${recording}`,
+                              }
+                            );
                           }}
                         >
                           <IconCapEditor class="size-[1rem]" />

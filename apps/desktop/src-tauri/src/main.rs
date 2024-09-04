@@ -182,15 +182,18 @@ fn main() {
             app.manage(Arc::new(Mutex::new(recording_state)));
 
             if let Some(main_tray) = app.tray_by_id("cap_main") {
-                main_tray.on_tray_icon_event(move |tray, event| if let tauri::tray::TrayIconEvent::Click {
+                main_tray.on_tray_icon_event(move |tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
                         button,
                         button_state,
                         ..
-                    } = event {
-                    if button == MouseButton::Left && button_state == MouseButtonState::Down {
-                        if let Err(err) = tray.app_handle().emit("cap://tray/clicked", ()) {
-                            eprintln!("Failed to emit event for tray {}", err);
-                        };
+                    } = event
+                    {
+                        if button == MouseButton::Left && button_state == MouseButtonState::Down {
+                            if let Err(err) = tray.app_handle().emit("cap://tray/clicked", ()) {
+                                eprintln!("Failed to emit event for tray {}", err);
+                            };
+                        }
                     }
                 });
             }
