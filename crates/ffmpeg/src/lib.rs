@@ -218,7 +218,7 @@ pub struct FFmpegRawAudioInput {
     pub sample_rate: u32,
     pub channels: u16,
     pub input: OsString,
-    // pub offset: f64,
+    pub wallclock: bool, // pub offset: f64,
 }
 
 impl ApplyFFmpegArgs for FFmpegRawAudioInput {
@@ -227,14 +227,17 @@ impl ApplyFFmpegArgs for FFmpegRawAudioInput {
         command
             .args(["-f", &self.sample_format])
             .args(["-ar", &self.sample_rate.to_string()])
-            .args(["-ac", &self.channels.to_string()])
-            .args(["-use_wallclock_as_timestamps", "1"])
-            .args(["-thread_queue_size", "4096", "-i"]);
+            .args(["-ac", &self.channels.to_string()]);
+
+        if self.wallclock {
+            command.args(["-use_wallclock_as_timestamps", "1"]);
+        }
 
         // if self.offset != 0.0 {
         //     command.args(["-itsoffset", &self.offset.to_string()]);
         // }
 
+        command.args(["-thread_queue_size", "4096", "-i"]);
         command.arg(&self.input);
     }
 }

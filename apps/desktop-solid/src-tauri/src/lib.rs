@@ -319,6 +319,7 @@ async fn render_to_file_impl(
                 sample_format: "f64le".to_string(),
                 sample_rate: 44100,
                 channels: 1,
+                wallclock: false,
             });
 
             Some((file_path, file, dir))

@@ -181,7 +181,7 @@ pub async fn start(
             sample_format: capturer.sample_format().to_string(),
             sample_rate: capturer.sample_rate(),
             channels: capturer.channels(),
-            // offset: start_time.duration_since(latest_start_time).as_secs_f64(),
+            wallclock: true, // offset: start_time.duration_since(latest_start_time).as_secs_f64(),
         });
 
         ffmpeg
