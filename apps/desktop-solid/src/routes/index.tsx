@@ -44,6 +44,8 @@ export default function () {
 
   commands.showPreviousRecordingsWindow();
 
+  type CameraOption = MediaDeviceInfo | { deviceId: string; label: string };
+
   // const navigate = useNavigate();
   // navigate("/recording-permissions");
 
@@ -169,18 +171,21 @@ export default function () {
                   </KSelect>
                   <div class="flex flex-col gap-[0.25rem] items-stretch">
                     <label class="text-gray-400 text-[0.875rem]">Camera</label>
-                    <KSelect<MediaDeviceInfo>
-                      options={cameras()}
+                    <KSelect<CameraOption>
+                      options={[
+                        { deviceId: "", label: "No Camera" },
+                        ...cameras(),
+                      ]}
                       optionValue="deviceId"
                       optionTextValue="label"
                       placeholder="No Camera"
-                      value={camera()}
+                      value={camera() ?? { deviceId: "", label: "No Camera" }}
                       disabled={isRecording()}
                       onChange={(d) => {
                         if (!d) return;
                         commands.setRecordingOptions({
                           ...options(),
-                          cameraLabel: d.label,
+                          cameraLabel: d.deviceId ? d.label : null,
                         });
                       }}
                       itemComponent={(props) => (
@@ -196,24 +201,24 @@ export default function () {
                     >
                       <KSelect.Trigger class="h-[2rem] px-[0.375rem] flex flex-row gap-[0.375rem] border rounded-lg border-gray-200 w-full items-center disabled:text-gray-400 transition-colors">
                         <IconCapCamera class="text-gray-400 size-[1.25rem]" />
-                        <KSelect.Value<MediaDeviceInfo> class="flex-1 text-left truncate">
+                        <KSelect.Value<CameraOption> class="flex-1 text-left truncate">
                           {(state) => <>{state.selectedOption().label}</>}
                         </KSelect.Value>
                         <button
                           type="button"
                           class={cx(
                             "px-[0.375rem] rounded-full text-[0.75rem]",
-                            camera()
+                            camera()?.deviceId
                               ? "bg-blue-50 text-blue-300"
                               : "bg-red-50 text-red-300"
                           )}
                           onPointerDown={(e) => {
-                            if (!camera()) return;
+                            if (!camera()?.deviceId) return;
                             e.stopPropagation();
                             e.preventDefault();
                           }}
                           onClick={(e) => {
-                            if (!camera()) return;
+                            if (!camera()?.deviceId) return;
                             e.stopPropagation();
                             e.preventDefault();
 
@@ -223,7 +228,7 @@ export default function () {
                             });
                           }}
                         >
-                          {camera() ? "On" : "Off"}
+                          {camera()?.deviceId ? "On" : "Off"}
                         </button>
                       </KSelect.Trigger>
                       <KSelect.Portal>
@@ -241,17 +246,21 @@ export default function () {
                   <div class="flex flex-col gap-[0.25rem] items-stretch">
                     <label class="text-gray-400">Microphone</label>
                     <KSelect<{ name: string }>
-                      options={audioDevices.data ?? []}
+                      options={[
+                        { name: "No Audio" },
+                        ...(audioDevices.data ?? []),
+                      ]}
                       optionValue="name"
                       optionTextValue="name"
                       placeholder="No Audio"
-                      value={audioDevice()}
+                      value={audioDevice() ?? { name: "No Audio" }}
                       disabled={isRecording()}
                       onChange={(item) => {
                         if (!item) return;
                         commands.setRecordingOptions({
                           ...options(),
-                          audioInputName: item.name,
+                          audioInputName:
+                            item.name !== "No Audio" ? item.name : null,
                         });
                       }}
                       itemComponent={(props) => (
