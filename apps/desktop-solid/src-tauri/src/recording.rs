@@ -210,8 +210,6 @@ pub async fn start(
 
     let ffmpeg_process = ffmpeg.start();
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
     println!("Starting writing to named pipes");
 
     start_writing_tx.send(true).unwrap();
