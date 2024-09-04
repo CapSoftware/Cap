@@ -955,10 +955,12 @@ fn show_previous_recordings_window(app: AppHandle) {
         window.show().ok();
         return;
     }
-    // if let Ok(panel) = app.get_webview_panel(PREV_RECORDINGS_WINDOW) {
-    //     panel.show();
-    //     return;
-    // };
+    if let Ok(panel) = app.get_webview_panel(PREV_RECORDINGS_WINDOW) {
+        if !panel.is_visible() {
+            panel.show();
+        }
+        return;
+    };
 
     let monitor = app.primary_monitor().unwrap().unwrap();
 
@@ -1049,8 +1051,9 @@ fn show_previous_recordings_window(app: AppHandle) {
 #[tauri::command]
 #[specta::specta]
 fn close_previous_recordings_window(app: AppHandle) {
-    if let Some(window) = app.get_webview_window(PREV_RECORDINGS_WINDOW) {
-        window.close().ok();
+    if let Ok(panel) = app.get_webview_panel(PREV_RECORDINGS_WINDOW) {
+        panel.released_when_closed(true);
+        panel.close();
     }
 }
 
