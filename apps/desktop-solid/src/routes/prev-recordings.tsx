@@ -181,8 +181,8 @@ export default function () {
                           tooltipPlacement="right"
                           onClick={() => {
                             new WebviewWindow("editor", {
-                              width: 1440,
-                              height: 1024,
+                              width: 1150,
+                              height: 800,
                               url: `/editor?path=${recording}`,
                             });
                           }}
@@ -350,6 +350,7 @@ const TooltipIconButton = (
             color: "white",
             "border-radius": "8px",
             "font-size": "12px",
+            "z-index": "1000",
           }}
         >
           {props.tooltipText}
