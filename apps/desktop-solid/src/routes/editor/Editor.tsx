@@ -146,19 +146,26 @@ function Inner() {
 
   const [playing, setPlaying] = createSignal(false);
 
-  const togglePlayback = () => {
-    if (playing()) {
-      commands.stopPlayback(videoId()).then(() => setPlaying(false));
-    } else {
-      commands.startPlayback(videoId(), state).then(() => setPlaying(true));
+  const togglePlayback = async () => {
+    try {
+      if (playing()) {
+        await commands.stopPlayback(videoId());
+        setPlaying(false);
+      } else {
+        await commands.startPlayback(videoId(), state);
+        setPlaying(true);
+      }
+    } catch (error) {
+      console.error("Error toggling playback:", error);
+      setPlaying(false);
     }
   };
 
   createEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.code === "Space" && e.target === document.body) {
         e.preventDefault();
-        togglePlayback();
+        await togglePlayback();
       }
     };
 
@@ -168,7 +175,6 @@ function Inner() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   });
-
   return (
     <div
       class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg leading-5"
