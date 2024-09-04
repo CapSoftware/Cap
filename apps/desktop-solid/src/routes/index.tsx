@@ -37,6 +37,7 @@ export default function () {
   const camera = createCameraForLabel(() => options.data?.cameraLabel ?? "");
 
   const [isRecording, setIsRecording] = createSignal(false);
+  const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
 
   events.showCapturesPanel.listen(() => {
     commands.showPreviousRecordingsWindow();
@@ -49,8 +50,20 @@ export default function () {
   // const navigate = useNavigate();
   // navigate("/recording-permissions");
 
+  const handleBodyClick = (e: MouseEvent) => {
+    if (windowSelectOpen()) {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".KSelect")) {
+        setWindowSelectOpen(false);
+      }
+    }
+  };
+
   return (
-    <div class="rounded-[1.5rem] bg-gray-50 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden">
+    <div
+      class="rounded-[1.5rem] bg-gray-50 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden"
+      onClick={handleBodyClick}
+    >
       <Header />
 
       <Suspense
@@ -65,9 +78,6 @@ export default function () {
         <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400]">
           <Show when={options.data}>
             {(options) => {
-              const [windowSelectOpen, setWindowSelectOpen] =
-                createSignal(false);
-
               const selectedWindow = createMemo(() => {
                 const d = options().captureTarget;
                 if (d.type !== "window") return;
@@ -125,13 +135,23 @@ export default function () {
                       disabled={isRecording()}
                       onChange={(s) => {
                         console.log({ s });
-                        if (options().captureTarget.type === s) return;
-                        if (s === "screen")
+                        if (options().captureTarget.type === s) {
+                          setWindowSelectOpen(false);
+                          return;
+                        }
+                        if (s === "screen") {
                           commands.setRecordingOptions({
                             ...options(),
                             captureTarget: { type: "screen" },
                           });
-                        else if (s === "window") setWindowSelectOpen(true);
+                          setWindowSelectOpen(false);
+                        } else if (s === "window") {
+                          if (windowSelectOpen()) {
+                            setWindowSelectOpen(false);
+                          } else {
+                            setWindowSelectOpen(true);
+                          }
+                        }
                       }}
                     >
                       <SwitchTab.List>
@@ -141,7 +161,7 @@ export default function () {
                         <SwitchTab.Trigger<ValidComponent>
                           as={(p) => <KSelect.Trigger<ValidComponent> {...p} />}
                           value="window"
-                          class="w-full text-nowrap overflow-hidden px-2 group"
+                          class="w-full text-nowrap overflow-hidden px-2 group KSelect"
                         >
                           <KSelect.Value<CaptureWindow> class="flex flex-row items-center justify-center">
                             {(item) => (
@@ -199,7 +219,7 @@ export default function () {
                         </MenuItem>
                       )}
                     >
-                      <KSelect.Trigger class="h-[2rem] px-[0.375rem] flex flex-row gap-[0.375rem] border rounded-lg border-gray-200 w-full items-center disabled:text-gray-400 transition-colors">
+                      <KSelect.Trigger class="h-[2rem] px-[0.375rem] flex flex-row gap-[0.375rem] border rounded-lg border-gray-200 w-full items-center disabled:text-gray-400 transition-colors KSelect">
                         <IconCapCamera class="text-gray-400 size-[1.25rem]" />
                         <KSelect.Value<CameraOption> class="flex-1 text-left truncate">
                           {(state) => <>{state.selectedOption().label}</>}
@@ -274,7 +294,7 @@ export default function () {
                         </MenuItem>
                       )}
                     >
-                      <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors">
+                      <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
                         <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
                         <KSelect.Value<{
                           name: string;
