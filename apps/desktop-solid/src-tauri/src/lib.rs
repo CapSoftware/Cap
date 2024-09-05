@@ -20,7 +20,8 @@ use ffmpeg_sidecar::{
     paths::sidecar_dir,
     version::ffmpeg_version,
 };
-use mp4::Mp4Reader;
+use image::{ImageBuffer, Rgba};
+use mp4::{Error as Mp4Error, Mp4Reader};
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
 use recording::{DisplaySource, InProgressRecording};
@@ -28,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::fs::File;
-use std::io::{BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
@@ -59,6 +60,13 @@ pub struct App {
     #[serde(skip)]
     current_recording: Option<InProgressRecording>,
     prev_recordings: Vec<PathBuf>,
+}
+
+#[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoType {
+    Screen,
+    Output,
 }
 
 const WINDOW_CAPTURE_OCCLUDER_LABEL: &str = "window-capture-occluder";
@@ -261,9 +269,11 @@ async fn get_rendered_video(
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
-    let editor_instance = upsert_editor_instance(&app, video_id).await;
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let recording_dir = recordings_path(&app).join(format!("{}.cap", video_id));
 
     render_to_file_impl(
+        recording_dir,
         editor_instance.render_constants.options.clone(),
         project,
         editor_instance.path.join("output/result.mp4"),
@@ -278,6 +288,7 @@ async fn get_rendered_video(
 }
 
 async fn render_to_file_impl(
+    recording_dir: PathBuf,
     options: RenderOptions,
     project: ProjectConfiguration,
     output_path: PathBuf,
@@ -292,6 +303,7 @@ async fn render_to_file_impl(
     std::fs::create_dir_all(output_folder)
         .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
     let output_path_clone = output_path.clone();
+    let recording_dir_clone = recording_dir.clone();
 
     tokio::spawn(async move {
         println!("Starting FFmpeg output process...");
@@ -346,11 +358,17 @@ async fn render_to_file_impl(
         let mut ffmpeg_process = ffmpeg.start();
 
         let mut frame_count = 0;
+        let mut first_frame = None;
+
         loop {
             match rx_image_data.recv().await {
                 Some(frame) => {
                     // println!("Sending image data to FFmpeg");
                     on_progress(frame_count);
+
+                    if frame_count == 0 {
+                        first_frame = Some(frame.clone());
+                    }
 
                     frame_count += 1;
                     if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
@@ -370,7 +388,36 @@ async fn render_to_file_impl(
         if let Some((audio_path, _, _)) = audio_path {
             std::fs::remove_file(audio_path).ok();
         }
+
+        // Save the first frame as a screenshot
+        if let Some(frame_data) = first_frame {
+            let width = options.output_size.0 as u32;
+            let height = options.output_size.1 as u32;
+            let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+                ImageBuffer::from_raw(width, height, frame_data)
+                    .expect("Failed to create image from frame data");
+
+            // Convert RGBA to RGB
+            let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+                ImageBuffer::from_fn(width, height, |x, y| {
+                    let rgba = rgba_img.get_pixel(x, y);
+                    image::Rgb([rgba[0], rgba[1], rgba[2]])
+                });
+
+            let screenshot_path = recording_dir_clone.join("screenshots/display.jpg");
+            std::fs::create_dir_all(screenshot_path.parent().unwrap()).unwrap_or_else(|e| {
+                eprintln!("Failed to create screenshots directory: {:?}", e);
+            });
+
+            rgb_img.save(screenshot_path).unwrap_or_else(|e| {
+                eprintln!("Failed to save screenshot: {:?}", e);
+            });
+        } else {
+            eprintln!("No frames were processed, cannot save screenshot");
+        }
     });
+
+    println!("Rendering video to channel");
 
     cap_rendering::render_video_to_channel(
         options,
@@ -380,6 +427,51 @@ async fn render_to_file_impl(
         camera_recording_decoder,
     )
     .await?;
+
+    println!("Copying file to {:?}", recording_dir);
+    let result_path = recording_dir.join("output/result.mp4");
+    std::fs::create_dir_all(result_path.parent().unwrap()).unwrap_or_else(|e| {
+        eprintln!("Failed to create output directory: {:?}", e);
+    });
+
+    // Function to check if the file is a valid MP4
+    fn is_valid_mp4(path: &std::path::Path) -> bool {
+        if let Ok(file) = std::fs::File::open(path) {
+            let file_size = match file.metadata() {
+                Ok(metadata) => metadata.len(),
+                Err(_) => return false,
+            };
+            let reader = std::io::BufReader::new(file);
+            match Mp4Reader::read_header(reader, file_size) {
+                Ok(_) => true,
+                Err(_) => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    println!("Waiting for valid MP4 file at {:?}", output_path);
+    // Wait for the file to become a valid MP4
+    let mut attempts = 0;
+    while attempts < 10 {
+        // Wait for up to 60 seconds
+        if is_valid_mp4(&output_path) {
+            println!("Valid MP4 file detected after {} seconds", attempts);
+            match std::fs::copy(&output_path, &result_path) {
+                Ok(bytes) => println!("Successfully copied {} bytes to {:?}", bytes, result_path),
+                Err(e) => eprintln!("Failed to copy file: {:?}", e),
+            }
+            break;
+        }
+        println!("Attempt {}: File not yet valid, waiting...", attempts + 1);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        attempts += 1;
+    }
+
+    if attempts == 10 {
+        eprintln!("Timeout: Failed to detect a valid MP4 file after 60 seconds");
+    }
 
     Ok(output_path)
 }
@@ -491,6 +583,7 @@ async fn copy_rendered_video_to_clipboard(
 async fn get_video_metadata(
     app: AppHandle,
     video_id: String,
+    video_type: Option<VideoType>,
     state: MutableState<'_, App>,
 ) -> Result<(f64, f64), String> {
     let video_id = if video_id.ends_with(".cap") {
@@ -509,18 +602,35 @@ async fn get_video_metadata(
     let screen_video_path = video_dir.join("content/display.mp4");
     let output_video_path = video_dir.join("output/result.mp4");
 
-    let video_path = if output_video_path.exists() {
-        println!("Using output video path: {:?}", output_video_path);
-        output_video_path
-    } else {
-        println!("Using screen video path: {:?}", screen_video_path);
-        if !screen_video_path.exists() {
-            return Err(format!(
-                "Screen video does not exist: {:?}",
-                screen_video_path
-            ));
+    let video_path = match video_type {
+        Some(VideoType::Screen) => {
+            println!("Using screen video path: {:?}", screen_video_path);
+            if !screen_video_path.exists() {
+                return Err(format!(
+                    "Screen video does not exist: {:?}",
+                    screen_video_path
+                ));
+            }
+            screen_video_path
         }
-        screen_video_path
+        Some(VideoType::Output) | None => {
+            if output_video_path.exists() {
+                println!("Using output video path: {:?}", output_video_path);
+                output_video_path
+            } else {
+                println!(
+                    "Output video not found, falling back to screen video path: {:?}",
+                    screen_video_path
+                );
+                if !screen_video_path.exists() {
+                    return Err(format!(
+                        "Screen video does not exist: {:?}",
+                        screen_video_path
+                    ));
+                }
+                screen_video_path
+            }
+        }
     };
 
     let file = File::open(&video_path).map_err(|e| {
@@ -548,12 +658,17 @@ async fn get_video_metadata(
         })?
         .len();
 
-    let mp4 = Mp4Reader::read_header(reader, file_size).map_err(|e| {
-        println!("Failed to read MP4 header: {}", e);
-        format!("Failed to read MP4 header: {}", e)
-    })?;
-
-    let duration = mp4.duration().as_secs_f64();
+    let duration = match Mp4Reader::read_header(reader, file_size) {
+        Ok(mp4) => mp4.duration().as_secs_f64(),
+        Err(e) => {
+            println!(
+                "Failed to read MP4 header: {}. Falling back to default duration.",
+                e
+            );
+            // Return a default duration (e.g., 0.0) or try to estimate it based on file size
+            0.0 // or some estimated value
+        }
+    };
 
     Ok((duration, size))
 }
@@ -775,16 +890,23 @@ async fn render_to_file(
     project: ProjectConfiguration,
     progress_channel: tauri::ipc::Channel<RenderProgress>,
 ) {
-    let (duration, _size) = get_video_metadata(app.clone(), video_id.clone(), app.state())
-        .await
-        .unwrap();
+    let (duration, _size) = get_video_metadata(
+        app.clone(),
+        video_id.clone(),
+        Some(VideoType::Screen),
+        app.state(),
+    )
+    .await
+    .unwrap();
 
     // 30 FPS (calculated for output video)
     let total_frames = (duration * 30.0).round() as u32;
 
-    let editor_instance = upsert_editor_instance(&app, video_id).await;
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let recording_dir = recordings_path(&app).join(format!("{}.cap", video_id));
 
     render_to_file_impl(
+        recording_dir,
         editor_instance.render_constants.options.clone(),
         project,
         output_path,
@@ -804,6 +926,8 @@ async fn render_to_file(
     )
     .await
     .ok();
+
+    ShowCapturesPanel.emit(&app).ok();
 }
 
 #[tauri::command]

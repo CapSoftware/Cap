@@ -116,9 +116,9 @@ export default function () {
                         <img
                           class="pointer-events-none w-[105%] h-[105%] object-cover absolute inset-0 -z-10"
                           alt="screenshot"
-                          src={convertFileSrc(
+                          src={`${convertFileSrc(
                             `${recording}/screenshots/display.jpg`
-                          )}
+                          )}?t=${Date.now()}`}
                           onError={() => setImageExists(false)}
                         />
                       </Show>

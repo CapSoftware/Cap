@@ -109,9 +109,9 @@ async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguratio
     else return { status: "error", error: e  as any };
 }
 },
-async getVideoMetadata(videoId: string) : Promise<Result<[number, number], string>> {
+async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<Result<[number, number], string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("get_video_metadata", { videoId }) };
+    return { status: "ok", data: await TAURI_INVOKE("get_video_metadata", { videoId, videoType }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -184,6 +184,7 @@ export type RecordingOptionsChanged = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type ShowCapturesPanel = null
+export type VideoType = "screen" | "output"
 
 /** tauri-specta globals **/
 
