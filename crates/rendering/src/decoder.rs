@@ -221,7 +221,7 @@ impl AsyncVideoDecoder {
             while let Ok(r) = peekable_requests.recv() {
                 match r {
                     VideoDecoderActorMessage::GetFrame(frame_number, sender) => {
-                        println!("received request for frame {frame_number}");
+                        // println!("received request for frame {frame_number}");
 
                         let mut sender = if let Some(cached) = cache.get(&frame_number) {
                             sender.send(Some(cached.clone())).ok();
@@ -252,7 +252,7 @@ impl AsyncVideoDecoder {
                                     * 1_000_000.0) as i64;
                             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
-                            println!("seeking to {position} for frame {frame_number}");
+                            // println!("seeking to {position} for frame {frame_number}");
 
                             drop(packet_stuff);
 
@@ -285,7 +285,7 @@ impl AsyncVideoDecoder {
                             let too_small_for_cache_bounds = current_frame < cache_min;
 
                             if peekable_requests.peek().is_some() {
-                                println!("skipping packet for frame {current_frame} as new request is available");
+                                // println!("skipping packet for frame {current_frame} as new request is available");
                                 packet_stuff.skipped_packet = Some((stream, packet));
 
                                 break;
@@ -293,7 +293,7 @@ impl AsyncVideoDecoder {
 
                             if stream.index() == input_stream_index {
                                 if too_great_for_cache_bounds {
-                                    println!("skipping packet for frame {current_frame} as it's out of cache bounds");
+                                    // println!("skipping packet for frame {current_frame} as it's out of cache bounds");
                                     packet_stuff.skipped_packet = Some((stream, packet));
                                     break;
                                 }
@@ -303,10 +303,10 @@ impl AsyncVideoDecoder {
                                 last_decoded_frame = Some(current_frame);
 
                                 while decoder.receive_frame(&mut temp_frame).is_ok() {
-                                    println!(
-                                        "decoded frame {current_frame}. will cache: {}",
-                                        !too_great_for_cache_bounds && !too_small_for_cache_bounds
-                                    );
+                                    // println!(
+                                    //     "decoded frame {current_frame}. will cache: {}",
+                                    //     !too_great_for_cache_bounds && !too_small_for_cache_bounds
+                                    // );
 
                                     let mut rgb_frame = frame::Video::empty();
                                     scaler.run(&temp_frame, &mut rgb_frame).unwrap();
@@ -314,9 +314,7 @@ impl AsyncVideoDecoder {
                                     let frame = Arc::new(rgb_frame.data(0).to_vec());
 
                                     if current_frame == frame_number {
-                                        // println!("decoded frame {current_frame} for request {frame_number}");
                                         if let Some(sender) = sender.take() {
-                                            // println!("sending frame {frame_number}");
                                             sender.send(Some(frame.clone())).ok();
                                         }
                                     }
@@ -339,10 +337,10 @@ impl AsyncVideoDecoder {
                                                     }
                                                 };
 
-                                                println!("removing frame {frame} from cache");
+                                                // println!("removing frame {frame} from cache");
                                                 cache.remove(&frame);
                                             } else {
-                                                println!("clearing cache");
+                                                // println!("clearing cache");
                                                 cache.clear()
                                             }
                                         }
