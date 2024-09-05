@@ -2,7 +2,7 @@ use crate::playback::{self, PlaybackHandle};
 use crate::{editor, AudioData};
 use cap_project::ProjectConfiguration;
 use cap_rendering::decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle};
-use cap_rendering::{ProjectUniforms, RenderOptions, RenderVideoConstants, VideoDecoderActor};
+use cap_rendering::{ProjectUniforms, RenderOptions, RenderVideoConstants};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{path::PathBuf, process::Command, sync::Arc};

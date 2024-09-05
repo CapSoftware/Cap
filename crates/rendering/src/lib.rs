@@ -13,7 +13,7 @@ use cap_project::{BackgroundSource, CameraXPosition, CameraYPosition, ProjectCon
 use std::time::Instant;
 
 pub mod decoder;
-pub use decoder::{DecodedFrame, VideoDecoderActor};
+pub use decoder::DecodedFrame;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RenderOptions {

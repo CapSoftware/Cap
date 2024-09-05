@@ -11,7 +11,7 @@ mod tray;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
-use cap_rendering::{decoder::AsyncVideoDecoderHandle, RenderOptions, VideoDecoderActor};
+use cap_rendering::{decoder::AsyncVideoDecoderHandle, RenderOptions};
 use display::{list_capture_windows, Bounds, CaptureTarget};
 use editor_instance::{EditorInstance, EditorState};
 use ffmpeg_sidecar::{

@@ -1,9 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use cap_project::ProjectConfiguration;
-use cap_rendering::{
-    decoder::AsyncVideoDecoderHandle, ProjectUniforms, RenderVideoConstants, VideoDecoderActor,
-};
+use cap_rendering::{decoder::AsyncVideoDecoderHandle, ProjectUniforms, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     SampleFormat, SizedSample,
