@@ -1,6 +1,7 @@
 use crate::playback::{self, PlaybackHandle};
 use crate::{editor, AudioData};
 use cap_project::ProjectConfiguration;
+use cap_rendering::decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle};
 use cap_rendering::{ProjectUniforms, RenderOptions, RenderVideoConstants, VideoDecoderActor};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,8 +18,8 @@ pub struct EditorState {
 pub struct EditorInstance {
     pub path: PathBuf,
     pub id: String,
-    pub screen_decoder: VideoDecoderActor,
-    pub camera_decoder: Option<VideoDecoderActor>,
+    pub screen_decoder: AsyncVideoDecoderHandle,
+    pub camera_decoder: Option<AsyncVideoDecoderHandle>,
     pub audio: Option<AudioData>,
     pub ws_port: u16,
     pub renderer: Arc<editor::RendererHandle>,
@@ -53,10 +54,10 @@ impl EditorInstance {
             output_size: OUTPUT_SIZE,
         };
 
-        let screen_decoder = VideoDecoderActor::new(project_path.join(meta.display.path).clone());
+        let screen_decoder = AsyncVideoDecoder::spawn(project_path.join(meta.display.path).clone());
         let camera_decoder = meta
             .camera
-            .map(|camera| VideoDecoderActor::new(project_path.join(camera.path).clone()));
+            .map(|camera| AsyncVideoDecoder::spawn(project_path.join(camera.path).clone()));
 
         let audio = meta.audio.map(|audio| {
             let audio_path = project_path.join(audio.path);
@@ -92,7 +93,7 @@ impl EditorInstance {
 
         let renderer = Arc::new(editor::Renderer::spawn(render_constants.clone(), frame_tx));
 
-        let (preview_tx, mut preview_rx) = watch::channel(None);
+        let (preview_tx, preview_rx) = watch::channel(None);
 
         let this = Arc::new(Self {
             id: video_id,

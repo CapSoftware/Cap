@@ -10,7 +10,7 @@ mod recording;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
-use cap_rendering::{RenderOptions, VideoDecoderActor};
+use cap_rendering::{decoder::AsyncVideoDecoderHandle, RenderOptions, VideoDecoderActor};
 use display::{list_capture_windows, Bounds, CaptureTarget};
 use editor_instance::{EditorInstance, EditorState};
 use ffmpeg_sidecar::{
@@ -280,8 +280,8 @@ async fn render_to_file_impl(
     options: RenderOptions,
     project: ProjectConfiguration,
     output_path: PathBuf,
-    screen_recording_decoder: VideoDecoderActor,
-    camera_recording_decoder: Option<VideoDecoderActor>,
+    screen_recording_decoder: AsyncVideoDecoderHandle,
+    camera_recording_decoder: Option<AsyncVideoDecoderHandle>,
     on_progress: impl Fn(u32) + Send + 'static,
     audio: Option<AudioData>,
 ) -> Result<PathBuf, String> {

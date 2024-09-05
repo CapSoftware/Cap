@@ -1,5 +1,6 @@
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
+use decoder::AsyncVideoDecoderHandle;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -119,8 +120,8 @@ pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
     sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    screen_recording_decoder: VideoDecoderActor,
-    camera_recording_decoder: Option<VideoDecoderActor>,
+    screen_recording_decoder: AsyncVideoDecoderHandle,
+    camera_recording_decoder: Option<AsyncVideoDecoderHandle>,
 ) -> Result<(), String> {
     let constants = RenderVideoConstants::new(options).await?;
 

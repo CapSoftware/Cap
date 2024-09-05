@@ -1,7 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use cap_project::ProjectConfiguration;
-use cap_rendering::{ProjectUniforms, RenderVideoConstants, VideoDecoderActor};
+use cap_rendering::{
+    decoder::AsyncVideoDecoderHandle, ProjectUniforms, RenderVideoConstants, VideoDecoderActor,
+};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     SampleFormat, SizedSample,
@@ -14,8 +16,8 @@ pub struct Playback {
     pub audio: Option<AudioData>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
-    pub screen_decoder: VideoDecoderActor,
-    pub camera_decoder: Option<VideoDecoderActor>,
+    pub screen_decoder: AsyncVideoDecoderHandle,
+    pub camera_decoder: Option<AsyncVideoDecoderHandle>,
     pub start_frame_number: u32,
     pub project: ProjectConfiguration,
 }
