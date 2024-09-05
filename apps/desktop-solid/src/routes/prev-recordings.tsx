@@ -186,6 +186,7 @@ export default function () {
                               {
                                 width: 1150,
                                 height: 800,
+                                title: "Cap Editor",
                                 url: `/editor?path=${recording}`,
                               }
                             );

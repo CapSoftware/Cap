@@ -323,7 +323,7 @@ function Header() {
       <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]">
         <div class="flex flex-row items-center gap-[0.375rem]">
           <div class="size-[1.5rem] rounded-[0.25rem] bg-gray-500 bg-black" />
-          <span>Adria Studio Workspace</span>
+          <span>My Workspace</span>
         </div>
         <span class="text-gray-400">/</span>
         <div class="flex flex-row items-center gap-[0.375rem]">
