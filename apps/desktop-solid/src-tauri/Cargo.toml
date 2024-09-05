@@ -19,6 +19,8 @@ swift-rs = { version = "1.0.6", features = ["build"] }
 tauri = { version = "2.0.0-rc", features = [
 	"macos-private-api",
 	"protocol-asset",
+	"tray-icon",
+	"image-png",
 ] }
 tauri-plugin-shell = "2.0.0-rc"
 serde = { version = "1", features = ["derive"] }
