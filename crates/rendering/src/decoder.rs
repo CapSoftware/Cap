@@ -243,10 +243,6 @@ impl AsyncVideoDecoder {
                                 .map(|f| frame_number < f)
                                 .unwrap_or(false)
                         {
-                            dbg!(cache.keys().min(), cache.keys().max());
-                            dbg!(cache.get(&frame_number).is_some());
-                            dbg!((frame_number, last_decoded_frame));
-
                             let timestamp_us =
                                 ((frame_number as f32 / frame_rate.numerator() as f32)
                                     * 1_000_000.0) as i64;
