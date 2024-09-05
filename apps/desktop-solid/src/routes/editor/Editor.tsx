@@ -289,7 +289,9 @@ function Inner() {
               }}
               onMouseMove={(e) => {
                 const { left, width } = e.currentTarget.getBoundingClientRect();
-                setPreviewTime(duration * ((e.clientX - left) / width));
+                setPreviewTime(
+                  Math.max(duration * ((e.clientX - left) / width), 0)
+                );
               }}
               onMouseLeave={() => {
                 setPreviewTime(undefined);
