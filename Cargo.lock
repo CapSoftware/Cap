@@ -931,6 +931,7 @@ name = "cap-utils"
 version = "0.1.0"
 dependencies = [
  "nix 0.29.0",
+ "winapi",
 ]
 
 [[package]]
