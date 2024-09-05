@@ -140,7 +140,7 @@ impl AudioCapturer {
 
         self.device
             .build_input_stream(
-                &self.config.clone().into(),
+                &self.config.clone(),
                 move |data: &[T], _| {
                     let sample_size = std::mem::size_of::<T>();
                     let mut bytes = vec![0; std::mem::size_of_val(data)];

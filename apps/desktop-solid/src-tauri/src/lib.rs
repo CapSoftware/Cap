@@ -2,18 +2,17 @@ mod audio;
 mod camera;
 mod display;
 mod editor;
+mod editor_instance;
 mod macos;
+mod playback;
 mod recording;
 
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
-use cap_rendering::{ProjectUniforms, RenderOptions, RenderVideoConstants, VideoDecoderActor};
-use cpal::{
-    traits::{DeviceTrait, HostTrait, StreamTrait},
-    SampleFormat, SizedSample,
-};
+use cap_rendering::{RenderOptions, VideoDecoderActor};
 use display::{list_capture_windows, Bounds, CaptureTarget};
+use editor_instance::{EditorInstance, EditorState};
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
     download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
@@ -27,21 +26,19 @@ use recording::{DisplaySource, InProgressRecording};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::fs::File;
 use std::io::{BufReader, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
 };
-use std::{fs::File, pin};
 use tauri::{AppHandle, Manager, State, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
 use tokio::{
-    sync::{watch, Mutex, Notify, RwLock},
-    task::JoinHandle,
-    time::{sleep, Instant},
+    sync::{Mutex, RwLock},
+    time::sleep,
 };
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -263,7 +260,7 @@ async fn get_rendered_video(
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
-    let editor_instance = EditorInstance::get(&app, video_id).await;
+    let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     render_to_file_impl(
         editor_instance.render_constants.options.clone(),
@@ -392,11 +389,6 @@ struct RenderFrameEvent {
     project: ProjectConfiguration,
 }
 
-struct EditorState {
-    playhead_position: u32,
-    playback_task: Option<watch::Sender<bool>>,
-}
-
 #[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
 struct EditorStateChanged {
     playhead_position: u32,
@@ -417,437 +409,31 @@ struct AudioData {
     // pub channels: u18
 }
 
-struct EditorInstance {
-    app: AppHandle,
-    pub path: PathBuf,
-    pub id: String,
-    pub screen_decoder: VideoDecoderActor,
-    pub camera_decoder: Option<VideoDecoderActor>,
-    pub audio: Option<AudioData>,
-    pub ws_port: u16,
-    pub renderer: Arc<editor::RendererHandle>,
-    pub render_constants: Arc<RenderVideoConstants>,
-    pub state: Mutex<EditorState>,
-}
-
-impl EditorInstance {
-    pub async fn new(app: &AppHandle, video_id: String) -> Self {
-        let project_path = app
-            .path()
-            .app_data_dir()
-            .unwrap()
-            .join("recordings")
-            .join(format!("{video_id}.cap"));
-
-        if !project_path.exists() {
-            println!("Video path {} not found!", project_path.display());
-            // return Err(format!("Video path {} not found!", path.display()));
-            panic!("Video path {} not found!", project_path.display());
-        }
-
-        let meta = cap_project::RecordingMeta::load_for_project(&project_path);
-
-        const OUTPUT_SIZE: (u32, u32) = (1920, 1080);
-
-        let render_options = RenderOptions {
-            screen_size: (meta.display.width, meta.display.height),
-            camera_size: meta.camera.as_ref().map(|c| (c.width, c.height)), //.unwrap_or((0, 0)),
-            output_size: OUTPUT_SIZE,
-        };
-
-        let screen_decoder = VideoDecoderActor::new(project_path.join(meta.display.path).clone());
-        let camera_decoder = meta
-            .camera
-            .map(|camera| VideoDecoderActor::new(project_path.join(camera.path).clone()));
-
-        let audio = meta.audio.map(|audio| {
-            let audio_path = project_path.join(audio.path);
-
-            let stdout = Command::new("ffmpeg")
-                .arg("-i")
-                .arg(audio_path)
-                .args(["-f", "f64le", "-acodec", "pcm_f64le"])
-                .args(["-ar", &audio.sample_rate.to_string()])
-                .args(["-ac", &audio.channels.to_string(), "-"])
-                .output()
-                .unwrap()
-                .stdout;
-
-            let buffer = stdout
-                .chunks_exact(8)
-                .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
-                .collect::<Vec<_>>();
-
-            println!("audio buffer length: {}", buffer.len());
-
-            AudioData {
-                buffer: Arc::new(buffer),
-                sample_rate: audio.sample_rate,
-            }
-        });
-
-        let (frame_tx, rx) = tokio::sync::mpsc::unbounded_channel();
-
-        let ws_port = {
-            use axum::{
-                extract::{
-                    ws::{Message, WebSocket, WebSocketUpgrade},
-                    State,
-                },
-                response::IntoResponse,
-                routing::get,
-            };
-            use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
-
-            type RouterState = Arc<Mutex<UnboundedReceiver<Vec<u8>>>>;
-
-            async fn ws_handler(
-                ws: WebSocketUpgrade,
-                State(state): State<RouterState>,
-            ) -> impl IntoResponse {
-                // let rx = rx.lock().await.take().unwrap();
-                ws.on_upgrade(move |socket| handle_socket(socket, state))
-            }
-
-            async fn handle_socket(mut socket: WebSocket, state: RouterState) {
-                let mut rx = state.lock().await;
-                println!("socket connection established");
-                let now = std::time::Instant::now();
-
-                loop {
-                    tokio::select! {
-                        _ = socket.recv() => {
-                            break;
-                        }
-                        msg = rx.recv() => {
-                            if let Some(chunk) = msg {
-                                socket.send(Message::Binary(chunk)).await.unwrap();
-                            }
-                        }
-                    }
-                }
-                let elapsed = now.elapsed();
-                println!("Websocket closing after {elapsed:.2?}");
-            }
-
-            let router = axum::Router::new()
-                .route("/frames-ws", get(ws_handler))
-                .with_state(Arc::new(Mutex::new(rx)));
-
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let port = listener.local_addr().unwrap().port();
-            tokio::spawn(async move {
-                axum::serve(listener, router.into_make_service())
-                    .await
-                    .unwrap();
-            });
-
-            port
-        };
-
-        let render_constants = Arc::new(RenderVideoConstants::new(render_options).await.unwrap());
-
-        let renderer = Arc::new(editor::Renderer::spawn(render_constants.clone(), frame_tx));
-
-        RenderFrameEvent::listen_any(app, {
-            let screen_decoder = screen_decoder.clone();
-            let camera_decoder = camera_decoder.clone();
-            let render_constants = render_constants.clone();
-
-            let rendering = Arc::new(AtomicBool::new(false));
-            let renderer = renderer.clone();
-
-            move |e| {
-                let screen_decoder = screen_decoder.clone();
-                let camera_decoder = camera_decoder.clone();
-                let render_constants = render_constants.clone();
-
-                if rendering.load(Ordering::Relaxed) {
-                    return;
-                }
-
-                let rendering = rendering.clone();
-                let renderer = renderer.clone();
-                tokio::spawn(async move {
-                    rendering.store(true, Ordering::Relaxed);
-
-                    let Some(screen_frame) = screen_decoder.get_frame(e.payload.frame_number).await
-                    else {
-                        return;
-                    };
-
-                    let camera_frame = match camera_decoder {
-                        Some(d) => d.get_frame(e.payload.frame_number).await,
-                        None => None,
-                    };
-
-                    renderer
-                        .render_frame(
-                            screen_frame,
-                            camera_frame,
-                            e.payload.project.background.source.clone(),
-                            ProjectUniforms::new(&render_constants, &e.payload.project),
-                        )
-                        .await;
-
-                    rendering.store(false, Ordering::Relaxed);
-                });
-            }
-        });
-
-        Self {
-            app: app.clone(),
-            id: video_id,
-            path: project_path,
-            screen_decoder,
-            camera_decoder,
-            ws_port,
-            renderer,
-            render_constants,
-            audio,
-            state: Mutex::new(EditorState {
-                playhead_position: 0,
-                playback_task: None,
-            }),
-        }
-    }
-
-    pub async fn get(app: &AppHandle, video_id: String) -> Arc<Self> {
-        let map = match app.try_state::<Arc<Mutex<HashMap<String, Arc<Self>>>>>() {
-            Some(s) => (*s).clone(),
-            None => {
-                let map = Arc::new(Mutex::new(HashMap::new()));
-                app.manage(map.clone());
-                map
-            }
-        };
-
-        let mut map = map.lock().await;
-
-        use std::collections::hash_map::Entry;
-        match map.entry(video_id.clone()) {
-            Entry::Occupied(o) => o.get().clone(),
-            Entry::Vacant(v) => {
-                let instance = Arc::new(Self::new(app, video_id).await);
-                v.insert(instance.clone());
-                instance
-            }
-        }
-    }
-
-    pub async fn dispose(&self) {
-        let Some(map) = self
-            .app
-            .try_state::<Arc<Mutex<HashMap<String, Arc<Self>>>>>()
-        else {
-            return;
-        };
-
-        let mut state = self.state.lock().await;
-        println!("got state");
-        if let Some(sender) = state.playback_task.take() {
-            println!("stopping playback");
-            sender.send(true).ok();
-        };
-
-        map.lock().await.remove(&self.id);
-    }
-
-    pub async fn modify_and_emit_state(&self, modify: impl Fn(&mut EditorState)) {
-        let mut state = self.state.lock().await;
-        modify(&mut state);
-        EditorStateChanged::new(&state).emit(&self.app).ok();
-    }
-}
-
 #[tauri::command]
 #[specta::specta]
 async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfiguration) {
-    let editor_instance = EditorInstance::get(&app, video_id).await;
-
-    let Ok(mut state) = editor_instance.state.try_lock() else {
-        return;
-    };
-
-    let start_frame_number = state.playhead_position;
-
-    let fps = 60.0;
-    let duration = 10.0;
-
-    let editor_instance = editor_instance.clone();
-
-    let (stop_tx, mut stop_rx) = watch::channel(false);
-
-    let prev = state.playback_task.replace(stop_tx.clone());
-
-    tokio::spawn(async move {
-        let start = Instant::now();
-        let audio = editor_instance.audio.clone();
-
-        let handle = tokio::runtime::Handle::current();
-
-        stop_rx.borrow_and_update();
-
-        std::thread::spawn({
-            let mut stop_rx = stop_rx.clone();
-            move || {
-                let Some(audio) = audio else {
-                    return;
-                };
-
-                let host = cpal::default_host();
-                let device = host.default_output_device().unwrap();
-                let supported_config = device
-                    .default_output_config()
-                    .expect("Failed to get default output format");
-                let mut config = supported_config.config();
-                config.channels = 1;
-
-                dbg!(audio.sample_rate);
-                dbg!(&config);
-
-                let data = audio.buffer.clone();
-
-                let mut clock =
-                    data.len() as f64 * (start_frame_number as f64 / (fps * duration) as f64);
-
-                let resample_ratio = audio.sample_rate as f64 / config.sample_rate.0 as f64;
-                dbg!(resample_ratio);
-
-                let next_sample = move || {
-                    clock = clock + resample_ratio;
-
-                    if clock >= data.len() as f64 {
-                        return None;
-                    }
-
-                    // Simple linear interpolation
-                    let index = clock as usize;
-                    let frac = clock.fract();
-                    let current = data[index];
-                    let next = data[(index + 1) % data.len()];
-                    Some(current * (1.0 - frac) + next * frac)
-                };
-
-                let shared_data = (&device, &config, next_sample);
-                let stream = match supported_config.sample_format() {
-                    SampleFormat::I8 => create_stream::<i8>(shared_data),
-                    SampleFormat::I16 => create_stream::<i16>(shared_data),
-                    SampleFormat::I32 => create_stream::<i32>(shared_data),
-                    SampleFormat::I64 => create_stream::<i64>(shared_data),
-                    SampleFormat::U8 => create_stream::<u8>(shared_data),
-                    SampleFormat::U16 => create_stream::<u16>(shared_data),
-                    SampleFormat::U32 => create_stream::<u32>(shared_data),
-                    SampleFormat::U64 => create_stream::<u64>(shared_data),
-                    SampleFormat::F32 => create_stream::<f32>(shared_data),
-                    SampleFormat::F64 => create_stream::<f64>(shared_data),
-                    _ => unimplemented!(),
-                };
-
-                fn create_stream<T: SizedSample + cpal::FromSample<f64> + 'static>(
-                    (device, config, mut next_sample): (
-                        &cpal::Device,
-                        &cpal::StreamConfig,
-                        impl FnMut() -> Option<f64> + Send + 'static,
-                    ),
-                ) -> cpal::Stream {
-                    device
-                        .build_output_stream(
-                            config,
-                            move |buffer: &mut [T], _info| {
-                                for sample in buffer.iter_mut() {
-                                    let Some(s) = next_sample() else {
-                                        *sample = T::EQUILIBRIUM;
-                                        continue;
-                                    };
-                                    let value = cpal::Sample::from_sample::<f64>(s);
-                                    *sample = value;
-                                }
-                            },
-                            |_| {},
-                            None,
-                        )
-                        .unwrap()
-                }
-
-                stream.play().unwrap();
-
-                handle.block_on(stop_rx.changed()).ok();
-
-                stream.pause().ok();
-                drop(stream);
-            }
-        });
-
-        let mut frame_number = start_frame_number + 1;
-        let uniforms = ProjectUniforms::new(&editor_instance.render_constants, &project);
-
-        loop {
-            if frame_number as f32 > fps * duration {
-                break;
-            };
-
-            tokio::select! {
-                _ = stop_rx.changed() => {
-                   break;
-                },
-                Some(screen_frame) = editor_instance.screen_decoder.get_frame(frame_number) => {
-                    let camera_frame = match &editor_instance.camera_decoder {
-                        Some(d) => d.get_frame(frame_number).await,
-                        None => None,
-                    };
-
-                    editor_instance
-                        .renderer
-                        .render_frame(
-                            screen_frame,
-                            camera_frame,
-                            project.background.source.clone(),
-                            uniforms.clone()
-                        )
-                        .await;
-
-                    editor_instance
-                        .modify_and_emit_state(|state| {
-                            state.playhead_position = frame_number;
-                        })
-                        .await;
-
-                    tokio::time::sleep_until(start + Duration::from_secs_f32(1.0 / fps)).await;
-
-                    frame_number += 1;
-                }
-                else => {
-                    break;
-                }
-            }
-        }
-
-        println!("playback done");
-        stop_tx.send(true).ok();
-    });
-
-    if let Some(prev) = prev {
-        prev.send(true).ok();
-    }
+    upsert_editor_instance(&app, video_id)
+        .await
+        .start_playback(project)
+        .await
 }
 
 #[tauri::command]
 #[specta::specta]
 async fn stop_playback(app: AppHandle, video_id: String) {
-    let editor_instance = EditorInstance::get(&app, video_id).await;
+    let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     let mut state = editor_instance.state.lock().await;
 
-    if let Some(sender) = state.playback_task.take() {
-        sender.send(true).ok();
+    if let Some(handle) = state.playback_task.take() {
+        handle.stop();
     }
 }
 
 #[tauri::command]
 #[specta::specta]
 async fn create_editor_instance(app: AppHandle, video_id: String) -> Result<u16, String> {
-    let editor_instance = EditorInstance::get(&app, video_id).await;
+    let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     Ok(editor_instance.ws_port)
 }
@@ -1195,7 +781,7 @@ async fn render_to_file(
     // 30 FPS (calculated for output video)
     let total_frames = (duration * 30.0).round() as u32;
 
-    let editor_instance = EditorInstance::get(&app, video_id).await;
+    let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     render_to_file_impl(
         editor_instance.render_constants.options.clone(),
@@ -1222,7 +808,7 @@ async fn render_to_file(
 #[tauri::command]
 #[specta::specta]
 async fn set_playhead_position(app: AppHandle, video_id: String, frame_number: u32) {
-    let editor_instance = EditorInstance::get(&app, video_id).await;
+    let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     editor_instance
         .modify_and_emit_state(|state| {
@@ -1346,11 +932,71 @@ pub fn run() {
 										let app = window.app_handle().clone();
 
 										tokio::spawn(async move {
-												EditorInstance::get(&app, id).await.dispose().await;
+											if let Some(editor) = remove_editor_instance(&app, id.clone()).await {
+												editor.dispose().await;
+											}
 										});
 								}
           	}
 				})
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+pub async fn remove_editor_instance(
+    app: &AppHandle,
+    video_id: String,
+) -> Option<Arc<EditorInstance>> {
+    let map = match app.try_state::<Arc<Mutex<HashMap<String, Arc<EditorInstance>>>>>() {
+        Some(s) => (*s).clone(),
+        None => return None,
+    };
+
+    let mut map = map.lock().await;
+
+    map.remove(&video_id).clone()
+}
+
+pub async fn upsert_editor_instance(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {
+    let map = match app.try_state::<Arc<Mutex<HashMap<String, Arc<EditorInstance>>>>>() {
+        Some(s) => (*s).clone(),
+        None => {
+            let map = Arc::new(Mutex::new(HashMap::new()));
+            app.manage(map.clone());
+            map
+        }
+    };
+
+    let mut map = map.lock().await;
+
+    use std::collections::hash_map::Entry;
+    match map.entry(video_id.clone()) {
+        Entry::Occupied(o) => o.get().clone(),
+        Entry::Vacant(v) => {
+            let instance = create_editor_instance_impl(app, video_id).await;
+            v.insert(instance.clone());
+            instance
+        }
+    }
+}
+
+async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {
+    let instance = Arc::new(
+        EditorInstance::new(app, video_id, {
+            let app = app.clone();
+            move |state| {
+                EditorStateChanged::new(state).emit(&app).ok();
+            }
+        })
+        .await,
+    );
+
+    RenderFrameEvent::listen_any(app, {
+        let instance = instance.clone();
+        move |e| {
+            instance.try_render_frame(e.payload.frame_number, e.payload.project);
+        }
+    });
+
+    instance
 }
