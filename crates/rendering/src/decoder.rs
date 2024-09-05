@@ -1,150 +1,17 @@
 use std::{
     collections::BTreeMap,
-    num::NonZeroUsize,
     path::PathBuf,
     sync::{mpsc, Arc},
-    thread,
 };
 
 use ffmpeg_next::{
-    format::context::{input::PacketIter, Input},
-    frame, rescale, Packet, Rational, Rescale, Stream,
+    format::context::input::PacketIter, frame, rescale, Packet, Rational, Rescale, Stream,
 };
-use lru::LruCache;
 
 pub type DecodedFrame = Arc<Vec<u8>>;
 
-pub struct VideoDecoder {
-    input: ffmpeg_next::format::context::Input,
-    decoder: ffmpeg_next::codec::decoder::Video,
-    scaler: ffmpeg_next::software::scaling::context::Context,
-    input_stream_index: usize,
-    temp_frame: ffmpeg_next::frame::Video,
-    time_base: ffmpeg_next::Rational,
-    frame_rate: ffmpeg_next::Rational,
-    last_decoded_frame: Option<u32>,
-    frame_cache: LruCache<u32, DecodedFrame>,
-}
-
-impl VideoDecoder {
-    pub fn new(path: &PathBuf) -> Self {
-        println!("creating decoder for {}", path.display());
-        let ictx = ffmpeg_next::format::input(path).unwrap();
-
-        let input_stream = ictx
-            .streams()
-            .best(ffmpeg_next::media::Type::Video)
-            .ok_or("Could not find a video stream")
-            .unwrap();
-        let input_stream_index = input_stream.index();
-        let time_base = input_stream.time_base();
-        let frame_rate = input_stream.rate();
-
-        // Create a decoder for the video stream
-        let decoder =
-            ffmpeg_next::codec::context::Context::from_parameters(input_stream.parameters())
-                .unwrap()
-                .decoder()
-                .video()
-                .unwrap();
-
-        use ffmpeg_next::format::Pixel;
-        use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
-
-        let scaler = Context::get(
-            decoder.format(),
-            decoder.width(),
-            decoder.height(),
-            Pixel::RGBA,
-            decoder.width(),
-            decoder.height(),
-            Flags::BILINEAR,
-        )
-        .unwrap();
-
-        Self {
-            input: ictx,
-            decoder,
-            scaler,
-            input_stream_index,
-            temp_frame: ffmpeg_next::frame::Video::empty(),
-            time_base,
-            frame_rate,
-            frame_cache: LruCache::new(NonZeroUsize::new(FRAME_CACHE_SIZE).unwrap()),
-            last_decoded_frame: None,
-        }
-    }
-
-    pub fn get_frame(&mut self, frame_number: u32) -> Option<DecodedFrame> {
-        if let Some(frame) = self.frame_cache.get(&frame_number) {
-            return Some(frame.clone());
-        }
-
-        for (stream, packet) in self.input.packets() {
-            if stream.index() == self.input_stream_index {
-                let current_frame =
-                    ts_to_frame(packet.pts().unwrap(), self.time_base, self.frame_rate);
-
-                self.decoder.send_packet(&packet).unwrap();
-
-                while self.decoder.receive_frame(&mut self.temp_frame).is_ok() {
-                    // Convert the frame to RGB
-                    let mut rgb_frame = frame::Video::empty();
-                    self.scaler.run(&self.temp_frame, &mut rgb_frame).unwrap();
-
-                    let frame = Arc::new(rgb_frame.data(0).to_vec());
-
-                    self.last_decoded_frame = Some(current_frame);
-                    self.frame_cache.put(current_frame, frame.clone());
-
-                    if current_frame == frame_number {
-                        return Some(frame);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-}
-
-enum VideoDecoderActorMessage {
+enum VideoDecoderMessage {
     GetFrame(u32, tokio::sync::oneshot::Sender<Option<Arc<Vec<u8>>>>),
-}
-
-#[derive(Clone)]
-pub struct VideoDecoderActor {
-    tx: mpsc::Sender<VideoDecoderActorMessage>,
-}
-
-impl VideoDecoderActor {
-    pub fn new(path: PathBuf) -> Self {
-        let (tx, rx) = mpsc::channel();
-
-        thread::spawn(move || {
-            let mut decoder = VideoDecoder::new(&path);
-
-            loop {
-                match rx.recv() {
-                    Ok(VideoDecoderActorMessage::GetFrame(frame_number, sender)) => {
-                        let frame = decoder.get_frame(frame_number);
-                        sender.send(frame).ok();
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        Self { tx }
-    }
-
-    pub async fn get_frame(&self, frame_number: u32) -> Option<Arc<Vec<u8>>> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.tx
-            .send(VideoDecoderActorMessage::GetFrame(frame_number, tx))
-            .unwrap();
-        rx.await.unwrap()
-    }
 }
 
 fn ts_to_frame(ts: i64, time_base: Rational, frame_rate: Rational) -> u32 {
@@ -220,7 +87,7 @@ impl AsyncVideoDecoder {
 
             while let Ok(r) = peekable_requests.recv() {
                 match r {
-                    VideoDecoderActorMessage::GetFrame(frame_number, sender) => {
+                    VideoDecoderMessage::GetFrame(frame_number, sender) => {
                         // println!("received request for frame {frame_number}");
 
                         let mut sender = if let Some(cached) = cache.get(&frame_number) {
@@ -362,14 +229,14 @@ impl AsyncVideoDecoder {
 
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
-    sender: mpsc::Sender<VideoDecoderActorMessage>,
+    sender: mpsc::Sender<VideoDecoderMessage>,
 }
 
 impl AsyncVideoDecoderHandle {
     pub async fn get_frame(&self, frame_number: u32) -> Option<Arc<Vec<u8>>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.sender
-            .send(VideoDecoderActorMessage::GetFrame(frame_number, tx))
+            .send(VideoDecoderMessage::GetFrame(frame_number, tx))
             .unwrap();
         rx.await.unwrap()
     }
