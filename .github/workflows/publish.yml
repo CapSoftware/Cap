@@ -66,8 +66,8 @@ jobs:
         run: |
           rustup target add x86_64-apple-darwin 
           pnpm install
-          pnpm tauri build -- --target x86_64-apple-darwin
-          pnpm tauri build -- --target aarch64-apple-darwin
+          pnpm tauri build --target x86_64-apple-darwin
+          pnpm tauri build --target aarch64-apple-darwin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
