@@ -275,20 +275,23 @@ async fn get_rendered_video(
 ) -> Result<PathBuf, String> {
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
     let recording_dir = recordings_path(&app).join(format!("{}.cap", video_id));
+    let output_path = editor_instance.path.join("output/result.mp4");
 
-    render_to_file_impl(
-        recording_dir,
-        editor_instance.render_constants.options.clone(),
-        project,
-        editor_instance.path.join("output/result.mp4"),
-        editor_instance.screen_decoder.clone(),
-        editor_instance.camera_decoder.clone(),
-        |_| {},
-        editor_instance.audio.clone(),
-    )
-    .await?;
+    if !output_path.exists() {
+        render_to_file_impl(
+            recording_dir,
+            editor_instance.render_constants.options.clone(),
+            project,
+            output_path.clone(),
+            editor_instance.screen_decoder.clone(),
+            editor_instance.camera_decoder.clone(),
+            |_| {},
+            editor_instance.audio.clone(),
+        )
+        .await?;
+    }
 
-    Ok(editor_instance.path.clone())
+    Ok(output_path)
 }
 
 async fn render_to_file_impl(
@@ -543,6 +546,7 @@ async fn copy_rendered_video_to_clipboard(
     project: ProjectConfiguration,
 ) -> Result<(), String> {
     println!("Copying to clipboard");
+    println!("video_id: {:?}", video_id);
 
     let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
         Ok(path) => {

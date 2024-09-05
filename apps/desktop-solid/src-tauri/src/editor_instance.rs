@@ -36,7 +36,15 @@ impl EditorInstance {
         video_id: String,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
     ) -> Arc<Self> {
-        let project_path = projects_path.join(format!("{video_id}.cap"));
+        let project_path = projects_path.join(format!(
+            "{}{}",
+            video_id,
+            if video_id.ends_with(".cap") {
+                ""
+            } else {
+                ".cap"
+            }
+        ));
 
         if !project_path.exists() {
             println!("Video path {} not found!", project_path.display());
