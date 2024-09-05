@@ -80,7 +80,6 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: api.p8
 
-          # using the same keys as v1
           TAURI_PRIVATE_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_KEY_SIGNING_PASSWORD: ${{ secrets.TAURI_KEY_SIGNING_PASSWORD }}
 
