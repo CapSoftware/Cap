@@ -403,7 +403,7 @@ impl EditorStateChanged {
 }
 
 #[derive(Clone)]
-struct AudioData {
+pub struct AudioData {
     pub buffer: Arc<Vec<f64>>,
     pub sample_rate: u32,
     // pub channels: u18
@@ -981,22 +981,27 @@ pub async fn upsert_editor_instance(app: &AppHandle, video_id: String) -> Arc<Ed
 }
 
 async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {
-    let instance = Arc::new(
-        EditorInstance::new(app, video_id, {
-            let app = app.clone();
-            move |state| {
-                EditorStateChanged::new(state).emit(&app).ok();
-            }
-        })
-        .await,
-    );
+    let instance = EditorInstance::new(recordings_path(app), video_id, {
+        let app = app.clone();
+        move |state| {
+            EditorStateChanged::new(state).emit(&app).ok();
+        }
+    })
+    .await;
 
     RenderFrameEvent::listen_any(app, {
         let instance = instance.clone();
         move |e| {
-            instance.try_render_frame(e.payload.frame_number, e.payload.project);
+            instance
+                .preview_tx
+                .send(Some((e.payload.frame_number, e.payload.project)))
+                .ok();
         }
     });
 
     instance
+}
+
+fn recordings_path(app: &AppHandle) -> PathBuf {
+    app.path().app_data_dir().unwrap().join("recordings")
 }

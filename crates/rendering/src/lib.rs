@@ -1,19 +1,18 @@
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
-use ffmpeg_next::{frame, rescale, Rational, Rescale};
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::mpsc::{channel, Sender};
-use std::thread;
 use wgpu::util::DeviceExt;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use cap_project::{BackgroundSource, CameraXPosition, CameraYPosition, ProjectConfiguration};
 
 use std::time::Instant;
+
+pub mod decoder;
+pub use decoder::{DecodedFrame, VideoDecoderActor};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RenderOptions {
@@ -129,7 +128,8 @@ pub async fn render_video_to_channel(
 
     ffmpeg_next::init().unwrap();
 
-    let (screen_tx, mut screen_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let (screen_tx, mut screen_rx) =
+        tokio::sync::mpsc::unbounded_channel::<decoder::DecodedFrame>();
 
     tokio::spawn(async move {
         let now = Instant::now();
@@ -156,7 +156,7 @@ pub async fn render_video_to_channel(
 
     let mut camera_rx = camera_recording_decoder.map(|camera_recording_decoder| {
         println!("Setting up FFmpeg input for webcam recording...");
-        let (camera_tx, camera_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let (camera_tx, camera_rx) = tokio::sync::mpsc::unbounded_channel();
 
         tokio::spawn(async move {
             let now = Instant::now();
@@ -204,7 +204,7 @@ pub async fn render_video_to_channel(
             let frame = match produce_frame(
                 &constants,
                 &screen_frame,
-                camera_frame.as_ref(),
+                &camera_frame,
                 background,
                 &uniforms,
             )
@@ -256,8 +256,8 @@ pub struct RenderVideoConstants {
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub options: RenderOptions,
-    pub composite_video_frame_pipeline: CompositeVideoFramePipeline,
-    pub gradient_or_color_pipeline: GradientOrColorPipeline,
+    composite_video_frame_pipeline: CompositeVideoFramePipeline,
+    gradient_or_color_pipeline: GradientOrColorPipeline,
     pub output_texture: wgpu::Texture,
     pub output_texture_view: wgpu::TextureView,
     pub output_texture_size: wgpu::Extent3d,
@@ -454,7 +454,7 @@ pub async fn produce_frame(
         ..
     }: &RenderVideoConstants,
     screen_frame: &Vec<u8>,
-    camera_frame: Option<&Vec<u8>>,
+    camera_frame: &Option<DecodedFrame>,
     background: Background,
     uniforms: &ProjectUniforms,
 ) -> Result<Vec<u8>, String> {
@@ -1075,162 +1075,6 @@ fn srgb_to_linear(c: u16) -> f32 {
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
     }
-}
-
-struct VideoDecoder {
-    input: ffmpeg_next::format::context::Input,
-    decoder: ffmpeg_next::codec::decoder::Video,
-    scaler: ffmpeg_next::software::scaling::context::Context,
-    input_stream_index: usize,
-    temp_frame: ffmpeg_next::frame::Video,
-    time_base: ffmpeg_next::Rational,
-    frame_rate: ffmpeg_next::Rational,
-    last_frame: Option<(u32, Vec<u8>)>,
-    // cached_frames: HashMap<u32, Vec<u8>>,
-}
-
-impl VideoDecoder {
-    fn new(path: &PathBuf) -> Self {
-        println!("creating decoder for {}", path.display());
-        let ictx = ffmpeg_next::format::input(path).unwrap();
-
-        let input_stream = ictx
-            .streams()
-            .best(ffmpeg_next::media::Type::Video)
-            .ok_or("Could not find a video stream")
-            .unwrap();
-        let input_stream_index = input_stream.index();
-        let time_base = input_stream.time_base();
-        let frame_rate = input_stream.rate();
-
-        // Create a decoder for the video stream
-        let decoder =
-            ffmpeg_next::codec::context::Context::from_parameters(input_stream.parameters())
-                .unwrap()
-                .decoder()
-                .video()
-                .unwrap();
-
-        use ffmpeg_next::format::Pixel;
-        use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
-
-        let scaler = Context::get(
-            decoder.format(),
-            decoder.width(),
-            decoder.height(),
-            Pixel::RGBA,
-            decoder.width(),
-            decoder.height(),
-            Flags::BILINEAR,
-        )
-        .unwrap();
-
-        Self {
-            input: ictx,
-            decoder,
-            scaler,
-            input_stream_index,
-            temp_frame: ffmpeg_next::frame::Video::empty(),
-            time_base,
-            frame_rate,
-            last_frame: None,
-            // cached_frames: Default::default(),
-        }
-    }
-
-    // TODO: optimisations
-    // - cache frames
-    // - cache I frame positions to know whether seeking is actually necessary when going backwards
-    fn get_frame(&mut self, frame_number: u32) -> Option<Vec<u8>> {
-        if let Some((last_frame_number, frame)) = &self.last_frame {
-            if *last_frame_number == frame_number {
-                return Some(frame.clone());
-            }
-        }
-
-        if self.last_frame.is_some()
-            && (frame_number <= 0 || frame_number <= self.last_frame.as_ref().unwrap().0)
-        {
-            let timestamp_us =
-                ((frame_number as f32 / self.frame_rate.numerator() as f32) * 1_000_000.0) as i64;
-            let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
-
-            println!("seeeking to {position} for frame {frame_number}");
-
-            self.decoder.flush();
-            self.input.seek(position, ..position).unwrap();
-        }
-
-        for (stream, packet) in self.input.packets() {
-            if stream.index() == self.input_stream_index {
-                let current_frame =
-                    ts_to_frame(packet.pts().unwrap(), self.time_base, self.frame_rate);
-
-                self.decoder.send_packet(&packet).unwrap();
-
-                while self.decoder.receive_frame(&mut self.temp_frame).is_ok() {
-                    // Convert the frame to RGB
-                    let mut rgb_frame = frame::Video::empty();
-                    self.scaler.run(&self.temp_frame, &mut rgb_frame).unwrap();
-
-                    let frame = rgb_frame.data(0).to_vec();
-
-                    self.last_frame = Some((current_frame, frame.clone()));
-
-                    if current_frame == frame_number {
-                        return Some(frame);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-}
-
-enum VideoDecoderActorMessage {
-    GetFrame(u32, tokio::sync::oneshot::Sender<Option<Vec<u8>>>),
-}
-
-#[derive(Clone)]
-pub struct VideoDecoderActor {
-    tx: Sender<VideoDecoderActorMessage>,
-}
-
-impl VideoDecoderActor {
-    pub fn new(path: PathBuf) -> Self {
-        let (tx, rx) = channel();
-
-        thread::spawn(move || {
-            let mut decoder = VideoDecoder::new(&path);
-
-            loop {
-                match rx.recv() {
-                    Ok(VideoDecoderActorMessage::GetFrame(frame_number, sender)) => {
-                        let frame = decoder.get_frame(frame_number);
-                        sender.send(frame).ok();
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        Self { tx }
-    }
-
-    pub async fn get_frame(&self, frame_number: u32) -> Option<Vec<u8>> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.tx
-            .send(VideoDecoderActorMessage::GetFrame(frame_number, tx))
-            .unwrap();
-        rx.await.unwrap()
-    }
-}
-
-fn ts_to_frame(ts: i64, time_base: Rational, frame_rate: Rational) -> u32 {
-    // dbg!((ts, time_base, frame_rate));
-    ((ts * time_base.numerator() as i64 * frame_rate.numerator() as i64)
-        / (time_base.denominator() as i64 * frame_rate.denominator() as i64)) as u32
 }
 
 fn get_either<T>((a, b): (T, T), left: bool) -> T {

@@ -120,7 +120,7 @@ function Inner() {
       frame_number: Math.floor(time * 30),
       project: state,
     });
-  }, 10);
+  }, 1000 / 60);
 
   const frameNumberToRender = createMemo(() => {
     const preview = previewTime();
@@ -700,6 +700,7 @@ function SettingsSidebar() {
               onChange={(v) => setState("background", "padding", v[0])}
               minValue={0}
               maxValue={40}
+              step={0.1}
             />
           </Field>
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
@@ -708,6 +709,7 @@ function SettingsSidebar() {
               onChange={(v) => setState("background", "rounding", v[0])}
               minValue={0}
               maxValue={100}
+              step={0.1}
             />
           </Field>
           <Field name="Inset" icon={<IconCapInset />}>
@@ -784,6 +786,7 @@ function SettingsSidebar() {
               onChange={(v) => setState("camera", "rounding", v[0])}
               minValue={0}
               maxValue={100}
+              step={0.1}
             />
           </Field>
           <Field name="Shadow" icon={<IconCapShadow />}>

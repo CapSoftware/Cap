@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cap_project::{BackgroundSource, ProjectConfiguration};
-use cap_rendering::{produce_frame, ProjectUniforms, RenderVideoConstants};
+use cap_rendering::{decoder::DecodedFrame, produce_frame, ProjectUniforms, RenderVideoConstants};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
@@ -97,8 +97,8 @@ impl EditorHandle {
 
 pub enum RendererMessage {
     RenderFrame {
-        screen_frame: Vec<u8>,
-        camera_frame: Option<Vec<u8>>,
+        screen_frame: DecodedFrame,
+        camera_frame: Option<DecodedFrame>,
         background: BackgroundSource,
         uniforms: ProjectUniforms,
         finished: oneshot::Sender<()>,
@@ -161,7 +161,7 @@ impl Renderer {
                             let frame = produce_frame(
                                 &render_constants,
                                 &screen_frame,
-                                camera_frame.as_ref(),
+                                &camera_frame,
                                 cap_rendering::Background::from(background),
                                 &uniforms,
                             )
@@ -185,8 +185,8 @@ impl RendererHandle {
 
     pub async fn render_frame(
         &self,
-        screen_frame: Vec<u8>,
-        camera_frame: Option<Vec<u8>>,
+        screen_frame: DecodedFrame,
+        camera_frame: Option<DecodedFrame>,
         background: BackgroundSource,
         uniforms: ProjectUniforms,
     ) {

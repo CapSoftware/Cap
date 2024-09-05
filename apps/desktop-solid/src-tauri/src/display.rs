@@ -1,10 +1,4 @@
-use std::{
-    fs::File,
-    io::Write,
-    path::PathBuf,
-    sync::atomic::Ordering,
-    time::Instant,
-};
+use std::{fs::File, io::Write, path::PathBuf, sync::atomic::Ordering, time::Instant};
 
 use scap::{
     capturer::{Area, Capturer, Options, Point, Resolution, Size},
@@ -68,7 +62,7 @@ pub fn list_capture_windows() -> Vec<CaptureWindow> {
         .collect::<Vec<_>>()
 }
 
-pub const FPS: u32 = 60;
+pub const FPS: u32 = 30;
 
 pub async fn start_capturing(
     pipe_path: PathBuf,

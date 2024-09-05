@@ -38,9 +38,6 @@ pub struct PlaybackHandle {
 
 impl Playback {
     pub async fn start(self) -> PlaybackHandle {
-        let fps = 60.0;
-        let duration = 10.0;
-
         let (stop_tx, mut stop_rx) = watch::channel(false);
         stop_rx.borrow_and_update();
 
@@ -68,7 +65,7 @@ impl Playback {
             };
 
             loop {
-                if frame_number as f32 > fps * duration {
+                if frame_number as f32 > (FPS * DURATION) as f32 {
                     break;
                 };
 
@@ -94,7 +91,7 @@ impl Playback {
 
                         event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
 
-                        tokio::time::sleep_until(start + Duration::from_secs_f32(1.0 / fps)).await;
+                        tokio::time::sleep_until(start + Duration::from_secs_f32(1.0 / FPS as f32)).await;
 
                         frame_number += 1;
                     }

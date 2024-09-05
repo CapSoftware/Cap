@@ -34,8 +34,8 @@ impl Default for BackgroundSource {
 pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
     pub blur: u32,
-    pub padding: u32,
-    pub rounding: u32,
+    pub padding: f32,
+    pub rounding: f32,
     pub inset: u32,
 }
 
@@ -69,7 +69,7 @@ pub struct CameraConfiguration {
     pub hide: bool,
     pub mirror: bool,
     pub position: CameraPosition,
-    pub rounding: u32,
+    pub rounding: f32,
     pub shadow: u32,
 }
 

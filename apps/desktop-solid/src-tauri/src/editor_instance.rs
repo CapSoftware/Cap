@@ -2,10 +2,12 @@ use crate::playback::{self, PlaybackHandle};
 use crate::{editor, AudioData};
 use cap_project::ProjectConfiguration;
 use cap_rendering::{ProjectUniforms, RenderOptions, RenderVideoConstants, VideoDecoderActor};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{path::PathBuf, process::Command, sync::Arc};
-use tauri::{AppHandle, Manager};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
+
+type PreviewFrameInstruction = (u32, ProjectConfiguration);
 
 pub struct EditorState {
     pub playhead_position: u32,
@@ -24,6 +26,7 @@ pub struct EditorInstance {
     pub state: Mutex<EditorState>,
     on_state_change: Box<dyn Fn(&EditorState) + Send + Sync + 'static>,
     rendering: Arc<AtomicBool>,
+    pub preview_tx: watch::Sender<Option<PreviewFrameInstruction>>,
 }
 
 impl EditorInstance {
@@ -31,14 +34,8 @@ impl EditorInstance {
         projects_path: PathBuf,
         video_id: String,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
-    ) -> Self {
-        let project_path = projects_path
-            // app
-            //     .path()
-            //     .app_data_dir()
-            //     .unwrap()
-            //     .join("recordings")
-            .join(format!("{video_id}.cap"));
+    ) -> Arc<Self> {
+        let project_path = projects_path.join(format!("{video_id}.cap"));
 
         if !project_path.exists() {
             println!("Video path {} not found!", project_path.display());
@@ -95,7 +92,9 @@ impl EditorInstance {
 
         let renderer = Arc::new(editor::Renderer::spawn(render_constants.clone(), frame_tx));
 
-        Self {
+        let (preview_tx, mut preview_rx) = watch::channel(None);
+
+        let this = Arc::new(Self {
             id: video_id,
             path: project_path,
             screen_decoder,
@@ -110,7 +109,12 @@ impl EditorInstance {
             }),
             rendering: Arc::new(AtomicBool::new(false)),
             on_state_change: Box::new(on_state_change),
-        }
+            preview_tx,
+        });
+
+        this.clone().spawn_preview_renderer(preview_rx);
+
+        this
     }
 
     pub async fn dispose(&self) {
@@ -176,35 +180,35 @@ impl EditorInstance {
         }
     }
 
-    pub fn try_render_frame(self: &Arc<Self>, frame_number: u32, project: ProjectConfiguration) {
-        if self.rendering.load(Ordering::Relaxed) {
-            return;
-        }
-
-        let this = self.clone();
-
+    fn spawn_preview_renderer(
+        self: Arc<Self>,
+        mut preview_rx: watch::Receiver<Option<PreviewFrameInstruction>>,
+    ) {
         tokio::spawn(async move {
-            this.rendering.store(true, Ordering::Relaxed);
+            loop {
+                preview_rx.changed().await.ok();
+                let Some((frame_number, project)) = preview_rx.borrow().deref().clone() else {
+                    continue;
+                };
 
-            let Some(screen_frame) = this.screen_decoder.get_frame(frame_number).await else {
-                return;
-            };
+                let Some(screen_frame) = self.screen_decoder.get_frame(frame_number).await else {
+                    return;
+                };
 
-            let camera_frame = match &this.camera_decoder {
-                Some(d) => d.get_frame(frame_number).await,
-                None => None,
-            };
+                let camera_frame = match &self.camera_decoder {
+                    Some(d) => d.get_frame(frame_number).await,
+                    None => None,
+                };
 
-            this.renderer
-                .render_frame(
-                    screen_frame,
-                    camera_frame,
-                    project.background.source.clone(),
-                    ProjectUniforms::new(&this.render_constants, &project),
-                )
-                .await;
-
-            this.rendering.store(false, Ordering::Relaxed);
+                self.renderer
+                    .render_frame(
+                        screen_frame,
+                        camera_frame,
+                        project.background.source.clone(),
+                        ProjectUniforms::new(&self.render_constants, &project),
+                    )
+                    .await;
+            }
         });
     }
 }
