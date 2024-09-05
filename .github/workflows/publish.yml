@@ -88,4 +88,4 @@ jobs:
         with:
           command: release upload ${{ env.CN_APPLICATION }} --framework tauri
           api-key: ${{ secrets.CN_API_KEY }}
-          path: ./apps/desktop-solid/src-tauri
+          working-directory: ./apps/desktop-solid/src-tauri
