@@ -274,7 +274,8 @@ async fn get_rendered_video(
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-    let recording_dir = recordings_path(&app).join(format!("{}.cap", video_id));
+    let recording_dir =
+        recordings_path(&app).join(format!("{}.cap", video_id.trim_end_matches(".cap")));
     let output_path = editor_instance.path.join("output/result.mp4");
 
     if !output_path.exists() {
@@ -292,6 +293,25 @@ async fn get_rendered_video(
     }
 
     Ok(output_path)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn copy_file_to_path(src: String, dst: String) -> Result<(), String> {
+    println!("Attempting to copy file from {} to {}", src, dst);
+    match tokio::fs::copy(&src, &dst).await {
+        Ok(bytes) => {
+            println!(
+                "Successfully copied {} bytes from {} to {}",
+                bytes, src, dst
+            );
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Failed to copy file from {} to {}: {}", src, dst, e);
+            Err(e.to_string())
+        }
+    }
 }
 
 async fn render_to_file_impl(
@@ -545,9 +565,6 @@ async fn copy_rendered_video_to_clipboard(
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<(), String> {
-    println!("Copying to clipboard");
-    println!("video_id: {:?}", video_id);
-
     let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
         Ok(path) => {
             println!("Successfully retrieved rendered video path: {:?}", path);
@@ -989,6 +1006,7 @@ pub fn run() {
             get_current_recording,
             render_to_file,
             get_rendered_video,
+            copy_file_to_path,
             copy_rendered_video_to_clipboard,
             get_video_metadata,
             create_editor_instance,

@@ -101,6 +101,14 @@ async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise
     else return { status: "error", error: e  as any };
 }
 },
+async copyFileToPath(src: string, dst: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("copy_file_to_path", { src, dst }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguration) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("copy_rendered_video_to_clipboard", { videoId, project }) };
