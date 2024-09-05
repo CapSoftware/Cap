@@ -6,6 +6,7 @@ mod editor_instance;
 mod macos;
 mod playback;
 mod recording;
+mod tray;
 
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
@@ -887,6 +888,12 @@ pub fn run() {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
+
+            #[cfg(all(desktop))]
+            {
+                let handle = app.handle();
+                tray::create_tray(&handle)?;
+            }
 
             if let Err(_error) = handle_ffmpeg_installation() {
                 println!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now");
