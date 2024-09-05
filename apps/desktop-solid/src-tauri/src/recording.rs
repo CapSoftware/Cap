@@ -137,11 +137,13 @@ pub async fn start(
 
         let output_path = content_dir.join("camera.mp4");
 
+        let fps = 30;
+
         let ffmpeg_input = ffmpeg.add_input(FFmpegRawVideoInput {
             input: capture.path().clone().into_os_string(),
             width: format.resolution().width(),
             height: format.resolution().height(),
-            fps: 30,
+            fps,
             // fps: format.frame_rate(),
             pix_fmt: match format.format() {
                 FrameFormat::YUYV => "uyvy422",
@@ -152,6 +154,10 @@ pub async fn start(
             // offset: start_time.duration_since(latest_start_time).as_secs_f64(),
         });
 
+        let keyframe_interval_secs = 2;
+        let keyframe_interval = keyframe_interval_secs * fps;
+        let keyframe_interval_str = keyframe_interval.to_string();
+
         ffmpeg
             .command
             .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
@@ -159,6 +165,8 @@ pub async fn start(
             .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
             .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
             .args(["-movflags", "frag_keyframe+empty_moov"])
+            .args(["-g", &keyframe_interval_str])
+            .args(["-keyint_min", &keyframe_interval_str])
             .args([
                 "-vf",
                 &format!(
