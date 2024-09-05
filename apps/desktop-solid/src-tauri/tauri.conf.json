@@ -1,4 +1,5 @@
 {
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "desktop-solid",
   "version": "0.1.0",
   "identifier": "so.cap.desktop-solid",
