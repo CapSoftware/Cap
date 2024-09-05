@@ -32,6 +32,10 @@ export default function () {
     recordings.refetch();
   });
 
+  events.refreshCapturesPanel.listen(() => {
+    location.reload();
+  });
+
   const [removedCount, setRemovedCount] = createSignal(0);
   const [hasClosedWindow, setHasClosedWindow] = createSignal(false);
   const [isScrolledToTop, setIsScrolledToTop] = createSignal(true);
