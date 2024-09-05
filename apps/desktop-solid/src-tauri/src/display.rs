@@ -70,6 +70,9 @@ pub async fn start_capturing(
     start_writing_rx: watch::Receiver<bool>,
 ) -> ((u32, u32), NamedPipeCapture, Instant) {
     dbg!(capture_target);
+
+    let targets = scap::get_all_targets();
+
     let mut capturer = {
         let crop_area = match capture_target {
             CaptureTarget::Window { id: window_number } => {
@@ -87,12 +90,26 @@ pub async fn start_capturing(
             _ => None,
         };
 
+        let excluded_titles = vec!["Cap", "Cap Camera", "Cap Recordings"];
+        let excluded_targets: Vec<scap::Target> = targets
+            .into_iter()
+            .filter(|target| match target {
+                Target::Window(scap_window)
+                    if excluded_titles.contains(&scap_window.title.as_str()) =>
+                {
+                    true
+                }
+                _ => false,
+            })
+            .collect();
+
         let options = Options {
             fps: FPS,
             show_highlight: true,
             output_type: FrameType::BGRAFrame,
             output_resolution: Resolution::_2160p,
             crop_area,
+            excluded_targets: Some(excluded_targets),
             ..Default::default()
         };
 
