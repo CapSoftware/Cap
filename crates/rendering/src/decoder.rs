@@ -284,16 +284,16 @@ impl AsyncVideoDecoder {
                             let too_great_for_cache_bounds = current_frame > cache_max;
                             let too_small_for_cache_bounds = current_frame < cache_min;
 
-                            // if peekable_requests.peek().is_some() {
-                            //     println!("skipping packet for frame {current_frame} as new request is available");
-                            //     packet_stuff.skipped_packet = Some((stream, packet));
+                            if peekable_requests.peek().is_some() {
+                                println!("skipping packet for frame {current_frame} as new request is available");
+                                packet_stuff.skipped_packet = Some((stream, packet));
 
-                            //     break;
-                            // }
+                                break;
+                            }
 
                             if stream.index() == input_stream_index {
                                 if too_great_for_cache_bounds {
-                                    // println!("skipping packet for frame {current_frame} as it's out of cache bounds");
+                                    println!("skipping packet for frame {current_frame} as it's out of cache bounds");
                                     packet_stuff.skipped_packet = Some((stream, packet));
                                     break;
                                 }
@@ -347,7 +347,7 @@ impl AsyncVideoDecoder {
                                             }
                                         }
 
-                                        println!("caching frame {current_frame}");
+                                        // println!("caching frame {current_frame}");
                                         cache.insert(current_frame, frame);
                                     }
                                 }

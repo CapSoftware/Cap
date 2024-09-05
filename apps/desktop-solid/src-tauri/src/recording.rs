@@ -1,8 +1,8 @@
 use nokhwa::utils::CameraFormat;
 use serde::Serialize;
 use specta::Type;
-use std::time::Instant;
 use std::path::PathBuf;
+use std::time::Instant;
 use tokio::sync::watch;
 
 use crate::{
@@ -106,10 +106,16 @@ pub async fn start(
             ..Default::default()
         });
 
+        let keyframe_interval_secs = 2;
+        let keyframe_interval = keyframe_interval_secs * display::FPS;
+        let keyframe_interval_str = keyframe_interval.to_string();
+
         ffmpeg
             .command
             .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
             .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+            .args(["-g", &keyframe_interval_str])
+            .args(["-keyint_min", &keyframe_interval_str])
             .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
             // .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
             // .args(["-movflags", "frag_keyframe+empty_moov"])
