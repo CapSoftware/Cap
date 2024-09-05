@@ -20,7 +20,7 @@ jobs:
         id: get_version
         run: echo "appVersion=$(jq -r '.version' apps/desktop/package.json)" >> $GITHUB_OUTPUT
 
-      - name: create daft release
+      - name: create draft release
         uses: crabnebula-dev/cloud-release@v0
         with:
           command: release draft ${{ env.CN_APPLICATION }} ${{ steps.get_version.outputs.appVersion }} --framework tauri
