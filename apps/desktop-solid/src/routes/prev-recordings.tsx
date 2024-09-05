@@ -28,45 +28,28 @@ export default function () {
     },
   }));
 
-  // let closingRecording: string | null = null;
-  // window.addEventListener("wheel", (e) => {
-  //   if (e.deltaX === 0) closingRecording = null;
-  // });
-
   events.showCapturesPanel.listen(() => {
     recordings.refetch();
   });
 
-  const [showAll, setShowAll] = createSignal(false);
-  const [showMoreRef, setShowMoreRef] = createSignal<HTMLElement | null>(null);
   const [removedCount, setRemovedCount] = createSignal(0);
   const [hasClosedWindow, setHasClosedWindow] = createSignal(false);
+  const [isScrolledToTop, setIsScrolledToTop] = createSignal(true);
 
-  const visibleRecordings = () =>
-    showAll()
-      ? recordings.data?.slice().reverse()
-      : recordings.data?.slice(0, 5).reverse();
+  const visibleRecordings = () => recordings.data?.slice().reverse();
 
-  createFakeWindowBounds(showMoreRef, () => "show-more-btn");
+  const handleScroll = (e: Event) => {
+    const target = e.target as HTMLElement;
+    setIsScrolledToTop(target.scrollTop === 0);
+  };
 
   return (
     <div class="w-screen h-[100vh] bg-transparent relative">
-      <div class="absolute left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto">
-        <Show when={recordings.data && recordings.data.length > 5}>
-          <div class="show-more-btn w-full relative z-20" ref={setShowMoreRef}>
-            <Button
-              class="w-full max-w-[260px] cursor-pointer"
-              variant="secondary"
-              size="md"
-              onClick={() => setShowAll(!showAll())}
-            >
-              {showAll()
-                ? "Show less"
-                : `Show ${recordings.data!.length - 5} more`}
-            </Button>
-          </div>
-        </Show>
-        <div class="w-full flex flex-col-reverse gap-4">
+      <div
+        class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto"
+        onScroll={handleScroll}
+      >
+        <div class="pt-12 w-full flex flex-col-reverse gap-4">
           <For each={visibleRecordings()}>
             {(recording, i) => {
               const [ref, setRef] = createSignal<HTMLElement | null>(null);
@@ -107,24 +90,10 @@ export default function () {
 
               return (
                 <Show when={present()}>
-                  {/* biome-ignore lint/a11y/useKeyWithClickEvents: <explanation> */}
                   <div
                     ref={setRef}
-                    // onWheel={(e) => {
-                    //   if (closingRecording && closingRecording !== recording) {
-                    //     if (e.deltaX === 1) closingRecording = null;
-
-                    //     return;
-                    //   }
-
-                    //   if (e.deltaX > 8) {
-                    //     setExiting(true);
-                    //     closingRecording = recording;
-                    //   }
-                    // }}
                     style={{
                       "border-color": "rgba(255, 255, 255, 0.2)",
-                      // "box-shadow": "0px 2px 4px rgba(18, 22, 31, 0.12)",
                     }}
                     class={cx(
                       "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500 rounded-[12px] overflow-hidden shadow border-[1px] group transition-all relative",
