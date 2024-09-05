@@ -93,9 +93,9 @@ impl Playback {
 
                         event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
 
-                        tokio::time::sleep_until(start + Duration::from_secs_f32(1.0 / FPS as f32)).await;
-
                         frame_number += 1;
+
+                        tokio::time::sleep_until(start + frame_number * Duration::from_secs_f32(1.0 / FPS as f32)).await;
                     }
                     else => {
                         break;
