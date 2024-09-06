@@ -26,7 +26,7 @@
   },
   "productName": "Cap",
   "version": "0.2.9",
-  "identifier": "so.cap.desktop-solid",
+  "identifier": "so.cap.desktop-",
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFRDMyMDE5MDZEMDk4RTEKUldUaG1OQUdHU0RUbm44YWgxNVlkRjBMZU8yOHB5N0kyY01NZDJTeXNOb09Zdlc2Um81UVFKcTAK",
