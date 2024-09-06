@@ -24,37 +24,38 @@ export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 export const DEFAULT_FROM = [71, 133, 255] satisfies [number, number, number];
 export const DEFAULT_TO = [255, 71, 102] satisfies [number, number, number];
 
+export const DEFAULT_CONFIG: ProjectConfiguration = {
+  aspectRatio: "wide",
+  background: {
+    source: {
+      type: "gradient",
+      from: DEFAULT_FROM,
+      to: DEFAULT_TO,
+    },
+    blur: 0,
+    padding: 10,
+    rounding: 20,
+    inset: 0,
+  },
+  camera: {
+    hide: false,
+    mirror: false,
+    position: { x: "left", y: "top" },
+    rounding: 100,
+    shadow: 50,
+  },
+  audio: { mute: false, improve: false },
+  cursor: { hideWhenIdle: false, size: 0, type: "pointer" },
+  hotkeys: { show: false },
+};
+
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
   () => {
     const [dialog, setDialog] = createSignal<DialogState>({
       open: false,
     });
 
-    const [state, setState] = createStore<ProjectConfiguration>({
-      aspectRatio: "wide",
-      background: {
-        // source: { type: "color", value: [255, 0, ] },
-        source: {
-          type: "gradient",
-          from: DEFAULT_FROM,
-          to: DEFAULT_TO,
-        },
-        blur: 0,
-        padding: 10,
-        rounding: 20,
-        inset: 0,
-      },
-      camera: {
-        hide: false,
-        mirror: false,
-        position: { x: "left", y: "top" },
-        rounding: 100,
-        shadow: 50,
-      },
-      audio: { mute: false, improve: false },
-      cursor: { hideWhenIdle: false, size: 0, type: "pointer" },
-      hotkeys: { show: false },
-    });
+    const [state, setState] = createStore<ProjectConfiguration>(DEFAULT_CONFIG);
 
     const [selectedTab, setSelectedTab] = createSignal<
       "background" | "camera" | "transcript" | "audio" | "cursor" | "hotkeys"

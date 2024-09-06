@@ -18,6 +18,7 @@ import { Button } from "@cap/ui-solid";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { save } from "@tauri-apps/plugin-dialog";
 import { commands, events } from "../utils/tauri";
+import { DEFAULT_CONFIG } from "./editor/context";
 
 export default function () {
   const recordings = createQuery(() => ({
@@ -75,6 +76,8 @@ export default function () {
               });
 
               const isLoading = () => isCopyLoading() || isSaveLoading();
+
+              const videoId = recording.split("/").pop()?.split(".")[0]!;
 
               createEffect(() => {
                 commands.getVideoMetadata(recording, null).then((result) => {
@@ -164,18 +167,12 @@ export default function () {
                           tooltipText="Edit"
                           tooltipPlacement="right"
                           onClick={() => {
-                            new WebviewWindow(
-                              `editor-${recording
-                                .split("/")
-                                .at(-1)
-                                ?.split(".")[0]!}`,
-                              {
-                                width: 1150,
-                                height: 800,
-                                title: "Cap Editor",
-                                url: `/editor?path=${recording}`,
-                              }
-                            );
+                            new WebviewWindow(`editor-${videoId}`, {
+                              width: 1150,
+                              height: 800,
+                              title: "Cap Editor",
+                              url: `/editor?path=${recording}`,
+                            });
                           }}
                         >
                           <IconCapEditor class="size-[1rem]" />
@@ -193,34 +190,8 @@ export default function () {
                             setIsCopyLoading(true);
                             try {
                               await commands.copyRenderedVideoToClipboard(
-                                recording,
-                                {
-                                  aspectRatio: "classic",
-                                  background: {
-                                    source: {
-                                      type: "color",
-                                      value: [0, 0, 0],
-                                    },
-                                    blur: 0,
-                                    padding: 0,
-                                    rounding: 0,
-                                    inset: 0,
-                                  },
-                                  camera: {
-                                    hide: false,
-                                    mirror: false,
-                                    position: { x: "left", y: "bottom" },
-                                    rounding: 0,
-                                    shadow: 0,
-                                  },
-                                  audio: { mute: false, improve: false },
-                                  cursor: {
-                                    hideWhenIdle: false,
-                                    size: 16,
-                                    type: "pointer",
-                                  },
-                                  hotkeys: { show: false },
-                                }
+                                videoId,
+                                DEFAULT_CONFIG
                               );
                               setIsCopySuccess(true);
                               setTimeout(() => setIsCopySuccess(false), 2000);
@@ -260,7 +231,7 @@ export default function () {
                               setIsSaveLoading(true);
                               try {
                                 const renderedPath =
-                                  await commands.getRenderedVideo(recording, {
+                                  await commands.getRenderedVideo(videoId, {
                                     aspectRatio: "classic",
                                     background: {
                                       source: {

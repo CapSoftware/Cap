@@ -276,7 +276,7 @@ async fn get_rendered_video(
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
     let recording_dir =
         recordings_path(&app).join(format!("{}.cap", video_id.trim_end_matches(".cap")));
-    let output_path = editor_instance.path.join("output/result.mp4");
+    let output_path = recording_dir.join("output/result.mp4");
 
     if !output_path.exists() {
         render_to_file_impl(
@@ -457,10 +457,6 @@ async fn render_to_file_impl(
 
     println!("Copying file to {:?}", recording_dir);
     let result_path = recording_dir.join("output/result.mp4");
-    std::fs::create_dir_all(result_path.parent().unwrap()).unwrap_or_else(|e| {
-        eprintln!("Failed to create output directory: {:?}", e);
-    });
-
     // Function to check if the file is a valid MP4
     fn is_valid_mp4(path: &std::path::Path) -> bool {
         if let Ok(file) = std::fs::File::open(path) {
@@ -478,26 +474,30 @@ async fn render_to_file_impl(
         }
     }
 
-    println!("Waiting for valid MP4 file at {:?}", output_path);
-    // Wait for the file to become a valid MP4
-    let mut attempts = 0;
-    while attempts < 10 {
-        // Wait for up to 60 seconds
-        if is_valid_mp4(&output_path) {
-            println!("Valid MP4 file detected after {} seconds", attempts);
-            match std::fs::copy(&output_path, &result_path) {
-                Ok(bytes) => println!("Successfully copied {} bytes to {:?}", bytes, result_path),
-                Err(e) => eprintln!("Failed to copy file: {:?}", e),
+    if output_path != result_path {
+        println!("Waiting for valid MP4 file at {:?}", output_path);
+        // Wait for the file to become a valid MP4
+        let mut attempts = 0;
+        while attempts < 10 {
+            // Wait for up to 60 seconds
+            if is_valid_mp4(&output_path) {
+                println!("Valid MP4 file detected after {} seconds", attempts);
+                match std::fs::copy(&output_path, &result_path) {
+                    Ok(bytes) => {
+                        println!("Successfully copied {} bytes to {:?}", bytes, result_path)
+                    }
+                    Err(e) => eprintln!("Failed to copy file: {:?}", e),
+                }
+                break;
             }
-            break;
+            println!("Attempt {}: File not yet valid, waiting...", attempts + 1);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            attempts += 1;
         }
-        println!("Attempt {}: File not yet valid, waiting...", attempts + 1);
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        attempts += 1;
-    }
 
-    if attempts == 10 {
-        eprintln!("Timeout: Failed to detect a valid MP4 file after 60 seconds");
+        if attempts == 10 {
+            eprintln!("Timeout: Failed to detect a valid MP4 file after 60 seconds");
+        }
     }
 
     Ok(output_path)
@@ -577,6 +577,8 @@ async fn copy_rendered_video_to_clipboard(
     };
 
     let output_path_str = output_path.to_str().unwrap();
+
+    println!("Copying to clipboard: {:?}", output_path_str);
 
     #[cfg(target_os = "macos")]
     {
