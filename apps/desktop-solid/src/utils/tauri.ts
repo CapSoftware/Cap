@@ -155,14 +155,14 @@ async saveProjectConfig(videoId: string, config: ProjectConfiguration) : Promise
 
 export const events = __makeEvents__<{
 editorStateChanged: EditorStateChanged,
+newRecordingAdded: NewRecordingAdded,
 recordingOptionsChanged: RecordingOptionsChanged,
-refreshCapturesPanel: RefreshCapturesPanel,
 renderFrameEvent: RenderFrameEvent,
 showCapturesPanel: ShowCapturesPanel
 }>({
 editorStateChanged: "editor-state-changed",
+newRecordingAdded: "new-recording-added",
 recordingOptionsChanged: "recording-options-changed",
-refreshCapturesPanel: "refresh-captures-panel",
 renderFrameEvent: "render-frame-event",
 showCapturesPanel: "show-captures-panel"
 })
@@ -191,10 +191,10 @@ export type EditorStateChanged = { playhead_position: number }
 export type HotkeysConfiguration = { show: boolean }
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
 export type JsonValue<T> = [T]
+export type NewRecordingAdded = { path: string }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
-export type RefreshCapturesPanel = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null }

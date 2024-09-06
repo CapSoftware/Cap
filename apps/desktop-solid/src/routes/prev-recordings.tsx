@@ -19,43 +19,73 @@ import { Button } from "@cap/ui-solid";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { save } from "@tauri-apps/plugin-dialog";
 
+import { createStore, produce } from "solid-js/store";
+import { makePersisted } from "@solid-primitives/storage";
 import { commands, events } from "../utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 
-export default function () {
-  const recordings = createQuery(() => ({
-    queryKey: ["recordings"],
-    queryFn: async () => {
-      const o = await commands.getPrevRecordings();
-      if (o.status === "ok") return o.data;
-    },
-  }));
+type RecordingEntry = {
+  path: string;
+  hidden: boolean;
+};
 
-  events.showCapturesPanel.listen(() => {
-    recordings.refetch();
+export default function () {
+  const [recordings, setRecordings] = makePersisted(
+    createStore<RecordingEntry[]>([]),
+    {
+      name: "recordings-store",
+      storage: localStorage,
+    }
+  );
+
+  const addRecording = (path: string) => {
+    setRecordings(
+      produce((state) => {
+        if (!state.some((entry) => entry.path === path)) {
+          state.push({ path: path, hidden: false });
+        }
+      })
+    );
+  };
+  const toggleHidden = (path: string) => {
+    setRecordings(
+      produce((state) => {
+        const entry = state.find((entry) => entry.path === path);
+        if (entry) {
+          entry.hidden = !entry.hidden;
+        }
+      })
+    );
+  };
+
+  // Listen for new recordings
+  events.newRecordingAdded.listen((event: NewRecordingAdded) => {
+    addRecording(event.payload.path);
   });
 
-  events.refreshCapturesPanel.listen(() => {
+  // Initialize recordings from the backend
+  createEffect(() => {
+    commands
+      .getPrevRecordings()
+      .then((result: { status: string; data: string[] }) => {
+        if (result.status === "ok") {
+          result.data.forEach((path) => addRecording(path));
+        }
+      });
+  });
+
+  events.showCapturesPanel.listen(() => {
     location.reload();
   });
 
   const [removedCount, setRemovedCount] = createSignal(0);
   const [hasClosedWindow, setHasClosedWindow] = createSignal(false);
-  const [isScrolledToTop, setIsScrolledToTop] = createSignal(true);
 
-  const visibleRecordings = () => recordings.data?.slice().reverse();
-
-  const handleScroll = (e: Event) => {
-    const target = e.target as HTMLElement;
-    setIsScrolledToTop(target.scrollTop === 0);
-  };
+  const visibleRecordings = () => recordings.slice().reverse();
 
   return (
     <div class="w-screen h-[100vh] bg-transparent relative">
-      <div
-        class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto"
-        onScroll={handleScroll}
-      >
+      <div class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto">
         <div class="pt-12 w-full flex flex-col-reverse gap-4">
           <For each={visibleRecordings()}>
             {(recording, i) => {
@@ -119,26 +149,32 @@ export default function () {
               const isLoading = () =>
                 copyVideo.isPending || saveVideo.isPending;
 
-              const videoId = recording.split("/").pop()?.split(".")[0]!;
+              const videoId = recording.path.split("/").pop()?.split(".")[0]!;
 
               createEffect(() => {
-                commands.getVideoMetadata(recording, null).then((result) => {
-                  if (result.status === "ok") {
-                    const [duration, size] = result.data;
-                    console.log(
-                      `Metadata for ${recording}: duration=${duration}, size=${size}`
-                    );
-                    setMetadata({
-                      duration,
-                      size,
-                    });
-                  } else {
-                    console.error(`Failed to get metadata: ${result.error}`);
-                  }
-                });
+                commands
+                  .getVideoMetadata(recording.path, null)
+                  .then(
+                    (result: { status: string; data: [number, number] }) => {
+                      if (result.status === "ok") {
+                        const [duration, size] = result.data;
+                        console.log(
+                          `Metadata for ${recording.path}: duration=${duration}, size=${size}`
+                        );
+                        setMetadata({
+                          duration,
+                          size,
+                        });
+                      } else {
+                        console.error(
+                          `Failed to get metadata: ${result.status}`
+                        );
+                      }
+                    }
+                  );
               });
 
-              createFakeWindowBounds(ref, () => recording);
+              createFakeWindowBounds(ref, () => recording.path);
 
               return (
                 <Show when={present()}>
@@ -173,7 +209,7 @@ export default function () {
                           class="pointer-events-none w-[105%] h-[105%] object-cover absolute inset-0 -z-10"
                           alt="screenshot"
                           src={`${convertFileSrc(
-                            `${recording}/screenshots/display.jpg`
+                            `${recording.path}/screenshots/display.jpg`
                           )}?t=${Date.now()}`}
                           onError={() => setImageExists(false)}
                         />
@@ -213,7 +249,7 @@ export default function () {
                               width: 1150,
                               height: 800,
                               title: "Cap Editor",
-                              url: `/editor?path=${recording}`,
+                              url: `/editor?path=${recording.path}`,
                             });
                           }}
                         >

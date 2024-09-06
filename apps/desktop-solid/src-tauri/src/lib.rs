@@ -158,9 +158,10 @@ pub struct RecordingOptionsChanged;
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
 pub struct ShowCapturesPanel;
 
-// dedicated event + command used as panel must be accessed on main thread
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
-pub struct RefreshCapturesPanel;
+pub struct NewRecordingAdded {
+    path: PathBuf,
+}
 
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
@@ -260,9 +261,16 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         .output()
         .unwrap();
 
-    state.prev_recordings.push(current_recording.recording_dir);
+    let recording_dir = current_recording.recording_dir.clone();
+    state.prev_recordings.push(recording_dir.clone());
 
     ShowCapturesPanel.emit(&app).ok();
+
+    NewRecordingAdded {
+        path: recording_dir,
+    }
+    .emit(&app)
+    .ok();
 
     Ok(())
 }
@@ -948,7 +956,7 @@ async fn render_to_file(
     .await
     .ok();
 
-    RefreshCapturesPanel.emit(&app).ok();
+    ShowCapturesPanel.emit(&app).ok();
 }
 
 #[tauri::command]
@@ -1027,7 +1035,7 @@ pub fn run() {
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
             ShowCapturesPanel,
-            RefreshCapturesPanel,
+            NewRecordingAdded,
             RenderFrameEvent,
             EditorStateChanged
         ])
