@@ -1,5 +1,5 @@
 {
-  "name": "@cap/ui-solid",
+  "name": "desktop-solid",
   "type": "module",
   "scripts": {
     "dev": "vinxi dev --port 1420",
