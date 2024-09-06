@@ -16,8 +16,9 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Tooltip from "@corvu/tooltip";
 import { Button } from "@cap/ui-solid";
 import { createElementBounds } from "@solid-primitives/bounds";
-
+import { save } from "@tauri-apps/plugin-dialog";
 import { commands, events } from "../utils/tauri";
+import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 
 export default function () {
   const recordings = createQuery(() => ({
@@ -28,52 +29,40 @@ export default function () {
     },
   }));
 
-  // let closingRecording: string | null = null;
-  // window.addEventListener("wheel", (e) => {
-  //   if (e.deltaX === 0) closingRecording = null;
-  // });
-
   events.showCapturesPanel.listen(() => {
     recordings.refetch();
   });
 
-  const [showAll, setShowAll] = createSignal(false);
-  const [showMoreRef, setShowMoreRef] = createSignal<HTMLElement | null>(null);
+  events.refreshCapturesPanel.listen(() => {
+    location.reload();
+  });
+
   const [removedCount, setRemovedCount] = createSignal(0);
   const [hasClosedWindow, setHasClosedWindow] = createSignal(false);
+  const [isScrolledToTop, setIsScrolledToTop] = createSignal(true);
 
-  const visibleRecordings = () =>
-    showAll()
-      ? recordings.data?.slice().reverse()
-      : recordings.data?.slice(0, 5).reverse();
+  const visibleRecordings = () => recordings.data?.slice().reverse();
 
-  createFakeWindowBounds(showMoreRef, () => "show-more-btn");
+  const handleScroll = (e: Event) => {
+    const target = e.target as HTMLElement;
+    setIsScrolledToTop(target.scrollTop === 0);
+  };
 
   return (
     <div class="w-screen h-[100vh] bg-transparent relative">
-      <div class="absolute left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto">
-        <Show when={recordings.data && recordings.data.length > 5}>
-          <div class="show-more-btn w-full relative z-20" ref={setShowMoreRef}>
-            <Button
-              class="w-full max-w-[260px] cursor-pointer"
-              variant="secondary"
-              size="md"
-              onClick={() => setShowAll(!showAll())}
-            >
-              {showAll()
-                ? "Show less"
-                : `Show ${recordings.data!.length - 5} more`}
-            </Button>
-          </div>
-        </Show>
-        <div class="w-full flex flex-col-reverse gap-4">
+      <div
+        class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto"
+        onScroll={handleScroll}
+      >
+        <div class="pt-12 w-full flex flex-col-reverse gap-4">
           <For each={visibleRecordings()}>
             {(recording, i) => {
               const [ref, setRef] = createSignal<HTMLElement | null>(null);
-
               const [exiting, setExiting] = createSignal(false);
-              const [isLoading, setIsLoading] = createSignal(false);
-              const [isSuccess, setIsSuccess] = createSignal(false);
+              const [isCopyLoading, setIsCopyLoading] = createSignal(false);
+              const [isCopySuccess, setIsCopySuccess] = createSignal(false);
+              const [isSaveLoading, setIsSaveLoading] = createSignal(false);
+              const [isSaveSuccess, setIsSaveSuccess] = createSignal(false);
               const [metadata, setMetadata] = createSignal({
                 duration: 0,
                 size: 0,
@@ -86,8 +75,12 @@ export default function () {
                 element: ref,
               });
 
+              const isLoading = () => isCopyLoading() || isSaveLoading();
+
+              const videoId = recording.split("/").pop()?.split(".")[0]!;
+
               createEffect(() => {
-                commands.getVideoMetadata(recording).then((result) => {
+                commands.getVideoMetadata(recording, null).then((result) => {
                   if (result.status === "ok") {
                     const [duration, size] = result.data;
                     console.log(
@@ -107,24 +100,10 @@ export default function () {
 
               return (
                 <Show when={present()}>
-                  {/* biome-ignore lint/a11y/useKeyWithClickEvents: <explanation> */}
                   <div
                     ref={setRef}
-                    // onWheel={(e) => {
-                    //   if (closingRecording && closingRecording !== recording) {
-                    //     if (e.deltaX === 1) closingRecording = null;
-
-                    //     return;
-                    //   }
-
-                    //   if (e.deltaX > 8) {
-                    //     setExiting(true);
-                    //     closingRecording = recording;
-                    //   }
-                    // }}
                     style={{
                       "border-color": "rgba(255, 255, 255, 0.2)",
-                      // "box-shadow": "0px 2px 4px rgba(18, 22, 31, 0.12)",
                     }}
                     class={cx(
                       "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500 rounded-[12px] overflow-hidden shadow border-[1px] group transition-all relative",
@@ -135,7 +114,11 @@ export default function () {
                     )}
                   >
                     <div
-                      class="w-full h-full flex relative bg-transparent rounded-[8px] border-[1px] overflow-hidden z-10"
+                      class={cx(
+                        "w-full h-full flex relative bg-transparent rounded-[8px] border-[1px] overflow-hidden z-10",
+                        "transition-all",
+                        isLoading() && "backdrop-blur bg-gray-500/80"
+                      )}
                       style={{ "border-color": "rgba(255, 255, 255, 0.2)" }}
                     >
                       <Show
@@ -147,13 +130,19 @@ export default function () {
                         <img
                           class="pointer-events-none w-[105%] h-[105%] object-cover absolute inset-0 -z-10"
                           alt="screenshot"
-                          src={convertFileSrc(
+                          src={`${convertFileSrc(
                             `${recording}/screenshots/display.jpg`
-                          )}
+                          )}?t=${Date.now()}`}
                           onError={() => setImageExists(false)}
                         />
                       </Show>
-                      <div class="w-full h-full absolute inset-0 transition-all opacity-0 group-hover:opacity-100 backdrop-blur group-hover:backdrop-blur bg-gray-500/80 text-white p-2">
+                      <div
+                        class={cx(
+                          "w-full h-full absolute inset-0 transition-all",
+                          isLoading() || "opacity-0 group-hover:opacity-100",
+                          "backdrop-blur bg-gray-500/80 text-white p-2"
+                        )}
+                      >
                         <TooltipIconButton
                           class="absolute left-3 top-3 z-20"
                           tooltipText="Close"
@@ -178,75 +167,49 @@ export default function () {
                           tooltipText="Edit"
                           tooltipPlacement="right"
                           onClick={() => {
-                            new WebviewWindow(
-                              `editor-${recording
-                                .split("/")
-                                .at(-1)
-                                ?.split(".")[0]!}`,
-                              {
-                                width: 1150,
-                                height: 800,
-                                title: "Cap Editor",
-                                url: `/editor?path=${recording}`,
-                              }
-                            );
+                            new WebviewWindow(`editor-${videoId}`, {
+                              width: 1150,
+                              height: 800,
+                              title: "Cap Editor",
+                              url: `/editor?path=${recording}`,
+                            });
                           }}
                         >
                           <IconCapEditor class="size-[1rem]" />
                         </TooltipIconButton>
                         <TooltipIconButton
                           class="absolute right-3 top-3 z-20"
-                          tooltipText="Copy to Clipboard"
+                          tooltipText={
+                            isCopyLoading()
+                              ? "Copying to Clipboard"
+                              : "Copy to Clipboard"
+                          }
+                          forceOpen={isCopyLoading()}
                           tooltipPlacement="left"
                           onClick={async () => {
-                            setIsLoading(true);
+                            setIsCopyLoading(true);
                             try {
                               await commands.copyRenderedVideoToClipboard(
-                                recording,
-                                {
-                                  aspectRatio: "classic",
-                                  background: {
-                                    source: {
-                                      type: "color",
-                                      value: [0, 0, 0],
-                                    },
-                                    blur: 0,
-                                    padding: 0,
-                                    rounding: 0,
-                                    inset: 0,
-                                  },
-                                  camera: {
-                                    hide: false,
-                                    mirror: false,
-                                    position: { x: "left", y: "bottom" },
-                                    rounding: 0,
-                                    shadow: 0,
-                                  },
-                                  audio: { mute: false, improve: false },
-                                  cursor: {
-                                    hideWhenIdle: false,
-                                    size: 16,
-                                    type: "pointer",
-                                  },
-                                  hotkeys: { show: false },
-                                }
+                                videoId,
+                                DEFAULT_PROJECT_CONFIG
                               );
-                              setIsLoading(false);
-                              setIsSuccess(true);
-                              setTimeout(() => setIsSuccess(false), 2000);
+                              setIsCopySuccess(true);
+                              setTimeout(() => setIsCopySuccess(false), 2000);
                             } catch (error) {
-                              setIsLoading(false);
                               window.alert("Failed to copy to clipboard");
+                            } finally {
+                              setIsCopyLoading(false);
                             }
                           }}
+                          disabled={isSaveLoading()}
                         >
-                          <Show when={isLoading()}>
+                          <Show when={isCopyLoading()}>
                             <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
                           </Show>
-                          <Show when={isSuccess()}>
+                          <Show when={isCopySuccess()}>
                             <IconLucideCheck class="size-[1rem]" />
                           </Show>
-                          <Show when={!isLoading() && !isSuccess()}>
+                          <Show when={!isCopyLoading() && !isCopySuccess()}>
                             <IconCapCopy class="size-[1rem]" />
                           </Show>
                         </TooltipIconButton>
@@ -255,15 +218,7 @@ export default function () {
                           tooltipText="Create Shareable Link"
                           tooltipPlacement="left"
                           onClick={async () => {
-                            setIsLoading(true);
-                            try {
-                              setIsLoading(false);
-                              setIsSuccess(true);
-                              setTimeout(() => setIsSuccess(false), 2000);
-                            } catch (error) {
-                              setIsLoading(false);
-                              window.alert("Failed to create shareable link");
-                            }
+                            // Implement shareable link functionality here
                           }}
                         >
                           <IconCapUpload class="size-[1rem]" />
@@ -273,24 +228,85 @@ export default function () {
                             variant="secondary"
                             size="sm"
                             onClick={async () => {
-                              setIsLoading(true);
+                              setIsSaveLoading(true);
                               try {
-                                setIsLoading(false);
-                                setIsSuccess(true);
-                                setTimeout(() => setIsSuccess(false), 2000);
+                                const renderedPath =
+                                  await commands.getRenderedVideo(videoId, {
+                                    aspectRatio: "classic",
+                                    background: {
+                                      source: {
+                                        type: "color",
+                                        value: [0, 0, 0],
+                                      },
+                                      blur: 0,
+                                      padding: 0,
+                                      rounding: 0,
+                                      inset: 0,
+                                    },
+                                    camera: {
+                                      hide: false,
+                                      mirror: false,
+                                      position: { x: "left", y: "bottom" },
+                                      rounding: 0,
+                                      shadow: 0,
+                                    },
+                                    audio: { mute: false, improve: false },
+                                    cursor: {
+                                      hideWhenIdle: false,
+                                      size: 16,
+                                      type: "pointer",
+                                    },
+                                    hotkeys: { show: false },
+                                  });
+
+                                if (renderedPath.status === "ok") {
+                                  const savePath = await save({
+                                    filters: [
+                                      {
+                                        name: "MP4 Video",
+                                        extensions: ["mp4"],
+                                      },
+                                    ],
+                                  });
+
+                                  if (savePath) {
+                                    await commands.copyFileToPath(
+                                      renderedPath.data,
+                                      savePath
+                                    );
+                                    setIsSaveSuccess(true);
+                                    setTimeout(
+                                      () => setIsSaveSuccess(false),
+                                      2000
+                                    );
+                                  }
+                                }
                               } catch (error) {
-                                setIsLoading(false);
+                                console.error(
+                                  "Failed to save recording:",
+                                  error
+                                );
                                 window.alert("Failed to save recording");
+                              } finally {
+                                setIsSaveLoading(false);
                               }
                             }}
+                            disabled={isCopyLoading()}
                           >
-                            Save
+                            {isSaveLoading()
+                              ? "Saving..."
+                              : isSaveSuccess()
+                              ? "Saved!"
+                              : "Save"}
                           </Button>
                         </div>
                       </div>
                       <div
                         style={{ color: "white", "font-size": "14px" }}
-                        class="absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center group-hover:opacity-0 pointer-events-none transition-all"
+                        class={cx(
+                          "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all group-hover:opacity-0",
+                          isLoading() && "opacity-0"
+                        )}
                       >
                         <p class="flex items-center">
                           <IconCapCamera class="w-[20px] h-[20px] mr-1" />
@@ -330,13 +346,18 @@ const TooltipIconButton = (
   props: ComponentProps<"button"> & {
     tooltipText: string;
     tooltipPlacement: string;
+    forceOpen?: boolean;
   }
 ) => {
+  const [isOpen, setIsOpen] = createSignal(false);
+
   return (
     <Tooltip
       placement={props.tooltipPlacement as "top" | "bottom" | "left" | "right"}
       openDelay={0}
       closeDelay={0}
+      open={props.forceOpen || isOpen()}
+      onOpenChange={setIsOpen}
       hoverableContent={false}
       floatingOptions={{
         offset: 10,

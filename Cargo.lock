@@ -916,6 +916,8 @@ dependencies = [
  "cap-ffmpeg",
  "cap-project",
  "ffmpeg-next",
+ "ffmpeg-sys-next",
+ "futures",
  "futures-intrusive",
  "lru",
  "nix 0.29.0",
@@ -931,6 +933,7 @@ name = "cap-utils"
 version = "0.1.0"
 dependencies = [
  "nix 0.29.0",
+ "winapi",
 ]
 
 [[package]]
@@ -1696,6 +1699,7 @@ dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
  "cpal",
+ "ffmpeg-next",
  "ffmpeg-sidecar 1.1.0 (git+https://github.com/CapSoftware/ffmpeg-sidecar?branch=main)",
  "futures",
  "futures-intrusive",

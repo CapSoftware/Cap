@@ -101,6 +101,14 @@ async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise
     else return { status: "error", error: e  as any };
 }
 },
+async copyFileToPath(src: string, dst: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("copy_file_to_path", { src, dst }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguration) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("copy_rendered_video_to_clipboard", { videoId, project }) };
@@ -109,15 +117,15 @@ async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguratio
     else return { status: "error", error: e  as any };
 }
 },
-async getVideoMetadata(videoId: string) : Promise<Result<[number, number], string>> {
+async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<Result<[number, number], string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("get_video_metadata", { videoId }) };
+    return { status: "ok", data: await TAURI_INVOKE("get_video_metadata", { videoId, videoType }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
 },
-async createEditorInstance(videoId: string) : Promise<Result<number, string>> {
+async createEditorInstance(videoId: string) : Promise<Result<SerializedEditorInstance, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("create_editor_instance", { videoId }) };
 } catch (e) {
@@ -145,11 +153,13 @@ async openInFinder(path: string) : Promise<void> {
 export const events = __makeEvents__<{
 editorStateChanged: EditorStateChanged,
 recordingOptionsChanged: RecordingOptionsChanged,
+refreshCapturesPanel: RefreshCapturesPanel,
 renderFrameEvent: RenderFrameEvent,
 showCapturesPanel: ShowCapturesPanel
 }>({
 editorStateChanged: "editor-state-changed",
 recordingOptionsChanged: "recording-options-changed",
+refreshCapturesPanel: "refresh-captures-panel",
 renderFrameEvent: "render-frame-event",
 showCapturesPanel: "show-captures-panel"
 })
@@ -181,9 +191,12 @@ export type JsonValue<T> = [T]
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
+export type RefreshCapturesPanel = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null }
 export type ShowCapturesPanel = null
+export type VideoType = "screen" | "output"
 
 /** tauri-specta globals **/
 

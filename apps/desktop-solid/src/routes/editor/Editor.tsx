@@ -1,15 +1,20 @@
 import { Button } from "@cap/ui-solid";
 import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
-import { Select as KSelect } from "@kobalte/core/select";
-import { Tabs as KTabs } from "@kobalte/core/tabs";
-import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import {
   RadioGroup as KRadioGroup,
   RadioGroup,
 } from "@kobalte/core/radio-group";
+import { Select as KSelect } from "@kobalte/core/select";
+import { Tabs as KTabs } from "@kobalte/core/tabs";
+import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
+import { createElementBounds } from "@solid-primitives/bounds";
+import { trackDeep } from "@solid-primitives/deep";
+import { throttle } from "@solid-primitives/scheduled";
+import { useSearchParams } from "@solidjs/router";
 import { cx } from "cva";
 import {
   type Component,
+  ErrorBoundary,
   For,
   type JSX,
   Match,
@@ -21,20 +26,18 @@ import {
   on,
   onMount,
 } from "solid-js";
-import { Dynamic } from "solid-js/web";
-import { throttle } from "@solid-primitives/scheduled";
-import { trackDeep } from "@solid-primitives/deep";
-import { useSearchParams } from "@solidjs/router";
 import { createStore, reconcile, unwrap } from "solid-js/store";
-import { createElementBounds } from "@solid-primitives/bounds";
+import { Dynamic } from "solid-js/web";
 
 import {
-  ASPECT_RATIOS,
-  DEFAULT_FROM,
-  DEFAULT_TO,
-  EditorContextProvider,
-  useEditorContext,
-} from "./context";
+  events,
+  type AspectRatio,
+  type BackgroundSource,
+  type CursorType,
+  type RenderProgress,
+  commands,
+} from "../../utils/tauri";
+import { EditorContextProvider, useEditorContext } from "./context";
 import {
   Dialog,
   DialogContent,
@@ -51,30 +54,34 @@ import {
   dropdownContainerClasses,
   topLeftAnimateClasses,
 } from "./ui";
-import {
-  commands,
-  events,
-  type RenderProgress,
-  type AspectRatio,
-  type BackgroundSource,
-  type CursorType,
-} from "../../utils/tauri";
 
 export function Editor() {
+  const [params] = useSearchParams<{ path: string }>();
+
+  // biome-ignore lint/style/noNonNullAssertion: it's fine i swear
+  const videoId = () => params.path?.split("/").at(-1)?.split(".")[0]!;
+
   return (
-    <EditorContextProvider>
-      <Inner />
-    </EditorContextProvider>
+    <Show when={videoId()} fallback="No video id available" keyed>
+      {(videoId) => (
+        <EditorInstanceContextProvider videoId={videoId}>
+          <Show when={useEditorInstanceContext().editorInstance()}>
+            {(editorInstance) => (
+              <EditorContextProvider editorInstance={editorInstance()}>
+                <Inner />
+              </EditorContextProvider>
+            )}
+          </Show>
+        </EditorInstanceContextProvider>
+      )}
+    </Show>
   );
 }
 
-const OUTPUT_SIZE = {
-  width: 1920,
-  height: 1080,
-};
-
 function Inner() {
-  const duration = 10;
+  const { setCanvasRef, state, videoId, editorInstance } = useEditorContext();
+
+  const duration = () => editorInstance.recordingDuration;
 
   const [playbackTime, setPlaybackTime] = createSignal<number>(0);
 
@@ -89,31 +96,6 @@ function Inner() {
 
   const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
   const timelineBounds = createElementBounds(timelineRef);
-
-  const { canvasRef, setCanvasRef, state, videoId } = useEditorContext();
-
-  onMount(() => {
-    commands.createEditorInstance(videoId()).then((result) => {
-      if (result.status !== "ok") return;
-      const ws = new WebSocket(`ws://localhost:${result.data}/frames-ws`);
-
-      ws.binaryType = "arraybuffer";
-
-      ws.onmessage = (event) => {
-        const ctx = canvasRef()?.getContext("2d");
-        if (!ctx) return;
-
-        const clamped = new Uint8ClampedArray(event.data);
-        const imageData = new ImageData(
-          clamped,
-          OUTPUT_SIZE.width,
-          OUTPUT_SIZE.height
-        );
-
-        ctx.putImageData(imageData, 0, 0);
-      };
-    });
-  });
 
   const renderFrame = throttle((time: number) => {
     events.renderFrameEvent.emit({
@@ -151,10 +133,10 @@ function Inner() {
   const togglePlayback = async () => {
     try {
       if (playing()) {
-        await commands.stopPlayback(videoId());
+        await commands.stopPlayback(videoId);
         setPlaying(false);
       } else {
-        await commands.startPlayback(videoId(), state);
+        await commands.startPlayback(videoId, state);
         setPlaying(true);
       }
     } catch (error) {
@@ -177,6 +159,7 @@ function Inner() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   });
+
   return (
     <div
       class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg leading-5"
@@ -209,14 +192,14 @@ function Inner() {
             <div class="flex flex-row items-center p-[0.75rem]">
               <div class="flex-1" />
               <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
-                <span>0:00.00</span>
+                <span>{formatTime(playbackTime())}</span>
                 <IconCapFrameFirst class="size-[1.2rem]" />
                 {!playing() ? (
                   <button
                     type="button"
                     onClick={() =>
                       commands
-                        .startPlayback(videoId(), state)
+                        .startPlayback(videoId, state)
                         .then(() => setPlaying(true))
                     }
                   >
@@ -227,7 +210,7 @@ function Inner() {
                     type="button"
                     onClick={() =>
                       commands
-                        .stopPlayback(videoId())
+                        .stopPlayback(videoId)
                         .then(() => setPlaying(false))
                     }
                   >
@@ -235,7 +218,7 @@ function Inner() {
                   </button>
                 )}
                 <IconCapFrameLast class="size-[1rem]" />
-                <span>8:32.16</span>
+                <span>{formatTime(duration())}</span>
               </div>
               <div class="flex-1 flex flex-row justify-end">
                 <EditorButton<typeof KToggleButton>
@@ -257,7 +240,7 @@ function Inner() {
                 class="w-px bg-black-transparent-20 absolute left-5 top-4 bottom-0 z-10 pointer-events-none"
                 style={{
                   transform: `translateX(${
-                    (time() / duration) * (timelineBounds.width ?? 0)
+                    (time() / duration()) * (timelineBounds.width ?? 0)
                   }px)`,
                 }}
               >
@@ -269,7 +252,7 @@ function Inner() {
             class="w-px bg-red-300 absolute left-5 top-4 bottom-0 z-10"
             style={{
               transform: `translateX(${
-                (playbackTime() / duration) * (timelineBounds.width ?? 0)
+                (playbackTime() / duration()) * (timelineBounds.width ?? 0)
               }px)`,
             }}
           >
@@ -283,13 +266,15 @@ function Inner() {
               onMouseDown={(e) => {
                 const { left, width } = e.currentTarget.getBoundingClientRect();
                 commands.setPlayheadPosition(
-                  videoId(),
-                  Math.round(30 * duration * ((e.clientX - left) / width))
+                  videoId,
+                  Math.round(30 * duration() * ((e.clientX - left) / width))
                 );
               }}
               onMouseMove={(e) => {
                 const { left, width } = e.currentTarget.getBoundingClientRect();
-                setPreviewTime(duration * ((e.clientX - left) / width));
+                setPreviewTime(
+                  Math.max(duration() * ((e.clientX - left) / width), 0)
+                );
               }}
               onMouseLeave={() => {
                 setPreviewTime(undefined);
@@ -299,7 +284,7 @@ function Inner() {
                 0:00
               </span>
               <span class="text-black-transparent-60 text-[0.625rem] ml-auto">
-                {Math.floor(duration / 60)}:{Math.round(duration % 60)}
+                {formatTime(duration())}
               </span>
             </div>
             <div class="bg-blue-300 w-[0.5rem]" />
@@ -311,9 +296,15 @@ function Inner() {
   );
 }
 
+function formatTime(secs: number) {
+  const minutes = Math.floor(secs / 60);
+  const seconds = Math.round(secs % 60);
+
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 function Header() {
   const [params] = useSearchParams<{ path: string }>();
-  const { state, canvasRef } = useEditorContext();
 
   return (
     <header
@@ -341,8 +332,14 @@ function Header() {
   );
 }
 
-import { save } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import {
+  EditorInstanceContextProvider,
+  OUTPUT_SIZE,
+  useEditorInstanceContext,
+} from "./editorInstanceContext";
+import { ASPECT_RATIOS } from "./projectConfig";
 
 function ExportButton() {
   const { videoId, state: project } = useEditorContext();
@@ -389,7 +386,7 @@ function ExportButton() {
             };
 
             return commands
-              .renderToFile(p, videoId(), project, progress)
+              .renderToFile(p, videoId, project, progress)
               .then(() => {
                 setState({ ...state, type: "finished", path: p });
               });
@@ -434,7 +431,7 @@ function ExportButton() {
                           100
                         )}%`,
                       }}
-                    ></div>
+                    />
                   </div>
                 </>
               )}
@@ -936,14 +933,14 @@ function AspectRatioSelect() {
           </KSelect.Icon>
         }
       >
-        <KSelect.Value>
-          {(state) => (
-            <>
-              {state.selectedOption() === "auto"
-                ? "Auto"
-                : ASPECT_RATIOS[state.selectedOption()].name}
-            </>
-          )}
+        <KSelect.Value<AspectRatio | "auto">>
+          {(state) => {
+            const text = () => {
+              const option = state.selectedOption();
+              option === "auto" ? "Auto" : ASPECT_RATIOS[option].name;
+            };
+            return <>{text()}</>;
+          }}
         </KSelect.Value>
       </EditorButton>
       <KSelect.Portal>

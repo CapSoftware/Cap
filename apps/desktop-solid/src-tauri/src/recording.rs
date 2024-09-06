@@ -2,7 +2,7 @@ use nokhwa::utils::CameraFormat;
 use serde::Serialize;
 use specta::Type;
 use std::time::Instant;
-use std::path::PathBuf;
+use std::{path::PathBuf, time::SystemTime};
 use tokio::sync::watch;
 
 use crate::{
@@ -34,6 +34,7 @@ pub struct InProgressRecording {
     pub camera: Option<FFmpegCaptureOutput<FFmpegRawVideoInput>>,
     #[serde(skip)]
     pub audio: Option<(FFmpegCaptureOutput<FFmpegRawAudioInput>, AudioCapturer)>,
+    // pub start: f64,
 }
 
 unsafe impl Send for InProgressRecording {}
@@ -54,6 +55,40 @@ impl InProgressRecording {
         if let Some(audio) = &mut self.audio {
             audio.1.stop().ok();
         }
+
+        use cap_project::*;
+        RecordingMeta {
+            project_path: self.recording_dir.clone(),
+            display: Display {
+                path: self
+                    .display
+                    .output_path
+                    .strip_prefix(&self.recording_dir)
+                    .unwrap()
+                    .to_owned(),
+                width: self.display.input.width,
+                height: self.display.input.height,
+            },
+            camera: self.camera.as_ref().map(|camera| Camera {
+                path: camera
+                    .output_path
+                    .strip_prefix(&self.recording_dir)
+                    .unwrap()
+                    .to_owned(),
+                width: camera.input.width,
+                height: camera.input.height,
+            }),
+            audio: self.audio.as_ref().map(|(audio, _)| Audio {
+                path: audio
+                    .output_path
+                    .strip_prefix(&self.recording_dir)
+                    .unwrap()
+                    .to_owned(),
+                sample_rate: audio.input.sample_rate,
+                channels: audio.input.channels,
+            }),
+        }
+        .save_for_project(&self.recording_dir);
     }
 }
 
@@ -61,6 +96,7 @@ pub struct FFmpegCaptureOutput<T> {
     pub input: FFmpegInput<T>,
     pub capture: NamedPipeCapture,
     pub output_path: PathBuf,
+    pub start_time: Instant,
 }
 
 pub async fn start(
@@ -70,8 +106,6 @@ pub async fn start(
     let content_dir = recording_dir.join("content");
 
     std::fs::create_dir_all(&content_dir).unwrap();
-
-    let now = Instant::now();
 
     let mut ffmpeg = FFmpeg::new();
 
@@ -106,10 +140,16 @@ pub async fn start(
             ..Default::default()
         });
 
+        let keyframe_interval_secs = 2;
+        let keyframe_interval = keyframe_interval_secs * display::FPS;
+        let keyframe_interval_str = keyframe_interval.to_string();
+
         ffmpeg
             .command
             .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
             .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+            .args(["-g", &keyframe_interval_str])
+            .args(["-keyint_min", &keyframe_interval_str])
             .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
             // .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
             // .args(["-movflags", "frag_keyframe+empty_moov"])
@@ -123,6 +163,7 @@ pub async fn start(
             input: ffmpeg_input,
             capture,
             output_path,
+            start_time,
         }
     };
 
@@ -131,11 +172,13 @@ pub async fn start(
 
         let output_path = content_dir.join("camera.mp4");
 
+        let fps = 30;
+
         let ffmpeg_input = ffmpeg.add_input(FFmpegRawVideoInput {
             input: capture.path().clone().into_os_string(),
             width: format.resolution().width(),
             height: format.resolution().height(),
-            fps: 30,
+            fps,
             // fps: format.frame_rate(),
             pix_fmt: match format.format() {
                 FrameFormat::YUYV => "uyvy422",
@@ -146,6 +189,10 @@ pub async fn start(
             // offset: start_time.duration_since(latest_start_time).as_secs_f64(),
         });
 
+        let keyframe_interval_secs = 2;
+        let keyframe_interval = keyframe_interval_secs * fps;
+        let keyframe_interval_str = keyframe_interval.to_string();
+
         ffmpeg
             .command
             .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
@@ -153,6 +200,8 @@ pub async fn start(
             .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
             .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
             .args(["-movflags", "frag_keyframe+empty_moov"])
+            .args(["-g", &keyframe_interval_str])
+            .args(["-keyint_min", &keyframe_interval_str])
             .args([
                 "-vf",
                 &format!(
@@ -166,6 +215,7 @@ pub async fn start(
             input: ffmpeg_input,
             capture,
             output_path,
+            start_time,
         })
     } else {
         None
@@ -201,6 +251,7 @@ pub async fn start(
                 input: ffmpeg_input,
                 capture,
                 output_path,
+                start_time,
             },
             capturer,
         ))
@@ -213,43 +264,6 @@ pub async fn start(
     println!("Starting writing to named pipes");
 
     start_writing_tx.send(true).unwrap();
-
-    use cap_project::*;
-    let meta = RecordingMeta {
-        display: Display {
-            path: display
-                .output_path
-                .strip_prefix(&recording_dir)
-                .unwrap()
-                .to_owned(),
-            width: display.input.width,
-            height: display.input.height,
-        },
-        camera: camera.as_ref().map(|camera| Camera {
-            path: camera
-                .output_path
-                .strip_prefix(&recording_dir)
-                .unwrap()
-                .to_owned(),
-            width: camera.input.width,
-            height: camera.input.height,
-        }),
-        audio: audio.as_ref().map(|(audio, _)| Audio {
-            path: audio
-                .output_path
-                .strip_prefix(&recording_dir)
-                .unwrap()
-                .to_owned(),
-            sample_rate: audio.input.sample_rate,
-            channels: audio.input.channels,
-        }),
-    };
-
-    std::fs::write(
-        recording_dir.join("recording-meta.json"),
-        serde_json::to_string(&meta).unwrap(),
-    )
-    .ok();
 
     InProgressRecording {
         recording_dir,

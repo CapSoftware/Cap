@@ -19,6 +19,8 @@ swift-rs = { version = "1.0.6", features = ["build"] }
 tauri = { version = "2.0.0-rc", features = [
 	"macos-private-api",
 	"protocol-asset",
+	"tray-icon",
+	"image-png",
 ] }
 tauri-plugin-shell = "2.0.0-rc"
 serde = { version = "1", features = ["derive"] }
@@ -28,18 +30,10 @@ tauri-specta = { version = "=2.0.0-rc.14", features = ["derive", "typescript"] }
 specta-typescript = "0.0.6"
 tauri-plugin-decorum = "1.0.0"
 swift-rs = "1.0.6"
-nokhwa = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1", features = [
-	"input-avfoundation",
-	"serialize",
-] }
-nokhwa-bindings-macos = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1" }
 nix = { version = "0.29.0", features = ["fs"] }
-tokio = { version = "1.39.2", features = ["macros", "process"] }
+tokio = { version = "1.39.2", features = ["macros", "process", "fs"] }
 uuid = { version = "1.10.0", features = ["v4"] }
 scap = { git = "https://github.com/CapSoftware/scap" }
-objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
-core-graphics = "0.24.0"
-core-foundation = "0.10.0"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
 wgpu = "22.1.0"
@@ -48,11 +42,12 @@ image = "0.25.2"
 tauri-plugin-fs = "2.0.0-rc.0"
 futures-intrusive = "0.5.0"
 anyhow = "1.0.86"
-cocoa = "0.26.0"
-objc = "0.2.7"
 mp4 = "0.14.0"
 futures = "0.3.30"
-
+nokhwa = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1", features = [
+	"input-avfoundation",
+	"serialize",
+] }
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
 cap-rendering = { path = "../../../crates/rendering" }
@@ -64,6 +59,15 @@ cpal = "0.15.3"
 indexmap = "2.5.0"
 num-traits = "0.2.19"
 tempfile = "3.12.0"
+ffmpeg-next = "7.0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.24.0"
+core-foundation = "0.10.0"
+nokhwa-bindings-macos = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1" }
+objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
+cocoa = "0.26.0"
+objc = "0.2.7"
 
 # Optimize for smaller binary size
 [profile.release]

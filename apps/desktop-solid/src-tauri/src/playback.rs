@@ -1,27 +1,26 @@
 use std::{sync::Arc, time::Duration};
 
 use cap_project::ProjectConfiguration;
-use cap_rendering::{ProjectUniforms, RenderVideoConstants, VideoDecoderActor};
+use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     SampleFormat, SizedSample,
 };
 use tokio::{sync::watch, time::Instant};
 
-use crate::{editor, AudioData};
+use crate::{editor, project_recordings::ProjectRecordings, AudioData};
 
 pub struct Playback {
     pub audio: Option<AudioData>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
-    pub screen_decoder: VideoDecoderActor,
-    pub camera_decoder: Option<VideoDecoderActor>,
+    pub decoders: RecordingDecoders,
     pub start_frame_number: u32,
     pub project: ProjectConfiguration,
+    pub recordings: ProjectRecordings,
 }
 
 const FPS: u32 = 30;
-const DURATION: u32 = 10;
 
 #[derive(Clone, Copy)]
 pub enum PlaybackEvent {
@@ -55,17 +54,20 @@ impl Playback {
             let mut frame_number = self.start_frame_number + 1;
             let uniforms = ProjectUniforms::new(&self.render_constants, &self.project);
 
+            let duration = self.recordings.duration();
+
             if let Some(audio) = self.audio.clone() {
                 AudioPlayback {
                     audio,
                     stop_rx: stop_rx.clone(),
                     start_frame_number: self.start_frame_number,
+                    duration,
                 }
                 .spawn();
             };
 
             loop {
-                if frame_number as f32 > (FPS * DURATION) as f32 {
+                if frame_number as f64 > FPS as f64 * duration {
                     break;
                 };
 
@@ -73,11 +75,8 @@ impl Playback {
                     _ = stop_rx.changed() => {
                        break;
                     },
-                    Some(screen_frame) = self.screen_decoder.get_frame(frame_number) => {
-                        let camera_frame = match &self.camera_decoder {
-                            Some(d) => d.get_frame(frame_number).await,
-                            None => None,
-                        };
+                    Some((screen_frame, camera_frame)) = self.decoders.get_frames(frame_number) => {
+                        tokio::time::sleep_until(start + (frame_number - self.start_frame_number) * Duration::from_secs_f32(1.0 / FPS as f32)).await;
 
                         self
                             .renderer
@@ -90,8 +89,6 @@ impl Playback {
                             .await;
 
                         event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
-
-                        tokio::time::sleep_until(start + Duration::from_secs_f32(1.0 / FPS as f32)).await;
 
                         frame_number += 1;
                     }
@@ -126,6 +123,7 @@ struct AudioPlayback {
     audio: AudioData,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
+    duration: f64,
 }
 
 impl AudioPlayback {
@@ -149,7 +147,7 @@ impl AudioPlayback {
             let data = audio.buffer.clone();
 
             let mut clock =
-                data.len() as f64 * (self.start_frame_number as f64 / (FPS * DURATION) as f64);
+                data.len() as f64 * self.start_frame_number as f64 / (FPS as f64 * self.duration);
 
             let resample_ratio = audio.sample_rate as f64 / config.sample_rate.0 as f64;
             dbg!(resample_ratio);

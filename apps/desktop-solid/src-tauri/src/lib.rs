@@ -5,20 +5,23 @@ mod editor;
 mod editor_instance;
 mod macos;
 mod playback;
+mod project_recordings;
 mod recording;
+mod tray;
 
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
-use cap_rendering::{RenderOptions, VideoDecoderActor};
+use cap_rendering::{RecordingDecoders, RenderOptions};
 use display::{list_capture_windows, Bounds, CaptureTarget};
-use editor_instance::{EditorInstance, EditorState};
+use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
     download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
     paths::sidecar_dir,
     version::ffmpeg_version,
 };
+use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
@@ -27,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::fs::File;
-use std::io::{BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
@@ -58,6 +61,13 @@ pub struct App {
     #[serde(skip)]
     current_recording: Option<InProgressRecording>,
     prev_recordings: Vec<PathBuf>,
+}
+
+#[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoType {
+    Screen,
+    Output,
 }
 
 const WINDOW_CAPTURE_OCCLUDER_LABEL: &str = "window-capture-occluder";
@@ -147,6 +157,10 @@ pub struct RecordingOptionsChanged;
 // dedicated event + command used as panel must be accessed on main thread
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
 pub struct ShowCapturesPanel;
+
+// dedicated event + command used as panel must be accessed on main thread
+#[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
+pub struct RefreshCapturesPanel;
 
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
@@ -260,28 +274,52 @@ async fn get_rendered_video(
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
-    let editor_instance = upsert_editor_instance(&app, video_id).await;
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let recording_dir =
+        recordings_path(&app).join(format!("{}.cap", video_id.trim_end_matches(".cap")));
+    let output_path = recording_dir.join("output/result.mp4");
 
-    render_to_file_impl(
-        editor_instance.render_constants.options.clone(),
-        project,
-        editor_instance.path.join("output/result.mp4"),
-        editor_instance.screen_decoder.clone(),
-        editor_instance.camera_decoder.clone(),
-        |_| {},
-        editor_instance.audio.clone(),
-    )
-    .await?;
+    if !output_path.exists() {
+        render_to_file_impl(
+            recording_dir,
+            editor_instance.render_constants.options.clone(),
+            project,
+            output_path.clone(),
+            editor_instance.decoders.clone(),
+            |_| {},
+            editor_instance.audio.clone(),
+        )
+        .await?;
+    }
 
-    Ok(editor_instance.path.clone())
+    Ok(output_path)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn copy_file_to_path(src: String, dst: String) -> Result<(), String> {
+    println!("Attempting to copy file from {} to {}", src, dst);
+    match tokio::fs::copy(&src, &dst).await {
+        Ok(bytes) => {
+            println!(
+                "Successfully copied {} bytes from {} to {}",
+                bytes, src, dst
+            );
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Failed to copy file from {} to {}: {}", src, dst, e);
+            Err(e.to_string())
+        }
+    }
 }
 
 async fn render_to_file_impl(
+    recording_dir: PathBuf,
     options: RenderOptions,
     project: ProjectConfiguration,
     output_path: PathBuf,
-    screen_recording_decoder: VideoDecoderActor,
-    camera_recording_decoder: Option<VideoDecoderActor>,
+    decoders: RecordingDecoders,
     on_progress: impl Fn(u32) + Send + 'static,
     audio: Option<AudioData>,
 ) -> Result<PathBuf, String> {
@@ -291,6 +329,7 @@ async fn render_to_file_impl(
     std::fs::create_dir_all(output_folder)
         .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
     let output_path_clone = output_path.clone();
+    let recording_dir_clone = recording_dir.clone();
 
     tokio::spawn(async move {
         println!("Starting FFmpeg output process...");
@@ -345,11 +384,17 @@ async fn render_to_file_impl(
         let mut ffmpeg_process = ffmpeg.start();
 
         let mut frame_count = 0;
+        let mut first_frame = None;
+
         loop {
             match rx_image_data.recv().await {
                 Some(frame) => {
                     // println!("Sending image data to FFmpeg");
                     on_progress(frame_count);
+
+                    if frame_count == 0 {
+                        first_frame = Some(frame.clone());
+                    }
 
                     frame_count += 1;
                     if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
@@ -369,16 +414,80 @@ async fn render_to_file_impl(
         if let Some((audio_path, _, _)) = audio_path {
             std::fs::remove_file(audio_path).ok();
         }
+
+        // Save the first frame as a screenshot
+        if let Some(frame_data) = first_frame {
+            let width = options.output_size.0;
+            let height = options.output_size.1;
+            let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+                ImageBuffer::from_raw(width, height, frame_data)
+                    .expect("Failed to create image from frame data");
+
+            // Convert RGBA to RGB
+            let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+                ImageBuffer::from_fn(width, height, |x, y| {
+                    let rgba = rgba_img.get_pixel(x, y);
+                    image::Rgb([rgba[0], rgba[1], rgba[2]])
+                });
+
+            let screenshot_path = recording_dir_clone.join("screenshots/display.jpg");
+            std::fs::create_dir_all(screenshot_path.parent().unwrap()).unwrap_or_else(|e| {
+                eprintln!("Failed to create screenshots directory: {:?}", e);
+            });
+
+            rgb_img.save(screenshot_path).unwrap_or_else(|e| {
+                eprintln!("Failed to save screenshot: {:?}", e);
+            });
+        } else {
+            eprintln!("No frames were processed, cannot save screenshot");
+        }
     });
 
-    cap_rendering::render_video_to_channel(
-        options,
-        project,
-        tx_image_data,
-        screen_recording_decoder,
-        camera_recording_decoder,
-    )
-    .await?;
+    println!("Rendering video to channel");
+
+    cap_rendering::render_video_to_channel(options, project, tx_image_data, decoders).await?;
+
+    println!("Copying file to {:?}", recording_dir);
+    let result_path = recording_dir.join("output/result.mp4");
+    // Function to check if the file is a valid MP4
+    fn is_valid_mp4(path: &std::path::Path) -> bool {
+        if let Ok(file) = std::fs::File::open(path) {
+            let file_size = match file.metadata() {
+                Ok(metadata) => metadata.len(),
+                Err(_) => return false,
+            };
+            let reader = std::io::BufReader::new(file);
+            Mp4Reader::read_header(reader, file_size).is_ok()
+        } else {
+            false
+        }
+    }
+
+    if output_path != result_path {
+        println!("Waiting for valid MP4 file at {:?}", output_path);
+        // Wait for the file to become a valid MP4
+        let mut attempts = 0;
+        while attempts < 10 {
+            // Wait for up to 60 seconds
+            if is_valid_mp4(&output_path) {
+                println!("Valid MP4 file detected after {} seconds", attempts);
+                match std::fs::copy(&output_path, &result_path) {
+                    Ok(bytes) => {
+                        println!("Successfully copied {} bytes to {:?}", bytes, result_path)
+                    }
+                    Err(e) => eprintln!("Failed to copy file: {:?}", e),
+                }
+                break;
+            }
+            println!("Attempt {}: File not yet valid, waiting...", attempts + 1);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            attempts += 1;
+        }
+
+        if attempts == 10 {
+            eprintln!("Timeout: Failed to detect a valid MP4 file after 60 seconds");
+        }
+    }
 
     Ok(output_path)
 }
@@ -430,12 +539,31 @@ async fn stop_playback(app: AppHandle, video_id: String) {
     }
 }
 
+#[derive(Serialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+struct SerializedEditorInstance {
+    frames_socket_url: String,
+    recording_duration: f64,
+    saved_project_config: Option<ProjectConfiguration>,
+}
+
 #[tauri::command]
 #[specta::specta]
-async fn create_editor_instance(app: AppHandle, video_id: String) -> Result<u16, String> {
+async fn create_editor_instance(
+    app: AppHandle,
+    video_id: String,
+) -> Result<SerializedEditorInstance, String> {
     let editor_instance = upsert_editor_instance(&app, video_id).await;
 
-    Ok(editor_instance.ws_port)
+    Ok(SerializedEditorInstance {
+        frames_socket_url: format!("ws://localhost:{}{FRAMES_WS_PATH}", editor_instance.ws_port),
+        recording_duration: editor_instance.recordings.duration(),
+        saved_project_config: std::fs::read_to_string(
+            &editor_instance.project_path.join("project-config.json"),
+        )
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok()),
+    })
 }
 
 #[tauri::command]
@@ -445,8 +573,6 @@ async fn copy_rendered_video_to_clipboard(
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<(), String> {
-    println!("Copying to clipboard");
-
     let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
         Ok(path) => {
             println!("Successfully retrieved rendered video path: {:?}", path);
@@ -459,6 +585,8 @@ async fn copy_rendered_video_to_clipboard(
     };
 
     let output_path_str = output_path.to_str().unwrap();
+
+    println!("Copying to clipboard: {:?}", output_path_str);
 
     #[cfg(target_os = "macos")]
     {
@@ -490,6 +618,7 @@ async fn copy_rendered_video_to_clipboard(
 async fn get_video_metadata(
     app: AppHandle,
     video_id: String,
+    video_type: Option<VideoType>,
     state: MutableState<'_, App>,
 ) -> Result<(f64, f64), String> {
     let video_id = if video_id.ends_with(".cap") {
@@ -508,18 +637,35 @@ async fn get_video_metadata(
     let screen_video_path = video_dir.join("content/display.mp4");
     let output_video_path = video_dir.join("output/result.mp4");
 
-    let video_path = if output_video_path.exists() {
-        println!("Using output video path: {:?}", output_video_path);
-        output_video_path
-    } else {
-        println!("Using screen video path: {:?}", screen_video_path);
-        if !screen_video_path.exists() {
-            return Err(format!(
-                "Screen video does not exist: {:?}",
-                screen_video_path
-            ));
+    let video_path = match video_type {
+        Some(VideoType::Screen) => {
+            println!("Using screen video path: {:?}", screen_video_path);
+            if !screen_video_path.exists() {
+                return Err(format!(
+                    "Screen video does not exist: {:?}",
+                    screen_video_path
+                ));
+            }
+            screen_video_path
         }
-        screen_video_path
+        Some(VideoType::Output) | None => {
+            if output_video_path.exists() {
+                println!("Using output video path: {:?}", output_video_path);
+                output_video_path
+            } else {
+                println!(
+                    "Output video not found, falling back to screen video path: {:?}",
+                    screen_video_path
+                );
+                if !screen_video_path.exists() {
+                    return Err(format!(
+                        "Screen video does not exist: {:?}",
+                        screen_video_path
+                    ));
+                }
+                screen_video_path
+            }
+        }
     };
 
     let file = File::open(&video_path).map_err(|e| {
@@ -547,12 +693,17 @@ async fn get_video_metadata(
         })?
         .len();
 
-    let mp4 = Mp4Reader::read_header(reader, file_size).map_err(|e| {
-        println!("Failed to read MP4 header: {}", e);
-        format!("Failed to read MP4 header: {}", e)
-    })?;
-
-    let duration = mp4.duration().as_secs_f64();
+    let duration = match Mp4Reader::read_header(reader, file_size) {
+        Ok(mp4) => mp4.duration().as_secs_f64(),
+        Err(e) => {
+            println!(
+                "Failed to read MP4 header: {}. Falling back to default duration.",
+                e
+            );
+            // Return a default duration (e.g., 0.0) or try to estimate it based on file size
+            0.0 // or some estimated value
+        }
+    };
 
     Ok((duration, size))
 }
@@ -774,21 +925,27 @@ async fn render_to_file(
     project: ProjectConfiguration,
     progress_channel: tauri::ipc::Channel<RenderProgress>,
 ) {
-    let (duration, _size) = get_video_metadata(app.clone(), video_id.clone(), app.state())
-        .await
-        .unwrap();
+    let (duration, _size) = get_video_metadata(
+        app.clone(),
+        video_id.clone(),
+        Some(VideoType::Screen),
+        app.state(),
+    )
+    .await
+    .unwrap();
 
     // 30 FPS (calculated for output video)
     let total_frames = (duration * 30.0).round() as u32;
 
-    let editor_instance = upsert_editor_instance(&app, video_id).await;
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let recording_dir = recordings_path(&app).join(format!("{}.cap", video_id));
 
     render_to_file_impl(
+        recording_dir,
         editor_instance.render_constants.options.clone(),
         project,
         output_path,
-        editor_instance.screen_decoder.clone(),
-        editor_instance.camera_decoder.clone(),
+        editor_instance.decoders.clone(),
         move |current_frame| {
             if current_frame == 0 {
                 progress_channel
@@ -803,6 +960,8 @@ async fn render_to_file(
     )
     .await
     .ok();
+
+    RefreshCapturesPanel.emit(&app).ok();
 }
 
 #[tauri::command]
@@ -856,6 +1015,7 @@ pub fn run() {
             get_current_recording,
             render_to_file,
             get_rendered_video,
+            copy_file_to_path,
             copy_rendered_video_to_clipboard,
             get_video_metadata,
             create_editor_instance,
@@ -867,6 +1027,7 @@ pub fn run() {
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
             ShowCapturesPanel,
+            RefreshCapturesPanel,
             RenderFrameEvent,
             EditorStateChanged
         ])
@@ -887,6 +1048,12 @@ pub fn run() {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
+
+            #[cfg(all(desktop))]
+            {
+                let handle = app.handle();
+                tray::create_tray(handle)?;
+            }
 
             if let Err(_error) = handle_ffmpeg_installation() {
                 println!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now");
