@@ -53,6 +53,12 @@ importers:
       '@solid-primitives/deep':
         specifier: ^0.2.9
         version: 0.2.9(solid-js@1.8.21)
+      '@solid-primitives/event-listener':
+        specifier: ^2.3.3
+        version: 2.3.3(solid-js@1.8.21)
+      '@solid-primitives/history':
+        specifier: ^0.1.5
+        version: 0.1.5(solid-js@1.8.21)
       '@solid-primitives/resize-observer':
         specifier: ^2.0.26
         version: 2.0.26(solid-js@1.8.21)
@@ -73,7 +79,7 @@ importers:
         version: 0.14.3(solid-js@1.8.21)
       '@solidjs/start':
         specifier: ^1.0.6
-        version: 1.0.6(@testing-library/jest-dom@6.4.5(@jest/globals@29.7.0)(@types/jest@29.5.12)(jest@29.7.0(@types/node@20.14.2)))(rollup@4.20.0)(solid-js@1.8.21)(vinxi@0.4.1(@planetscale/database@1.18.0)(@types/node@20.14.2)(ioredis@5.4.1)(terser@5.31.6))(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))
+        version: 1.0.6(@testing-library/jest-dom@6.4.5)(rollup@4.20.0)(solid-js@1.8.21)(vinxi@0.4.1(@planetscale/database@1.18.0)(@types/node@20.14.2)(ioredis@5.4.1)(terser@5.31.6))(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))
       '@tanstack/solid-query':
         specifier: ^5.51.21
         version: 5.51.21(solid-js@1.8.21)
@@ -4661,6 +4667,11 @@ packages:
 
   '@solid-primitives/event-listener@2.3.3':
     resolution: {integrity: sha512-DAJbl+F0wrFW2xmcV8dKMBhk9QLVLuBSW+TR4JmIfTaObxd13PuL7nqaXnaYKDWOYa6otB00qcCUIGbuIhSUgQ==}
+    peerDependencies:
+      solid-js: ^1.6.12
+
+  '@solid-primitives/history@0.1.5':
+    resolution: {integrity: sha512-Hu6WiA6KBdNIpczUMNOHiBNVnuMrNqOjW98M7X9GSIPoHG2W0A1CwGyNJa838QVWbnoXmo8QI1Za2bAc83/BEA==}
     peerDependencies:
       solid-js: ^1.6.12
 
@@ -16454,6 +16465,11 @@ snapshots:
       '@solid-primitives/utils': 6.2.3(solid-js@1.8.21)
       solid-js: 1.8.21
 
+  '@solid-primitives/history@0.1.5(solid-js@1.8.21)':
+    dependencies:
+      '@solid-primitives/utils': 6.2.3(solid-js@1.8.21)
+      solid-js: 1.8.21
+
   '@solid-primitives/keyed@1.2.2(solid-js@1.8.21)':
     dependencies:
       solid-js: 1.8.21
@@ -16535,7 +16551,7 @@ snapshots:
     dependencies:
       solid-js: 1.8.21
 
-  '@solidjs/start@1.0.6(@testing-library/jest-dom@6.4.5(@jest/globals@29.7.0)(@types/jest@29.5.12)(jest@29.7.0(@types/node@20.14.2)))(rollup@4.20.0)(solid-js@1.8.21)(vinxi@0.4.1(@planetscale/database@1.18.0)(@types/node@20.14.2)(ioredis@5.4.1)(terser@5.31.6))(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))':
+  '@solidjs/start@1.0.6(@testing-library/jest-dom@6.4.5)(rollup@4.20.0)(solid-js@1.8.21)(vinxi@0.4.1(@planetscale/database@1.18.0)(@types/node@20.14.2)(ioredis@5.4.1)(terser@5.31.6))(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))':
     dependencies:
       '@vinxi/plugin-directives': 0.4.1(vinxi@0.4.1(@planetscale/database@1.18.0)(@types/node@20.14.2)(ioredis@5.4.1)(terser@5.31.6))
       '@vinxi/server-components': 0.4.1(vinxi@0.4.1(@planetscale/database@1.18.0)(@types/node@20.14.2)(ioredis@5.4.1)(terser@5.31.6))

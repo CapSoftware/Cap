@@ -13,6 +13,7 @@ import {
   mergeProps,
   splitProps,
 } from "solid-js";
+import { useEditorContext } from "./context";
 
 export function Field(props: ParentProps<{ name: string; icon: JSX.Element }>) {
   return (
@@ -57,10 +58,24 @@ export function Toggle(props: ComponentProps<typeof KSwitch>) {
 }
 
 export function Slider(props: ComponentProps<typeof KSlider>) {
+  const { history } = useEditorContext();
+
+  // Pause history when slider is being dragged
+  let resumeHistory: (() => void) | null = null;
+
   return (
     <KSlider
       {...props}
       class={cx("relative px-1 bg-gray-200 rounded-full", props.class)}
+      onChange={(v) => {
+        if (!resumeHistory) resumeHistory = history.pause();
+        props.onChange?.(v);
+      }}
+      onChangeEnd={(e) => {
+        resumeHistory?.();
+        resumeHistory = null;
+        props.onChangeEnd?.(e);
+      }}
     >
       <KSlider.Track class="h-[0.5rem] relative mx-1">
         <KSlider.Fill class="absolute bg-blue-100 h-full rounded-full -ml-2" />
@@ -220,9 +235,9 @@ const editorButtonLeftIconStyles = cva("transition-colors duration-100", {
   variants: {
     variant: {
       primary:
-        "text-gray-400 group-hover:text-gray-500 ui-group-expanded:text-gray-500 group-disabled:text-gray-100",
+        "text-gray-400 group-hover:not-ui-group-disabled:text-gray-500 ui-group-expanded:text-gray-500",
       danger:
-        "text-gray-400 group-hover:text-gray-500 ui-group-expanded:text-gray-50 ui-group-pressed:text-gray-50 group-disabled:text-gray-100",
+        "text-gray-400 group-hover:text-gray-500 ui-group-expanded:text-gray-50 ui-group-pressed:text-gray-50",
     },
   },
   defaultVariants: { variant: "primary" },

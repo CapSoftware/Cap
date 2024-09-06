@@ -79,7 +79,8 @@ export function Editor() {
 }
 
 function Inner() {
-  const { setCanvasRef, state, videoId, editorInstance } = useEditorContext();
+  const { setCanvasRef, state, videoId, editorInstance, history } =
+    useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
 
@@ -176,8 +177,20 @@ function Inner() {
                 <PresetsDropdown />
               </div>
               <div class="flex flex-row place-items-center gap-2">
-                <EditorButton leftIcon={<IconCapUndo />}>Undo</EditorButton>
-                <EditorButton leftIcon={<IconCapRedo />}>Redo</EditorButton>
+                <EditorButton
+                  disabled={!history.canUndo()}
+                  leftIcon={<IconCapUndo />}
+                  onClick={() => history.undo()}
+                >
+                  Undo
+                </EditorButton>
+                <EditorButton
+                  disabled={!history.canRedo()}
+                  leftIcon={<IconCapRedo />}
+                  onClick={() => history.redo()}
+                >
+                  Redo
+                </EditorButton>
               </div>
             </div>
             <div class="bg-gray-100 flex items-center justify-center flex-1 flex-row object-contain p-4">
@@ -339,7 +352,11 @@ import {
   OUTPUT_SIZE,
   useEditorInstanceContext,
 } from "./editorInstanceContext";
-import { ASPECT_RATIOS } from "./projectConfig";
+import {
+  ASPECT_RATIOS,
+  DEFAULT_GRADIENT_FROM,
+  DEFAULT_GRADIENT_TO,
+} from "./projectConfig";
 
 function ExportButton() {
   const { videoId, state: project } = useEditorContext();
@@ -533,15 +550,15 @@ function SettingsSidebar() {
                   case "color": {
                     setState("background", "source", {
                       type: "color",
-                      value: DEFAULT_FROM,
+                      value: DEFAULT_GRADIENT_FROM,
                     });
                     return;
                   }
                   case "gradient": {
                     setState("background", "source", {
                       type: "gradient",
-                      from: DEFAULT_FROM,
-                      to: DEFAULT_TO,
+                      from: DEFAULT_GRADIENT_FROM,
+                      to: DEFAULT_GRADIENT_TO,
                     });
                     return;
                   }
