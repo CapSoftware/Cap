@@ -278,13 +278,7 @@ async fn get_rendered_video(
     let output_path = editor_instance.project_path.join("output/result.mp4");
 
     if !output_path.exists() {
-        render_to_file_impl(
-            &editor_instance,
-            project,
-            output_path.clone(),
-            |_| {},
-        )
-        .await?;
+        render_to_file_impl(&editor_instance, project, output_path.clone(), |_| {}).await?;
     }
 
     Ok(output_path)
@@ -971,6 +965,18 @@ async fn set_playhead_position(app: AppHandle, video_id: String, frame_number: u
 
 #[tauri::command]
 #[specta::specta]
+async fn save_project_config(app: AppHandle, video_id: String, config: ProjectConfiguration) {
+    let editor_instance = upsert_editor_instance(&app, video_id).await;
+
+    std::fs::write(
+        editor_instance.project_path.join("project-config.json"),
+        serde_json::to_string_pretty(&json!(config)).unwrap(),
+    )
+    .unwrap();
+}
+
+#[tauri::command]
+#[specta::specta]
 fn open_in_finder(path: PathBuf) {
     Command::new("open")
         .arg("-R")
@@ -1015,7 +1021,8 @@ pub fn run() {
             start_playback,
             stop_playback,
             set_playhead_position,
-            open_in_finder
+            open_in_finder,
+            save_project_config
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1103,11 +1110,13 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+type EditorInstancesState = Arc<Mutex<HashMap<String, Arc<EditorInstance>>>>;
+
 pub async fn remove_editor_instance(
     app: &AppHandle,
     video_id: String,
 ) -> Option<Arc<EditorInstance>> {
-    let map = match app.try_state::<Arc<Mutex<HashMap<String, Arc<EditorInstance>>>>>() {
+    let map = match app.try_state::<EditorInstancesState>() {
         Some(s) => (*s).clone(),
         None => return None,
     };
@@ -1118,7 +1127,7 @@ pub async fn remove_editor_instance(
 }
 
 pub async fn upsert_editor_instance(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {
-    let map = match app.try_state::<Arc<Mutex<HashMap<String, Arc<EditorInstance>>>>>() {
+    let map = match app.try_state::<EditorInstancesState>() {
         Some(s) => (*s).clone(),
         None => {
             let map = Arc::new(Mutex::new(HashMap::new()));
