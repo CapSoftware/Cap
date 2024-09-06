@@ -9,22 +9,16 @@ use specta::Type;
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Display {
     pub path: PathBuf,
-    pub width: u32,
-    pub height: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Camera {
     pub path: PathBuf,
-    pub width: u32,
-    pub height: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Audio {
     pub path: PathBuf,
-    pub channels: u16,
-    pub sample_rate: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

@@ -66,8 +66,6 @@ impl InProgressRecording {
                     .strip_prefix(&self.recording_dir)
                     .unwrap()
                     .to_owned(),
-                width: self.display.input.width,
-                height: self.display.input.height,
             },
             camera: self.camera.as_ref().map(|camera| Camera {
                 path: camera
@@ -75,8 +73,6 @@ impl InProgressRecording {
                     .strip_prefix(&self.recording_dir)
                     .unwrap()
                     .to_owned(),
-                width: camera.input.width,
-                height: camera.input.height,
             }),
             audio: self.audio.as_ref().map(|(audio, _)| Audio {
                 path: audio
@@ -84,8 +80,6 @@ impl InProgressRecording {
                     .strip_prefix(&self.recording_dir)
                     .unwrap()
                     .to_owned(),
-                sample_rate: audio.input.sample_rate,
-                channels: audio.input.channels,
             }),
         }
         .save_for_project(&self.recording_dir);

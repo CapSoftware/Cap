@@ -8,7 +8,6 @@ use scap::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tokio::{
-    io::AsyncWriteExt,
     sync::{oneshot, watch},
 };
 

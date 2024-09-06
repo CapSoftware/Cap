@@ -61,8 +61,8 @@ impl EditorInstance {
         const OUTPUT_SIZE: (u32, u32) = (1920, 1080);
 
         let render_options = RenderOptions {
-            screen_size: (meta.display.width, meta.display.height),
-            camera_size: meta.camera.as_ref().map(|c| (c.width, c.height)), //.unwrap_or((0, 0)),
+            screen_size: (recordings.display.width, recordings.display.height),
+            camera_size: recordings.camera.as_ref().map(|c| (c.width, c.height)),
             output_size: OUTPUT_SIZE,
         };
 
@@ -71,15 +71,16 @@ impl EditorInstance {
             .camera
             .map(|camera| AsyncVideoDecoder::spawn(project_path.join(camera.path).clone()));
 
-        let audio = meta.audio.map(|audio| {
-            let audio_path = project_path.join(audio.path);
+        let audio = meta.audio.zip(recordings.audio).map(|(meta, recording)| {
+            let audio_path = project_path.join(meta.path);
 
+            // TODO: Use ffmpeg crate instead of command line
             let stdout = Command::new("ffmpeg")
                 .arg("-i")
                 .arg(audio_path)
                 .args(["-f", "f64le", "-acodec", "pcm_f64le"])
-                .args(["-ar", &audio.sample_rate.to_string()])
-                .args(["-ac", &audio.channels.to_string(), "-"])
+                .args(["-ar", &recording.sample_rate.to_string()])
+                .args(["-ac", &recording.channels.to_string(), "-"])
                 .output()
                 .unwrap()
                 .stdout;
@@ -93,7 +94,7 @@ impl EditorInstance {
 
             AudioData {
                 buffer: Arc::new(buffer),
-                sample_rate: audio.sample_rate,
+                sample_rate: recording.sample_rate,
             }
         });
 

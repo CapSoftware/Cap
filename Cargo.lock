@@ -1685,7 +1685,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "desktop-solid"
+name = "desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",

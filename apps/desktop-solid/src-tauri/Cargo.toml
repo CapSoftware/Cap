@@ -1,5 +1,5 @@
 [package]
-name = "desktop-solid"
+name = "desktop"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]

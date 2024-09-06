@@ -1,14 +1,15 @@
-import { createQuery } from "@tanstack/solid-query";
+import { createMutation, createQuery } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
   type Accessor,
   type ComponentProps,
   For,
+  Match,
   Show,
+  Switch,
   createEffect,
   createSignal,
-  on,
   onCleanup,
 } from "solid-js";
 import createPresence from "solid-presence";
@@ -17,6 +18,7 @@ import Tooltip from "@corvu/tooltip";
 import { Button } from "@cap/ui-solid";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { save } from "@tauri-apps/plugin-dialog";
+
 import { commands, events } from "../utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 
@@ -59,10 +61,49 @@ export default function () {
             {(recording, i) => {
               const [ref, setRef] = createSignal<HTMLElement | null>(null);
               const [exiting, setExiting] = createSignal(false);
-              const [isCopyLoading, setIsCopyLoading] = createSignal(false);
-              const [isCopySuccess, setIsCopySuccess] = createSignal(false);
-              const [isSaveLoading, setIsSaveLoading] = createSignal(false);
-              const [isSaveSuccess, setIsSaveSuccess] = createSignal(false);
+
+              const copyVideo = createMutation(() => ({
+                mutationFn: async () => {
+                  try {
+                    await commands.copyRenderedVideoToClipboard(
+                      videoId,
+                      DEFAULT_PROJECT_CONFIG
+                    );
+                  } catch (error) {
+                    console.error("Failed to copy to clipboard", error);
+                    window.alert("Failed to copy to clipboard");
+                  } finally {
+                  }
+                },
+              }));
+
+              const saveVideo = createMutation(() => ({
+                mutationFn: async () => {
+                  try {
+                    const renderedPath = await commands.getRenderedVideo(
+                      videoId,
+                      DEFAULT_PROJECT_CONFIG
+                    );
+
+                    if (renderedPath.status !== "ok")
+                      throw new Error("Failed to get rendered video path");
+
+                    const savePath = await save({
+                      filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
+                    });
+
+                    if (!savePath) return false;
+
+                    await commands.copyFileToPath(renderedPath.data, savePath);
+                  } catch (error) {
+                    console.error("Failed to save recording:", error);
+                    window.alert("Failed to save recording");
+                  }
+
+                  return true;
+                },
+              }));
+
               const [metadata, setMetadata] = createSignal({
                 duration: 0,
                 size: 0,
@@ -75,7 +116,8 @@ export default function () {
                 element: ref,
               });
 
-              const isLoading = () => isCopyLoading() || isSaveLoading();
+              const isLoading = () =>
+                copyVideo.isPending || saveVideo.isPending;
 
               const videoId = recording.split("/").pop()?.split(".")[0]!;
 
@@ -180,38 +222,31 @@ export default function () {
                         <TooltipIconButton
                           class="absolute right-3 top-3 z-20"
                           tooltipText={
-                            isCopyLoading()
+                            copyVideo.isPending
                               ? "Copying to Clipboard"
                               : "Copy to Clipboard"
                           }
-                          forceOpen={isCopyLoading()}
+                          forceOpen={copyVideo.isPending}
                           tooltipPlacement="left"
-                          onClick={async () => {
-                            setIsCopyLoading(true);
-                            try {
-                              await commands.copyRenderedVideoToClipboard(
-                                videoId,
-                                DEFAULT_PROJECT_CONFIG
-                              );
-                              setIsCopySuccess(true);
-                              setTimeout(() => setIsCopySuccess(false), 2000);
-                            } catch (error) {
-                              window.alert("Failed to copy to clipboard");
-                            } finally {
-                              setIsCopyLoading(false);
-                            }
-                          }}
-                          disabled={isSaveLoading()}
+                          onClick={() => copyVideo.mutate()}
+                          disabled={saveVideo.isPending}
                         >
-                          <Show when={isCopyLoading()}>
-                            <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
-                          </Show>
-                          <Show when={isCopySuccess()}>
-                            <IconLucideCheck class="size-[1rem]" />
-                          </Show>
-                          <Show when={!isCopyLoading() && !isCopySuccess()}>
-                            <IconCapCopy class="size-[1rem]" />
-                          </Show>
+                          <Switch
+                            fallback={<IconCapCopy class="size-[1rem]" />}
+                          >
+                            <Match when={copyVideo.isPending}>
+                              <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+                            </Match>
+                            <Match when={copyVideo.isSuccess}>
+                              {(_) => {
+                                setTimeout(() => {
+                                  if (!copyVideo.isPending) copyVideo.reset();
+                                }, 2000);
+
+                                return <IconLucideCheck class="size-[1rem]" />;
+                              }}
+                            </Match>
+                          </Switch>
                         </TooltipIconButton>
                         <TooltipIconButton
                           class="absolute right-3 bottom-3"
@@ -227,77 +262,27 @@ export default function () {
                           <Button
                             variant="secondary"
                             size="sm"
-                            onClick={async () => {
-                              setIsSaveLoading(true);
-                              try {
-                                const renderedPath =
-                                  await commands.getRenderedVideo(videoId, {
-                                    aspectRatio: "classic",
-                                    background: {
-                                      source: {
-                                        type: "color",
-                                        value: [0, 0, 0],
-                                      },
-                                      blur: 0,
-                                      padding: 0,
-                                      rounding: 0,
-                                      inset: 0,
-                                    },
-                                    camera: {
-                                      hide: false,
-                                      mirror: false,
-                                      position: { x: "left", y: "bottom" },
-                                      rounding: 0,
-                                      shadow: 0,
-                                    },
-                                    audio: { mute: false, improve: false },
-                                    cursor: {
-                                      hideWhenIdle: false,
-                                      size: 16,
-                                      type: "pointer",
-                                    },
-                                    hotkeys: { show: false },
-                                  });
-
-                                if (renderedPath.status === "ok") {
-                                  const savePath = await save({
-                                    filters: [
-                                      {
-                                        name: "MP4 Video",
-                                        extensions: ["mp4"],
-                                      },
-                                    ],
-                                  });
-
-                                  if (savePath) {
-                                    await commands.copyFileToPath(
-                                      renderedPath.data,
-                                      savePath
-                                    );
-                                    setIsSaveSuccess(true);
-                                    setTimeout(
-                                      () => setIsSaveSuccess(false),
-                                      2000
-                                    );
-                                  }
-                                }
-                              } catch (error) {
-                                console.error(
-                                  "Failed to save recording:",
-                                  error
-                                );
-                                window.alert("Failed to save recording");
-                              } finally {
-                                setIsSaveLoading(false);
-                              }
-                            }}
-                            disabled={isCopyLoading()}
+                            onClick={() => saveVideo.mutate()}
+                            disabled={copyVideo.isPending}
                           >
-                            {isSaveLoading()
-                              ? "Saving..."
-                              : isSaveSuccess()
-                              ? "Saved!"
-                              : "Save"}
+                            <Switch fallback="Save">
+                              <Match when={saveVideo.isPending}>
+                                Saving...
+                              </Match>
+                              <Match
+                                when={
+                                  saveVideo.isSuccess && saveVideo.data === true
+                                }
+                              >
+                                {(_) => {
+                                  setTimeout(() => {
+                                    if (!saveVideo.isPending) saveVideo.reset();
+                                  }, 2000);
+
+                                  return "Saved!";
+                                }}
+                              </Match>
+                            </Switch>
                           </Button>
                         </div>
                       </div>

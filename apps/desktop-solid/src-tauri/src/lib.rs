@@ -275,19 +275,14 @@ async fn get_rendered_video(
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-    let recording_dir =
-        recordings_path(&app).join(format!("{}.cap", video_id.trim_end_matches(".cap")));
-    let output_path = recording_dir.join("output/result.mp4");
+    let output_path = editor_instance.project_path.join("output/result.mp4");
 
     if !output_path.exists() {
         render_to_file_impl(
-            recording_dir,
-            editor_instance.render_constants.options.clone(),
+            &editor_instance,
             project,
             output_path.clone(),
-            editor_instance.decoders.clone(),
             |_| {},
-            editor_instance.audio.clone(),
         )
         .await?;
     }
@@ -315,14 +310,16 @@ async fn copy_file_to_path(src: String, dst: String) -> Result<(), String> {
 }
 
 async fn render_to_file_impl(
-    recording_dir: PathBuf,
-    options: RenderOptions,
+    editor_instance: &Arc<EditorInstance>,
     project: ProjectConfiguration,
     output_path: PathBuf,
-    decoders: RecordingDecoders,
     on_progress: impl Fn(u32) + Send + 'static,
-    audio: Option<AudioData>,
 ) -> Result<PathBuf, String> {
+    let recording_dir = &editor_instance.project_path;
+    let audio = editor_instance.audio.clone();
+    let decoders = editor_instance.decoders.clone();
+    let options = editor_instance.render_constants.options.clone();
+
     let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
     let output_folder = output_path.parent().unwrap();
@@ -938,14 +935,11 @@ async fn render_to_file(
     let total_frames = (duration * 30.0).round() as u32;
 
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-    let recording_dir = recordings_path(&app).join(format!("{}.cap", video_id));
 
     render_to_file_impl(
-        recording_dir,
-        editor_instance.render_constants.options.clone(),
+        &editor_instance,
         project,
         output_path,
-        editor_instance.decoders.clone(),
         move |current_frame| {
             if current_frame == 0 {
                 progress_channel
@@ -956,7 +950,6 @@ async fn render_to_file(
                 .send(RenderProgress::FrameRendered { current_frame })
                 .ok();
         },
-        editor_instance.audio.clone(),
     )
     .await
     .ok();
@@ -1169,6 +1162,7 @@ async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<E
     instance
 }
 
+// use EditorInstance.project_path instead of this
 fn recordings_path(app: &AppHandle) -> PathBuf {
     app.path().app_data_dir().unwrap().join("recordings")
 }

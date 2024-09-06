@@ -31,29 +31,6 @@ pub struct WebcamStyle {
     pub shadow_offset: (f32, f32),
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, Pod, Zeroable)]
-#[repr(C)]
-pub struct CompositeParams {
-    // static inputs
-    background_start: [f32; 4],
-    background_end: [f32; 4],
-
-    shadow_color: [f32; 4],
-    shadow_offset: [f32; 2],
-
-    webcam_position: [f32; 2],
-    // webcam_size: [f32; 2],
-    screen_padding: f32,
-    screen_rounding: f32,
-    camera_rounding: f32,
-
-    _padding1: f32,
-
-    shadow_blur: f32,
-
-    background_angle: f32,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Copy)]
 pub enum Background {
     Color([f32; 4]),
@@ -107,12 +84,10 @@ impl RecordingDecoders {
         &self,
         frame_number: u32,
     ) -> Option<(DecodedFrame, Option<DecodedFrame>)> {
-        println!("getting frames");
         let (screen_frame, camera_frame) = tokio::join!(
             self.screen.get_frame(frame_number),
             OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
         );
-        println!("got frames");
 
         screen_frame.map(|f| (f, camera_frame.flatten()))
     }
