@@ -9,7 +9,9 @@ import {
   Show,
   Switch,
   createEffect,
+  createResource,
   createSignal,
+  on,
   onCleanup,
 } from "solid-js";
 import createPresence from "solid-presence";
@@ -26,68 +28,30 @@ import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 
 type RecordingEntry = {
   path: string;
-  hidden: boolean;
 };
 
 export default function () {
   const [recordings, setRecordings] = makePersisted(
     createStore<RecordingEntry[]>([]),
-    {
-      name: "recordings-store",
-      storage: localStorage,
-    }
+    { name: "recordings-store" }
   );
 
-  const addRecording = (path: string) => {
-    setRecordings(
-      produce((state) => {
-        if (!state.some((entry) => entry.path === path)) {
-          state.push({ path: path, hidden: false });
-        }
-      })
-    );
-  };
-  const toggleHidden = (path: string) => {
-    setRecordings(
-      produce((state) => {
-        const entry = state.find((entry) => entry.path === path);
-        if (entry) {
-          entry.hidden = !entry.hidden;
-        }
-      })
-    );
-  };
-
   // Listen for new recordings
-  events.newRecordingAdded.listen((event: NewRecordingAdded) => {
-    addRecording(event.payload.path);
+  events.newRecordingAdded.listen((event) => {
+    const path = event.payload.path;
+    setRecordings(
+      produce((state) => {
+        if (state.some((entry) => entry.path === path)) return;
+        state.push({ path });
+      })
+    );
   });
-
-  // Initialize recordings from the backend
-  createEffect(() => {
-    commands
-      .getPrevRecordings()
-      .then((result: { status: string; data: string[] }) => {
-        if (result.status === "ok") {
-          result.data.forEach((path) => addRecording(path));
-        }
-      });
-  });
-
-  events.showCapturesPanel.listen(() => {
-    location.reload();
-  });
-
-  const [removedCount, setRemovedCount] = createSignal(0);
-  const [hasClosedWindow, setHasClosedWindow] = createSignal(false);
-
-  const visibleRecordings = () => recordings.slice().reverse();
 
   return (
     <div class="w-screen h-[100vh] bg-transparent relative">
       <div class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto">
-        <div class="pt-12 w-full flex flex-col-reverse gap-4">
-          <For each={visibleRecordings()}>
+        <div class="pt-12 w-full flex flex-col gap-4">
+          <For each={recordings}>
             {(recording, i) => {
               const [ref, setRef] = createSignal<HTMLElement | null>(null);
               const [exiting, setExiting] = createSignal(false);
@@ -134,9 +98,23 @@ export default function () {
                 },
               }));
 
-              const [metadata, setMetadata] = createSignal({
-                duration: 0,
-                size: 0,
+              const [metadata] = createResource(async () => {
+                const result = await commands.getVideoMetadata(
+                  recording.path,
+                  null
+                );
+
+                if (result.status !== "ok") {
+                  console.error(`Failed to get metadata: ${result.status}`);
+                  return;
+                }
+
+                const [duration, size] = result.data;
+                console.log(
+                  `Metadata for ${recording.path}: duration=${duration}, size=${size}`
+                );
+
+                return { duration, size };
               });
 
               const [imageExists, setImageExists] = createSignal(true);
@@ -146,200 +124,187 @@ export default function () {
                 element: ref,
               });
 
+              createEffect(
+                on(present, (present) => {
+                  if (present) return;
+
+                  setRecordings(
+                    produce((state) => {
+                      state.splice(i(), 1);
+                    })
+                  );
+
+                  if (recordings.length === 0)
+                    commands.closePreviousRecordingsWindow();
+                })
+              );
+
               const isLoading = () =>
                 copyVideo.isPending || saveVideo.isPending;
 
               const videoId = recording.path.split("/").pop()?.split(".")[0]!;
 
-              createEffect(() => {
-                commands
-                  .getVideoMetadata(recording.path, null)
-                  .then(
-                    (result: { status: string; data: [number, number] }) => {
-                      if (result.status === "ok") {
-                        const [duration, size] = result.data;
-                        console.log(
-                          `Metadata for ${recording.path}: duration=${duration}, size=${size}`
-                        );
-                        setMetadata({
-                          duration,
-                          size,
-                        });
-                      } else {
-                        console.error(
-                          `Failed to get metadata: ${result.status}`
-                        );
-                      }
-                    }
-                  );
-              });
-
               createFakeWindowBounds(ref, () => recording.path);
 
               return (
-                <Show when={present()}>
-                  <div
-                    ref={setRef}
-                    style={{
-                      "border-color": "rgba(255, 255, 255, 0.2)",
-                    }}
-                    class={cx(
-                      "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500 rounded-[12px] overflow-hidden shadow border-[1px] group transition-all relative",
-                      "transition-[transform,opacity] duration-300",
-                      exiting()
-                        ? "animate-out slide-out-to-left-32 fade-out"
-                        : "animate-in fade-in"
-                    )}
-                  >
+                <Show when={present() && metadata()}>
+                  {(metadata) => (
                     <div
+                      ref={setRef}
+                      style={{
+                        "border-color": "rgba(255, 255, 255, 0.2)",
+                      }}
                       class={cx(
-                        "w-full h-full flex relative bg-transparent rounded-[8px] border-[1px] overflow-hidden z-10",
-                        "transition-all",
-                        isLoading() && "backdrop-blur bg-gray-500/80"
+                        "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500 rounded-[12px] overflow-hidden shadow border-[1px] group transition-all relative",
+                        "transition-[transform,opacity] duration-300",
+                        exiting()
+                          ? "animate-out slide-out-to-left-32 fade-out"
+                          : "animate-in fade-in"
                       )}
-                      style={{ "border-color": "rgba(255, 255, 255, 0.2)" }}
                     >
-                      <Show
-                        when={imageExists()}
-                        fallback={
-                          <div class="pointer-events-none w-[105%] h-[105%] absolute inset-0 -z-10 bg-gray-400" />
-                        }
-                      >
-                        <img
-                          class="pointer-events-none w-[105%] h-[105%] object-cover absolute inset-0 -z-10"
-                          alt="screenshot"
-                          src={`${convertFileSrc(
-                            `${recording.path}/screenshots/display.jpg`
-                          )}?t=${Date.now()}`}
-                          onError={() => setImageExists(false)}
-                        />
-                      </Show>
                       <div
                         class={cx(
-                          "w-full h-full absolute inset-0 transition-all",
-                          isLoading() || "opacity-0 group-hover:opacity-100",
-                          "backdrop-blur bg-gray-500/80 text-white p-2"
+                          "w-full h-full flex relative bg-transparent rounded-[8px] border-[1px] overflow-hidden z-10",
+                          "transition-all",
+                          isLoading() && "backdrop-blur bg-gray-500/80"
                         )}
+                        style={{ "border-color": "rgba(255, 255, 255, 0.2)" }}
                       >
-                        <TooltipIconButton
-                          class="absolute left-3 top-3 z-20"
-                          tooltipText="Close"
-                          tooltipPlacement="right"
-                          onClick={() => {
-                            setExiting(true);
-                            setRemovedCount(removedCount() + 1);
-                            if (
-                              removedCount() === visibleRecordings()?.length &&
-                              !hasClosedWindow()
-                            ) {
-                              commands.closePreviousRecordingsWindow();
-                              setHasClosedWindow(true);
-                            }
-                          }}
-                          disabled={hasClosedWindow()}
-                        >
-                          <IconCapCircleX class="size-[1rem]" />
-                        </TooltipIconButton>
-                        <TooltipIconButton
-                          class="absolute left-3 bottom-3 z-20"
-                          tooltipText="Edit"
-                          tooltipPlacement="right"
-                          onClick={() => {
-                            new WebviewWindow(`editor-${videoId}`, {
-                              width: 1150,
-                              height: 800,
-                              title: "Cap Editor",
-                              url: `/editor?path=${recording.path}`,
-                            });
-                          }}
-                        >
-                          <IconCapEditor class="size-[1rem]" />
-                        </TooltipIconButton>
-                        <TooltipIconButton
-                          class="absolute right-3 top-3 z-20"
-                          tooltipText={
-                            copyVideo.isPending
-                              ? "Copying to Clipboard"
-                              : "Copy to Clipboard"
+                        <Show
+                          when={imageExists()}
+                          fallback={
+                            <div class="pointer-events-none w-[105%] h-[105%] absolute inset-0 -z-10 bg-gray-400" />
                           }
-                          forceOpen={copyVideo.isPending}
-                          tooltipPlacement="left"
-                          onClick={() => copyVideo.mutate()}
-                          disabled={saveVideo.isPending}
                         >
-                          <Switch
-                            fallback={<IconCapCopy class="size-[1rem]" />}
-                          >
-                            <Match when={copyVideo.isPending}>
-                              <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
-                            </Match>
-                            <Match when={copyVideo.isSuccess}>
-                              {(_) => {
-                                setTimeout(() => {
-                                  if (!copyVideo.isPending) copyVideo.reset();
-                                }, 2000);
-
-                                return <IconLucideCheck class="size-[1rem]" />;
-                              }}
-                            </Match>
-                          </Switch>
-                        </TooltipIconButton>
-                        <TooltipIconButton
-                          class="absolute right-3 bottom-3"
-                          tooltipText="Create Shareable Link"
-                          tooltipPlacement="left"
-                          onClick={async () => {
-                            // Implement shareable link functionality here
-                          }}
+                          <img
+                            class="pointer-events-none w-[105%] h-[105%] object-cover absolute inset-0 -z-10"
+                            alt="screenshot"
+                            src={`${convertFileSrc(
+                              `${recording.path}/screenshots/display.jpg`
+                            )}?t=${Date.now()}`}
+                            onError={() => setImageExists(false)}
+                          />
+                        </Show>
+                        <div
+                          class={cx(
+                            "w-full h-full absolute inset-0 transition-all",
+                            isLoading() || "opacity-0 group-hover:opacity-100",
+                            "backdrop-blur bg-gray-500/80 text-white p-2"
+                          )}
                         >
-                          <IconCapUpload class="size-[1rem]" />
-                        </TooltipIconButton>
-                        <div class="absolute inset-0 flex items-center justify-center">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => saveVideo.mutate()}
-                            disabled={copyVideo.isPending}
+                          <TooltipIconButton
+                            class="absolute left-3 top-3 z-20"
+                            tooltipText="Close"
+                            tooltipPlacement="right"
+                            onClick={() => setExiting(true)}
                           >
-                            <Switch fallback="Save">
-                              <Match when={saveVideo.isPending}>
-                                Saving...
+                            <IconCapCircleX class="size-[1rem]" />
+                          </TooltipIconButton>
+                          <TooltipIconButton
+                            class="absolute left-3 bottom-3 z-20"
+                            tooltipText="Edit"
+                            tooltipPlacement="right"
+                            onClick={() => {
+                              new WebviewWindow(`editor-${videoId}`, {
+                                width: 1150,
+                                height: 800,
+                                title: "Cap Editor",
+                                url: `/editor?path=${recording.path}`,
+                              });
+                            }}
+                          >
+                            <IconCapEditor class="size-[1rem]" />
+                          </TooltipIconButton>
+                          <TooltipIconButton
+                            class="absolute right-3 top-3 z-20"
+                            tooltipText={
+                              copyVideo.isPending
+                                ? "Copying to Clipboard"
+                                : "Copy to Clipboard"
+                            }
+                            forceOpen={copyVideo.isPending}
+                            tooltipPlacement="left"
+                            onClick={() => copyVideo.mutate()}
+                            disabled={saveVideo.isPending}
+                          >
+                            <Switch
+                              fallback={<IconCapCopy class="size-[1rem]" />}
+                            >
+                              <Match when={copyVideo.isPending}>
+                                <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
                               </Match>
-                              <Match
-                                when={
-                                  saveVideo.isSuccess && saveVideo.data === true
-                                }
-                              >
+                              <Match when={copyVideo.isSuccess}>
                                 {(_) => {
                                   setTimeout(() => {
-                                    if (!saveVideo.isPending) saveVideo.reset();
+                                    if (!copyVideo.isPending) copyVideo.reset();
                                   }, 2000);
 
-                                  return "Saved!";
+                                  return (
+                                    <IconLucideCheck class="size-[1rem]" />
+                                  );
                                 }}
                               </Match>
                             </Switch>
-                          </Button>
+                          </TooltipIconButton>
+                          <TooltipIconButton
+                            class="absolute right-3 bottom-3"
+                            tooltipText="Create Shareable Link"
+                            tooltipPlacement="left"
+                            onClick={async () => {
+                              // Implement shareable link functionality here
+                            }}
+                          >
+                            <IconCapUpload class="size-[1rem]" />
+                          </TooltipIconButton>
+                          <div class="absolute inset-0 flex items-center justify-center">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => saveVideo.mutate()}
+                              disabled={copyVideo.isPending}
+                            >
+                              <Switch fallback="Save">
+                                <Match when={saveVideo.isPending}>
+                                  Saving...
+                                </Match>
+                                <Match
+                                  when={
+                                    saveVideo.isSuccess &&
+                                    saveVideo.data === true
+                                  }
+                                >
+                                  {(_) => {
+                                    setTimeout(() => {
+                                      if (!saveVideo.isPending)
+                                        saveVideo.reset();
+                                    }, 2000);
+
+                                    return "Saved!";
+                                  }}
+                                </Match>
+                              </Switch>
+                            </Button>
+                          </div>
+                        </div>
+                        <div
+                          style={{ color: "white", "font-size": "14px" }}
+                          class={cx(
+                            "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all group-hover:opacity-0",
+                            isLoading() && "opacity-0"
+                          )}
+                        >
+                          <p class="flex items-center">
+                            <IconCapCamera class="w-[20px] h-[20px] mr-1" />
+                            {Math.floor(metadata().duration / 60)}:
+                            {Math.floor(metadata().duration % 60)
+                              .toString()
+                              .padStart(2, "0")}
+                          </p>
+                          <p>{metadata().size.toFixed(2)} MB</p>
                         </div>
                       </div>
-                      <div
-                        style={{ color: "white", "font-size": "14px" }}
-                        class={cx(
-                          "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all group-hover:opacity-0",
-                          isLoading() && "opacity-0"
-                        )}
-                      >
-                        <p class="flex items-center">
-                          <IconCapCamera class="w-[20px] h-[20px] mr-1" />
-                          {Math.floor(metadata().duration / 60)}:
-                          {Math.floor(metadata().duration % 60)
-                            .toString()
-                            .padStart(2, "0")}
-                        </p>
-                        <p>{metadata().size.toFixed(2)} MB</p>
-                      </div>
                     </div>
-                  </div>
+                  )}
                 </Show>
               );
             }}
