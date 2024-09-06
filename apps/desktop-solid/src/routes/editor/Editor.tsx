@@ -96,20 +96,16 @@ function Inner() {
     commands.createEditorInstance(videoId()).then((result) => {
       if (result.status !== "ok") return;
       const ws = new WebSocket(`ws://localhost:${result.data}/frames-ws`);
-
       ws.binaryType = "arraybuffer";
-
       ws.onmessage = (event) => {
         const ctx = canvasRef()?.getContext("2d");
         if (!ctx) return;
-
         const clamped = new Uint8ClampedArray(event.data);
         const imageData = new ImageData(
           clamped,
           OUTPUT_SIZE.width,
           OUTPUT_SIZE.height
         );
-
         ctx.putImageData(imageData, 0, 0);
       };
     });

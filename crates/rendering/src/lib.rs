@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
 use decoder::AsyncVideoDecoderHandle;
+use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -92,27 +93,26 @@ impl From<BackgroundSource> for Background {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct UV<T> {
-    pub u: T,
-    pub v: T,
+#[derive(Clone)]
+pub struct RecordingDecoders {
+    screen: AsyncVideoDecoderHandle,
+    camera: Option<AsyncVideoDecoderHandle>,
 }
 
-impl<T> UV<T> {
-    pub fn new(x: T, y: T) -> Self {
-        Self { u: x, v: y }
+impl RecordingDecoders {
+    pub fn new(screen: AsyncVideoDecoderHandle, camera: Option<AsyncVideoDecoderHandle>) -> Self {
+        RecordingDecoders { screen, camera }
     }
-}
+    pub async fn get_frames(
+        &self,
+        frame_number: u32,
+    ) -> Option<(DecodedFrame, Option<DecodedFrame>)> {
+        let (screen_frame, camera_frame) = tokio::join!(
+            self.screen.get_frame(frame_number),
+            OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
+        );
 
-impl<T> From<UV<T>> for (T, T) {
-    fn from(xy: UV<T>) -> Self {
-        (xy.u, xy.v)
-    }
-}
-
-impl<T> From<UV<T>> for [T; 2] {
-    fn from(xy: UV<T>) -> Self {
-        [xy.u, xy.v]
+        screen_frame.map(|f| (f, camera_frame.flatten()))
     }
 }
 
@@ -120,8 +120,7 @@ pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
     sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    screen_recording_decoder: AsyncVideoDecoderHandle,
-    camera_recording_decoder: Option<AsyncVideoDecoderHandle>,
+    decoders: RecordingDecoders,
 ) -> Result<(), String> {
     let constants = RenderVideoConstants::new(options).await?;
 
@@ -137,7 +136,7 @@ pub async fn render_video_to_channel(
 
         let mut i = 0;
         loop {
-            match screen_recording_decoder.get_frame(i).await {
+            match decoders.screen.get_frame(i).await {
                 Some(frame) => {
                     if screen_tx.send(frame).is_err() {
                         println!("Error sending screen frame to renderer");
@@ -155,7 +154,7 @@ pub async fn render_video_to_channel(
         println!("done decoding screen in {:.2?}", now.elapsed())
     });
 
-    let mut camera_rx = camera_recording_decoder.map(|camera_recording_decoder| {
+    let mut camera_rx = decoders.camera.map(|decoder| {
         println!("Setting up FFmpeg input for webcam recording...");
         let (camera_tx, camera_rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -164,7 +163,7 @@ pub async fn render_video_to_channel(
 
             let mut i = 0;
             loop {
-                match camera_recording_decoder.get_frame(i).await {
+                match decoder.get_frame(i).await {
                     Some(frame) => {
                         if camera_tx.send(frame).is_err() {
                             println!("Error sending screen frame to renderer");
@@ -359,7 +358,7 @@ impl ProjectUniforms {
             let frame_aspect = frame_size[0] / frame_size[1];
             let min_axis = frame_size[0].min(frame_size[1]);
             let y_padding =
-                project.background.padding as f32 / 100.0 * SCREEN_MAX_PADDING * output_size[1];
+                project.background.padding / 100.0 * SCREEN_MAX_PADDING * output_size[1];
 
             let target_height = (output_size[1] - y_padding) - y_padding;
             let target_width = target_height * frame_aspect;
@@ -379,7 +378,7 @@ impl ProjectUniforms {
                 crop_bounds: [0.0, 0.0, frame_size[0], frame_size[1]],
                 target_bounds,
                 target_size,
-                rounding_px: project.background.rounding as f32 / 100.0 * 0.5 * min_target_axis,
+                rounding_px: project.background.rounding / 100.0 * 0.5 * min_target_axis,
                 ..Default::default()
             }
         };
@@ -431,7 +430,7 @@ impl ProjectUniforms {
                         target_bounds[2] - target_bounds[0],
                         target_bounds[3] - target_bounds[1],
                     ],
-                    rounding_px: project.camera.rounding as f32 / 100.0 * 0.5 * size[0],
+                    rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0],
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     ..Default::default()
                 }

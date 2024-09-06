@@ -11,7 +11,7 @@ mod tray;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
-use cap_rendering::{decoder::AsyncVideoDecoderHandle, RenderOptions};
+use cap_rendering::{RecordingDecoders, RenderOptions};
 use display::{list_capture_windows, Bounds, CaptureTarget};
 use editor_instance::{EditorInstance, EditorState};
 use ffmpeg_sidecar::{
@@ -21,7 +21,7 @@ use ffmpeg_sidecar::{
     version::ffmpeg_version,
 };
 use image::{ImageBuffer, Rgba};
-use mp4::{Error as Mp4Error, Mp4Reader};
+use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
 use recording::{DisplaySource, InProgressRecording};
@@ -284,8 +284,7 @@ async fn get_rendered_video(
             editor_instance.render_constants.options.clone(),
             project,
             output_path.clone(),
-            editor_instance.screen_decoder.clone(),
-            editor_instance.camera_decoder.clone(),
+            editor_instance.decoders.clone(),
             |_| {},
             editor_instance.audio.clone(),
         )
@@ -319,8 +318,7 @@ async fn render_to_file_impl(
     options: RenderOptions,
     project: ProjectConfiguration,
     output_path: PathBuf,
-    screen_recording_decoder: AsyncVideoDecoderHandle,
-    camera_recording_decoder: Option<AsyncVideoDecoderHandle>,
+    decoders: RecordingDecoders,
     on_progress: impl Fn(u32) + Send + 'static,
     audio: Option<AudioData>,
 ) -> Result<PathBuf, String> {
@@ -418,8 +416,8 @@ async fn render_to_file_impl(
 
         // Save the first frame as a screenshot
         if let Some(frame_data) = first_frame {
-            let width = options.output_size.0 as u32;
-            let height = options.output_size.1 as u32;
+            let width = options.output_size.0;
+            let height = options.output_size.1;
             let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
                 ImageBuffer::from_raw(width, height, frame_data)
                     .expect("Failed to create image from frame data");
@@ -446,14 +444,7 @@ async fn render_to_file_impl(
 
     println!("Rendering video to channel");
 
-    cap_rendering::render_video_to_channel(
-        options,
-        project,
-        tx_image_data,
-        screen_recording_decoder,
-        camera_recording_decoder,
-    )
-    .await?;
+    cap_rendering::render_video_to_channel(options, project, tx_image_data, decoders).await?;
 
     println!("Copying file to {:?}", recording_dir);
     let result_path = recording_dir.join("output/result.mp4");
@@ -465,10 +456,7 @@ async fn render_to_file_impl(
                 Err(_) => return false,
             };
             let reader = std::io::BufReader::new(file);
-            match Mp4Reader::read_header(reader, file_size) {
-                Ok(_) => true,
-                Err(_) => false,
-            }
+            Mp4Reader::read_header(reader, file_size).is_ok()
         } else {
             false
         }
@@ -937,8 +925,7 @@ async fn render_to_file(
         editor_instance.render_constants.options.clone(),
         project,
         output_path,
-        editor_instance.screen_decoder.clone(),
-        editor_instance.camera_decoder.clone(),
+        editor_instance.decoders.clone(),
         move |current_frame| {
             if current_frame == 0 {
                 progress_channel
@@ -1045,7 +1032,7 @@ pub fn run() {
             #[cfg(all(desktop))]
             {
                 let handle = app.handle();
-                tray::create_tray(&handle)?;
+                tray::create_tray(handle)?;
             }
 
             if let Err(_error) = handle_ffmpeg_installation() {

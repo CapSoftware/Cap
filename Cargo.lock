@@ -916,6 +916,8 @@ dependencies = [
  "cap-ffmpeg",
  "cap-project",
  "ffmpeg-next",
+ "ffmpeg-sys-next",
+ "futures",
  "futures-intrusive",
  "lru",
  "nix 0.29.0",

@@ -1,10 +1,12 @@
 use crate::playback::{self, PlaybackHandle};
 use crate::{editor, AudioData};
 use cap_project::ProjectConfiguration;
-use cap_rendering::decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle};
-use cap_rendering::{ProjectUniforms, RenderOptions, RenderVideoConstants};
+use cap_rendering::decoder::AsyncVideoDecoder;
+use cap_rendering::{
+    ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants,
+};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::{path::PathBuf, process::Command, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
 
@@ -18,10 +20,9 @@ pub struct EditorState {
 pub struct EditorInstance {
     pub path: PathBuf,
     pub id: String,
-    pub screen_decoder: AsyncVideoDecoderHandle,
-    pub camera_decoder: Option<AsyncVideoDecoderHandle>,
     pub audio: Option<AudioData>,
     pub ws_port: u16,
+    pub decoders: RecordingDecoders,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
     pub state: Mutex<EditorState>,
@@ -106,8 +107,7 @@ impl EditorInstance {
         let this = Arc::new(Self {
             id: video_id,
             path: project_path,
-            screen_decoder,
-            camera_decoder,
+            decoders: RecordingDecoders::new(screen_decoder, camera_decoder),
             ws_port,
             renderer,
             render_constants,
@@ -152,8 +152,7 @@ impl EditorInstance {
             audio: self.audio.clone(),
             renderer: self.renderer.clone(),
             render_constants: self.render_constants.clone(),
-            screen_decoder: self.screen_decoder.clone(),
-            camera_decoder: self.camera_decoder.clone(),
+            decoders: self.decoders.clone(),
             start_frame_number,
             project,
         }
@@ -200,13 +199,10 @@ impl EditorInstance {
                     continue;
                 };
 
-                let Some(screen_frame) = self.screen_decoder.get_frame(frame_number).await else {
+                let Some((screen_frame, camera_frame)) =
+                    self.decoders.get_frames(frame_number).await
+                else {
                     return;
-                };
-
-                let camera_frame = match &self.camera_decoder {
-                    Some(d) => d.get_frame(frame_number).await,
-                    None => None,
                 };
 
                 self.renderer

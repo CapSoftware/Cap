@@ -1,11 +1,21 @@
 use std::{
+    cell::Cell,
     collections::BTreeMap,
     path::PathBuf,
+    ptr::{null, null_mut},
     sync::{mpsc, Arc},
 };
 
 use ffmpeg_next::{
-    format::context::input::PacketIter, frame, rescale, Packet, Rational, Rescale, Stream,
+    codec,
+    format::{self, context::input::PacketIter, Pixel},
+    frame::{self, Video},
+    rescale, Codec, Packet, Rational, Rescale, Stream,
+};
+use ffmpeg_sys_next::{
+    av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create, av_hwframe_transfer_data,
+    avcodec_find_decoder, avcodec_get_hw_config, AVBufferRef, AVCodecContext, AVHWDeviceType,
+    AVPixelFormat, AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX,
 };
 
 pub type DecodedFrame = Arc<Vec<u8>>;
@@ -36,23 +46,43 @@ impl AsyncVideoDecoder {
                 .best(ffmpeg_next::media::Type::Video)
                 .ok_or("Could not find a video stream")
                 .unwrap();
+
+            let decoder_codec =
+                ff_find_decoder(&input, &input_stream, input_stream.parameters().id()).unwrap();
+
+            let mut context = codec::context::Context::new_with_codec(decoder_codec);
+            context.set_parameters(input_stream.parameters()).unwrap();
+
+            let hw_device = {
+                #[cfg(target_os = "macos")]
+                {
+                    context
+                        .try_use_hw_device(
+                            AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                            Pixel::NV12,
+                        )
+                        .ok()
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                None
+            };
+
             let input_stream_index = input_stream.index();
             let time_base = input_stream.time_base();
             let frame_rate = input_stream.rate();
 
             // Create a decoder for the video stream
-            let mut decoder =
-                ffmpeg_next::codec::context::Context::from_parameters(input_stream.parameters())
-                    .unwrap()
-                    .decoder()
-                    .video()
-                    .unwrap();
+            let mut decoder = context.decoder().video().unwrap();
 
             use ffmpeg_next::format::Pixel;
             use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
 
             let mut scaler = Context::get(
-                decoder.format(),
+                hw_device
+                    .as_ref()
+                    .map(|d| d.pix_fmt)
+                    .unwrap_or(decoder.format()),
                 decoder.width(),
                 decoder.height(),
                 Pixel::RGBA,
@@ -97,25 +127,24 @@ impl AsyncVideoDecoder {
                             Some(sender)
                         };
 
-                        // need to seek when frame_number is less than last_decoded_frame
-
-                        let cache_min = frame_number
-                            .checked_sub(FRAME_CACHE_SIZE as u32 / 2)
-                            .unwrap_or(0);
+                        let cache_min = frame_number.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
                         let cache_max = frame_number + FRAME_CACHE_SIZE as u32 / 2;
 
-                        // TODO: seek forward when last_decoded_frame's I-frame is previous to frame_number's I-frame
                         if frame_number <= 0
                             || last_decoded_frame
-                                .map(|f| frame_number < f)
-                                .unwrap_or(false)
+                                .map(|f| {
+                                    frame_number < f ||
+                                    // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
+                                    frame_number - f > FRAME_CACHE_SIZE as u32
+                                })
+                                .unwrap_or(true)
                         {
                             let timestamp_us =
                                 ((frame_number as f32 / frame_rate.numerator() as f32)
                                     * 1_000_000.0) as i64;
                             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
-                            // println!("seeking to {position} for frame {frame_number}");
+                            println!("seeking to {position} for frame {frame_number}");
 
                             drop(packet_stuff);
 
@@ -171,8 +200,11 @@ impl AsyncVideoDecoder {
                                     //     !too_great_for_cache_bounds && !too_small_for_cache_bounds
                                     // );
 
+                                    let sw_frame = try_transfer_hwframe(&temp_frame);
+                                    let frame = sw_frame.as_ref().unwrap_or(&temp_frame);
+
                                     let mut rgb_frame = frame::Video::empty();
-                                    scaler.run(&temp_frame, &mut rgb_frame).unwrap();
+                                    scaler.run(frame, &mut rgb_frame).unwrap();
 
                                     let frame = Arc::new(rgb_frame.data(0).to_vec());
 
@@ -276,6 +308,143 @@ impl<T> PeekableReceiver<T> {
             Ok(value)
         } else {
             self.rx.recv()
+        }
+    }
+}
+
+thread_local! {
+    static HW_PIX_FMT: Cell<AVPixelFormat> = const { Cell::new(AVPixelFormat::AV_PIX_FMT_NONE) };
+}
+
+unsafe extern "C" fn get_format(
+    _: *mut AVCodecContext,
+    pix_fmts: *const AVPixelFormat,
+) -> AVPixelFormat {
+    let mut fmt = pix_fmts;
+
+    loop {
+        if *fmt == AVPixelFormat::AV_PIX_FMT_NONE {
+            break;
+        }
+
+        if *fmt == HW_PIX_FMT.get() {
+            return *fmt;
+        }
+
+        fmt = fmt.offset(1);
+    }
+
+    AVPixelFormat::AV_PIX_FMT_NONE
+}
+
+fn ff_find_decoder(
+    s: &format::context::Input,
+    st: &format::stream::Stream,
+    codec_id: codec::Id,
+) -> Option<Codec> {
+    unsafe {
+        use ffmpeg_next::media::Type;
+        let codec = match st.parameters().medium() {
+            Type::Video => Some((*s.as_ptr()).video_codec),
+            Type::Audio => Some((*s.as_ptr()).audio_codec),
+            Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
+            _ => None,
+        };
+
+        if let Some(codec) = codec {
+            if !codec.is_null() {
+                return Some(Codec::wrap(codec));
+            }
+        }
+
+        let found = avcodec_find_decoder(codec_id.into());
+
+        if found.is_null() {
+            return None;
+        }
+        Some(Codec::wrap(found))
+    }
+}
+
+fn try_transfer_hwframe(src: &Video) -> Option<Video> {
+    unsafe {
+        if src.format() == HW_PIX_FMT.get().into() {
+            let mut sw_frame = frame::Video::empty();
+
+            if av_hwframe_transfer_data(sw_frame.as_mut_ptr(), src.as_ptr(), 0) >= 0 {
+                return Some(sw_frame);
+            };
+        }
+    }
+
+    None
+}
+
+struct HwDevice {
+    pub device_type: AVHWDeviceType,
+    pub pix_fmt: Pixel,
+    ctx: *mut AVBufferRef,
+}
+
+impl Drop for HwDevice {
+    fn drop(&mut self) {
+        unsafe {
+            av_buffer_unref(&mut self.ctx);
+        }
+    }
+}
+
+trait CodecContextExt {
+    fn try_use_hw_device(
+        &mut self,
+        device_type: AVHWDeviceType,
+        pix_fmt: Pixel,
+    ) -> Result<HwDevice, &'static str>;
+}
+
+impl CodecContextExt for codec::context::Context {
+    fn try_use_hw_device(
+        &mut self,
+        device_type: AVHWDeviceType,
+        pix_fmt: Pixel,
+    ) -> Result<HwDevice, &'static str> {
+        let codec = self.codec().ok_or("no codec")?;
+
+        unsafe {
+            let mut i = 0;
+            loop {
+                let config = avcodec_get_hw_config(codec.as_ptr(), i);
+                if config.is_null() {
+                    return Err("no hw config");
+                }
+
+                if (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1
+                    && (*config).device_type == AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
+                {
+                    HW_PIX_FMT.set((*config).pix_fmt);
+                    break;
+                }
+
+                i += 1;
+            }
+
+            let context = self.as_mut_ptr();
+
+            (*context).get_format = Some(get_format);
+
+            let mut hw_device_ctx = null_mut();
+
+            if av_hwdevice_ctx_create(&mut hw_device_ctx, device_type, null(), null_mut(), 0) < 0 {
+                return Err("failed to create hw device context");
+            }
+
+            (*context).hw_device_ctx = av_buffer_ref(hw_device_ctx);
+
+            Ok(HwDevice {
+                device_type,
+                ctx: hw_device_ctx,
+                pix_fmt,
+            })
         }
     }
 }
