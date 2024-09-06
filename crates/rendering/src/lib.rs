@@ -107,10 +107,12 @@ impl RecordingDecoders {
         &self,
         frame_number: u32,
     ) -> Option<(DecodedFrame, Option<DecodedFrame>)> {
+        println!("getting frames");
         let (screen_frame, camera_frame) = tokio::join!(
             self.screen.get_frame(frame_number),
             OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
         );
+        println!("got frames");
 
         screen_frame.map(|f| (f, camera_frame.flatten()))
     }

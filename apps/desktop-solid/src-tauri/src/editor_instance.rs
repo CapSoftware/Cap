@@ -1,10 +1,10 @@
 use crate::playback::{self, PlaybackHandle};
+use crate::project_recordings::ProjectRecordings;
 use crate::{editor, AudioData};
-use cap_project::ProjectConfiguration;
+use cap_project::{ProjectConfiguration, RecordingMeta};
 use cap_rendering::decoder::AsyncVideoDecoder;
-use cap_rendering::{
-    ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants,
-};
+use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
+use ffmpeg_next::Rational;
 use std::ops::Deref;
 use std::sync::atomic::AtomicBool;
 use std::{path::PathBuf, process::Command, sync::Arc};
@@ -18,11 +18,12 @@ pub struct EditorState {
 }
 
 pub struct EditorInstance {
-    pub path: PathBuf,
+    pub project_path: PathBuf,
     pub id: String,
     pub audio: Option<AudioData>,
     pub ws_port: u16,
     pub decoders: RecordingDecoders,
+    pub recordings: ProjectRecordings,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
     pub state: Mutex<EditorState>,
@@ -54,6 +55,8 @@ impl EditorInstance {
         }
 
         let meta = cap_project::RecordingMeta::load_for_project(&project_path);
+
+        let recordings = ProjectRecordings::new(&meta);
 
         const OUTPUT_SIZE: (u32, u32) = (1920, 1080);
 
@@ -106,8 +109,9 @@ impl EditorInstance {
 
         let this = Arc::new(Self {
             id: video_id,
-            path: project_path,
+            project_path,
             decoders: RecordingDecoders::new(screen_decoder, camera_decoder),
+            recordings,
             ws_port,
             renderer,
             render_constants,
@@ -142,39 +146,44 @@ impl EditorInstance {
     }
 
     pub async fn start_playback(self: Arc<Self>, project: ProjectConfiguration) {
-        let Ok(mut state) = self.state.try_lock() else {
-            return;
+        let (mut handle, prev) = {
+            let Ok(mut state) = self.state.try_lock() else {
+                return;
+            };
+
+            let start_frame_number = state.playhead_position;
+
+            let playback_handle = playback::Playback {
+                audio: self.audio.clone(),
+                renderer: self.renderer.clone(),
+                render_constants: self.render_constants.clone(),
+                decoders: self.decoders.clone(),
+                recordings: self.recordings,
+                start_frame_number,
+                project,
+            }
+            .start()
+            .await;
+
+            let prev = state.playback_task.replace(playback_handle.clone());
+
+            (playback_handle, prev)
         };
 
-        let start_frame_number = state.playhead_position;
-
-        let playback_handle = playback::Playback {
-            audio: self.audio.clone(),
-            renderer: self.renderer.clone(),
-            render_constants: self.render_constants.clone(),
-            decoders: self.decoders.clone(),
-            start_frame_number,
-            project,
-        }
-        .start()
-        .await;
-
-        let prev = state.playback_task.replace(playback_handle.clone());
-
-        drop(state);
-
-        let mut handle = playback_handle;
         tokio::spawn(async move {
             loop {
+                println!("receiving playback event");
                 let event = *handle.receive_event().await;
 
                 match event {
                     playback::PlaybackEvent::Start => {}
                     playback::PlaybackEvent::Frame(frame_number) => {
+                        println!("playback frame: {frame_number}");
                         self.modify_and_emit_state(|state| {
                             state.playhead_position = frame_number;
                         })
                         .await;
+                        println!("playback frame: {frame_number} done")
                     }
                     playback::PlaybackEvent::Stop => {
                         return;
@@ -217,6 +226,8 @@ impl EditorInstance {
         });
     }
 }
+
+pub const FRAMES_WS_PATH: &str = "/frames-ws";
 
 async fn create_frames_ws(frame_rx: mpsc::UnboundedReceiver<Vec<u8>>) -> u16 {
     use axum::{
@@ -261,7 +272,7 @@ async fn create_frames_ws(frame_rx: mpsc::UnboundedReceiver<Vec<u8>>) -> u16 {
     }
 
     let router = axum::Router::new()
-        .route("/frames-ws", get(ws_handler))
+        .route(FRAMES_WS_PATH, get(ws_handler))
         .with_state(Arc::new(Mutex::new(frame_rx)));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -1699,6 +1699,7 @@ dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
  "cpal",
+ "ffmpeg-next",
  "ffmpeg-sidecar 1.1.0 (git+https://github.com/CapSoftware/ffmpeg-sidecar?branch=main)",
  "futures",
  "futures-intrusive",

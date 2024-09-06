@@ -144,7 +144,7 @@ impl AsyncVideoDecoder {
                                     * 1_000_000.0) as i64;
                             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
-                            println!("seeking to {position} for frame {frame_number}");
+                            // println!("seeking to {position} for frame {frame_number}");
 
                             drop(packet_stuff);
 

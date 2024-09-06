@@ -125,7 +125,7 @@ async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<R
     else return { status: "error", error: e  as any };
 }
 },
-async createEditorInstance(videoId: string) : Promise<Result<number, string>> {
+async createEditorInstance(videoId: string) : Promise<Result<SerializedEditorInstance, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("create_editor_instance", { videoId }) };
 } catch (e) {
@@ -194,6 +194,7 @@ export type RecordingOptionsChanged = null
 export type RefreshCapturesPanel = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null }
 export type ShowCapturesPanel = null
 export type VideoType = "screen" | "output"
 

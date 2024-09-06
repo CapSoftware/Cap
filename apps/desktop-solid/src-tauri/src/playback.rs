@@ -8,7 +8,7 @@ use cpal::{
 };
 use tokio::{sync::watch, time::Instant};
 
-use crate::{editor, AudioData};
+use crate::{editor, project_recordings::ProjectRecordings, AudioData};
 
 pub struct Playback {
     pub audio: Option<AudioData>,
@@ -17,10 +17,10 @@ pub struct Playback {
     pub decoders: RecordingDecoders,
     pub start_frame_number: u32,
     pub project: ProjectConfiguration,
+    pub recordings: ProjectRecordings,
 }
 
 const FPS: u32 = 30;
-const DURATION: u32 = 10;
 
 #[derive(Clone, Copy)]
 pub enum PlaybackEvent {
@@ -54,17 +54,20 @@ impl Playback {
             let mut frame_number = self.start_frame_number + 1;
             let uniforms = ProjectUniforms::new(&self.render_constants, &self.project);
 
+            let duration = self.recordings.duration();
+
             if let Some(audio) = self.audio.clone() {
                 AudioPlayback {
                     audio,
                     stop_rx: stop_rx.clone(),
                     start_frame_number: self.start_frame_number,
+                    duration,
                 }
                 .spawn();
             };
 
             loop {
-                if frame_number as f32 > (FPS * DURATION) as f32 {
+                if frame_number as f64 > FPS as f64 * duration {
                     break;
                 };
 
@@ -73,6 +76,8 @@ impl Playback {
                        break;
                     },
                     Some((screen_frame, camera_frame)) = self.decoders.get_frames(frame_number) => {
+                        tokio::time::sleep_until(start + (frame_number - self.start_frame_number) * Duration::from_secs_f32(1.0 / FPS as f32)).await;
+
                         self
                             .renderer
                             .render_frame(
@@ -86,8 +91,6 @@ impl Playback {
                         event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
 
                         frame_number += 1;
-
-                        tokio::time::sleep_until(start + frame_number * Duration::from_secs_f32(1.0 / FPS as f32)).await;
                     }
                     else => {
                         break;
@@ -120,6 +123,7 @@ struct AudioPlayback {
     audio: AudioData,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
+    duration: f64,
 }
 
 impl AudioPlayback {
@@ -143,7 +147,7 @@ impl AudioPlayback {
             let data = audio.buffer.clone();
 
             let mut clock =
-                data.len() as f64 * (self.start_frame_number as f64 / (FPS * DURATION) as f64);
+                data.len() as f64 * self.start_frame_number as f64 / (FPS as f64 * self.duration);
 
             let resample_ratio = audio.sample_rate as f64 / config.sample_rate.0 as f64;
             dbg!(resample_ratio);

@@ -59,6 +59,7 @@ cpal = "0.15.3"
 indexmap = "2.5.0"
 num-traits = "0.2.19"
 tempfile = "3.12.0"
+ffmpeg-next = "7.0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

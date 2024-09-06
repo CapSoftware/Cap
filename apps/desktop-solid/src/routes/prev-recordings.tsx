@@ -18,7 +18,7 @@ import { Button } from "@cap/ui-solid";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { save } from "@tauri-apps/plugin-dialog";
 import { commands, events } from "../utils/tauri";
-import { DEFAULT_CONFIG } from "./editor/context";
+import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 
 export default function () {
   const recordings = createQuery(() => ({
@@ -191,7 +191,7 @@ export default function () {
                             try {
                               await commands.copyRenderedVideoToClipboard(
                                 videoId,
-                                DEFAULT_CONFIG
+                                DEFAULT_PROJECT_CONFIG
                               );
                               setIsCopySuccess(true);
                               setTimeout(() => setIsCopySuccess(false), 2000);

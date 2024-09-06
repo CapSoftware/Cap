@@ -1,8 +1,8 @@
 use nokhwa::utils::CameraFormat;
 use serde::Serialize;
 use specta::Type;
-use std::path::PathBuf;
 use std::time::Instant;
+use std::{path::PathBuf, time::SystemTime};
 use tokio::sync::watch;
 
 use crate::{
@@ -34,6 +34,7 @@ pub struct InProgressRecording {
     pub camera: Option<FFmpegCaptureOutput<FFmpegRawVideoInput>>,
     #[serde(skip)]
     pub audio: Option<(FFmpegCaptureOutput<FFmpegRawAudioInput>, AudioCapturer)>,
+    // pub start: f64,
 }
 
 unsafe impl Send for InProgressRecording {}
@@ -54,6 +55,40 @@ impl InProgressRecording {
         if let Some(audio) = &mut self.audio {
             audio.1.stop().ok();
         }
+
+        use cap_project::*;
+        RecordingMeta {
+            project_path: self.recording_dir.clone(),
+            display: Display {
+                path: self
+                    .display
+                    .output_path
+                    .strip_prefix(&self.recording_dir)
+                    .unwrap()
+                    .to_owned(),
+                width: self.display.input.width,
+                height: self.display.input.height,
+            },
+            camera: self.camera.as_ref().map(|camera| Camera {
+                path: camera
+                    .output_path
+                    .strip_prefix(&self.recording_dir)
+                    .unwrap()
+                    .to_owned(),
+                width: camera.input.width,
+                height: camera.input.height,
+            }),
+            audio: self.audio.as_ref().map(|(audio, _)| Audio {
+                path: audio
+                    .output_path
+                    .strip_prefix(&self.recording_dir)
+                    .unwrap()
+                    .to_owned(),
+                sample_rate: audio.input.sample_rate,
+                channels: audio.input.channels,
+            }),
+        }
+        .save_for_project(&self.recording_dir);
     }
 }
 
@@ -61,6 +96,7 @@ pub struct FFmpegCaptureOutput<T> {
     pub input: FFmpegInput<T>,
     pub capture: NamedPipeCapture,
     pub output_path: PathBuf,
+    pub start_time: Instant,
 }
 
 pub async fn start(
@@ -70,8 +106,6 @@ pub async fn start(
     let content_dir = recording_dir.join("content");
 
     std::fs::create_dir_all(&content_dir).unwrap();
-
-    let now = Instant::now();
 
     let mut ffmpeg = FFmpeg::new();
 
@@ -129,6 +163,7 @@ pub async fn start(
             input: ffmpeg_input,
             capture,
             output_path,
+            start_time,
         }
     };
 
@@ -180,6 +215,7 @@ pub async fn start(
             input: ffmpeg_input,
             capture,
             output_path,
+            start_time,
         })
     } else {
         None
@@ -215,6 +251,7 @@ pub async fn start(
                 input: ffmpeg_input,
                 capture,
                 output_path,
+                start_time,
             },
             capturer,
         ))
@@ -227,43 +264,6 @@ pub async fn start(
     println!("Starting writing to named pipes");
 
     start_writing_tx.send(true).unwrap();
-
-    use cap_project::*;
-    let meta = RecordingMeta {
-        display: Display {
-            path: display
-                .output_path
-                .strip_prefix(&recording_dir)
-                .unwrap()
-                .to_owned(),
-            width: display.input.width,
-            height: display.input.height,
-        },
-        camera: camera.as_ref().map(|camera| Camera {
-            path: camera
-                .output_path
-                .strip_prefix(&recording_dir)
-                .unwrap()
-                .to_owned(),
-            width: camera.input.width,
-            height: camera.input.height,
-        }),
-        audio: audio.as_ref().map(|(audio, _)| Audio {
-            path: audio
-                .output_path
-                .strip_prefix(&recording_dir)
-                .unwrap()
-                .to_owned(),
-            sample_rate: audio.input.sample_rate,
-            channels: audio.input.channels,
-        }),
-    };
-
-    std::fs::write(
-        recording_dir.join("recording-meta.json"),
-        serde_json::to_string(&meta).unwrap(),
-    )
-    .ok();
 
     InProgressRecording {
         recording_dir,

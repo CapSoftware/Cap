@@ -5,6 +5,7 @@ mod editor;
 mod editor_instance;
 mod macos;
 mod playback;
+mod project_recordings;
 mod recording;
 mod tray;
 
@@ -13,7 +14,7 @@ use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
 use cap_rendering::{RecordingDecoders, RenderOptions};
 use display::{list_capture_windows, Bounds, CaptureTarget};
-use editor_instance::{EditorInstance, EditorState};
+use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use ffmpeg_sidecar::{
     command::ffmpeg_is_installed,
     download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
@@ -538,12 +539,31 @@ async fn stop_playback(app: AppHandle, video_id: String) {
     }
 }
 
+#[derive(Serialize, Type, Debug)]
+#[serde(rename_all = "camelCase")]
+struct SerializedEditorInstance {
+    frames_socket_url: String,
+    recording_duration: f64,
+    saved_project_config: Option<ProjectConfiguration>,
+}
+
 #[tauri::command]
 #[specta::specta]
-async fn create_editor_instance(app: AppHandle, video_id: String) -> Result<u16, String> {
+async fn create_editor_instance(
+    app: AppHandle,
+    video_id: String,
+) -> Result<SerializedEditorInstance, String> {
     let editor_instance = upsert_editor_instance(&app, video_id).await;
 
-    Ok(editor_instance.ws_port)
+    Ok(SerializedEditorInstance {
+        frames_socket_url: format!("ws://localhost:{}{FRAMES_WS_PATH}", editor_instance.ws_port),
+        recording_duration: editor_instance.recordings.duration(),
+        saved_project_config: std::fs::read_to_string(
+            &editor_instance.project_path.join("project-config.json"),
+        )
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok()),
+    })
 }
 
 #[tauri::command]
