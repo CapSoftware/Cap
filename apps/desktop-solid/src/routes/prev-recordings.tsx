@@ -28,6 +28,8 @@ import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 
 type RecordingEntry = {
   path: string;
+  prettyName: string;
+  isNew: boolean;
 };
 
 export default function () {
@@ -42,9 +44,25 @@ export default function () {
     setRecordings(
       produce((state) => {
         if (state.some((entry) => entry.path === path)) return;
-        state.push({ path });
+        const fileName = path.split("/").pop() || "";
+        const match = fileName.match(
+          /Cap (\d{4}-\d{2}-\d{2} at \d{2}\.\d{2}\.\d{2})/
+        );
+        const prettyName = match ? match[1].replace(/\./g, ":") : fileName;
+        state.push({ path, prettyName, isNew: true });
       })
     );
+
+    setTimeout(() => {
+      setRecordings(
+        produce((state) => {
+          const index = state.findIndex((entry) => entry.path === path);
+          if (index !== -1) {
+            state[index].isNew = false;
+          }
+        })
+      );
+    }, 3000);
   });
 
   return (
@@ -159,7 +177,9 @@ export default function () {
                         "transition-[transform,opacity] duration-300",
                         exiting()
                           ? "animate-out slide-out-to-left-32 fade-out"
-                          : "animate-in fade-in"
+                          : "animate-in fade-in",
+                        recording.isNew &&
+                          "ring-2 ring-blue-500 ring-opacity-75"
                       )}
                     >
                       <div

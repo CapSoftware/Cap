@@ -26,6 +26,7 @@ pub struct RecordingMeta {
     // this field is just for convenience, it shouldn't be persisted
     #[serde(skip_serializing, default)]
     pub project_path: PathBuf,
+    pub pretty_name: String,
     pub display: Display,
     #[serde(default)]
     pub camera: Option<Camera>,

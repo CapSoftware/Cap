@@ -59,6 +59,10 @@ impl InProgressRecording {
         use cap_project::*;
         RecordingMeta {
             project_path: self.recording_dir.clone(),
+            pretty_name: format!(
+                "Cap {}",
+                chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
+            ),
             display: Display {
                 path: self
                     .display

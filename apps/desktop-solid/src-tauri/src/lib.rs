@@ -158,7 +158,7 @@ pub struct RecordingOptionsChanged;
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
 pub struct ShowCapturesPanel;
 
-#[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewRecordingAdded {
     path: PathBuf,
 }
@@ -247,9 +247,9 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     current_recording.stop().await;
 
     std::fs::create_dir_all(current_recording.recording_dir.join("screenshots")).ok();
-
     dbg!(&current_recording.display.output_path);
-    Command::new(ffmpeg_binary_path_str)
+
+    Command::new(&ffmpeg_binary_path_str)
         .args(["-ss", "0:00:00", "-i"])
         .arg(&current_recording.display.output_path)
         .args(["-frames:v", "1", "-q:v", "2"])
@@ -257,6 +257,18 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
             current_recording
                 .recording_dir
                 .join("screenshots/display.jpg"),
+        )
+        .output()
+        .unwrap();
+
+    Command::new(&ffmpeg_binary_path_str)
+        .args(["-ss", "0:00:00", "-i"])
+        .arg(&current_recording.display.output_path)
+        .args(["-frames:v", "1", "-vf", "scale=100:-1"])
+        .arg(
+            current_recording
+                .recording_dir
+                .join("screenshots/thumbnail.png"),
         )
         .output()
         .unwrap();
@@ -413,8 +425,7 @@ async fn render_to_file_impl(
         if let Some((audio_path, _, _)) = audio_path {
             std::fs::remove_file(audio_path).ok();
         }
-
-        // Save the first frame as a screenshot
+        // Save the first frame as a screenshot and thumbnail
         if let Some(frame_data) = first_frame {
             let width = options.output_size.0;
             let height = options.output_size.1;
@@ -429,16 +440,26 @@ async fn render_to_file_impl(
                     image::Rgb([rgba[0], rgba[1], rgba[2]])
                 });
 
-            let screenshot_path = recording_dir_clone.join("screenshots/display.jpg");
-            std::fs::create_dir_all(screenshot_path.parent().unwrap()).unwrap_or_else(|e| {
+            let screenshots_dir = recording_dir_clone.join("screenshots");
+            std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
                 eprintln!("Failed to create screenshots directory: {:?}", e);
             });
 
-            rgb_img.save(screenshot_path).unwrap_or_else(|e| {
+            // Save full-size screenshot
+            let screenshot_path = screenshots_dir.join("display.jpg");
+            rgb_img.save(&screenshot_path).unwrap_or_else(|e| {
                 eprintln!("Failed to save screenshot: {:?}", e);
             });
+
+            // Create and save thumbnail
+            let thumbnail =
+                image::imageops::resize(&rgb_img, 100, 100, image::imageops::FilterType::Lanczos3);
+            let thumbnail_path = screenshots_dir.join("thumbnail.png");
+            thumbnail.save(&thumbnail_path).unwrap_or_else(|e| {
+                eprintln!("Failed to save thumbnail: {:?}", e);
+            });
         } else {
-            eprintln!("No frames were processed, cannot save screenshot");
+            eprintln!("No frames were processed, cannot save screenshot or thumbnail");
         }
     });
 
@@ -1057,12 +1078,6 @@ pub fn run() {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
-            #[cfg(all(desktop))]
-            {
-                let handle = app.handle();
-                tray::create_tray(handle)?;
-            }
-
             if let Err(_error) = handle_ffmpeg_installation() {
                 println!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now");
                 // TODO: UI message instead
@@ -1095,6 +1110,12 @@ pub fn run() {
             })));
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
+
+            #[cfg(all(desktop))]
+            {
+                let handle = app.handle();
+                tray::create_tray(handle)?;
+            }
 
             Ok(())
         })

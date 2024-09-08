@@ -30,6 +30,10 @@
         "enable": true,
         "scope": ["$APPDATA/**"]
       }
+    },
+    "trayIcon": {
+      "iconPath": "icons/tray-default-icon.png",
+      "iconAsTemplate": true
     }
   },
   "plugins": {
