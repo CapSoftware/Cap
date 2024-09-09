@@ -61,7 +61,6 @@ pub struct App {
     handle: AppHandle,
     #[serde(skip)]
     current_recording: Option<InProgressRecording>,
-    prev_recordings: Vec<PathBuf>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -209,11 +208,6 @@ async fn get_current_recording(
 
 #[tauri::command]
 #[specta::specta]
-async fn get_prev_recordings(state: MutableState<'_, App>) -> Result<Vec<PathBuf>, ()> {
-    let state = state.read().await;
-    Ok(state.prev_recordings.clone())
-}
-
 #[tauri::command]
 #[specta::specta]
 async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
@@ -275,7 +269,6 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         .unwrap();
 
     let recording_dir = current_recording.recording_dir.clone();
-    state.prev_recordings.push(recording_dir.clone());
 
     ShowCapturesPanel.emit(&app).ok();
 
@@ -1161,21 +1154,6 @@ pub fn run() {
                     audio_input_name: None
                 },
                 current_recording: None,
-                prev_recordings: std::fs::read_dir(
-                    app.path().app_data_dir().unwrap().join("recordings"),
-                )
-                .map(|d| d.into_iter().collect::<Vec<_>>())
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|entry| {
-                    let path = entry.unwrap().path();
-                    if path.extension()? == "cap" {
-                        Some(path)
-                    } else {
-                        None
-                    }
-                })
-                .collect(),
             })));
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
