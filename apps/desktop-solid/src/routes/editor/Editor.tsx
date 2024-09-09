@@ -1343,21 +1343,27 @@ function Dialogs() {
 
                                   const diff = {
                                     x:
-                                      (moveEvent.clientX - downEvent.clientX) /
-                                      parentDiv.clientWidth,
+                                      ((moveEvent.clientX - downEvent.clientX) /
+                                        parentDiv.clientWidth) *
+                                      display.width,
                                     y:
-                                      (moveEvent.clientY - downEvent.clientY) /
-                                      parentDiv.clientHeight,
+                                      ((moveEvent.clientY - downEvent.clientY) /
+                                        parentDiv.clientHeight) *
+                                      display.height,
                                   };
 
                                   batch(() => {
                                     if (original.position.x + diff.x < 0)
                                       setCrop("position", "x", 0);
                                     else if (
-                                      original.position.x + diff.x + width >
-                                      1
+                                      original.position.x + diff.x >
+                                      display.width - crop.size.x
                                     )
-                                      setCrop("position", "x", 1);
+                                      setCrop(
+                                        "position",
+                                        "x",
+                                        display.width - crop.size.x
+                                      );
                                     else
                                       setCrop(
                                         "position",
@@ -1368,10 +1374,14 @@ function Dialogs() {
                                     if (original.position.y + diff.y < 0)
                                       setCrop("position", "y", 0);
                                     else if (
-                                      original.position.y + diff.y + height >
-                                      1
+                                      original.position.y + diff.y >
+                                      display.height - crop.size.y
                                     )
-                                      setCrop("position", "y", 1);
+                                      setCrop(
+                                        "position",
+                                        "y",
+                                        display.height - crop.size.y
+                                      );
                                     else
                                       setCrop(
                                         "position",
