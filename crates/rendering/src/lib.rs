@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
-use cap_project::{BackgroundSource, CameraXPosition, CameraYPosition, ProjectConfiguration};
+use cap_project::{
+    BackgroundSource, CameraXPosition, CameraYPosition, Crop, ProjectConfiguration, XY,
+};
 
 use std::time::Instant;
 
@@ -331,14 +333,33 @@ impl ProjectUniforms {
         let output_size = [options.output_size.0 as f32, options.output_size.1 as f32];
 
         let display = {
-            let frame_size = [options.screen_size.0 as f32, options.screen_size.1 as f32];
-            let frame_aspect = frame_size[0] / frame_size[1];
-            let min_axis = frame_size[0].min(frame_size[1]);
+            let size = [options.screen_size.0 as f32, options.screen_size.1 as f32];
+
+            let crop_bounds = {
+                let crop = project.background.crop.clone().unwrap_or(Crop {
+                    position: XY { x: 0.0, y: 0.0 },
+                    size: XY { x: size[0], y: size[1] },
+                });
+
+                [
+                    crop.position.x,
+                    crop.position.y,
+                    crop.position.x + crop.size.x,
+                    crop.position.y + crop.size.y,
+                ]
+            };
+
+            let cropped_size = [
+                crop_bounds[2] - crop_bounds[0],
+                crop_bounds[3] - crop_bounds[1],
+            ];
+            let cropped_aspect = cropped_size[0] / cropped_size[1];
+
             let y_padding =
                 project.background.padding / 100.0 * SCREEN_MAX_PADDING * output_size[1];
 
             let target_height = (output_size[1] - y_padding) - y_padding;
-            let target_width = target_height * frame_aspect;
+            let target_width = target_height * cropped_aspect;
             let target_left_bounds = (output_size[0] - target_width) / 2.0;
             let target_bounds = [
                 target_left_bounds,
@@ -351,8 +372,8 @@ impl ProjectUniforms {
 
             CompositeVideoFrameUniforms {
                 output_size,
-                frame_size,
-                crop_bounds: [0.0, 0.0, frame_size[0], frame_size[1]],
+                frame_size: size,
+                crop_bounds,
                 target_bounds,
                 target_size,
                 rounding_px: project.background.rounding / 100.0 * 0.5 * min_target_axis,

@@ -25,6 +25,7 @@ use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
+use project_recordings::ProjectRecordings;
 use recording::{DisplaySource, InProgressRecording};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -565,6 +566,7 @@ struct SerializedEditorInstance {
     frames_socket_url: String,
     recording_duration: f64,
     saved_project_config: Option<ProjectConfiguration>,
+    recordings: ProjectRecordings,
 }
 
 #[tauri::command]
@@ -583,6 +585,7 @@ async fn create_editor_instance(
         )
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok()),
+        recordings: editor_instance.recordings.clone(),
     })
 }
 

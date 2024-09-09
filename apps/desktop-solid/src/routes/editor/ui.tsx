@@ -90,7 +90,7 @@ export function Input(props: ComponentProps<"input">) {
     <input
       {...props}
       class={cx(
-        "rounded-[0.5rem] h-[2rem] p-[0.375rem] border w-full text-gray-500 text-[0.875rem] focus:border-blue-300 outline-none",
+        "rounded-[0.5rem] h-[2rem] p-[0.375rem] border w-full text-[0.875rem] focus:border-blue-300 outline-none",
         props.class
       )}
     />
@@ -98,7 +98,12 @@ export function Input(props: ComponentProps<"input">) {
 }
 
 export const Dialog = {
-  Root(props: ComponentProps<typeof KDialog> & { hideOverlay?: boolean }) {
+  Root(
+    props: ComponentProps<typeof KDialog> & {
+      hideOverlay?: boolean;
+      size?: "sm" | "lg";
+    }
+  ) {
     return (
       <KDialog {...props}>
         <KDialog.Portal>
@@ -106,7 +111,12 @@ export const Dialog = {
             <KDialog.Overlay class="fixed inset-0 z-50 bg-black-transparent-80 ui-expanded:animate-in ui-expanded:fade-in ui-closed:animate-out ui-closed:fade-out" />
           )}
           <div class="fixed inset-0 z-50 flex items-center justify-center">
-            <KDialog.Content class="z-50 divide-y text-sm rounded-[1.25rem] overflow-hidden max-w-96 border border-gray-200 bg-gray-50 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95">
+            <KDialog.Content
+              class={cx(
+                "z-50 divide-y text-sm rounded-[1.25rem] overflow-hidden border border-gray-200 bg-gray-50 min-w-[22rem] ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 origin-top ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95",
+                (props.size ?? "sm") === "sm" ? "max-w-96" : "max-w-3xl"
+              )}
+            >
               {props.children}
             </KDialog.Content>
           </div>
@@ -142,11 +152,9 @@ export const Dialog = {
       </div>
     );
   },
-  Header(props: { title: string } & ComponentProps<"div">) {
+  Header(props: ComponentProps<"div">) {
     return (
-      <div {...props} class="h-[3.5rem] px-[1rem] flex flex-row items-center">
-        <KDialog.Title>{props.title}</KDialog.Title>
-      </div>
+      <div {...props} class="h-[3.5rem] px-[1rem] flex flex-row items-center" />
     );
   },
   Content(props: ComponentProps<"div">) {
@@ -159,7 +167,9 @@ export function DialogContent(
 ) {
   return (
     <>
-      <Dialog.Header title={props.title} />
+      <Dialog.Header>
+        <KDialog.Title>{props.title}</KDialog.Title>
+      </Dialog.Header>
       <Dialog.Content class={props.class}>{props.children}</Dialog.Content>
       <Dialog.Footer>{props.confirm}</Dialog.Footer>
     </>

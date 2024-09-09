@@ -1,5 +1,5 @@
 import { createContextProvider } from "@solid-primitives/context";
-import { createEffect, createSignal, on } from "solid-js";
+import { type Accessor, createEffect, createSignal, on } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import { debounce } from "@solid-primitives/scheduled";
 import { createUndoHistory } from "@solid-primitives/history";
@@ -10,6 +10,7 @@ import {
   type SerializedEditorInstance,
   type ProjectConfiguration,
   commands,
+  type XY,
 } from "../../utils/tauri";
 import { useEditorInstanceContext } from "./editorInstanceContext";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
@@ -18,7 +19,7 @@ export type CurrentDialog =
   | { type: "createPreset" }
   | { type: "renamePreset"; presetId: string }
   | { type: "deletePreset"; presetId: string }
-  | { type: "crop" };
+  | { type: "crop"; position: XY<number>; size: XY<number> };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 

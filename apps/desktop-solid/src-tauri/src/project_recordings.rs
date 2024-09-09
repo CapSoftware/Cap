@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
 use cap_project::RecordingMeta;
+use serde::Serialize;
+use specta::Type;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct Video {
-    pub duration: i64,
+    pub duration: f64,
     pub width: u32,
     pub height: u32,
     pub fps: f32,
@@ -29,15 +31,15 @@ impl Video {
         Video {
             width: video_decoder.width(),
             height: video_decoder.height(),
-            duration: input.duration(),
+            duration: (input.duration() / 1_000_000) as f64,
             fps: frame_rate.numerator() as f32 / frame_rate.denominator() as f32,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct Audio {
-    pub duration: i64,
+    pub duration: f64,
     pub sample_rate: u32,
     pub channels: u16,
 }
@@ -57,14 +59,14 @@ impl Audio {
             .unwrap();
 
         Audio {
-            duration: input.duration(),
+            duration: (input.duration() / 1_000_000) as f64,
             sample_rate: video_decoder.rate(),
             channels: video_decoder.channels(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Type)]
 pub struct ProjectRecordings {
     pub display: Video,
     pub camera: Option<Video>,
@@ -91,16 +93,15 @@ impl ProjectRecordings {
     }
 
     pub fn duration(&self) -> f64 {
-        let duration_ns = [
+        let mut duration_ns = [
             Some(self.display.duration),
             self.camera.as_ref().map(|s| s.duration),
             self.audio.as_ref().map(|s| s.duration),
         ]
         .into_iter()
         .flatten()
-        .max()
-        .unwrap();
-
-        duration_ns as f64 / 1_000_000.0
+        .collect::<Vec<_>>();
+        duration_ns.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        duration_ns[0]
     }
 }

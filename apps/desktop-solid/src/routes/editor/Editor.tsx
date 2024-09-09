@@ -20,8 +20,10 @@ import {
   Match,
   Show,
   Switch,
+  batch,
   createEffect,
   createMemo,
+  createRoot,
   createSignal,
   on,
   onMount,
@@ -65,9 +67,17 @@ export function Editor() {
     <Show when={videoId()} fallback="No video id available" keyed>
       {(videoId) => (
         <EditorInstanceContextProvider videoId={videoId}>
-          <Show when={useEditorInstanceContext().editorInstance()}>
-            {(editorInstance) => (
-              <EditorContextProvider editorInstance={editorInstance()}>
+          <Show
+            when={(() => {
+              const ctx = useEditorInstanceContext();
+              const editorInstance = ctx.editorInstance();
+
+              if (!editorInstance) return;
+              return { editorInstance };
+            })()}
+          >
+            {(values) => (
+              <EditorContextProvider {...values()}>
                 <Inner />
               </EditorContextProvider>
             )}
@@ -79,7 +89,7 @@ export function Editor() {
 }
 
 function Inner() {
-  const { setCanvasRef, state, videoId, editorInstance, history } =
+  const { state, videoId, editorInstance, history, currentFrame, setDialog } =
     useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
@@ -161,6 +171,15 @@ function Inner() {
     };
   });
 
+  let canvasRef: HTMLCanvasElement;
+
+  createEffect(() => {
+    const frame = currentFrame();
+    if (!frame) return;
+    const ctx = canvasRef.getContext("2d");
+    ctx?.putImageData(frame, 0, 0);
+  });
+
   return (
     <div
       class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg leading-5"
@@ -173,7 +192,26 @@ function Inner() {
             <div class="flex flex-row justify-between font-medium p-[0.75rem] text-[0.875rem]">
               <div class="flex flex-row items-center gap-[0.5rem]">
                 <AspectRatioSelect />
-                <EditorButton leftIcon={<IconCapCrop />}>Crop</EditorButton>
+                <EditorButton
+                  leftIcon={<IconCapCrop />}
+                  onClick={() => {
+                    setDialog({
+                      open: true,
+                      type: "crop",
+                      position: {
+                        ...(state.background.crop?.position ?? { x: 0, y: 0 }),
+                      },
+                      size: {
+                        ...(state.background.crop?.size ?? {
+                          x: editorInstance.recordings.display.width,
+                          y: editorInstance.recordings.display.height,
+                        }),
+                      },
+                    });
+                  }}
+                >
+                  Crop
+                </EditorButton>
                 <PresetsDropdown />
               </div>
               <div class="flex flex-row place-items-center gap-2">
@@ -196,7 +234,8 @@ function Inner() {
             <div class="bg-gray-100 flex items-center justify-center flex-1 flex-row object-contain p-4">
               <canvas
                 class="bg-blue-50 w-full"
-                ref={setCanvasRef}
+                // biome-ignore lint/style/noNonNullAssertion: ref
+                ref={canvasRef!}
                 id="canvas"
                 width={OUTPUT_SIZE.width}
                 height={OUTPUT_SIZE.height}
@@ -345,7 +384,7 @@ function Header() {
   );
 }
 
-import { Channel } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
   EditorInstanceContextProvider,
@@ -357,6 +396,10 @@ import {
   DEFAULT_GRADIENT_FROM,
   DEFAULT_GRADIENT_TO,
 } from "./projectConfig";
+import {
+  createEventListener,
+  createEventListenerMap,
+} from "@solid-primitives/event-listener";
 
 function ExportButton() {
   const { videoId, state: project } = useEditorContext();
@@ -954,7 +997,7 @@ function AspectRatioSelect() {
           {(state) => {
             const text = () => {
               const option = state.selectedOption();
-              option === "auto" ? "Auto" : ASPECT_RATIOS[option].name;
+              return option === "auto" ? "Auto" : ASPECT_RATIOS[option].name;
             };
             return <>{text()}</>;
           }}
@@ -1104,6 +1147,7 @@ function Dialogs() {
 
   return (
     <Dialog.Root
+      size={dialog().type === "crop" ? "lg" : "sm"}
       open={dialog().open}
       onOpenChange={(o) => {
         if (!o) setDialog((d) => ({ ...d, open: false }));
@@ -1183,6 +1227,323 @@ function Dialogs() {
                 </DialogContent>
               )}
             </Match>
+            <Match
+              when={(() => {
+                const d = dialog();
+                if (d.type === "crop") return d;
+              })()}
+            >
+              {(dialog) => {
+                const { setState, editorInstance } = useEditorContext();
+                const [params] = useSearchParams<{ path: string }>();
+                const [crop, setCrop] = createStore({
+                  position: dialog().position,
+                  size: dialog().size,
+                });
+
+                const display = editorInstance.recordings.display;
+
+                const styles = createMemo(() => {
+                  return {
+                    left: `${(crop.position.x / display.width) * 100}%`,
+                    top: `${(crop.position.y / display.height) * 100}%`,
+                    right: `calc(${
+                      ((display.width - crop.size.x - crop.position.x) /
+                        display.width) *
+                      100
+                    }%)`,
+                    bottom: `calc(${
+                      ((display.height - crop.size.y - crop.position.y) /
+                        display.height) *
+                      100
+                    }%)`,
+                  };
+                });
+
+                return (
+                  <>
+                    <Dialog.Header>
+                      <div class="flex flex-row space-x-[0.75rem]">
+                        {/* <AspectRatioSelect />*/}
+                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
+                          <span>Size</span>
+                          <Input
+                            class="w-[3.25rem]"
+                            value={crop.size.x}
+                            disabled
+                          />
+                          <span>x</span>
+                          <Input
+                            class="w-[3.25rem]"
+                            value={crop.size.y}
+                            disabled
+                          />
+                        </div>
+                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
+                          <span>Position</span>
+                          <Input
+                            class="w-[3.25rem]"
+                            value={crop.position.x}
+                            disabled
+                          />
+                          <span>x</span>
+                          <Input
+                            class="w-[3.25rem]"
+                            value={crop.position.y}
+                            disabled
+                          />
+                        </div>
+                      </div>
+                      <EditorButton
+                        leftIcon={<IconCapCircleX />}
+                        class="ml-auto"
+                        onClick={() =>
+                          setCrop({
+                            position: { x: 0, y: 0 },
+                            size: {
+                              x: editorInstance.recordings.display.width,
+                              y: editorInstance.recordings.display.height,
+                            },
+                          })
+                        }
+                      >
+                        Reset
+                      </EditorButton>
+                    </Dialog.Header>
+                    <Dialog.Content>
+                      <div class="relative">
+                        <div class="divide-black-transparent-10 overflow-hidden rounded-lg">
+                          <img
+                            class="shadow pointer-events-none"
+                            alt="screenshot"
+                            src={convertFileSrc(
+                              `${params.path}/screenshots/display.jpg`
+                            )}
+                          />
+                        </div>
+                        <div
+                          class="bg-white-transparent-20 absolute cursor-move"
+                          style={styles()}
+                          onMouseDown={(downEvent) => {
+                            const parentDiv =
+                              downEvent.target.parentElement?.parentElement;
+                            if (!parentDiv) return;
+
+                            const original = {
+                              position: { ...crop.position },
+                              size: { ...crop.size },
+                            };
+
+                            createRoot((dispose) => {
+                              createEventListenerMap(window, {
+                                mouseup: () => dispose(),
+                                mousemove: (moveEvent) => {
+                                  const width = crop.size.x;
+                                  const height = crop.size.y;
+
+                                  const diff = {
+                                    x:
+                                      (moveEvent.clientX - downEvent.clientX) /
+                                      parentDiv.clientWidth,
+                                    y:
+                                      (moveEvent.clientY - downEvent.clientY) /
+                                      parentDiv.clientHeight,
+                                  };
+
+                                  batch(() => {
+                                    if (original.position.x + diff.x < 0)
+                                      setCrop("position", "x", 0);
+                                    else if (
+                                      original.position.x + diff.x + width >
+                                      1
+                                    )
+                                      setCrop("position", "x", 1);
+                                    else
+                                      setCrop(
+                                        "position",
+                                        "x",
+                                        original.position.x + diff.x
+                                      );
+
+                                    if (original.position.y + diff.y < 0)
+                                      setCrop("position", "y", 0);
+                                    else if (
+                                      original.position.y + diff.y + height >
+                                      1
+                                    )
+                                      setCrop("position", "y", 1);
+                                    else
+                                      setCrop(
+                                        "position",
+                                        "y",
+                                        original.position.y + diff.y
+                                      );
+                                  });
+                                },
+                              });
+                            });
+                          }}
+                        >
+                          <For
+                            each={Array.from({ length: 4 }, (_, i) => ({
+                              x: i < 2 ? ("l" as const) : ("r" as const),
+                              y: i % 2 === 0 ? ("t" as const) : ("b" as const),
+                            }))}
+                          >
+                            {(pos) => {
+                              const behaviours = {
+                                x:
+                                  pos.x === "l"
+                                    ? ("both" as const)
+                                    : ("resize" as const),
+                                y:
+                                  pos.y === "t"
+                                    ? ("both" as const)
+                                    : ("resize" as const),
+                              };
+
+                              return (
+                                <button
+                                  type="button"
+                                  class="absolute"
+                                  style={{
+                                    ...(pos.x === "l"
+                                      ? { left: "0px" }
+                                      : { right: "0px" }),
+                                    ...(pos.y === "t"
+                                      ? { top: "0px" }
+                                      : { bottom: "0px" }),
+                                  }}
+                                  onMouseDown={(downEvent) => {
+                                    downEvent.stopPropagation();
+
+                                    const parentDiv =
+                                      downEvent.target.parentElement
+                                        ?.parentElement?.parentElement;
+                                    if (!parentDiv) return;
+
+                                    const original = {
+                                      position: { ...crop.position },
+                                      size: { ...crop.size },
+                                    };
+
+                                    const MIN_SIZE = 100;
+
+                                    createRoot((dispose) => {
+                                      createEventListenerMap(window, {
+                                        mouseup: () => dispose(),
+                                        mousemove: (moveEvent) => {
+                                          batch(() => {
+                                            const diff = {
+                                              x:
+                                                ((moveEvent.clientX -
+                                                  downEvent.clientX) /
+                                                  parentDiv.clientWidth) *
+                                                display.width,
+                                              y:
+                                                ((moveEvent.clientY -
+                                                  downEvent.clientY) /
+                                                  parentDiv.clientHeight) *
+                                                display.height,
+                                            };
+
+                                            if (behaviours.x === "resize") {
+                                              setCrop(
+                                                "size",
+                                                "x",
+                                                clamp(
+                                                  original.size.x + diff.x,
+                                                  MIN_SIZE,
+                                                  editorInstance.recordings
+                                                    .display.width -
+                                                    crop.position.x
+                                                )
+                                              );
+                                            } else {
+                                              setCrop(
+                                                "position",
+                                                "x",
+                                                clamp(
+                                                  original.position.x + diff.x,
+                                                  0,
+                                                  editorInstance.recordings
+                                                    .display.width - MIN_SIZE
+                                                )
+                                              );
+                                              setCrop(
+                                                "size",
+                                                "x",
+                                                clamp(
+                                                  original.size.x - diff.x,
+                                                  MIN_SIZE,
+                                                  editorInstance.recordings
+                                                    .display.width
+                                                )
+                                              );
+                                            }
+
+                                            if (behaviours.y === "resize") {
+                                              setCrop(
+                                                "size",
+                                                "y",
+                                                clamp(
+                                                  original.size.y + diff.y,
+                                                  MIN_SIZE,
+                                                  editorInstance.recordings
+                                                    .display.height -
+                                                    crop.position.y
+                                                )
+                                              );
+                                            } else {
+                                              setCrop(
+                                                "position",
+                                                "y",
+                                                clamp(
+                                                  original.position.y + diff.y,
+                                                  0,
+                                                  editorInstance.recordings
+                                                    .display.height - MIN_SIZE
+                                                )
+                                              );
+                                              setCrop(
+                                                "size",
+                                                "y",
+                                                clamp(
+                                                  original.size.y - diff.y,
+                                                  MIN_SIZE,
+                                                  editorInstance.recordings
+                                                    .display.height
+                                                )
+                                              );
+                                            }
+                                          });
+                                        },
+                                      });
+                                    });
+                                  }}
+                                >
+                                  <div class="size-[1rem] bg-gray-500 border border-gray-50 rounded-full absolute -top-[0.5rem] -left-[0.5rem]" />
+                                </button>
+                              );
+                            }}
+                          </For>
+                        </div>
+                      </div>
+                    </Dialog.Content>
+                    <Dialog.Footer>
+                      <Button
+                        onClick={() => {
+                          setState("background", "crop", crop);
+                          setDialog((d) => ({ ...d, open: false }));
+                        }}
+                      >
+                        Save
+                      </Button>
+                    </Dialog.Footer>
+                  </>
+                );
+              }}
+            </Match>
           </Switch>
         )}
       </Show>
@@ -1254,4 +1615,8 @@ function hexToRgb(hex: string): [number, number, number] | null {
   const match = hex.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
   if (!match) return null;
   return match.slice(1).map((c) => Number.parseInt(c, 16)) as any;
+}
+
+function clamp(n: number, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, n));
 }

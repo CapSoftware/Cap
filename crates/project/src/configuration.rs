@@ -31,12 +31,27 @@ impl Default for BackgroundSource {
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct XY<T> {
+    pub x: T,
+    pub y: T,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Crop {
+	pub position: XY<f32>,
+	pub size: XY<f32>
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
     pub blur: u32,
     pub padding: f32,
     pub rounding: f32,
     pub inset: u32,
+    pub crop: Option<Crop>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]

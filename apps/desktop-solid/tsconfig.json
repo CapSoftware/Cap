@@ -14,7 +14,7 @@
     "noEmit": true,
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
-    "types": ["vite/client", "vinxi/client", "@cap/ui-solid/types"],
+    "types": ["vinxi/client", "@cap/ui-solid/types"],
 
     /* Linting */
     "strict": true

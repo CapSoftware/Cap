@@ -174,8 +174,9 @@ showCapturesPanel: "show-captures-panel"
 /** user-defined types **/
 
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
+export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
-export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number }
+export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
 export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number] }
 export type Bounds = { x: number; y: number; width: number; height: number }
 export type CameraConfiguration = { hide: boolean; mirror: boolean; position: CameraPosition; rounding: number; shadow: number }
@@ -184,6 +185,7 @@ export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
 export type CaptureTarget = { type: "screen" } | { type: "window"; id: number }
 export type CaptureWindow = { id: number; name: string }
+export type Crop = { position: XY<number>; size: XY<number> }
 export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: CursorType }
 export type CursorType = "pointer" | "circle"
 export type DisplaySource = { variant: "screen" } | { variant: "window"; bounds: Bounds }
@@ -193,13 +195,16 @@ export type InProgressRecording = { recordingDir: string; displaySource: Display
 export type JsonValue<T> = [T]
 export type NewRecordingAdded = { path: string }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
+export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
-export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null; recordings: ProjectRecordings }
 export type ShowCapturesPanel = null
+export type Video = { duration: number; width: number; height: number; fps: number }
 export type VideoType = "screen" | "output"
+export type XY<T> = { x: T; y: T }
 
 /** tauri-specta globals **/
 
