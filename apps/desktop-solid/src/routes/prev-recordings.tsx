@@ -25,6 +25,7 @@ import { createStore, produce } from "solid-js/store";
 import { makePersisted } from "@solid-primitives/storage";
 import { commands, events } from "../utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
+import { createPresets } from "./createPresets";
 
 type RecordingEntry = {
   path: string;
@@ -33,6 +34,7 @@ type RecordingEntry = {
 };
 
 export default function () {
+  const presets = createPresets();
   const [recordings, setRecordings] = makePersisted(
     createStore<RecordingEntry[]>([]),
     { name: "recordings-store" }
@@ -79,7 +81,7 @@ export default function () {
                   try {
                     await commands.copyRenderedVideoToClipboard(
                       videoId,
-                      DEFAULT_PROJECT_CONFIG
+                      presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
                     );
                   } catch (error) {
                     console.error("Failed to copy to clipboard", error);
@@ -94,7 +96,7 @@ export default function () {
                   try {
                     const renderedPath = await commands.getRenderedVideo(
                       videoId,
-                      DEFAULT_PROJECT_CONFIG
+                      presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
                     );
 
                     if (renderedPath.status !== "ok")

@@ -22,6 +22,7 @@ import {
 import { useEditorInstanceContext } from "./editorInstanceContext";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { Store } from "@tauri-apps/plugin-store";
+import { createPresets } from "../createPresets";
 
 export type CurrentDialog =
   | { type: "createPreset" }
@@ -147,79 +148,3 @@ type Static<T = unknown> =
       [K in number | string]: T;
     }
   | T[];
-
-const store = new Store("frontend-stuff");
-
-type Presets = {
-  presets: Array<{
-    name: string;
-    config: ProjectConfiguration;
-  }>;
-  default?: number;
-};
-
-export type CreatePreset = {
-  name: string;
-  config: ProjectConfiguration;
-  default: boolean;
-};
-
-function createPresets() {
-  const [query, queryActions] = createResource(async () => {
-    return (
-      (await store.get<Presets>("presets")) ?? ({ presets: [] } as Presets)
-    );
-  });
-
-  const [cleanup] = createResource(() =>
-    store.onKeyChange<Presets>("presets", (data) => {
-      if (data) queryActions.mutate(data);
-    })
-  );
-  onCleanup(() => cleanup()?.());
-
-  return {
-    query,
-    createPreset: async (preset: CreatePreset) => {
-      const p = query();
-      if (!p) throw new Error("Presets not loaded");
-
-      await store.set("presets", {
-        presets: [...p.presets, { name: preset.name, config: preset.config }],
-        default: preset.default ? p.presets.length : p.default,
-      });
-    },
-    deletePreset: async (index: number) => {
-      const p = query();
-      if (!p) throw new Error("Presets not loaded");
-
-      p.presets.splice(index, 1);
-
-      await store.set("presets", {
-        presets: p.presets,
-        default:
-          index > p.presets.length - 1 ? p.presets.length - 1 : p.default,
-      });
-    },
-    setDefault: async (index: number) => {
-      const p = query();
-      if (!p) throw new Error("Presets not loaded");
-
-      await store.set("presets", {
-        presets: [...p.presets],
-        default: index,
-      });
-    },
-    renamePreset: async (index: number, name: string) => {
-      const p = query();
-      if (!p) throw new Error("Presets not loaded");
-
-      p.presets[index].name = name;
-
-      await store.set("presets", {
-        presets: p.presets,
-        default: p.default,
-      });
-    },
-  };
-}
