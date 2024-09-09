@@ -30,6 +30,7 @@
     "@tauri-apps/api": ">=2.0.0-rc.0",
     "@tauri-apps/plugin-dialog": "2.0.0-rc.1",
     "@tauri-apps/plugin-fs": "2.0.0-rc.0",
+    "@tauri-apps/plugin-os": "2.0.0-rc.1",
     "@tauri-apps/plugin-shell": ">=2.0.0-rc.0",
     "@tauri-apps/plugin-store": "2.0.0-rc.0",
     "@types/react-tooltip": "^4.2.4",

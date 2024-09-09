@@ -21,8 +21,7 @@ import {
 } from "../../utils/tauri";
 import { useEditorInstanceContext } from "./editorInstanceContext";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
-import { Store } from "@tauri-apps/plugin-store";
-import { createPresets } from "../createPresets";
+import type { PresetsStore } from "../createPresets";
 
 export type CurrentDialog =
   | { type: "createPreset" }
@@ -33,10 +32,15 @@ export type CurrentDialog =
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
-  (props: { editorInstance: SerializedEditorInstance }) => {
+  (props: {
+    editorInstance: SerializedEditorInstance;
+    presets: PresetsStore;
+  }) => {
     const editorInstanceContext = useEditorInstanceContext();
     const [project, setProject] = createStore<ProjectConfiguration>(
-      props.editorInstance.savedProjectConfig ?? DEFAULT_PROJECT_CONFIG
+      props.editorInstance.savedProjectConfig ??
+        props.presets.presets[props.presets.default ?? 0].config ??
+        DEFAULT_PROJECT_CONFIG
     );
 
     createEffect(
@@ -69,7 +73,6 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       selectedTab,
       setSelectedTab,
       history: createStoreHistory(project, setProject),
-      presets: createPresets(),
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok

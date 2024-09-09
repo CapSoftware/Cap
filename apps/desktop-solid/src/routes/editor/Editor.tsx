@@ -30,6 +30,7 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
+import { platform } from "@tauri-apps/plugin-os";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import { Equal } from "effect";
@@ -64,22 +65,20 @@ import {
 } from "./ui";
 
 export function Editor() {
-  const [params] = useSearchParams<{ path: string }>();
-
-  // biome-ignore lint/style/noNonNullAssertion: it's fine i swear
-  const videoId = () => params.path?.split("/").at(-1)?.split(".")[0]!;
+  const [params] = useSearchParams<{ id: string }>();
 
   return (
-    <Show when={videoId()} fallback="No video id available" keyed>
+    <Show when={params.id} fallback="No video id available" keyed>
       {(videoId) => (
         <EditorInstanceContextProvider videoId={videoId}>
           <Show
             when={(() => {
               const ctx = useEditorInstanceContext();
               const editorInstance = ctx.editorInstance();
+              const presets = ctx.presets.query();
 
-              if (!editorInstance) return;
-              return { editorInstance };
+              if (!editorInstance || !presets) return;
+              return { editorInstance, presets };
             })()}
           >
             {(values) => (
@@ -373,11 +372,13 @@ function formatTime(secs: number) {
 }
 
 function Header() {
-  const [params] = useSearchParams<{ path: string }>();
-
+  const [os] = createResource(() => platform());
   return (
     <header
-      class="flex flex-row justify-between items-center"
+      class={cx(
+        "flex flex-row justify-between items-center",
+        os() === "macos" && "pl-[4.3rem]"
+      )}
       data-tauri-drag-region
     >
       <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]">
@@ -549,7 +550,7 @@ const BACKGROUND_SOURCES_LIST = [
 ] satisfies Array<BackgroundSource["type"]>;
 
 function SettingsSidebar() {
-  const { selectedTab, setSelectedTab, project, setProject } =
+  const { selectedTab, setSelectedTab, project, setProject, editorInstance } =
     useEditorContext();
 
   return (
@@ -561,7 +562,11 @@ function SettingsSidebar() {
         <For
           each={[
             { id: "background" as const, icon: IconCapImage },
-            { id: "camera" as const, icon: IconCapCamera },
+            {
+              id: "camera" as const,
+              icon: IconCapCamera,
+              disabled: editorInstance.recordings.camera === null,
+            },
             // {
             //   id: "transcript" as const,
             //   icon: IconCapMessageBubble,
@@ -574,8 +579,9 @@ function SettingsSidebar() {
           {(item) => (
             <KTabs.Trigger
               value={item.id}
-              class="flex-1 text-gray-400 ui-selected:text-gray-500 z-10"
+              class="flex-1 text-gray-400 ui-selected:text-gray-500 z-10 disabled:text-gray-300"
               onClick={() => setSelectedTab(item.id)}
+              disabled={item.disabled}
             >
               <Dynamic class="mx-auto" component={item.icon} />
             </KTabs.Trigger>
@@ -1324,7 +1330,6 @@ function Dialogs() {
               {(dialog) => {
                 const { setProject: setState, editorInstance } =
                   useEditorContext();
-                const [params] = useSearchParams<{ path: string }>();
                 const [crop, setCrop] = createStore({
                   position: dialog().position,
                   size: dialog().size,
@@ -1409,7 +1414,7 @@ function Dialogs() {
                             class="shadow pointer-events-none"
                             alt="screenshot"
                             src={convertFileSrc(
-                              `${params.path}/screenshots/display.jpg`
+                              `${editorInstance.path}/screenshots/display.jpg`
                             )}
                           />
                         </div>

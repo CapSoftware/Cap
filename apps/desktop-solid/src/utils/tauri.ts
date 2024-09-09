@@ -147,6 +147,9 @@ async openInFinder(path: string) : Promise<void> {
 },
 async saveProjectConfig(videoId: string, config: ProjectConfiguration) : Promise<void> {
     await TAURI_INVOKE("save_project_config", { videoId, config });
+},
+async openEditor(id: string) : Promise<void> {
+    await TAURI_INVOKE("open_editor", { id });
 }
 }
 
@@ -200,7 +203,7 @@ export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: stri
 export type RecordingOptionsChanged = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
-export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null; recordings: ProjectRecordings }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null; recordings: ProjectRecordings; path: string }
 export type ShowCapturesPanel = null
 export type Video = { duration: number; width: number; height: number; fps: number }
 export type VideoType = "screen" | "output"

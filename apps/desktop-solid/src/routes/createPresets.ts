@@ -5,7 +5,7 @@ import type { ProjectConfiguration } from "../utils/tauri";
 
 const store = new Store("frontend-stuff");
 
-type PresetsStore = {
+export type PresetsStore = {
   presets: Array<{
     name: string;
     config: ProjectConfiguration;

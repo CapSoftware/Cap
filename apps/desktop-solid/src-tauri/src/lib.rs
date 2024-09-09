@@ -35,7 +35,7 @@ use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
 };
-use tauri::{AppHandle, Manager, State, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
@@ -566,6 +566,7 @@ struct SerializedEditorInstance {
     recording_duration: f64,
     saved_project_config: Option<ProjectConfiguration>,
     recordings: ProjectRecordings,
+    path: PathBuf
 }
 
 #[tauri::command]
@@ -585,6 +586,7 @@ async fn create_editor_instance(
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok()),
         recordings: editor_instance.recordings.clone(),
+        path: editor_instance.project_path.clone(),
     })
 }
 
@@ -873,6 +875,26 @@ fn show_previous_recordings_window(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
+fn open_editor(app: AppHandle, id: String) {
+    let window = WebviewWindow::builder(
+        &app,
+        format!("editor-{id}"),
+        WebviewUrl::App(format!("/editor?id={id}").into()),
+    )
+    .inner_size(1150.0, 800.0)
+    .title("Cap Editor")
+    .hidden_title(true)
+    .title_bar_style(tauri::TitleBarStyle::Overlay)
+    .theme(Some(tauri::Theme::Light))
+    .build()
+    .unwrap();
+
+    window.create_overlay_titlebar().unwrap();
+    window.set_traffic_lights_inset(20.0, 48.0).unwrap();
+}
+
+#[tauri::command]
+#[specta::specta]
 fn close_previous_recordings_window(app: AppHandle) {
     if let Ok(panel) = app.get_webview_panel(PREV_RECORDINGS_WINDOW) {
         panel.released_when_closed(true);
@@ -1053,7 +1075,8 @@ pub fn run() {
             stop_playback,
             set_playhead_position,
             open_in_finder,
-            save_project_config
+            save_project_config,
+            open_editor
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1077,6 +1100,7 @@ pub fn run() {
         .plugin(tauri_nspanel::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_os::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);

@@ -227,12 +227,7 @@ export default function () {
                             tooltipText="Edit"
                             tooltipPlacement="right"
                             onClick={() => {
-                              new WebviewWindow(`editor-${videoId}`, {
-                                width: 1150,
-                                height: 800,
-                                title: "Cap Editor",
-                                url: `/editor?path=${recording.path}`,
-                              });
+                              commands.openEditor(videoId);
                             }}
                           >
                             <IconCapEditor class="size-[1rem]" />

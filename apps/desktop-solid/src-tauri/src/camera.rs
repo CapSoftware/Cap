@@ -52,6 +52,7 @@ pub fn create_camera_window(app: AppHandle) {
     }
 }
 
+
 #[tauri::command]
 #[specta::specta]
 pub fn list_cameras() -> Vec<String> {
@@ -74,8 +75,6 @@ pub struct CameraInfo {
     pub human_name: String,
     pub description: String,
 }
-
-struct CaptureStarted {}
 
 pub async fn start_capturing(
     pipe_path: PathBuf,
