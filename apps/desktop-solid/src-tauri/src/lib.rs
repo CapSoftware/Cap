@@ -12,7 +12,6 @@ mod tray;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::ffmpeg_path_as_str;
 use cap_project::ProjectConfiguration;
-use cap_rendering::{RecordingDecoders, RenderOptions};
 use display::{list_capture_windows, Bounds, CaptureTarget};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use ffmpeg_sidecar::{
@@ -1077,6 +1076,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_nspanel::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);

@@ -19,6 +19,7 @@
     "core:webview:allow-create-webview-window",
     "shell:default",
     "fs:default",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    "store:default"
   ]
 }

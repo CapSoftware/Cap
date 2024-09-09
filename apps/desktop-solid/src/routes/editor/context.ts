@@ -1,5 +1,12 @@
 import { createContextProvider } from "@solid-primitives/context";
-import { type Accessor, createEffect, createSignal, on } from "solid-js";
+import {
+  type Accessor,
+  createEffect,
+  createResource,
+  createSignal,
+  on,
+  onCleanup,
+} from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import { debounce } from "@solid-primitives/scheduled";
 import { createUndoHistory } from "@solid-primitives/history";
@@ -14,11 +21,12 @@ import {
 } from "../../utils/tauri";
 import { useEditorInstanceContext } from "./editorInstanceContext";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
+import { Store } from "@tauri-apps/plugin-store";
 
 export type CurrentDialog =
   | { type: "createPreset" }
-  | { type: "renamePreset"; presetId: string }
-  | { type: "deletePreset"; presetId: string }
+  | { type: "renamePreset"; presetIndex: number }
+  | { type: "deletePreset"; presetIndex: number }
   | { type: "crop"; position: XY<number>; size: XY<number> };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
@@ -26,17 +34,17 @@ export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
   (props: { editorInstance: SerializedEditorInstance }) => {
     const editorInstanceContext = useEditorInstanceContext();
-    const [state, setState] = createStore<ProjectConfiguration>(
+    const [project, setProject] = createStore<ProjectConfiguration>(
       props.editorInstance.savedProjectConfig ?? DEFAULT_PROJECT_CONFIG
     );
 
     createEffect(
       on(
         () => {
-          trackStore(state);
+          trackStore(project);
         },
         debounce(() => {
-          commands.saveProjectConfig(editorInstanceContext.videoId, state);
+          commands.saveProjectConfig(editorInstanceContext.videoId, project);
         }),
         { defer: true }
       )
@@ -55,11 +63,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       editorInstance: props.editorInstance,
       dialog,
       setDialog,
-      state,
-      setState,
+      project,
+      setProject,
       selectedTab,
       setSelectedTab,
-      history: createStoreHistory(state, setState),
+      history: createStoreHistory(project, setProject),
+      presets: createPresets(),
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok
@@ -138,3 +147,79 @@ type Static<T = unknown> =
       [K in number | string]: T;
     }
   | T[];
+
+const store = new Store("frontend-stuff");
+
+type Presets = {
+  presets: Array<{
+    name: string;
+    config: ProjectConfiguration;
+  }>;
+  default?: number;
+};
+
+export type CreatePreset = {
+  name: string;
+  config: ProjectConfiguration;
+  default: boolean;
+};
+
+function createPresets() {
+  const [query, queryActions] = createResource(async () => {
+    return (
+      (await store.get<Presets>("presets")) ?? ({ presets: [] } as Presets)
+    );
+  });
+
+  const [cleanup] = createResource(() =>
+    store.onKeyChange<Presets>("presets", (data) => {
+      if (data) queryActions.mutate(data);
+    })
+  );
+  onCleanup(() => cleanup()?.());
+
+  return {
+    query,
+    createPreset: async (preset: CreatePreset) => {
+      const p = query();
+      if (!p) throw new Error("Presets not loaded");
+
+      await store.set("presets", {
+        presets: [...p.presets, { name: preset.name, config: preset.config }],
+        default: preset.default ? p.presets.length : p.default,
+      });
+    },
+    deletePreset: async (index: number) => {
+      const p = query();
+      if (!p) throw new Error("Presets not loaded");
+
+      p.presets.splice(index, 1);
+
+      await store.set("presets", {
+        presets: p.presets,
+        default:
+          index > p.presets.length - 1 ? p.presets.length - 1 : p.default,
+      });
+    },
+    setDefault: async (index: number) => {
+      const p = query();
+      if (!p) throw new Error("Presets not loaded");
+
+      await store.set("presets", {
+        presets: [...p.presets],
+        default: index,
+      });
+    },
+    renamePreset: async (index: number, name: string) => {
+      const p = query();
+      if (!p) throw new Error("Presets not loaded");
+
+      p.presets[index].name = name;
+
+      await store.set("presets", {
+        presets: p.presets,
+        default: p.default,
+      });
+    },
+  };
+}

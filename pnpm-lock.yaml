@@ -59,6 +59,9 @@ importers:
       '@solid-primitives/history':
         specifier: ^0.1.5
         version: 0.1.5(solid-js@1.8.21)
+      '@solid-primitives/memo':
+        specifier: ^1.3.9
+        version: 1.3.9(solid-js@1.8.21)
       '@solid-primitives/resize-observer':
         specifier: ^2.0.26
         version: 2.0.26(solid-js@1.8.21)
@@ -67,7 +70,7 @@ importers:
         version: 1.4.3(solid-js@1.8.21)
       '@solid-primitives/storage':
         specifier: ^4.0.0
-        version: 4.0.0(solid-js@1.8.21)
+        version: 4.0.0(@tauri-apps/plugin-store@2.0.0-rc.0)(solid-js@1.8.21)
       '@solid-primitives/timer':
         specifier: ^1.3.9
         version: 1.3.9(solid-js@1.8.21)
@@ -95,12 +98,18 @@ importers:
       '@tauri-apps/plugin-shell':
         specifier: '>=2.0.0-rc.0'
         version: 2.0.0-rc.0
+      '@tauri-apps/plugin-store':
+        specifier: 2.0.0-rc.0
+        version: 2.0.0-rc.0
       '@types/react-tooltip':
         specifier: ^4.2.4
         version: 4.2.4(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
       cva:
         specifier: npm:class-variance-authority@^0.7.0
         version: class-variance-authority@0.7.0
+      effect:
+        specifier: ^3.7.2
+        version: 3.7.2
       mp4box:
         specifier: ^0.5.2
         version: 0.5.2
@@ -4841,11 +4850,11 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@8.3.0-beta.3':
-    resolution: {integrity: sha512-XqCsNC91a9CpMIdYe3ilO62DVLyda6fol8DyGz7AtX6m+iQCylF658MAEMv4Q/7CcNq66q44wolFSHRXFlNHDA==}
+  '@storybook/builder-vite@8.3.0-beta.4':
+    resolution: {integrity: sha512-ngdtu1Dn9cq2GoK7RL0cTDxnRZ4altblAW7bX9U6WXHHAxP83mIDvbnm+7IDoYuSRwm9KgLf+k8YiarCZTBEHQ==}
     peerDependencies:
       '@preact/preset-vite': '*'
-      storybook: ^8.3.0-beta.3
+      storybook: ^8.3.0-beta.4
       typescript: '>= 4.3.x'
       vite: ^4.0.0 || ^5.0.0
       vite-plugin-glimmerx: '*'
@@ -4868,10 +4877,10 @@ packages:
     peerDependencies:
       storybook: ^8.2.9
 
-  '@storybook/csf-plugin@8.3.0-beta.3':
-    resolution: {integrity: sha512-f2vBfFmjvQ2U+O9MPoqXGPLcqdOARFwFXvtJgm1CK0U9jG2n2HaQaUkWyT1wtYbOzNMp0CYBMkMkCh4Up76oOA==}
+  '@storybook/csf-plugin@8.3.0-beta.4':
+    resolution: {integrity: sha512-VgldiH9nC/P97KEnXyDkS63GxXlfaz7BWdnkqJk+mmnLCnxqJMckQ8fOdjuKOdmOSQMF8r1NjVpRHnMJeCpg3A==}
     peerDependencies:
-      storybook: ^8.3.0-beta.3
+      storybook: ^8.3.0-beta.4
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -5113,6 +5122,9 @@ packages:
 
   '@tauri-apps/plugin-shell@2.0.0-rc.0':
     resolution: {integrity: sha512-bhUcQcrqZoK8H1DFXapr5r1Z75oh6Kd5Tltz97XpZFLREEqp+KhN2Fvyh8r/fKAyenYsTYUIsDsyGdjdueuF9g==}
+
+  '@tauri-apps/plugin-store@2.0.0-rc.0':
+    resolution: {integrity: sha512-KqiEzq6EdRwxrl0/FwyNLwumDBM91xTchdu2a8vfkNub30GuP9z7RskP9ifVRI1gbxfa5TUDi0hKFk/SP7TANQ==}
 
   '@testing-library/dom@10.1.0':
     resolution: {integrity: sha512-wdsYKy5zupPyLCW2Je5DLHSxSfbIp6h80WoHOQc+RPtmPGA52O9x5MJEkv92Sjonpq+poOAtUKhh1kBGAXBrNA==}
@@ -6849,6 +6861,9 @@ packages:
 
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
+
+  effect@3.7.2:
+    resolution: {integrity: sha512-pV7l1+LSZFvVObj4zuy4nYiBaC7qZOfrKV6s/Ef4p3KueiQwZFgamazklwyZ+x7Nyj2etRDFvHE/xkThTfQD1w==}
 
   electron-to-chromium@1.4.637:
     resolution: {integrity: sha512-G7j3UCOukFtxVO1vWrPQUoDk3kL70mtvjc/DC/k2o7lE0wAdq+Vwp1ipagOow+BH0uVztFysLWbkM/RTIrbK3w==}
@@ -16525,10 +16540,12 @@ snapshots:
       '@solid-primitives/utils': 6.2.3(solid-js@1.8.21)
       solid-js: 1.8.21
 
-  '@solid-primitives/storage@4.0.0(solid-js@1.8.21)':
+  '@solid-primitives/storage@4.0.0(@tauri-apps/plugin-store@2.0.0-rc.0)(solid-js@1.8.21)':
     dependencies:
       '@solid-primitives/utils': 6.2.3(solid-js@1.8.21)
       solid-js: 1.8.21
+    optionalDependencies:
+      '@tauri-apps/plugin-store': 2.0.0-rc.0
 
   '@solid-primitives/timer@1.3.9(solid-js@1.8.21)':
     dependencies:
@@ -16706,9 +16723,9 @@ snapshots:
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
 
-  '@storybook/builder-vite@8.3.0-beta.3(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))':
+  '@storybook/builder-vite@8.3.0-beta.4(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))':
     dependencies:
-      '@storybook/csf-plugin': 8.3.0-beta.3(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))
+      '@storybook/csf-plugin': 8.3.0-beta.4(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))
       '@types/find-cache-dir': 3.2.1
       browser-assert: 1.2.1
       es-module-lexer: 1.5.4
@@ -16767,7 +16784,7 @@ snapshots:
       storybook: 8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10)
       unplugin: 1.12.1
 
-  '@storybook/csf-plugin@8.3.0-beta.3(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))':
+  '@storybook/csf-plugin@8.3.0-beta.4(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))':
     dependencies:
       storybook: 8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10)
       unplugin: 1.12.1
@@ -16987,6 +17004,10 @@ snapshots:
   '@tauri-apps/plugin-shell@2.0.0-rc.0':
     dependencies:
       '@tauri-apps/api': 2.0.0-rc.0
+
+  '@tauri-apps/plugin-store@2.0.0-rc.0':
+    dependencies:
+      '@tauri-apps/api': 2.0.0-rc.4
 
   '@testing-library/dom@10.1.0':
     dependencies:
@@ -18956,6 +18977,8 @@ snapshots:
       semver: 7.5.4
 
   ee-first@1.1.1: {}
+
+  effect@3.7.2: {}
 
   electron-to-chromium@1.4.637: {}
 
@@ -23829,7 +23852,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6)):
     dependencies:
-      '@storybook/builder-vite': 8.3.0-beta.3(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))
+      '@storybook/builder-vite': 8.3.0-beta.4(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))
     transitivePeerDependencies:
       - '@preact/preset-vite'
       - storybook

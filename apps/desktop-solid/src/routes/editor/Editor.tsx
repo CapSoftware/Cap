@@ -14,22 +14,27 @@ import { useSearchParams } from "@solidjs/router";
 import { cx } from "cva";
 import {
   type Component,
-  ErrorBoundary,
   For,
   type JSX,
   Match,
   Show,
+  Suspense,
   Switch,
   batch,
   createEffect,
   createMemo,
+  createResource,
   createRoot,
   createSignal,
   on,
+  onCleanup,
   onMount,
 } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
+import { Equal } from "effect";
+import { Store } from "@tauri-apps/plugin-store";
+import { createWritableMemo } from "@solid-primitives/memo";
 
 import {
   events,
@@ -38,6 +43,7 @@ import {
   type CursorType,
   type RenderProgress,
   commands,
+  ProjectConfiguration,
 } from "../../utils/tauri";
 import { EditorContextProvider, useEditorContext } from "./context";
 import {
@@ -89,8 +95,14 @@ export function Editor() {
 }
 
 function Inner() {
-  const { state, videoId, editorInstance, history, currentFrame, setDialog } =
-    useEditorContext();
+  const {
+    project: state,
+    videoId,
+    editorInstance,
+    history,
+    currentFrame,
+    setDialog,
+  } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
 
@@ -405,9 +417,10 @@ import {
   DEFAULT_GRADIENT_FROM,
   DEFAULT_GRADIENT_TO,
 } from "./projectConfig";
+import { createMutation } from "@tanstack/solid-query";
 
 function ExportButton() {
-  const { videoId, state: project } = useEditorContext();
+  const { videoId, project } = useEditorContext();
 
   const [state, setState] = createStore<
     | { open: false; type: "idle" }
@@ -536,7 +549,8 @@ const BACKGROUND_SOURCES_LIST = [
 ] satisfies Array<BackgroundSource["type"]>;
 
 function SettingsSidebar() {
-  const { selectedTab, setSelectedTab, state, setState } = useEditorContext();
+  const { selectedTab, setSelectedTab, project, setProject } =
+    useEditorContext();
 
   return (
     <KTabs
@@ -576,34 +590,34 @@ function SettingsSidebar() {
           <Field name="Background" icon={<IconCapImage />}>
             <KTabs
               class="space-y-3"
-              value={state.background.source.type}
+              value={project.background.source.type}
               onChange={(v) => {
                 const tab = v as BackgroundSource["type"];
 
                 switch (tab) {
                   case "wallpaper": {
-                    setState("background", "source", {
+                    setProject("background", "source", {
                       type: "wallpaper",
                       id: 0,
                     });
                     return;
                   }
                   case "image": {
-                    setState("background", "source", {
+                    setProject("background", "source", {
                       type: "image",
                       path: null,
                     });
                     return;
                   }
                   case "color": {
-                    setState("background", "source", {
+                    setProject("background", "source", {
                       type: "color",
                       value: DEFAULT_GRADIENT_FROM,
                     });
                     return;
                   }
                   case "gradient": {
-                    setState("background", "source", {
+                    setProject("background", "source", {
                       type: "gradient",
                       from: DEFAULT_GRADIENT_FROM,
                       to: DEFAULT_GRADIENT_TO,
@@ -626,10 +640,10 @@ function SettingsSidebar() {
                         class={cx(
                           "w-px h-[0.75rem] rounded-full transition-colors",
                           BACKGROUND_SOURCES_LIST.indexOf(
-                            state.background.source.type
+                            project.background.source.type
                           ) === i ||
                             BACKGROUND_SOURCES_LIST.indexOf(
-                              state.background.source.type
+                              project.background.source.type
                             ) ===
                               i + 1
                             ? "bg-gray-50"
@@ -657,12 +671,12 @@ function SettingsSidebar() {
               <KTabs.Content value="wallpaper">
                 <KRadioGroup
                   value={
-                    state.background.source.type === "wallpaper"
-                      ? state.background.source.id.toString()
+                    project.background.source.type === "wallpaper"
+                      ? project.background.source.id.toString()
                       : undefined
                   }
                   onChange={(v) =>
-                    setState("background", "source", {
+                    setProject("background", "source", {
                       type: "wallpaper",
                       id: Number(v),
                     })
@@ -694,15 +708,15 @@ function SettingsSidebar() {
               <KTabs.Content value="color">
                 <Show
                   when={
-                    state.background.source.type === "color" &&
-                    state.background.source
+                    project.background.source.type === "color" &&
+                    project.background.source
                   }
                 >
                   {(source) => (
                     <RgbInput
                       value={source().value}
                       onChange={(value) =>
-                        setState("background", "source", {
+                        setProject("background", "source", {
                           type: "color",
                           value,
                         })
@@ -717,8 +731,8 @@ function SettingsSidebar() {
               >
                 <Show
                   when={
-                    state.background.source.type === "gradient" &&
-                    state.background.source
+                    project.background.source.type === "gradient" &&
+                    project.background.source
                   }
                 >
                   {(source) => (
@@ -726,7 +740,7 @@ function SettingsSidebar() {
                       <RgbInput
                         value={source().from}
                         onChange={(from) =>
-                          setState("background", "source", {
+                          setProject("background", "source", {
                             type: "gradient",
                             from,
                             to: source().to,
@@ -736,7 +750,7 @@ function SettingsSidebar() {
                       <RgbInput
                         value={source().to}
                         onChange={(to) =>
-                          setState("background", "source", {
+                          setProject("background", "source", {
                             type: "gradient",
                             from: source().from,
                             to,
@@ -753,16 +767,16 @@ function SettingsSidebar() {
           <Field name="Background Blur" icon={<IconCapBlur />}>
             <Slider
               disabled
-              value={[state.background.blur]}
-              onChange={(v) => setState("background", "blur", v[0])}
+              value={[project.background.blur]}
+              onChange={(v) => setProject("background", "blur", v[0])}
               minValue={0}
               maxValue={100}
             />
           </Field>
           <Field name="Padding" icon={<IconCapPadding />}>
             <Slider
-              value={[state.background.padding]}
-              onChange={(v) => setState("background", "padding", v[0])}
+              value={[project.background.padding]}
+              onChange={(v) => setProject("background", "padding", v[0])}
               minValue={0}
               maxValue={40}
               step={0.1}
@@ -770,8 +784,8 @@ function SettingsSidebar() {
           </Field>
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
-              value={[state.background.rounding]}
-              onChange={(v) => setState("background", "rounding", v[0])}
+              value={[project.background.rounding]}
+              onChange={(v) => setProject("background", "rounding", v[0])}
               minValue={0}
               maxValue={100}
               step={0.1}
@@ -780,8 +794,8 @@ function SettingsSidebar() {
           <Field name="Inset" icon={<IconCapInset />}>
             <Slider
               disabled
-              value={[state.background.inset]}
-              onChange={(v) => setState("background", "inset", v[0])}
+              value={[project.background.inset]}
+              onChange={(v) => setProject("background", "inset", v[0])}
               minValue={0}
               maxValue={100}
             />
@@ -792,23 +806,23 @@ function SettingsSidebar() {
             <div class="flex flex-col gap-[0.75rem]">
               <Subfield name="Hide Camera">
                 <Toggle
-                  checked={state.camera.hide}
-                  onChange={(hide) => setState("camera", "hide", hide)}
+                  checked={project.camera.hide}
+                  onChange={(hide) => setProject("camera", "hide", hide)}
                 />
               </Subfield>
               <Subfield name="Mirror Camera">
                 <Toggle
-                  checked={state.camera.mirror}
-                  onChange={(mirror) => setState("camera", "mirror", mirror)}
+                  checked={project.camera.mirror}
+                  onChange={(mirror) => setProject("camera", "mirror", mirror)}
                 />
               </Subfield>
               <div>
                 <Subfield name="Camera Position" class="mt-[0.75rem]" />
                 <KRadioGroup
-                  value={`${state.camera.position.x}:${state.camera.position.y}`}
+                  value={`${project.camera.position.x}:${project.camera.position.y}`}
                   onChange={(v) => {
                     const [x, y] = v.split(":");
-                    setState("camera", "position", { x, y } as any);
+                    setProject("camera", "position", { x, y } as any);
                   }}
                   class="mt-[0.75rem] rounded-[0.5rem] border border-gray-200 bg-gray-100 w-full h-[7.5rem] relative"
                 >
@@ -835,7 +849,7 @@ function SettingsSidebar() {
                               : "left-1/2 transform -translate-x-1/2",
                             item.y === "top" ? "top-2" : "bottom-2"
                           )}
-                          onClick={() => setState("camera", "position", item)}
+                          onClick={() => setProject("camera", "position", item)}
                         >
                           <div class="size-[0.5rem] shrink-0 bg-gray-50 rounded-full" />
                         </RadioGroup.ItemControl>
@@ -848,8 +862,8 @@ function SettingsSidebar() {
           </Field>
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
-              value={[state.camera.rounding]}
-              onChange={(v) => setState("camera", "rounding", v[0])}
+              value={[project.camera.rounding]}
+              onChange={(v) => setProject("camera", "rounding", v[0])}
               minValue={0}
               maxValue={100}
               step={0.1}
@@ -857,8 +871,8 @@ function SettingsSidebar() {
           </Field>
           <Field name="Shadow" icon={<IconCapShadow />}>
             <Slider
-              value={[state.camera.shadow]}
-              onChange={(v) => setState("camera", "shadow", v[0])}
+              value={[project.camera.shadow]}
+              onChange={(v) => setProject("camera", "shadow", v[0])}
               minValue={0}
               maxValue={100}
             />
@@ -900,8 +914,8 @@ function SettingsSidebar() {
           <Field name="Size" icon={<IconCapEnlarge />}>
             <Slider
               disabled
-              value={[state.cursor.size]}
-              onChange={(v) => setState("cursor", "size", v[0])}
+              value={[project.cursor.size]}
+              onChange={(v) => setProject("cursor", "size", v[0])}
               minValue={0}
               maxValue={100}
             />
@@ -924,8 +938,8 @@ function SettingsSidebar() {
                     <button
                       disabled
                       type="button"
-                      onClick={() => setState("cursor", "type", item.type)}
-                      data-selected={state.cursor.type === item.type}
+                      onClick={() => setProject("cursor", "type", item.type)}
+                      data-selected={project.cursor.type === item.type}
                       class="border border-black-transparent-5 bg-gray-100 rounded-lg p-[0.625rem] text-gray-400 data-[selected='true']:text-gray-500 disabled:text-gray-300 focus-visible:outline-blue-300 focus-visible:outline outline-1 outline-offset-1"
                     >
                       <Dynamic
@@ -952,15 +966,15 @@ function SettingsSidebar() {
 }
 
 function AspectRatioSelect() {
-  const { state, setState } = useEditorContext();
+  const { project, setProject } = useEditorContext();
 
   return (
     <KSelect<AspectRatio | "auto">
       disabled
-      value={state.aspectRatio ?? "auto"}
+      value={project.aspectRatio ?? "auto"}
       onChange={(v) => {
         if (v === null) return;
-        setState("aspectRatio", v === "auto" ? null : v);
+        setProject("aspectRatio", v === "auto" ? null : v);
       }}
       defaultValue="auto"
       options={
@@ -1031,7 +1045,7 @@ function AspectRatioSelect() {
 }
 
 function PresetsDropdown() {
-  const { setDialog } = useEditorContext();
+  const { setDialog, presets, setProject } = useEditorContext();
 
   return (
     <KDropdownMenu gutter={8}>
@@ -1042,120 +1056,128 @@ function PresetsDropdown() {
         Presets
       </EditorButton>
       <KDropdownMenu.Portal>
-        <PopperContent<typeof KDropdownMenu.Content>
-          as={KDropdownMenu.Content}
-          class={cx("w-72 max-h-56", topLeftAnimateClasses)}
-        >
-          <MenuItemList<typeof KDropdownMenu.Group>
-            as={KDropdownMenu.Group}
-            class="flex-1 overflow-y-auto scrollbar-none"
+        <Suspense>
+          <PopperContent<typeof KDropdownMenu.Content>
+            as={KDropdownMenu.Content}
+            class={cx("w-72 max-h-56", topLeftAnimateClasses)}
           >
-            <For
-              each={[
-                "Preset One",
-                "Preset Two",
-                "Preset Three",
-                "Preset Four",
-                "Preset Five",
-                "Preset Six",
-                "Preset Seven",
-                "Preset Eight",
-              ]}
+            <MenuItemList<typeof KDropdownMenu.Group>
+              as={KDropdownMenu.Group}
+              class="flex-1 overflow-y-auto scrollbar-none"
             >
-              {(preset, i) => {
-                const [showSettings, setShowSettings] = createSignal(false);
+              <For
+                each={presets.query()?.presets ?? []}
+                fallback={
+                  <div class="w-full text-sm text-gray-400 text-center py-1">
+                    No Presets
+                  </div>
+                }
+              >
+                {(preset, i) => {
+                  const [showSettings, setShowSettings] = createSignal(false);
 
-                return (
-                  <KDropdownMenu.Sub gutter={16}>
-                    <MenuItem<typeof KDropdownMenu.SubTrigger>
-                      as={KDropdownMenu.SubTrigger}
-                      onFocusIn={() => setShowSettings(false)}
-                      onClick={() => setShowSettings(false)}
-                    >
-                      <span class="mr-auto">{preset}</span>
-                      <Show when={i() === 1}>
-                        <span class="px-[0.375rem] h-[1.25rem] rounded-full bg-gray-100 text-gray-400 text-[0.75rem]">
-                          Default
-                        </span>
-                      </Show>
-                      <button
-                        type="button"
-                        class="text-gray-400 hover:text-black"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setShowSettings((s) => !s);
-                        }}
-                        onPointerUp={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                        }}
+                  console.log(presets.query());
+
+                  return (
+                    <KDropdownMenu.Sub gutter={16}>
+                      <MenuItem<typeof KDropdownMenu.SubTrigger>
+                        as={KDropdownMenu.SubTrigger}
+                        onFocusIn={() => setShowSettings(false)}
+                        onClick={() => setShowSettings(false)}
                       >
-                        <IconCapSettings />
-                      </button>
-                    </MenuItem>
-                    <KDropdownMenu.Portal>
-                      {showSettings() && (
-                        <>
-                          BRUH
-                          <MenuItemList<typeof KDropdownMenu.SubContent>
-                            as={KDropdownMenu.SubContent}
-                            class={cx(
-                              "animate-in fade-in slide-in-from-left-1 w-44",
-                              dropdownContainerClasses
-                            )}
-                          >
-                            <DropdownItem>Apply</DropdownItem>
-                            <DropdownItem>Set as default</DropdownItem>
-                            <DropdownItem
-                              onSelect={() =>
-                                setDialog({
-                                  type: "renamePreset",
-                                  presetId: preset,
-                                  open: true,
-                                })
-                              }
+                        <span class="mr-auto">{preset.name}</span>
+                        <Show when={presets.query()?.default === i()}>
+                          <span class="px-[0.375rem] h-[1.25rem] rounded-full bg-gray-100 text-gray-400 text-[0.75rem]">
+                            Default
+                          </span>
+                        </Show>
+                        <button
+                          type="button"
+                          class="text-gray-400 hover:text-black"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowSettings((s) => !s);
+                          }}
+                          onPointerUp={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                          }}
+                        >
+                          <IconCapSettings />
+                        </button>
+                      </MenuItem>
+                      <KDropdownMenu.Portal>
+                        {showSettings() && (
+                          <>
+                            BRUH
+                            <MenuItemList<typeof KDropdownMenu.SubContent>
+                              as={KDropdownMenu.SubContent}
+                              class={cx(
+                                "animate-in fade-in slide-in-from-left-1 w-44",
+                                dropdownContainerClasses
+                              )}
                             >
-                              Rename
-                            </DropdownItem>
-                            <DropdownItem
-                              onClick={() =>
-                                setDialog({
-                                  type: "deletePreset",
-                                  presetId: preset,
-                                  open: true,
-                                })
-                              }
-                            >
-                              Delete
-                            </DropdownItem>
-                          </MenuItemList>
-                        </>
-                      )}
-                    </KDropdownMenu.Portal>
-                  </KDropdownMenu.Sub>
-                );
-              }}
-            </For>
-          </MenuItemList>
-          <MenuItemList<typeof KDropdownMenu.Group>
-            as={KDropdownMenu.Group}
-            class="border-t shrink-0"
-          >
-            <DropdownItem
-              onSelect={() => setDialog({ type: "createPreset", open: true })}
+                              <DropdownItem
+                                onSelect={() => setProject(preset.config)}
+                              >
+                                Apply
+                              </DropdownItem>
+                              <DropdownItem
+                                onSelect={() => presets.setDefault(i())}
+                              >
+                                Set as default
+                              </DropdownItem>
+                              <DropdownItem
+                                onSelect={() =>
+                                  setDialog({
+                                    type: "renamePreset",
+                                    presetIndex: i(),
+                                    open: true,
+                                  })
+                                }
+                              >
+                                Rename
+                              </DropdownItem>
+                              <DropdownItem
+                                onClick={() =>
+                                  setDialog({
+                                    type: "deletePreset",
+                                    presetIndex: i(),
+                                    open: true,
+                                  })
+                                }
+                              >
+                                Delete
+                              </DropdownItem>
+                            </MenuItemList>
+                          </>
+                        )}
+                      </KDropdownMenu.Portal>
+                    </KDropdownMenu.Sub>
+                  );
+                }}
+              </For>
+            </MenuItemList>
+            <MenuItemList<typeof KDropdownMenu.Group>
+              as={KDropdownMenu.Group}
+              class="border-t shrink-0"
             >
-              <span>Create new preset</span>
-              <IconCapCirclePlus class="ml-auto" />
-            </DropdownItem>
-          </MenuItemList>
-        </PopperContent>
+              <DropdownItem
+                onSelect={() => setDialog({ type: "createPreset", open: true })}
+              >
+                <span>Create new preset</span>
+                <IconCapCirclePlus class="ml-auto" />
+              </DropdownItem>
+            </MenuItemList>
+          </PopperContent>
+        </Suspense>
       </KDropdownMenu.Portal>
     </KDropdownMenu>
   );
 }
 
 function Dialogs() {
-  const { dialog, setDialog } = useEditorContext();
+  const { dialog, setDialog, presets, project } = useEditorContext();
 
   return (
     <Dialog.Root
@@ -1174,22 +1196,47 @@ function Dialogs() {
         {(dialog) => (
           <Switch>
             <Match when={dialog().type === "createPreset"}>
-              <DialogContent
-                title="Create Preset"
-                confirm={
-                  <Dialog.ConfirmButton
-                    onClick={() => setDialog((d) => ({ ...d, open: false }))}
+              {(_) => {
+                const [form, setForm] = createStore({
+                  name: "",
+                  default: false,
+                });
+
+                const createPreset = createMutation(() => ({
+                  mutationFn: async () =>
+                    presets.createPreset({ ...form, config: project }),
+                  onSuccess: () => {
+                    setDialog((d) => ({ ...d, open: false }));
+                  },
+                }));
+
+                return (
+                  <DialogContent
+                    title="Create Preset"
+                    confirm={
+                      <Dialog.ConfirmButton
+                        disabled={createPreset.isPending}
+                        onClick={() => createPreset.mutate()}
+                      >
+                        Create
+                      </Dialog.ConfirmButton>
+                    }
                   >
-                    Create
-                  </Dialog.ConfirmButton>
-                }
-              >
-                <Subfield name="Name" required />
-                <Input class="mt-[0.25rem]" />
-                <Subfield name="Set as default" class="mt-[0.75rem]">
-                  <Toggle />
-                </Subfield>
-              </DialogContent>
+                    <Subfield name="Name" required />
+                    <Input
+                      class="mt-[0.25rem]"
+                      value={form.name}
+                      onInput={(e) => setForm("name", e.currentTarget.value)}
+                    />
+                    <Subfield name="Set as default" class="mt-[0.75rem]">
+                      <Toggle
+                        checked={form.default}
+                        onChange={(checked) => setForm("default", checked)}
+                      />
+                    </Subfield>
+                  </DialogContent>
+                );
+              }}
             </Match>
             <Match
               when={(() => {
@@ -1197,21 +1244,38 @@ function Dialogs() {
                 if (d.type === "renamePreset") return d;
               })()}
             >
-              {(dialog) => (
-                <DialogContent
-                  title="Rename Preset"
-                  confirm={
-                    <Dialog.ConfirmButton
-                      onClick={() => setDialog((d) => ({ ...d, open: false }))}
-                    >
-                      Rename
-                    </Dialog.ConfirmButton>
-                  }
-                >
-                  <Subfield name="Name" required />
-                  <Input value={dialog().presetId} />
-                </DialogContent>
-              )}
+              {(dialog) => {
+                const [name, setName] = createSignal(
+                  presets.query()?.presets[dialog().presetIndex].name!
+                );
+
+                const renamePreset = createMutation(() => ({
+                  mutationFn: async () =>
+                    presets.renamePreset(dialog().presetIndex, name()),
+                  onSuccess: () => {
+                    setDialog((d) => ({ ...d, open: false }));
+                  },
+                }));
+
+                return (
+                  <DialogContent
+                    title="Rename Preset"
+                    confirm={
+                      <Dialog.ConfirmButton
+                        onClick={() => renamePreset.mutate()}
+                      >
+                        Rename
+                      </Dialog.ConfirmButton>
+                    }
+                  >
+                    <Subfield name="Name" required />
+                    <Input
+                      value={name()}
+                      onInput={(e) => setName(e.currentTarget.value)}
+                    />
+                  </DialogContent>
+                );
+              }}
             </Match>
             <Match
               when={(() => {
@@ -1219,25 +1283,35 @@ function Dialogs() {
                 if (d.type === "deletePreset") return d;
               })()}
             >
-              {(_dialog) => (
-                <DialogContent
-                  title="Delete Preset"
-                  confirm={
-                    <Dialog.ConfirmButton
-                      variant="destructive"
-                      onClick={() => setDialog((d) => ({ ...d, open: false }))}
-                    >
-                      Delete
-                    </Dialog.ConfirmButton>
-                  }
-                >
-                  <p class="text-gray-400">
-                    Lorem ipsum dolor sit amet, consectetur adipiscing elit sed
-                    do eiusmod tempor incididunt ut labore et dolore magna
-                    aliqua.
-                  </p>
-                </DialogContent>
-              )}
+              {(dialog) => {
+                const deletePreset = createMutation(() => ({
+                  mutationFn: async () =>
+                    presets.deletePreset(dialog().presetIndex),
+                  onSuccess: () => {
+                    setDialog((d) => ({ ...d, open: false }));
+                  },
+                }));
+
+                return (
+                  <DialogContent
+                    title="Delete Preset"
+                    confirm={
+                      <Dialog.ConfirmButton
+                        variant="destructive"
+                        onClick={() => deletePreset.mutate()}
+                      >
+                        Delete
+                      </Dialog.ConfirmButton>
+                    }
+                  >
+                    <p class="text-gray-400">
+                      Lorem ipsum dolor sit amet, consectetur adipiscing elit
+                      sed do eiusmod tempor incididunt ut labore et dolore magna
+                      aliqua.
+                    </p>
+                  </DialogContent>
+                );
+              }}
             </Match>
             <Match
               when={(() => {
@@ -1246,7 +1320,8 @@ function Dialogs() {
               })()}
             >
               {(dialog) => {
-                const { setState, editorInstance } = useEditorContext();
+                const { setProject: setState, editorInstance } =
+                  useEditorContext();
                 const [params] = useSearchParams<{ path: string }>();
                 const [crop, setCrop] = createStore({
                   position: dialog().position,
@@ -1570,7 +1645,7 @@ function RgbInput(props: {
   value: [number, number, number];
   onChange: (value: [number, number, number]) => void;
 }) {
-  const [text, setText] = createSignal(rgbToHex(props.value));
+  const [text, setText] = createWritableMemo(() => rgbToHex(props.value));
   let prevHex = rgbToHex(props.value);
 
   let colorInput: HTMLInputElement;
