@@ -61,7 +61,7 @@ export function createPresets() {
       const p = query();
       if (!p) return;
 
-      return p.presets[p.default ?? 0].config?;
+      return p.presets[p.default ?? 0].config;
     },
     setDefault: async (index: number) => {
       const p = query();
