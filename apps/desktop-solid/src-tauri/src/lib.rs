@@ -4,6 +4,7 @@ mod display;
 mod editor;
 mod editor_instance;
 mod macos;
+mod permissions;
 mod playback;
 mod project_recordings;
 mod recording;
@@ -35,7 +36,7 @@ use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
 };
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent, Wry};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
@@ -566,7 +567,7 @@ struct SerializedEditorInstance {
     recording_duration: f64,
     saved_project_config: Option<ProjectConfiguration>,
     recordings: ProjectRecordings,
-    path: PathBuf
+    path: PathBuf,
 }
 
 #[tauri::command]
@@ -1047,6 +1048,36 @@ fn list_audio_devices() -> Vec<String> {
     devices.keys().cloned().collect()
 }
 
+#[tauri::command]
+#[specta::specta]
+fn open_main_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        window.set_focus().ok();
+        return;
+    }
+
+    let Some(window) = WebviewWindow::builder(&app, "main", tauri::WebviewUrl::App("/".into()))
+        .title("Cap")
+        .inner_size(300.0, 325.0)
+        .resizable(false)
+        .maximized(false)
+        .shadow(true)
+        .accept_first_mouse(true)
+        .transparent(true)
+        .hidden_title(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .theme(Some(tauri::Theme::Light))
+        .build()
+        .ok()
+    else {
+        return;
+    };
+
+    window.create_overlay_titlebar().unwrap();
+    #[cfg(target_os = "macos")]
+    window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -1077,7 +1108,10 @@ pub fn run() {
             set_playhead_position,
             open_in_finder,
             save_project_config,
-            open_editor
+            open_editor,
+            open_main_window,
+            permissions::open_permission_settings,
+            permissions::do_permissions_check
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1102,6 +1136,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
@@ -1112,10 +1147,11 @@ pub fn run() {
                 panic!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now")
             };
 
-            let main_window = app.get_webview_window("main").unwrap();
-            main_window.create_overlay_titlebar().unwrap();
-            #[cfg(target_os = "macos")]
-            main_window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+            if permissions::do_permissions_check().necessary_granted() {
+            		open_main_window(app.handle().clone());
+						} else {
+								permissions::open_permissions_window(app);
+            }
 
             app.manage(Arc::new(RwLock::new(App {
                 handle: app.handle().clone(),

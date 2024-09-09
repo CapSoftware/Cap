@@ -11,21 +11,6 @@
   },
   "app": {
     "macOSPrivateApi": true,
-    "windows": [
-      {
-        "title": "Cap",
-        "width": 300,
-        "height": 325,
-        "resizable": false,
-        "maximized": false,
-        "shadow": true,
-        "acceptFirstMouse": true,
-        "transparent": true,
-        "hiddenTitle": true,
-        "titleBarStyle": "Overlay",
-        "theme": "Light"
-      }
-    ],
     "security": {
       "csp": null,
       "assetProtocol": {

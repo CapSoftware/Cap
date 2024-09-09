@@ -150,6 +150,15 @@ async saveProjectConfig(videoId: string, config: ProjectConfiguration) : Promise
 },
 async openEditor(id: string) : Promise<void> {
     await TAURI_INVOKE("open_editor", { id });
+},
+async openMainWindow() : Promise<void> {
+    await TAURI_INVOKE("open_main_window");
+},
+async openPermissionSettings(settings: OSPermissionSettings) : Promise<void> {
+    await TAURI_INVOKE("open_permission_settings", { settings });
+},
+async doPermissionsCheck() : Promise<OSPermissionsCheck> {
+    return await TAURI_INVOKE("do_permissions_check");
 }
 }
 
@@ -196,7 +205,11 @@ export type EditorStateChanged = { playhead_position: number }
 export type HotkeysConfiguration = { show: boolean }
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
 export type JsonValue<T> = [T]
+export type MacOSPermissionSettings = "screenRecording"
+export type MacOSPermissionsCheck = { screenRecording: boolean }
 export type NewRecordingAdded = { path: string }
+export type OSPermissionSettings = { macOS: MacOSPermissionSettings }
+export type OSPermissionsCheck = ({ os: "macOS" } & MacOSPermissionsCheck) | { os: "other" }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }

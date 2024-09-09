@@ -46,9 +46,6 @@ export default function () {
 
   type CameraOption = MediaDeviceInfo | { deviceId: string; label: string };
 
-  // const navigate = useNavigate();
-  // navigate("/recording-permissions");
-
   const handleBodyClick = (e: MouseEvent) => {
     if (windowSelectOpen()) {
       const target = e.target as HTMLElement;

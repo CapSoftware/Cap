@@ -20,6 +20,7 @@
     "shell:default",
     "fs:default",
     "dialog:allow-save",
-    "store:default"
+    "store:default",
+    "process:default"
   ]
 }
