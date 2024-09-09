@@ -5,6 +5,7 @@ on: workflow_dispatch
 
 env:
   CN_APPLICATION: cap/cap
+  APP_CARGO_TOML: apps/desktop-solid/src-tauri/Cargo.toml
 
 jobs:
   cap-desktop-release:
@@ -16,14 +17,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get app version
-        id: get_version
-        run: echo "appVersion=$(jq -r '.version' apps/desktop/package.json)" >> $GITHUB_OUTPUT
+      - name: Read version number
+        uses: SebRollen/toml-action@v1.0.2
+        id: read_version
+        with:
+          file: ${{ env.APP_CARGO_TOML }}
+          field: "package.version"
 
       - name: create draft release
         uses: crabnebula-dev/cloud-release@v0
         with:
-          command: release draft ${{ env.CN_APPLICATION }} ${{ steps.get_version.outputs.appVersion }} --framework tauri
+          command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
           api-key: ${{ secrets.CN_API_KEY }}
 
       - name: Create API Key File
@@ -50,7 +54,7 @@ jobs:
 
       - name: Create .env file in root
         run: |
-          echo "appVersion=${{ steps.get_version.outputs.appVersion }}" >> .env
+          echo "appVersion=${{ steps.read_version.outputs.value }}" >> .env
           echo "CAP_DESKTOP_SENTRY_URL=https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200" >> .env
 
       - name: Copy .env to apps/desktop-solid
@@ -64,7 +68,7 @@ jobs:
         # Build both intel and apple silicon
         working-directory: apps/desktop-solid
         run: |
-          rustup target add x86_64-apple-darwin 
+          rustup target add x86_64-apple-darwin
           pnpm install
           pnpm tauri build --target x86_64-apple-darwin
           pnpm tauri build --target aarch64-apple-darwin
