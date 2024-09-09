@@ -175,7 +175,7 @@ export default function () {
                         "border-color": "rgba(255, 255, 255, 0.2)",
                       }}
                       class={cx(
-                        "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500 rounded-[12px] overflow-hidden shadow border-[1px] group transition-all relative",
+                        "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/50 rounded-[12px] overflow-hidden shadow border-[1px] group transition-all relative",
                         "transition-[transform,opacity] duration-300",
                         exiting()
                           ? "animate-out slide-out-to-left-32 fade-out"
