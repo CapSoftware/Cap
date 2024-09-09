@@ -22,10 +22,9 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let menu = Menu::with_items(app, &[&new_recording_i, &prev_recordings_submenu, &quit_i])?;
     let _ = TrayIconBuilder::with_id("tray")
-        .icon(Image::from_path(app.path().resolve(
-            "icons/tray-default-icon.png",
-            BaseDirectory::Resource,
-        )?)?)
+        .icon(Image::from_bytes(include_bytes!(
+            "../icons/tray-default-icon.png"
+        ))?)
         .menu(&menu)
         .menu_on_left_click(true)
         .on_menu_event(move |app, event| {

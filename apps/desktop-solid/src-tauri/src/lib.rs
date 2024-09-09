@@ -208,8 +208,6 @@ async fn get_current_recording(
 
 #[tauri::command]
 #[specta::specta]
-#[tauri::command]
-#[specta::specta]
 async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
@@ -1083,7 +1081,6 @@ pub fn run() {
             list_cameras,
             list_capture_windows,
             list_audio_devices,
-            get_prev_recordings,
             show_previous_recordings_window,
             close_previous_recordings_window,
             set_fake_window_bounds,
@@ -1158,11 +1155,8 @@ pub fn run() {
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
 
-            #[cfg(all(desktop))]
-            {
-                let handle = app.handle();
-                tray::create_tray(handle)?;
-            }
+            let handle = app.handle();
+            tray::create_tray(handle).unwrap();
 
             Ok(())
         })
