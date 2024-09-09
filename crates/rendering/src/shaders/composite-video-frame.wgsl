@@ -52,7 +52,7 @@ fn main_image(frag_color: vec4<f32>, frag_coord: vec2<f32>) -> vec4<f32> {
 
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 		if uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 {
-				var cropped_uv = (uv + crop_bounds_uv.xy) * (crop_bounds_uv.zw - crop_bounds_uv.xy);
+				var cropped_uv = uv * (crop_bounds_uv.zw - crop_bounds_uv.xy) + crop_bounds_uv.xy;
 
 				if u.mirror_x != 0.0 {
 						cropped_uv.x = (1.0 - uv.x + crop_bounds_uv.x) * (crop_bounds_uv.z - crop_bounds_uv.x);

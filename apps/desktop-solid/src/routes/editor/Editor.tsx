@@ -384,6 +384,10 @@ function Header() {
   );
 }
 
+import {
+  createEventListener,
+  createEventListenerMap,
+} from "@solid-primitives/event-listener";
 import { Channel, convertFileSrc } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
@@ -396,10 +400,6 @@ import {
   DEFAULT_GRADIENT_FROM,
   DEFAULT_GRADIENT_TO,
 } from "./projectConfig";
-import {
-  createEventListener,
-  createEventListenerMap,
-} from "@solid-primitives/event-listener";
 
 function ExportButton() {
   const { videoId, state: project } = useEditorContext();
@@ -1260,6 +1260,9 @@ function Dialogs() {
                   };
                 });
 
+                let cropAreaRef: HTMLDivElement;
+                let cropTargetRef: HTMLDivElement;
+
                 return (
                   <>
                     <Dialog.Header>
@@ -1267,31 +1270,27 @@ function Dialogs() {
                         {/* <AspectRatioSelect />*/}
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
                           <span>Size</span>
-                          <Input
-                            class="w-[3.25rem]"
-                            value={crop.size.x}
-                            disabled
-                          />
+                          <div class="w-[3.25rem]">
+                            <Input value={crop.size.x} disabled />
+                          </div>
                           <span>x</span>
-                          <Input
-                            class="w-[3.25rem]"
-                            value={crop.size.y}
-                            disabled
-                          />
+                          <div class="w-[3.25rem]">
+                            <Input value={crop.size.y} disabled />
+                          </div>
                         </div>
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
                           <span>Position</span>
-                          <Input
-                            class="w-[3.25rem]"
-                            value={crop.position.x}
-                            disabled
-                          />
+                          <div class="w-[3.25rem]">
+                            <Input value={crop.position.x} disabled />
+                          </div>
                           <span>x</span>
-                          <Input
-                            class="w-[3.25rem]"
-                            value={crop.position.y}
-                            disabled
-                          />
+                          <div class="w-[3.25rem]">
+                            <Input
+                              class="w-[3.25rem]"
+                              value={crop.position.y}
+                              disabled
+                            />
+                          </div>
                         </div>
                       </div>
                       <EditorButton
@@ -1311,7 +1310,11 @@ function Dialogs() {
                       </EditorButton>
                     </Dialog.Header>
                     <Dialog.Content>
-                      <div class="relative">
+                      <div
+                        class="relative"
+                        // biome-ignore lint/style/noNonNullAssertion: ref
+                        ref={cropAreaRef!}
+                      >
                         <div class="divide-black-transparent-10 overflow-hidden rounded-lg">
                           <img
                             class="shadow pointer-events-none"
@@ -1323,12 +1326,10 @@ function Dialogs() {
                         </div>
                         <div
                           class="bg-white-transparent-20 absolute cursor-move"
+                          // biome-ignore lint/style/noNonNullAssertion: ref
+                          ref={cropTargetRef!}
                           style={styles()}
                           onMouseDown={(downEvent) => {
-                            const parentDiv =
-                              downEvent.target.parentElement?.parentElement;
-                            if (!parentDiv) return;
-
                             const original = {
                               position: { ...crop.position },
                               size: { ...crop.size },
@@ -1338,17 +1339,14 @@ function Dialogs() {
                               createEventListenerMap(window, {
                                 mouseup: () => dispose(),
                                 mousemove: (moveEvent) => {
-                                  const width = crop.size.x;
-                                  const height = crop.size.y;
-
                                   const diff = {
                                     x:
                                       ((moveEvent.clientX - downEvent.clientX) /
-                                        parentDiv.clientWidth) *
+                                        cropAreaRef.clientWidth) *
                                       display.width,
                                     y:
                                       ((moveEvent.clientY - downEvent.clientY) /
-                                        parentDiv.clientHeight) *
+                                        cropAreaRef.clientHeight) *
                                       display.height,
                                   };
 
@@ -1427,11 +1425,6 @@ function Dialogs() {
                                   onMouseDown={(downEvent) => {
                                     downEvent.stopPropagation();
 
-                                    const parentDiv =
-                                      downEvent.target.parentElement
-                                        ?.parentElement?.parentElement;
-                                    if (!parentDiv) return;
-
                                     const original = {
                                       position: { ...crop.position },
                                       size: { ...crop.size },
@@ -1448,12 +1441,12 @@ function Dialogs() {
                                               x:
                                                 ((moveEvent.clientX -
                                                   downEvent.clientX) /
-                                                  parentDiv.clientWidth) *
+                                                  cropAreaRef.clientWidth) *
                                                 display.width,
                                               y:
                                                 ((moveEvent.clientY -
                                                   downEvent.clientY) /
-                                                  parentDiv.clientHeight) *
+                                                  cropAreaRef.clientHeight) *
                                                 display.height,
                                             };
 
