@@ -562,10 +562,10 @@ function SettingsSidebar() {
           each={[
             { id: "background" as const, icon: IconCapImage },
             { id: "camera" as const, icon: IconCapCamera },
-            {
-              id: "transcript" as const,
-              icon: IconCapMessageBubble,
-            },
+            // {
+            //   id: "transcript" as const,
+            //   icon: IconCapMessageBubble,
+            // },
             { id: "audio" as const, icon: IconCapAudioOn },
             { id: "cursor" as const, icon: IconCapCursor },
             { id: "hotkeys" as const, icon: IconCapHotkeys },
