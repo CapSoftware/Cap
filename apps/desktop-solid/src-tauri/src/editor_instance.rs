@@ -54,7 +54,7 @@ impl EditorInstance {
             panic!("Video path {} not found!", project_path.display());
         }
 
-        let meta = cap_project::RecordingMeta::load_for_project(&project_path);
+        let meta = cap_project::RecordingMeta::load_for_project(&project_path).unwrap();
 
         let recordings = ProjectRecordings::new(&meta);
 

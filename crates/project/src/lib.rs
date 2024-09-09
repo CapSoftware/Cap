@@ -1,6 +1,6 @@
 mod configuration;
 
-use std::path::PathBuf;
+use std::{io, path::PathBuf};
 
 pub use configuration::*;
 use serde::{Deserialize, Serialize};
@@ -35,12 +35,12 @@ pub struct RecordingMeta {
 }
 
 impl RecordingMeta {
-    pub fn load_for_project(project_path: &PathBuf) -> Self {
+    pub fn load_for_project(project_path: &PathBuf) -> Result<Self, String> {
         let meta_path = project_path.join("recording-meta.json");
-        let meta = std::fs::read_to_string(meta_path).unwrap();
-        let mut meta: Self = serde_json::from_str(&meta).unwrap();
+        let meta = std::fs::read_to_string(meta_path).map_err(|e| e.to_string())?;
+        let mut meta: Self = serde_json::from_str(&meta).map_err(|e| e.to_string())?;
         meta.project_path = project_path.clone();
-        meta
+        Ok(meta)
     }
 
     pub fn save_for_project(&self, project_path: &PathBuf) {

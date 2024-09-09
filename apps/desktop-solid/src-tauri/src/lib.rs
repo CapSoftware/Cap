@@ -224,6 +224,10 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
 
     state.set_current_recording(recording);
 
+    if let Some(window) = app.get_webview_window("main") {
+        window.minimize().ok();
+    }
+
     Ok(())
 }
 

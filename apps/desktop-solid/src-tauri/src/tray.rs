@@ -5,7 +5,6 @@ use std::result::Result;
 use tauri::{
     image::Image,
     menu::{IconMenuItem, IsMenuItem, Menu, MenuItem, MenuItemKind, Submenu},
-    path::BaseDirectory,
     tray::TrayIconBuilder,
     AppHandle, Manager, Runtime,
 };
@@ -22,9 +21,9 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let menu = Menu::with_items(app, &[&new_recording_i, &prev_recordings_submenu, &quit_i])?;
     let _ = TrayIconBuilder::with_id("tray")
-        .icon(Image::from_bytes(include_bytes!(
-            "../icons/tray-default-icon.png"
-        ))?)
+        // .icon(Image::from_bytes(include_bytes!(
+        //     "../icons/tray-default-icon.png"
+        // ))?)
         .menu(&menu)
         .menu_on_left_click(true)
         .on_menu_event(move |app, event| {
@@ -69,12 +68,14 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 }
 
 fn create_prev_recordings_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
-    let prev_recordings = get_prev_recordings(app)?;
+    let prev_recordings = get_prev_recordings(app).unwrap_or_default();
 
     let items: Vec<MenuItemKind<R>> = prev_recordings
         .iter()
         .filter_map(|path| {
-            let meta = RecordingMeta::load_for_project(&path);
+            let Ok(meta) = RecordingMeta::load_for_project(&path) else {
+                return None;
+            };
             let pretty_name = meta.pretty_name.clone();
             let id = pretty_name.clone();
 
@@ -154,7 +155,9 @@ fn get_recording_path_by_pretty_name<R: Runtime>(
     pretty_name: &str,
 ) -> Option<PathBuf> {
     get_prev_recordings(app).ok()?.into_iter().find(|path| {
-        let meta = RecordingMeta::load_for_project(&path);
+        let Ok(meta) = RecordingMeta::load_for_project(&path) else {
+            return false;
+        };
         meta.pretty_name == pretty_name
     })
 }
