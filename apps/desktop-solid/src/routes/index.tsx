@@ -59,6 +59,7 @@ export default function () {
   };
 
   return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: workaround
     <div
       class="rounded-[1.5rem] bg-gray-50 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden"
       onClick={handleBodyClick}

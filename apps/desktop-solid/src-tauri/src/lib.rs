@@ -890,6 +890,7 @@ fn open_editor(app: AppHandle, id: String) {
     .unwrap();
 
     window.create_overlay_titlebar().unwrap();
+    #[cfg(target_os = "macos")]
     window.set_traffic_lights_inset(20.0, 48.0).unwrap();
 }
 
@@ -1110,6 +1111,11 @@ pub fn run() {
                 // TODO: UI message instead
                 panic!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now")
             };
+
+            let main_window = app.get_webview_window("main").unwrap();
+            main_window.create_overlay_titlebar().unwrap();
+            #[cfg(target_os = "macos")]
+            main_window.set_traffic_lights_inset(14.0, 22.0).unwrap();
 
             app.manage(Arc::new(RwLock::new(App {
                 handle: app.handle().clone(),
