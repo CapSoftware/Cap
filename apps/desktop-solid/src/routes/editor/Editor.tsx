@@ -1262,6 +1262,7 @@ function Dialogs() {
                     title="Rename Preset"
                     confirm={
                       <Dialog.ConfirmButton
+                        disabled={renamePreset.isPending}
                         onClick={() => renamePreset.mutate()}
                       >
                         Rename
@@ -1299,6 +1300,7 @@ function Dialogs() {
                       <Dialog.ConfirmButton
                         variant="destructive"
                         onClick={() => deletePreset.mutate()}
+                        disabled={deletePreset.isPending}
                       >
                         Delete
                       </Dialog.ConfirmButton>
