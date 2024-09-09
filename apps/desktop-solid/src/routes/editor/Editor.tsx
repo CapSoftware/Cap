@@ -903,7 +903,7 @@ function SettingsSidebar() {
           <Field name="Audio" icon={<IconCapAudioOn />}>
             <div class="flex flex-col gap-3 ">
               <Subfield name="Mute Audio">
-                <Toggle />
+                <Toggle disabled />
               </Subfield>
               <Subfield name="Improve Mic Quality">
                 <Toggle disabled />
