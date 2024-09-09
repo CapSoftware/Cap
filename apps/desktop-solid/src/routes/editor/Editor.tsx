@@ -1187,7 +1187,11 @@ function Dialogs() {
 
   return (
     <Dialog.Root
-      size={dialog().type === "crop" ? "lg" : "sm"}
+      size={(() => {
+        const d = dialog();
+        if (!d.open) return "sm";
+        return d.type === "crop" ? "lg" : "sm";
+      })()}
       open={dialog().open}
       onOpenChange={(o) => {
         if (!o) setDialog((d) => ({ ...d, open: false }));
