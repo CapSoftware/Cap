@@ -50,7 +50,7 @@ export function Toggle(props: ComponentProps<typeof KSwitch>) {
   return (
     <KSwitch {...props}>
       <KSwitch.Input class="peer" />
-      <KSwitch.Control class="rounded-full bg-gray-300 w-[3rem] h-[1.5rem] p-[0.125rem] ui-checked:bg-blue-300 transition-colors peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300">
+      <KSwitch.Control class="rounded-full bg-gray-300 ui-disabled:bg-gray-200 w-[3rem] h-[1.5rem] p-[0.125rem] ui-checked:bg-blue-300 transition-colors peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-300">
         <KSwitch.Thumb class="bg-gray-50 rounded-full size-[1.25rem] transition-transform ui-checked:translate-x-[calc(100%+0.25rem)]" />
       </KSwitch.Control>
     </KSwitch>
@@ -78,8 +78,12 @@ export function Slider(props: ComponentProps<typeof KSlider>) {
       }}
     >
       <KSlider.Track class="h-[0.5rem] relative mx-1">
-        <KSlider.Fill class="absolute bg-blue-100 h-full rounded-full -ml-2" />
-        <KSlider.Thumb class="size-[1.25rem] bg-blue-300 -top-1.5 rounded-full outline-none outline-2 outline-offset-2 focus-visible:outline-blue-300" />
+        <KSlider.Fill class="absolute bg-blue-100 ui-disabled:bg-gray-300 h-full rounded-full -ml-2" />
+        <KSlider.Thumb
+          class={cx(
+            "size-[1.25rem] bg-blue-300 -top-1.5 rounded-full outline-none outline-2 outline-offset-2 focus-visible:outline-blue-300 ui-disabled:bg-gray-400"
+          )}
+        />
       </KSlider.Track>
     </KSlider>
   );
@@ -227,14 +231,15 @@ const editorButtonStyles = cva(
   [
     "group flex flex-row items-center px-[0.375rem] gap-[0.375rem] h-[2rem] rounded-[0.5rem] text-[0.875rem]",
     "focus-visible:outline outline-2 outline-offset-2 transition-colors duration-100",
+    "disabled:bg-gray-100 disabled:text-gray-400",
   ],
   {
     variants: {
       variant: {
         primary:
-          "text-gray-500 hover:ui-not-pressed:bg-gray-100 ui-expanded:bg-gray-100 disabled:bg-gray-100 disabled:text-gray-400 outline-blue-300",
+          "text-gray-500 hover:ui-not-pressed:bg-gray-100 ui-expanded:bg-gray-100 outline-blue-300",
         danger:
-          "text-gray-500 hover:ui-not-pressed:bg-gray-100 ui-expanded:bg-red-300 ui-pressed:bg-red-300 ui-expanded:text-gray-50 ui-pressed:text-gray-50 disabled:bg-gray-100 outline-red-300",
+          "text-gray-500 hover:ui-not-pressed:bg-gray-100 ui-expanded:bg-red-300 ui-pressed:bg-red-300 ui-expanded:text-gray-50 ui-pressed:text-gray-50 outline-red-300",
       },
     },
     defaultVariants: { variant: "primary" },

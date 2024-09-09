@@ -245,7 +245,9 @@ function Inner() {
               <div class="flex-1" />
               <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
                 <span>{formatTime(playbackTime())}</span>
-                <IconCapFrameFirst class="size-[1.2rem]" />
+                <button type="button" disabled>
+                  <IconCapFrameFirst class="size-[1.2rem]" />
+                </button>
                 {!playing() ? (
                   <button
                     type="button"
@@ -269,11 +271,14 @@ function Inner() {
                     <IconCapStopCircle class="size-[1.5rem]" />
                   </button>
                 )}
-                <IconCapFrameLast class="size-[1rem]" />
+                <button type="button" disabled>
+                  <IconCapFrameLast class="size-[1rem]" />
+                </button>
                 <span>{formatTime(duration())}</span>
               </div>
               <div class="flex-1 flex flex-row justify-end">
                 <EditorButton<typeof KToggleButton>
+                  disabled
                   as={KToggleButton}
                   variant="danger"
                   leftIcon={<IconCapScissors />}
@@ -639,6 +644,7 @@ function SettingsSidebar() {
                     <KTabs.Trigger
                       class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
                       value={item}
+                      disabled={item === "wallpaper" || item === "image"}
                     >
                       {BACKGROUND_SOURCES[item]}
                     </KTabs.Trigger>
@@ -743,8 +749,10 @@ function SettingsSidebar() {
               </KTabs.Content>
             </KTabs>
           </Field>
+
           <Field name="Background Blur" icon={<IconCapBlur />}>
             <Slider
+              disabled
               value={[state.background.blur]}
               onChange={(v) => setState("background", "blur", v[0])}
               minValue={0}
@@ -771,6 +779,7 @@ function SettingsSidebar() {
           </Field>
           <Field name="Inset" icon={<IconCapInset />}>
             <Slider
+              disabled
               value={[state.background.inset]}
               onChange={(v) => setState("background", "inset", v[0])}
               minValue={0}
@@ -877,7 +886,7 @@ function SettingsSidebar() {
                 <Toggle />
               </Subfield>
               <Subfield name="Improve Mic Quality">
-                <Toggle />
+                <Toggle disabled />
               </Subfield>
             </div>
           </Field>
@@ -885,11 +894,12 @@ function SettingsSidebar() {
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
           <Field name="Cursor" icon={<IconCapCursor />}>
             <Subfield name="Hide cursor when not moving">
-              <Toggle />
+              <Toggle disabled />
             </Subfield>
           </Field>
           <Field name="Size" icon={<IconCapEnlarge />}>
             <Slider
+              disabled
               value={[state.cursor.size]}
               onChange={(v) => setState("cursor", "size", v[0])}
               minValue={0}
@@ -912,10 +922,11 @@ function SettingsSidebar() {
                 {(item) => (
                   <li>
                     <button
+                      disabled
                       type="button"
                       onClick={() => setState("cursor", "type", item.type)}
                       data-selected={state.cursor.type === item.type}
-                      class="border border-black-transparent-5 bg-gray-100 rounded-lg p-[0.625rem] text-gray-400 data-[selected='true']:text-gray-500 focus-visible:outline-blue-300 focus-visible:outline outline-1 outline-offset-1"
+                      class="border border-black-transparent-5 bg-gray-100 rounded-lg p-[0.625rem] text-gray-400 data-[selected='true']:text-gray-500 disabled:text-gray-300 focus-visible:outline-blue-300 focus-visible:outline outline-1 outline-offset-1"
                     >
                       <Dynamic
                         component={item.icon}
@@ -931,7 +942,7 @@ function SettingsSidebar() {
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>
             <Subfield name="Show hotkeys">
-              <Toggle />
+              <Toggle disabled />
             </Subfield>
           </Field>
         </KTabs.Content>
@@ -945,6 +956,7 @@ function AspectRatioSelect() {
 
   return (
     <KSelect<AspectRatio | "auto">
+      disabled
       value={state.aspectRatio ?? "auto"}
       onChange={(v) => {
         if (v === null) return;
