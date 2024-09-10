@@ -1,4 +1,4 @@
-import { createMutation } from "@tanstack/solid-query";
+import { createMutation, createQuery } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
@@ -7,11 +7,13 @@ import {
   For,
   Match,
   Show,
+  Suspense,
   Switch,
   createEffect,
   createResource,
   createSignal,
   onCleanup,
+  startTransition,
 } from "solid-js";
 import Tooltip from "@corvu/tooltip";
 import { Button } from "@cap/ui-solid";
@@ -80,6 +82,13 @@ export default function () {
               {(recording, i) => {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
 
+                const videoId = recording.path.split("/").pop()?.split(".")[0]!;
+
+                const recordingMeta = createQuery(() => ({
+                  queryKey: ["recordingMeta", videoId],
+                  queryFn: () => commands.getRecordingMeta(videoId),
+                }));
+
                 const copyVideo = createMutation(() => ({
                   mutationFn: async () => {
                     const res = await commands.copyRenderedVideoToClipboard(
@@ -120,6 +129,8 @@ export default function () {
                     );
                     if (res.status !== "ok") throw new Error(res.error);
                   },
+                  onSuccess: () =>
+                    startTransition(() => recordingMeta.refetch()),
                 }));
 
                 const [metadata] = createResource(async () => {
@@ -151,192 +162,198 @@ export default function () {
                 const isLoading = () =>
                   copyVideo.isPending || saveVideo.isPending;
 
-                const videoId = recording.path.split("/").pop()?.split(".")[0]!;
-
                 createFakeWindowBounds(ref, () => recording.path);
 
                 return (
-                  <Show when={metadata()}>
-                    {(metadata) => (
-                      <div
-                        ref={setRef}
-                        style={{ "border-color": "rgba(255, 255, 255, 0.2)" }}
-                        class={cx(
-                          "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/50 rounded-[12px] overflow-hidden shadow border-[1px] group relative",
-                          "transition-all duration-300",
-                          recording.isNew &&
-                            "ring-2 ring-blue-500 ring-opacity-75"
-                        )}
-                      >
+                  <Suspense>
+                    <Show when={metadata()}>
+                      {(metadata) => (
                         <div
-                          class={cx(
-                            "w-full h-full flex relative bg-transparent rounded-[8px] border-[1px] overflow-hidden z-10",
-                            "transition-all",
-                            isLoading() && "backdrop-blur bg-gray-500/80"
-                          )}
+                          ref={setRef}
                           style={{ "border-color": "rgba(255, 255, 255, 0.2)" }}
+                          class={cx(
+                            "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/50 rounded-[12px] overflow-hidden shadow border-[1px] group relative",
+                            "transition-all duration-300",
+                            recording.isNew &&
+                              "ring-2 ring-blue-500 ring-opacity-75"
+                          )}
                         >
-                          <Show
-                            when={imageExists()}
-                            fallback={
-                              <div class="pointer-events-none w-[105%] h-[105%] absolute inset-0 -z-10 bg-gray-400" />
-                            }
-                          >
-                            <img
-                              class="pointer-events-none w-[105%] h-[105%] object-cover absolute inset-0 -z-10"
-                              alt="screenshot"
-                              src={`${convertFileSrc(
-                                `${recording.path}/screenshots/display.jpg`
-                              )}?t=${Date.now()}`}
-                              onError={() => setImageExists(false)}
-                            />
-                          </Show>
                           <div
                             class={cx(
-                              "w-full h-full absolute inset-0 transition-all",
-                              isLoading() ||
-                                "opacity-0 group-hover:opacity-100",
-                              "backdrop-blur bg-gray-500/80 text-white p-2"
+                              "w-full h-full flex relative bg-transparent rounded-[8px] border-[1px] overflow-hidden z-10",
+                              "transition-all",
+                              isLoading() && "backdrop-blur bg-gray-500/80"
                             )}
+                            style={{
+                              "border-color": "rgba(255, 255, 255, 0.2)",
+                            }}
                           >
-                            <TooltipIconButton
-                              class="absolute left-3 top-3 z-20"
-                              tooltipText="Close"
-                              tooltipPlacement="right"
-                              onClick={() =>
-                                setRecordings(
-                                  produce((state) => {
-                                    state.splice(i(), 1);
-                                  })
-                                )
+                            <Show
+                              when={imageExists()}
+                              fallback={
+                                <div class="pointer-events-none w-[105%] h-[105%] absolute inset-0 -z-10 bg-gray-400" />
                               }
                             >
-                              <IconCapCircleX class="size-[1rem]" />
-                            </TooltipIconButton>
-                            <TooltipIconButton
-                              class="absolute left-3 bottom-3 z-20"
-                              tooltipText="Edit"
-                              tooltipPlacement="right"
-                              onClick={() => {
-                                commands.openEditor(videoId);
-                              }}
+                              <img
+                                class="pointer-events-none w-[105%] h-[105%] object-cover absolute inset-0 -z-10"
+                                alt="screenshot"
+                                src={`${convertFileSrc(
+                                  `${recording.path}/screenshots/display.jpg`
+                                )}?t=${Date.now()}`}
+                                onError={() => setImageExists(false)}
+                              />
+                            </Show>
+                            <div
+                              class={cx(
+                                "w-full h-full absolute inset-0 transition-all",
+                                isLoading() ||
+                                  "opacity-0 group-hover:opacity-100",
+                                "backdrop-blur bg-gray-500/80 text-white p-2"
+                              )}
                             >
-                              <IconCapEditor class="size-[1rem]" />
-                            </TooltipIconButton>
-                            <TooltipIconButton
-                              class="absolute right-3 top-3 z-20"
-                              tooltipText={
-                                copyVideo.isPending
-                                  ? "Copying to Clipboard"
-                                  : "Copy to Clipboard"
-                              }
-                              forceOpen={copyVideo.isPending}
-                              tooltipPlacement="left"
-                              onClick={() => copyVideo.mutate()}
-                              disabled={saveVideo.isPending}
-                            >
-                              <Switch
-                                fallback={<IconCapCopy class="size-[1rem]" />}
+                              <TooltipIconButton
+                                class="absolute left-3 top-3 z-20"
+                                tooltipText="Close"
+                                tooltipPlacement="right"
+                                onClick={() =>
+                                  setRecordings(
+                                    produce((state) => {
+                                      state.splice(i(), 1);
+                                    })
+                                  )
+                                }
                               >
-                                <Match when={copyVideo.isPending}>
-                                  <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
-                                </Match>
-                                <Match when={copyVideo.isSuccess}>
-                                  {(_) => {
-                                    setTimeout(() => {
-                                      if (!copyVideo.isPending)
-                                        copyVideo.reset();
-                                    }, 2000);
-
-                                    return (
-                                      <IconLucideCheck class="size-[1rem]" />
-                                    );
-                                  }}
-                                </Match>
-                              </Switch>
-                            </TooltipIconButton>
-                            <TooltipIconButton
-                              class="absolute right-3 bottom-3 z-20"
-                              tooltipText={
-                                uploadVideo.isPending
-                                  ? "Uploading Cap"
-                                  : "Create Shareable Link"
-                              }
-                              forceOpen={uploadVideo.isPending}
-                              tooltipPlacement="left"
-                              onClick={() => uploadVideo.mutate()}
-                              disabled={uploadVideo.isPending}
-                            >
-                              <Switch
-                                fallback={<IconCapUpload class="size-[1rem]" />}
+                                <IconCapCircleX class="size-[1rem]" />
+                              </TooltipIconButton>
+                              <TooltipIconButton
+                                class="absolute left-3 bottom-3 z-20"
+                                tooltipText="Edit"
+                                tooltipPlacement="right"
+                                onClick={() => {
+                                  commands.openEditor(videoId);
+                                }}
                               >
-                                <Match when={uploadVideo.isPending}>
-                                  <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
-                                </Match>
-                                <Match when={uploadVideo.isSuccess}>
-                                  {(_) => {
-                                    setTimeout(() => {
-                                      if (!uploadVideo.isPending)
-                                        uploadVideo.reset();
-                                    }, 2000);
-
-                                    return (
-                                      <IconLucideCheck class="size-[1rem]" />
-                                    );
-                                  }}
-                                </Match>
-                              </Switch>
-                            </TooltipIconButton>
-                            <div class="absolute inset-0 flex items-center justify-center">
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => saveVideo.mutate()}
-                                disabled={copyVideo.isPending}
+                                <IconCapEditor class="size-[1rem]" />
+                              </TooltipIconButton>
+                              <TooltipIconButton
+                                class="absolute right-3 top-3 z-20"
+                                tooltipText={
+                                  copyVideo.isPending
+                                    ? "Copying to Clipboard"
+                                    : "Copy to Clipboard"
+                                }
+                                forceOpen={copyVideo.isPending}
+                                tooltipPlacement="left"
+                                onClick={() => copyVideo.mutate()}
+                                disabled={saveVideo.isPending}
                               >
-                                <Switch fallback="Save">
-                                  <Match when={saveVideo.isPending}>
-                                    Saving...
+                                <Switch
+                                  fallback={<IconCapCopy class="size-[1rem]" />}
+                                >
+                                  <Match when={copyVideo.isPending}>
+                                    <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
                                   </Match>
-                                  <Match
-                                    when={
-                                      saveVideo.isSuccess &&
-                                      saveVideo.data === true
-                                    }
-                                  >
+                                  <Match when={copyVideo.isSuccess}>
                                     {(_) => {
                                       setTimeout(() => {
-                                        if (!saveVideo.isPending)
-                                          saveVideo.reset();
+                                        if (!copyVideo.isPending)
+                                          copyVideo.reset();
                                       }, 2000);
 
-                                      return "Saved!";
+                                      return (
+                                        <IconLucideCheck class="size-[1rem]" />
+                                      );
                                     }}
                                   </Match>
                                 </Switch>
-                              </Button>
+                              </TooltipIconButton>
+                              <TooltipIconButton
+                                class="absolute right-3 bottom-3 z-20"
+                                tooltipText={
+                                  recordingMeta.data?.sharing
+                                    ? "Copy Shareable Link"
+                                    : uploadVideo.isPending
+                                    ? "Uploading Cap"
+                                    : "Create Shareable Link"
+                                }
+                                forceOpen={uploadVideo.isPending}
+                                tooltipPlacement="left"
+                                onClick={() => uploadVideo.mutate()}
+                                disabled={uploadVideo.isPending}
+                              >
+                                <Switch
+                                  fallback={
+                                    <IconCapUpload class="size-[1rem]" />
+                                  }
+                                >
+                                  <Match when={uploadVideo.isPending}>
+                                    <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+                                  </Match>
+                                  <Match when={uploadVideo.isSuccess}>
+                                    {(_) => {
+                                      setTimeout(() => {
+                                        if (!uploadVideo.isPending)
+                                          uploadVideo.reset();
+                                      }, 2000);
+
+                                      return (
+                                        <IconLucideCheck class="size-[1rem]" />
+                                      );
+                                    }}
+                                  </Match>
+                                </Switch>
+                              </TooltipIconButton>
+                              <div class="absolute inset-0 flex items-center justify-center">
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={() => saveVideo.mutate()}
+                                  disabled={copyVideo.isPending}
+                                >
+                                  <Switch fallback="Save">
+                                    <Match when={saveVideo.isPending}>
+                                      Saving...
+                                    </Match>
+                                    <Match
+                                      when={
+                                        saveVideo.isSuccess &&
+                                        saveVideo.data === true
+                                      }
+                                    >
+                                      {(_) => {
+                                        setTimeout(() => {
+                                          if (!saveVideo.isPending)
+                                            saveVideo.reset();
+                                        }, 2000);
+
+                                        return "Saved!";
+                                      }}
+                                    </Match>
+                                  </Switch>
+                                </Button>
+                              </div>
+                            </div>
+                            <div
+                              style={{ color: "white", "font-size": "14px" }}
+                              class={cx(
+                                "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all group-hover:opacity-0",
+                                isLoading() && "opacity-0"
+                              )}
+                            >
+                              <p class="flex items-center">
+                                <IconCapCamera class="w-[20px] h-[20px] mr-1" />
+                                {Math.floor(metadata().duration / 60)}:
+                                {Math.floor(metadata().duration % 60)
+                                  .toString()
+                                  .padStart(2, "0")}
+                              </p>
+                              <p>{metadata().size.toFixed(2)} MB</p>
                             </div>
                           </div>
-                          <div
-                            style={{ color: "white", "font-size": "14px" }}
-                            class={cx(
-                              "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all group-hover:opacity-0",
-                              isLoading() && "opacity-0"
-                            )}
-                          >
-                            <p class="flex items-center">
-                              <IconCapCamera class="w-[20px] h-[20px] mr-1" />
-                              {Math.floor(metadata().duration / 60)}:
-                              {Math.floor(metadata().duration % 60)
-                                .toString()
-                                .padStart(2, "0")}
-                            </p>
-                            <p>{metadata().size.toFixed(2)} MB</p>
-                          </div>
                         </div>
-                      </div>
-                    )}
-                  </Show>
+                      )}
+                    </Show>
+                  </Suspense>
                 );
               }}
             </For>

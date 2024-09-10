@@ -5,6 +5,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  onMount,
 } from "solid-js";
 import { Select as KSelect } from "@kobalte/core/select";
 import { SwitchTab, Button } from "@cap/ui-solid";
@@ -48,7 +49,9 @@ export default function () {
     commands.showPreviousRecordingsWindow();
   });
 
-  commands.showPreviousRecordingsWindow();
+  onMount(() => {
+    commands.showPreviousRecordingsWindow();
+  });
 
   type CameraOption = MediaDeviceInfo | { deviceId: string; label: string };
 

@@ -1190,7 +1190,7 @@ async fn upload_rendered_video(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 fn get_recording_meta(app: AppHandle, id: String) -> RecordingMeta {
     let meta = RecordingMeta::load_for_project(&recording_path(&app, &id)).unwrap();
