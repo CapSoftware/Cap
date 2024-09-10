@@ -60,7 +60,7 @@ cpal = "0.15.3"
 indexmap = "2.5.0"
 num-traits = "0.2.19"
 tempfile = "3.12.0"
-ffmpeg-next = "7.0.4"
+ffmpeg-next.workspace = true
 chrono = "0.4.38"
 
 cap-utils = { path = "../../../crates/utils" }

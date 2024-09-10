@@ -1151,7 +1151,7 @@ async fn upload_rendered_video(
             }
         };
 
-        let uploaded_video = upload_video(video_id, auth.token, output_path)
+        let uploaded_video = upload_video(video_id.clone(), auth.token, output_path)
             .await
             .unwrap();
 
@@ -1160,6 +1160,7 @@ async fn upload_rendered_video(
             id: uploaded_video.id.clone(),
         });
         meta.save_for_project();
+        RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
         uploaded_video.link
     };
@@ -1188,6 +1189,11 @@ async fn upload_rendered_video(
     }
 
     Ok(())
+}
+
+#[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
+struct RecordingMetaChanged {
+		id: String,
 }
 
 #[tauri::command(async)]
@@ -1239,7 +1245,8 @@ pub fn run() {
             NewRecordingAdded,
             RenderFrameEvent,
             EditorStateChanged,
-            CurrentRecordingChanged
+            CurrentRecordingChanged,
+            RecordingMetaChanged
         ])
         .ty::<ProjectConfiguration>()
         .ty::<AuthStore>();

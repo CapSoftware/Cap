@@ -32,3 +32,4 @@ pnpm-lock.yaml
 .zed
 .output
 .vinxi
+native-deps

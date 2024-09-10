@@ -7,3 +7,6 @@ members = [
 	"crates/utils",
 	"crates/project",
 ]
+
+[workspace.dependencies]
+ffmpeg-next = { git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "11f8d264bbc0" }

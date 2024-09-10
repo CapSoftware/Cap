@@ -26,6 +26,7 @@ import { makePersisted } from "@solid-primitives/storage";
 import { commands, events } from "../utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "./createPresets";
+import { createQueryInvalidate } from "../utils/events";
 
 type RecordingEntry = {
   path: string;
@@ -88,6 +89,7 @@ export default function () {
                   queryKey: ["recordingMeta", videoId],
                   queryFn: () => commands.getRecordingMeta(videoId),
                 }));
+                // createQueryInvalidate(record)
 
                 const copyVideo = createMutation(() => ({
                   mutationFn: async () => {

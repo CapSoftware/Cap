@@ -177,6 +177,7 @@ export const events = __makeEvents__<{
 currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
 newRecordingAdded: NewRecordingAdded,
+recordingMetaChanged: RecordingMetaChanged,
 recordingOptionsChanged: RecordingOptionsChanged,
 renderFrameEvent: RenderFrameEvent,
 showCapturesPanel: ShowCapturesPanel
@@ -184,6 +185,7 @@ showCapturesPanel: ShowCapturesPanel
 currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
 newRecordingAdded: "new-recording-added",
+recordingMetaChanged: "recording-meta-changed",
 recordingOptionsChanged: "recording-options-changed",
 renderFrameEvent: "render-frame-event",
 showCapturesPanel: "show-captures-panel"
@@ -228,6 +230,7 @@ export type OSPermissionsCheck = ({ os: "macOS" } & MacOSPermissionsCheck) | { o
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
 export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null }
+export type RecordingMetaChanged = { id: string }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
