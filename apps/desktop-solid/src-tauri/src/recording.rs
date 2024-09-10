@@ -1,8 +1,8 @@
 use nokhwa::utils::CameraFormat;
 use serde::Serialize;
 use specta::Type;
-use std::time::Instant;
 use std::path::PathBuf;
+use std::time::Instant;
 use tokio::sync::watch;
 
 use crate::{
@@ -59,6 +59,7 @@ impl InProgressRecording {
         use cap_project::*;
         RecordingMeta {
             project_path: self.recording_dir.clone(),
+            sharing: None,
             pretty_name: format!(
                 "Cap {}",
                 chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
@@ -86,7 +87,7 @@ impl InProgressRecording {
                     .to_owned(),
             }),
         }
-        .save_for_project(&self.recording_dir);
+        .save_for_project();
     }
 }
 

@@ -1,11 +1,10 @@
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
 use crate::{editor, AudioData};
-use cap_project::ProjectConfiguration;
+use cap_project::{ProjectConfiguration, RecordingMeta};
 use cap_rendering::decoder::AsyncVideoDecoder;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
 use std::ops::Deref;
-use std::sync::atomic::AtomicBool;
 use std::{path::PathBuf, process::Command, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
 
@@ -27,7 +26,6 @@ pub struct EditorInstance {
     pub render_constants: Arc<RenderVideoConstants>,
     pub state: Mutex<EditorState>,
     on_state_change: Box<dyn Fn(&EditorState) + Send + Sync + 'static>,
-    rendering: Arc<AtomicBool>,
     pub preview_tx: watch::Sender<Option<PreviewFrameInstruction>>,
 }
 
@@ -65,37 +63,43 @@ impl EditorInstance {
             output_size: OUTPUT_SIZE,
         };
 
-        let screen_decoder = AsyncVideoDecoder::spawn(project_path.join(meta.display.path).clone());
+        let screen_decoder =
+            AsyncVideoDecoder::spawn(project_path.join(&meta.display.path).clone());
         let camera_decoder = meta
             .camera
-            .map(|camera| AsyncVideoDecoder::spawn(project_path.join(camera.path).clone()));
+            .as_ref()
+            .map(|camera| AsyncVideoDecoder::spawn(project_path.join(&camera.path).clone()));
 
-        let audio = meta.audio.zip(recordings.audio).map(|(meta, recording)| {
-            let audio_path = project_path.join(meta.path);
+        let audio = meta
+            .audio
+            .as_ref()
+            .zip(recordings.audio)
+            .map(|(meta, recording)| {
+                let audio_path = project_path.join(&meta.path);
 
-            // TODO: Use ffmpeg crate instead of command line
-            let stdout = Command::new("ffmpeg")
-                .arg("-i")
-                .arg(audio_path)
-                .args(["-f", "f64le", "-acodec", "pcm_f64le"])
-                .args(["-ar", &recording.sample_rate.to_string()])
-                .args(["-ac", &recording.channels.to_string(), "-"])
-                .output()
-                .unwrap()
-                .stdout;
+                // TODO: Use ffmpeg crate instead of command line
+                let stdout = Command::new("ffmpeg")
+                    .arg("-i")
+                    .arg(audio_path)
+                    .args(["-f", "f64le", "-acodec", "pcm_f64le"])
+                    .args(["-ar", &recording.sample_rate.to_string()])
+                    .args(["-ac", &recording.channels.to_string(), "-"])
+                    .output()
+                    .unwrap()
+                    .stdout;
 
-            let buffer = stdout
-                .chunks_exact(8)
-                .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
-                .collect::<Vec<_>>();
+                let buffer = stdout
+                    .chunks_exact(8)
+                    .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+                    .collect::<Vec<_>>();
 
-            println!("audio buffer length: {}", buffer.len());
+                println!("audio buffer length: {}", buffer.len());
 
-            AudioData {
-                buffer: Arc::new(buffer),
-                sample_rate: recording.sample_rate,
-            }
-        });
+                AudioData {
+                    buffer: Arc::new(buffer),
+                    sample_rate: recording.sample_rate,
+                }
+            });
 
         let (frame_tx, frame_rx) = tokio::sync::mpsc::unbounded_channel();
 
@@ -120,7 +124,6 @@ impl EditorInstance {
                 playhead_position: 0,
                 playback_task: None,
             }),
-            rendering: Arc::new(AtomicBool::new(false)),
             on_state_change: Box::new(on_state_change),
             preview_tx,
         });
@@ -128,6 +131,10 @@ impl EditorInstance {
         this.clone().spawn_preview_renderer(preview_rx);
 
         this
+    }
+
+    pub fn meta(&self) -> RecordingMeta {
+        RecordingMeta::load_for_project(&self.project_path).unwrap()
     }
 
     pub async fn dispose(&self) {

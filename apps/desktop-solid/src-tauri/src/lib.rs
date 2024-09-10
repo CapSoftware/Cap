@@ -15,7 +15,7 @@ mod upload;
 use auth::AuthStore;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::FFmpeg;
-use cap_project::ProjectConfiguration;
+use cap_project::{ProjectConfiguration, RecordingMeta, Sharing};
 use display::{list_capture_windows, Bounds, CaptureTarget};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use image::{ImageBuffer, Rgba};
@@ -351,6 +351,14 @@ async fn get_rendered_video(
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+
+    get_rendered_video_impl(editor_instance, project).await
+}
+
+async fn get_rendered_video_impl(
+    editor_instance: Arc<EditorInstance>,
+    project: ProjectConfiguration,
+) -> Result<PathBuf, String> {
     let output_path = editor_instance.project_path.join("output/result.mp4");
 
     if !output_path.exists() {
@@ -656,7 +664,9 @@ async fn copy_rendered_video_to_clipboard(
     project: ProjectConfiguration,
 ) -> Result<(), String> {
     println!("copying");
-    let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+
+    let output_path = match get_rendered_video_impl(editor_instance, project).await {
         Ok(path) => {
             println!("Successfully retrieved rendered video path: {:?}", path);
             path
@@ -1123,22 +1133,38 @@ async fn upload_rendered_video(
         return Err("Not authenticated".to_string());
     };
 
-    let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
-        Ok(path) => {
-            println!("Successfully retrieved rendered video path: {:?}", path);
-            path
-        }
-        Err(e) => {
-            println!("Failed to get rendered video: {}", e);
-            return Err(format!("Failed to get rendered video: {}", e));
-        }
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+
+    let mut meta = editor_instance.meta();
+
+    let share_link = if let Some(sharing) = meta.sharing {
+        sharing.link
+    } else {
+        let output_path = match get_rendered_video_impl(editor_instance.clone(), project).await {
+            Ok(path) => {
+                println!("Successfully retrieved rendered video path: {:?}", path);
+                path
+            }
+            Err(e) => {
+                println!("Failed to get rendered video: {}", e);
+                return Err(format!("Failed to get rendered video: {}", e));
+            }
+        };
+
+        let uploaded_video = upload_video(video_id, auth.token, output_path)
+            .await
+            .unwrap();
+
+        meta.sharing = Some(Sharing {
+            link: uploaded_video.link.clone(),
+            id: uploaded_video.id.clone(),
+        });
+        meta.save_for_project();
+
+        uploaded_video.link
     };
 
-    let shareable_link = upload_video(video_id, auth.token, output_path)
-        .await
-        .unwrap();
-
-    println!("Copying to clipboard: {:?}", shareable_link);
+    println!("Copying to clipboard: {:?}", share_link);
 
     #[cfg(target_os = "macos")]
     {
@@ -1152,7 +1178,7 @@ async fn upload_rendered_video(
                 let pasteboard: id = NSPasteboard::generalPasteboard(nil);
                 NSPasteboard::clearContents(pasteboard);
 
-                let ns_string = NSString::alloc(nil).init_str(&shareable_link);
+                let ns_string = NSString::alloc(nil).init_str(&share_link);
 
                 let objects: id = NSArray::arrayWithObject(nil, ns_string);
 

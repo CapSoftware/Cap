@@ -22,11 +22,19 @@ pub struct Audio {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct Sharing {
+    pub id: String,
+    pub link: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RecordingMeta {
     // this field is just for convenience, it shouldn't be persisted
     #[serde(skip_serializing, default)]
     pub project_path: PathBuf,
     pub pretty_name: String,
+    #[serde(default)]
+    pub sharing: Option<Sharing>,
     pub display: Display,
     #[serde(default)]
     pub camera: Option<Camera>,
@@ -43,8 +51,8 @@ impl RecordingMeta {
         Ok(meta)
     }
 
-    pub fn save_for_project(&self, project_path: &PathBuf) {
-        let meta_path = project_path.join("recording-meta.json");
+    pub fn save_for_project(&self) {
+        let meta_path = &self.project_path.join("recording-meta.json");
         let meta = serde_json::to_string_pretty(&self).unwrap();
         std::fs::write(meta_path, meta).unwrap();
     }

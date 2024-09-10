@@ -32,11 +32,16 @@ struct S3VideoUploadBody {
     video_codec: String,
 }
 
+pub struct UploadedVideo {
+    pub link: String,
+    pub id: String,
+}
+
 pub async fn upload_video(
     video_id: String,
     auth_token: String,
     file_path: PathBuf,
-) -> Result<String, String> {
+) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
     let file_name = file_path
@@ -47,7 +52,6 @@ pub async fn upload_video(
 
     let client = reqwest::Client::new();
     let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
-    dbg!(server_url_base);
     let s3_config = get_s3_config(&client, server_url_base, &auth_token).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
@@ -85,7 +89,10 @@ pub async fn upload_video(
 
     if response.status().is_success() {
         println!("File uploaded successfully");
-        return Ok(format!("{server_url_base}/s/{}", s3_config.id));
+        return Ok(UploadedVideo {
+            link: format!("{server_url_base}/s/{}", &s3_config.id),
+            id: s3_config.id,
+        });
     }
 
     let status = response.status();
