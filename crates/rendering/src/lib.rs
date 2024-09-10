@@ -331,6 +331,7 @@ impl ProjectUniforms {
     pub fn new(constants: &RenderVideoConstants, project: &ProjectConfiguration) -> Self {
         let options = &constants.options;
         let output_size = [options.output_size.0 as f32, options.output_size.1 as f32];
+        let output_aspect = output_size[0] / output_size[1];
 
         let display = {
             let size = [options.screen_size.0 as f32, options.screen_size.1 as f32];
@@ -338,7 +339,10 @@ impl ProjectUniforms {
             let crop_bounds = {
                 let crop = project.background.crop.clone().unwrap_or(Crop {
                     position: XY { x: 0.0, y: 0.0 },
-                    size: XY { x: size[0], y: size[1] },
+                    size: XY {
+                        x: size[0],
+                        y: size[1],
+                    },
                 });
 
                 [
@@ -355,19 +359,44 @@ impl ProjectUniforms {
             ];
             let cropped_aspect = cropped_size[0] / cropped_size[1];
 
-            let y_padding =
-                project.background.padding / 100.0 * SCREEN_MAX_PADDING * output_size[1];
+            let is_height_constrained = cropped_aspect <= output_aspect;
+            let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
 
-            let target_height = (output_size[1] - y_padding) - y_padding;
-            let target_width = target_height * cropped_aspect;
-            let target_left_bounds = (output_size[0] - target_width) / 2.0;
-            let target_bounds = [
-                target_left_bounds,
-                y_padding,
-                output_size[0] - target_left_bounds,
-                output_size[1] - y_padding,
+            let padding = [
+                output_size[0] * padding_factor * !is_height_constrained as u8 as f32,
+                output_size[1] * padding_factor * is_height_constrained as u8 as f32,
             ];
-            let target_size = [target_bounds[2] - target_bounds[0], target_height];
+
+            let available_size = [
+                output_size[0] - 2.0 * padding[0],
+                output_size[1] - 2.0 * padding[1],
+            ];
+
+            let target_size = if is_height_constrained {
+                [available_size[1] * cropped_aspect, available_size[1]]
+            } else {
+                [available_size[0], available_size[0] / cropped_aspect]
+            };
+
+            let target_offset = [
+                (output_size[0] - target_size[0]) / 2.0,
+                (output_size[1] - target_size[1]) / 2.0,
+            ];
+
+            let target_start = if is_height_constrained {
+                [target_offset[0], padding[1]]
+            } else {
+                [padding[0], target_offset[1]]
+            };
+
+            let target_bounds = [
+                target_start[0],
+                target_start[1],
+                output_size[0] - target_start[0],
+                output_size[1] - target_start[1],
+            ];
+
+            let target_size = [target_bounds[2] - target_bounds[0], target_size[1]];
             let min_target_axis = target_size[0].min(target_size[1]);
 
             CompositeVideoFrameUniforms {
