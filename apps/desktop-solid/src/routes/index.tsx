@@ -57,7 +57,7 @@ export default function () {
     }
   };
 
-  const isRecording = () => !currentRecording.data;
+  const isRecording = () => !!currentRecording.data;
 
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {

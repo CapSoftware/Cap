@@ -73,7 +73,7 @@ fn create_prev_recordings_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Resu
     let items: Vec<MenuItemKind<R>> = prev_recordings
         .iter()
         .filter_map(|path| {
-            let Ok(meta) = RecordingMeta::load_for_project(&path) else {
+            let Ok(meta) = RecordingMeta::load_for_project(path) else {
                 return None;
             };
             let pretty_name = meta.pretty_name.clone();
@@ -122,7 +122,7 @@ fn get_prev_recordings<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<PathBuf>, t
         return Ok(Vec::new());
     }
 
-    let entries = std::fs::read_dir(recordings_dir).map_err(|e| tauri::Error::Io(e))?;
+    let entries = std::fs::read_dir(recordings_dir).map_err(tauri::Error::Io)?;
 
     Ok(entries
         .filter_map(Result::ok)
@@ -155,7 +155,7 @@ fn get_recording_path_by_pretty_name<R: Runtime>(
     pretty_name: &str,
 ) -> Option<PathBuf> {
     get_prev_recordings(app).ok()?.into_iter().find(|path| {
-        let Ok(meta) = RecordingMeta::load_for_project(&path) else {
+        let Ok(meta) = RecordingMeta::load_for_project(path) else {
             return false;
         };
         meta.pretty_name == pretty_name

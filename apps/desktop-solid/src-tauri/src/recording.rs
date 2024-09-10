@@ -2,7 +2,7 @@ use nokhwa::utils::CameraFormat;
 use serde::Serialize;
 use specta::Type;
 use std::time::Instant;
-use std::{path::PathBuf, time::SystemTime};
+use std::path::PathBuf;
 use tokio::sync::watch;
 
 use crate::{

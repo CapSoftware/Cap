@@ -2,7 +2,6 @@ use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, WebviewUrl, WebviewWindow, Wry};
-use tauri_plugin_decorum::WebviewWindowExt;
 
 #[derive(Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]

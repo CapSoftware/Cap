@@ -1,6 +1,6 @@
 mod configuration;
 
-use std::{io, path::PathBuf};
+use std::path::PathBuf;
 
 pub use configuration::*;
 use serde::{Deserialize, Serialize};

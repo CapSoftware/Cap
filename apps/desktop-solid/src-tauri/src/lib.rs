@@ -132,6 +132,8 @@ impl App {
     pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
         self.close_occluder_window();
 
+        CurrentRecordingChanged(JsonValue::new(&None)).emit(&self.handle).ok();
+
         self.current_recording.take()
     }
 
@@ -651,6 +653,7 @@ async fn copy_rendered_video_to_clipboard(
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<(), String> {
+		println!("copying");
     let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
         Ok(path) => {
             println!("Successfully retrieved rendered video path: {:?}", path);
@@ -859,7 +862,7 @@ fn show_previous_recordings_window(app: AppHandle) {
     .accept_first_mouse(true)
     .content_protected(true)
     .inner_size(
-        (monitor.size().width as f64) / monitor.scale_factor(),
+    		800.0,
         (monitor.size().height as f64) / monitor.scale_factor(),
     )
     .position(0.0, 0.0)

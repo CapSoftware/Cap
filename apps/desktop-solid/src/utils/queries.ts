@@ -22,7 +22,7 @@ const getCurrentRecording = queryOptions({
   queryKey: ["currentRecording"] as const,
   queryFn: async () => {
     const o = await commands.getCurrentRecording();
-    if (o.status === "ok") return o.data;
+    if (o.status === "ok") return o.data[0];
   },
 });
 

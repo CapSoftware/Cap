@@ -1,10 +1,9 @@
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
 use crate::{editor, AudioData};
-use cap_project::{ProjectConfiguration, RecordingMeta};
+use cap_project::ProjectConfiguration;
 use cap_rendering::decoder::AsyncVideoDecoder;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
-use ffmpeg_next::Rational;
 use std::ops::Deref;
 use std::sync::atomic::AtomicBool;
 use std::{path::PathBuf, process::Command, sync::Arc};

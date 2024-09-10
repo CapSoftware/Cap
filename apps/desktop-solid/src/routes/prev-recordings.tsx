@@ -84,44 +84,30 @@ export default function () {
 
                 const copyVideo = createMutation(() => ({
                   mutationFn: async () => {
-                    try {
-                      await commands.copyRenderedVideoToClipboard(
-                        videoId,
-                        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                      );
-                    } catch (error) {
-                      console.error("Failed to copy to clipboard", error);
-                      window.alert("Failed to copy to clipboard");
-                    } finally {
-                    }
+                    await commands.copyRenderedVideoToClipboard(
+                      videoId,
+                      presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                    );
                   },
                 }));
 
                 const saveVideo = createMutation(() => ({
                   mutationFn: async () => {
-                    try {
-                      const renderedPath = await commands.getRenderedVideo(
-                        videoId,
-                        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                      );
+                    const renderedPath = await commands.getRenderedVideo(
+                      videoId,
+                      presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                    );
 
-                      if (renderedPath.status !== "ok")
-                        throw new Error("Failed to get rendered video path");
+                    if (renderedPath.status !== "ok")
+                      throw new Error("Failed to get rendered video path");
 
-                      const savePath = await save({
-                        filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
-                      });
+                    const savePath = await save({
+                      filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
+                    });
 
-                      if (!savePath) return false;
+                    if (!savePath) return false;
 
-                      await commands.copyFileToPath(
-                        renderedPath.data,
-                        savePath
-                      );
-                    } catch (error) {
-                      console.error("Failed to save recording:", error);
-                      window.alert("Failed to save recording");
-                    }
+                    await commands.copyFileToPath(renderedPath.data, savePath);
 
                     return true;
                   },
