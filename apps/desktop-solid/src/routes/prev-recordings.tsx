@@ -72,8 +72,10 @@ export default function () {
       <div class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto">
         <div class="pt-12 w-full flex flex-col gap-4">
           <TransitionGroup
-            enterClass="opacity-0"
+            enterToClass="translate-y-0"
+            enterClass="opacity-0 translate-y-4"
             exitToClass="opacity-0 -translate-x-1/2 ease-out"
+            exitClass="opacity-100 translate-x-0"
             exitActiveClass="absolute"
           >
             <For each={recordings}>
