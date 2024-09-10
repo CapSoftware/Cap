@@ -1037,10 +1037,12 @@ fn open_in_finder(path: PathBuf) {
 
 #[tauri::command]
 #[specta::specta]
-fn list_audio_devices() -> Vec<String> {
-    let devices = audio::get_input_devices();
+async fn list_audio_devices() -> Result<Vec<String>, ()> {
+		tokio::task::spawn_blocking(|| {
+			let devices = audio::get_input_devices();
 
-    devices.keys().cloned().collect()
+    	devices.keys().cloned().collect()
+		}).await.map_err(|_| ())
 }
 
 #[tauri::command]

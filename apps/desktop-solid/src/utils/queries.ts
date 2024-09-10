@@ -29,7 +29,8 @@ export const getCurrentRecording = queryOptions({
 export const listAudioDevices = queryOptions({
   queryKey: ["audioDevices"] as const,
   queryFn: async () => {
-    return (await commands.listAudioDevices()).map((name) => ({ name }));
+    const r = await commands.listAudioDevices();
+    if (r.status === "ok") return r.data.map((name) => ({ name }));
   },
   reconcile: "name",
 });

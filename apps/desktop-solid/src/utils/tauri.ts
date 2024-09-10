@@ -46,8 +46,13 @@ async listCameras() : Promise<string[]> {
 async listCaptureWindows() : Promise<CaptureWindow[]> {
     return await TAURI_INVOKE("list_capture_windows");
 },
-async listAudioDevices() : Promise<string[]> {
-    return await TAURI_INVOKE("list_audio_devices");
+async listAudioDevices() : Promise<Result<string[], null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_audio_devices") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async showPreviousRecordingsWindow() : Promise<void> {
     await TAURI_INVOKE("show_previous_recordings_window");
