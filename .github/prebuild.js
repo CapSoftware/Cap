@@ -8,6 +8,7 @@ import extract from "extract-zip";
 
 const exec = promisify(execCb);
 const signId = env.APPLE_SIGNING_IDENTITY || "-";
+const keychain = env.APPLE_KEYCHAIN ? `--keychain ${env.APPLE_KEYCHAIN}` : "";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,7 +29,7 @@ async function symlinkSharedLibsMacOS(nativeDeps) {
           .filter((entry) => entry.isFile() && entry.name.endsWith(".dylib"))
           .map((entry) =>
             exec(
-              `codesign -s "${signId}" -f "${path.join(
+              `codesign ${keychain} -s "${signId}" -f "${path.join(
                 entry.path,
                 entry.name
               )}"`

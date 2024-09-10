@@ -33,21 +33,43 @@ jobs:
       - name: Create API Key File
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
 
+      - name: Ensure signing identity
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=${{ runner.temp }}/certificate.p12
+          KEYCHAIN_PATH=${{ runner.temp }}/build.keychain
+
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
+
+          # Maybe set password in secrets?? This gets cleaned up at the beginning and end of each job though.
+          security create-keychain -p "" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security default-keychain -s $KEYCHAIN_PATH
+          security unlock-keychain -p "" $KEYCHAIN_PATH
+          security import $CERTIFICATE_PATH -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Verify certificate
+        run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
+
       - name: Rust setup
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
           cache: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 8.10.5
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8.10.5
 
       - name: Install dependencies
         run: cd apps/desktop-solid && pnpm install
@@ -56,6 +78,9 @@ jobs:
         run: |
           echo "appVersion=${{ steps.read_version.outputs.value }}" >> .env
           echo "CAP_DESKTOP_SENTRY_URL=https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200" >> .env
+          echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" > .env
+          echo "NEXTAUTH_URL=${NEXT_PUBLIC_URL}" > .env
+          echo "VITE_SERVER_URL=${NEXT_PUBLIC_URL}" > .env
 
       - name: Copy .env to apps/desktop-solid
         run: cp .env apps/desktop-solid/.env
@@ -85,7 +110,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: api.p8
-
+          APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
           TAURI_PRIVATE_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_KEY_SIGNING_PASSWORD: ${{ secrets.TAURI_KEY_SIGNING_PASSWORD }}
 
