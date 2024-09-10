@@ -35,6 +35,7 @@ const nextConfig = {
       "@react-email/render",
       "@react-email/tailwind",
     ],
+    outputFileTracingRoot: join(__dirname, '../../'),
   },
   images: {
     remotePatterns: [
