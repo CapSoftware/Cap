@@ -89,7 +89,7 @@ rustflags = [
     JSON.stringify(
       {
         bundle: {
-          macOS: { frameworks: path.join(nativeDeps, "Spacedrive.framework") },
+          macOS: { frameworks: [path.join(nativeDeps, "Spacedrive.framework")] },
         },
       },
       null,
