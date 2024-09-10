@@ -1,4 +1,5 @@
 import million from "million/compiler";
+import { join } from 'path';
 
 /** @type {import('next').NextConfig} */
 
