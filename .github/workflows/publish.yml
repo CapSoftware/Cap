@@ -70,9 +70,9 @@ jobs:
         run: |
           rustup target add x86_64-apple-darwin
           pnpm install
-          node ${{ GITHUB_WORKSPACE }}/.github/prebuild.js x86_64
+          node ${{ github.workspace }}/.github/prebuild.js x86_64
           pnpm tauri build --target x86_64-apple-darwin
-          node ${{ GITHUB_WORKSPACE }}/.github/prebuild.js aarch64
+          node ${{ github.workspace }}/.github/prebuild.js aarch64
           pnpm tauri build --target aarch64-apple-darwin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
