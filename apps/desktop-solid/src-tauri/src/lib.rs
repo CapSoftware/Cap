@@ -398,7 +398,7 @@ async fn render_to_file_impl(
     let output_path_clone = output_path.clone();
     let recording_dir_clone = recording_dir.clone();
 
-    tokio::spawn(async move {
+    let ffmpeg_handle = tokio::spawn(async move {
         println!("Starting FFmpeg output process...");
         let mut ffmpeg = cap_ffmpeg::FFmpeg::new();
 
@@ -522,6 +522,8 @@ async fn render_to_file_impl(
     println!("Rendering video to channel");
 
     cap_rendering::render_video_to_channel(options, project, tx_image_data, decoders).await?;
+
+    ffmpeg_handle.await.ok();
 
     println!("Copying file to {:?}", recording_dir);
     let result_path = recording_dir.join("output/result.mp4");
