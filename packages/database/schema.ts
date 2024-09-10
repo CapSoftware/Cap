@@ -156,7 +156,9 @@ export const videos = mysqlTable(
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     source: json("source")
-      .$type<{ type: "MediaConvert" } | { type: "local" }>()
+      .$type<
+        { type: "MediaConvert" } | { type: "local" } | { type: "desktopMP4" }
+      >()
       .notNull()
       .default({ type: "MediaConvert" }),
   },

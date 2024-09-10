@@ -62,7 +62,7 @@
     "server-only": "^0.0.1",
     "subtitles-parser-vtt": "^0.1.0",
     "tailwind-merge": "^2.1.0",
-    "video.js": "^8.17.2",
+    "video.js": "^8.17.3",
     "zod": "^3.22.4"
   },
   "devDependencies": {
