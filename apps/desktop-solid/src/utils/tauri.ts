@@ -156,6 +156,14 @@ async openPermissionSettings(settings: OSPermissionSettings) : Promise<void> {
 },
 async doPermissionsCheck() : Promise<OSPermissionsCheck> {
     return await TAURI_INVOKE("do_permissions_check");
+},
+async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("upload_rendered_video", { videoId, project }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -187,6 +195,7 @@ showCapturesPanel: "show-captures-panel"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
+export type AuthStore = { token: string; expires: number }
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
 export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number] }
 export type Bounds = { x: number; y: number; width: number; height: number }

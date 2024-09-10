@@ -11,18 +11,16 @@ import {
   createEffect,
   createResource,
   createSignal,
-  on,
   onCleanup,
 } from "solid-js";
-import createPresence from "solid-presence";
 import Tooltip from "@corvu/tooltip";
 import { Button } from "@cap/ui-solid";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { save } from "@tauri-apps/plugin-dialog";
 import { TransitionGroup } from "solid-transition-group";
-
 import { createStore, produce } from "solid-js/store";
 import { makePersisted } from "@solid-primitives/storage";
+
 import { commands, events } from "../utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "./createPresets";
@@ -84,10 +82,11 @@ export default function () {
 
                 const copyVideo = createMutation(() => ({
                   mutationFn: async () => {
-                    await commands.copyRenderedVideoToClipboard(
+                    const res = await commands.copyRenderedVideoToClipboard(
                       videoId,
                       presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
                     );
+                    if (res.status !== "ok") throw new Error(res.error);
                   },
                 }));
 
@@ -110,6 +109,17 @@ export default function () {
                     await commands.copyFileToPath(renderedPath.data, savePath);
 
                     return true;
+                  },
+                }));
+
+                const uploadVideo = createMutation(() => ({
+                  mutationFn: async () => {
+                    console.log("bruh");
+                    const res = await commands.uploadRenderedVideo(
+                      videoId,
+                      presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                    );
+                    if (res.status !== "ok") throw new Error(res.error);
                   },
                 }));
 
@@ -247,14 +257,36 @@ export default function () {
                               </Switch>
                             </TooltipIconButton>
                             <TooltipIconButton
-                              class="absolute right-3 bottom-3"
-                              tooltipText="Create Shareable Link"
+                              class="absolute right-3 bottom-3 z-20"
+                              tooltipText={
+                                uploadVideo.isPending
+                                  ? "Uploading Cap"
+                                  : "Create Shareable Link"
+                              }
+                              forceOpen={uploadVideo.isPending}
                               tooltipPlacement="left"
-                              onClick={async () => {
-                                // Implement shareable link functionality here
-                              }}
+                              onClick={() => uploadVideo.mutate()}
+                              disabled={uploadVideo.isPending}
                             >
-                              <IconCapUpload class="size-[1rem]" />
+                              <Switch
+                                fallback={<IconCapUpload class="size-[1rem]" />}
+                              >
+                                <Match when={uploadVideo.isPending}>
+                                  <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+                                </Match>
+                                <Match when={uploadVideo.isSuccess}>
+                                  {(_) => {
+                                    setTimeout(() => {
+                                      if (!uploadVideo.isPending)
+                                        uploadVideo.reset();
+                                    }, 2000);
+
+                                    return (
+                                      <IconLucideCheck class="size-[1rem]" />
+                                    );
+                                  }}
+                                </Match>
+                              </Switch>
                             </TooltipIconButton>
                             <div class="absolute inset-0 flex items-center justify-center">
                               <Button

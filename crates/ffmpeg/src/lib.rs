@@ -309,29 +309,29 @@ impl FFmpeg {
     pub fn start(self) -> FFmpegProcess {
         FFmpegProcess::spawn(self.command)
     }
-}
 
-pub fn handle_ffmpeg_installation() -> Result<(), String> {
-    if ffmpeg_is_installed() {
-        return Ok(());
+    pub fn install_if_necessary() -> Result<(), String> {
+        if ffmpeg_is_installed() {
+            return Ok(());
+        }
+
+        match check_latest_version() {
+            Ok(version) => println!("Latest available version: {}", version),
+            Err(e) => println!("Skipping version check due to error: {e}"),
+        }
+
+        let download_url = ffmpeg_download_url().map_err(|e| e.to_string())?;
+        let destination = sidecar_dir().map_err(|e| e.to_string())?;
+
+        let archive_path =
+            download_ffmpeg_package(download_url, &destination).map_err(|e| e.to_string())?;
+
+        unpack_ffmpeg(&archive_path, &destination).map_err(|e| e.to_string())?;
+
+        let version = ffmpeg_version().map_err(|e| e.to_string())?;
+
+        println!("Done! Installed FFmpeg version {} 🏁", version);
+
+        Ok(())
     }
-
-    match check_latest_version() {
-        Ok(version) => println!("Latest available version: {}", version),
-        Err(e) => println!("Skipping version check due to error: {e}"),
-    }
-
-    let download_url = ffmpeg_download_url().map_err(|e| e.to_string())?;
-    let destination = sidecar_dir().map_err(|e| e.to_string())?;
-
-    let archive_path =
-        download_ffmpeg_package(download_url, &destination).map_err(|e| e.to_string())?;
-
-    unpack_ffmpeg(&archive_path, &destination).map_err(|e| e.to_string())?;
-
-    let version = ffmpeg_version().map_err(|e| e.to_string())?;
-
-    println!("Done! Installed FFmpeg version {} 🏁", version);
-
-    Ok(())
 }

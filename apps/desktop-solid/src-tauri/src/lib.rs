@@ -1,4 +1,5 @@
 mod audio;
+mod auth;
 mod camera;
 mod display;
 mod editor;
@@ -9,7 +10,9 @@ mod playback;
 mod project_recordings;
 mod recording;
 mod tray;
+mod upload;
 
+use auth::AuthStore;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::FFmpeg;
 use cap_project::ProjectConfiguration;
@@ -44,6 +47,7 @@ use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
 };
+use upload::upload_video;
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -132,7 +136,9 @@ impl App {
     pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
         self.close_occluder_window();
 
-        CurrentRecordingChanged(JsonValue::new(&None)).emit(&self.handle).ok();
+        CurrentRecordingChanged(JsonValue::new(&None))
+            .emit(&self.handle)
+            .ok();
 
         self.current_recording.take()
     }
@@ -653,7 +659,7 @@ async fn copy_rendered_video_to_clipboard(
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<(), String> {
-		println!("copying");
+    println!("copying");
     let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
         Ok(path) => {
             println!("Successfully retrieved rendered video path: {:?}", path);
@@ -862,7 +868,7 @@ fn show_previous_recordings_window(app: AppHandle) {
     .accept_first_mouse(true)
     .content_protected(true)
     .inner_size(
-    		800.0,
+        800.0,
         (monitor.size().height as f64) / monitor.scale_factor(),
     )
     .position(0.0, 0.0)
@@ -958,35 +964,6 @@ fn close_previous_recordings_window(app: AppHandle) {
         panel.released_when_closed(true);
         panel.close();
     }
-}
-
-fn handle_ffmpeg_installation() -> Result<(), String> {
-    if ffmpeg_is_installed() {
-        println!("FFmpeg is already installed! 🎉");
-        return Ok(());
-    }
-
-    println!("FFmpeg not found. Attempting to install...");
-    match check_latest_version() {
-        Ok(version) => println!("Latest available version: {}", version),
-        Err(e) => println!("Skipping version check due to error: {e}"),
-    }
-
-    let download_url = ffmpeg_download_url().map_err(|e| e.to_string())?;
-    let destination = sidecar_dir().map_err(|e| e.to_string())?;
-
-    println!("Downloading from: {:?}", download_url);
-    let archive_path =
-        download_ffmpeg_package(download_url, &destination).map_err(|e| e.to_string())?;
-    println!("Downloaded package: {:?}", archive_path);
-
-    println!("Extracting...");
-    unpack_ffmpeg(&archive_path, &destination).map_err(|e| e.to_string())?;
-
-    let version = ffmpeg_version().map_err(|e| e.to_string())?;
-
-    println!("Done! Installed FFmpeg version {} 🏁", version);
-    Ok(())
 }
 
 fn on_recording_options_change(app: &AppHandle, options: &RecordingOptions) {
@@ -1138,6 +1115,58 @@ fn open_main_window(app: AppHandle) {
     window.set_traffic_lights_inset(14.0, 22.0).unwrap();
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn upload_rendered_video(
+    app: AppHandle,
+    video_id: String,
+    project: ProjectConfiguration,
+) -> Result<(), String> {
+    let Ok(Some(auth)) = AuthStore::get(&app) else {
+    		println!("not authenticated!");
+        return Err("Not authenticated".to_string());
+    };
+
+    let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
+        Ok(path) => {
+            println!("Successfully retrieved rendered video path: {:?}", path);
+            path
+        }
+        Err(e) => {
+            println!("Failed to get rendered video: {}", e);
+            return Err(format!("Failed to get rendered video: {}", e));
+        }
+    };
+
+    let shareable_link = upload_video(video_id, auth.token, output_path).await.unwrap();
+
+    println!("Copying to clipboard: {:?}", shareable_link);
+
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::appkit::NSPasteboard;
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::{NSArray, NSString, NSURL};
+        use objc::rc::autoreleasepool;
+
+        unsafe {
+            autoreleasepool(|| {
+                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
+                NSPasteboard::clearContents(pasteboard);
+
+                let url =
+                    NSURL::fileURLWithPath_(nil, NSString::alloc(nil).init_str(&shareable_link));
+
+                let objects: id = NSArray::arrayWithObject(nil, url);
+
+                NSPasteboard::writeObjects(pasteboard, objects);
+            });
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -1170,7 +1199,8 @@ pub fn run() {
             open_editor,
             open_main_window,
             permissions::open_permission_settings,
-            permissions::do_permissions_check
+            permissions::do_permissions_check,
+            upload_rendered_video
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1180,7 +1210,8 @@ pub fn run() {
             EditorStateChanged,
             CurrentRecordingChanged
         ])
-        .ty::<ProjectConfiguration>();
+        .ty::<ProjectConfiguration>()
+        .ty::<AuthStore>();
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds
     specta_builder
@@ -1204,7 +1235,7 @@ pub fn run() {
 
             let app_handle = app.handle();
 
-            if let Err(_error) = handle_ffmpeg_installation() {
+            if let Err(_error) = FFmpeg::install_if_necessary() {
                 println!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now");
                 // TODO: UI message instead
                 panic!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now")

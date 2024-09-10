@@ -1,6 +1,6 @@
 import { Store } from "@tauri-apps/plugin-store";
 
-import type { ProjectConfiguration } from "./utils/tauri";
+import type { AuthStore, ProjectConfiguration } from "./utils/tauri";
 
 const store = new Store("store");
 
@@ -20,11 +20,6 @@ export const presetsStore = {
   },
   listen: (fn: (data: PresetsStore | null) => void) =>
     store.onKeyChange<PresetsStore>("presets", fn),
-};
-
-export type AuthStore = {
-  token: string;
-  expires: number;
 };
 
 export const authStore = {
