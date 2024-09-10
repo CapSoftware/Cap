@@ -128,10 +128,15 @@ async fn get_s3_config(
         return Err("Failed to authenticate request; please log in again".into());
     }
 
-    let config = response.json::<S3UploadMeta>().await.map_err(|e| {
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    let config = serde_json::from_str::<S3UploadMeta>(&response_text).map_err(|e| {
         format!(
-            "Failed to read and deserialize response from Next.js handler: {}",
-            e
+            "Failed to deserialize response: {}. Response body: {}",
+            e, response_text
         )
     })?;
 

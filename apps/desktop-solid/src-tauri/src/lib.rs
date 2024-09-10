@@ -1123,7 +1123,7 @@ async fn upload_rendered_video(
     project: ProjectConfiguration,
 ) -> Result<(), String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
-    		println!("not authenticated!");
+        println!("not authenticated!");
         return Err("Not authenticated".to_string());
     };
 
@@ -1138,7 +1138,9 @@ async fn upload_rendered_video(
         }
     };
 
-    let shareable_link = upload_video(video_id, auth.token, output_path).await.unwrap();
+    let shareable_link = upload_video(video_id, auth.token, output_path)
+        .await
+        .unwrap();
 
     println!("Copying to clipboard: {:?}", shareable_link);
 
@@ -1146,7 +1148,7 @@ async fn upload_rendered_video(
     {
         use cocoa::appkit::NSPasteboard;
         use cocoa::base::{id, nil};
-        use cocoa::foundation::{NSArray, NSString, NSURL};
+        use cocoa::foundation::{NSArray, NSString};
         use objc::rc::autoreleasepool;
 
         unsafe {
@@ -1154,10 +1156,9 @@ async fn upload_rendered_video(
                 let pasteboard: id = NSPasteboard::generalPasteboard(nil);
                 NSPasteboard::clearContents(pasteboard);
 
-                let url =
-                    NSURL::fileURLWithPath_(nil, NSString::alloc(nil).init_str(&shareable_link));
+                let ns_string = NSString::alloc(nil).init_str(&shareable_link);
 
-                let objects: id = NSArray::arrayWithObject(nil, url);
+                let objects: id = NSArray::arrayWithObject(nil, ns_string);
 
                 NSPasteboard::writeObjects(pasteboard, objects);
             });
