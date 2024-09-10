@@ -9,6 +9,7 @@ import { dub } from "@/utils/dub";
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
   "http://localhost:3001",
+  "http://localhost:3000",
   "tauri://localhost",
   "http://tauri.localhost",
   "https://tauri.localhost",
@@ -18,6 +19,8 @@ export async function OPTIONS(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
+
+  console.log("OPTIONS request received:", { origin, originalOrigin });
 
   return new Response(null, {
     status: 200,
@@ -54,11 +57,13 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
-  const recordingMode: "hls" | null = params.get("recordingMode") as any;
+  const recordingMode: "hls" | "desktopMP4" | null = params.get(
+    "recordingMode"
+  ) as any;
 
-  console.log("cookies:", cookies().getAll());
 
   if (!user) {
+    console.log("User not authenticated, returning 401");
     return new Response(JSON.stringify({ error: true }), {
       status: 401,
       headers: {
@@ -81,13 +86,19 @@ export async function GET(req: NextRequest) {
     month: "long",
   })} ${date.getFullYear()}`;
 
+
   await db.insert(videos).values({
     id: id,
     name: `My Cap Recording - ${formattedDate}`,
     ownerId: user.id,
     awsRegion: awsRegion,
     awsBucket: awsBucket,
-    source: recordingMode === "hls" ? { type: "local" } : undefined,
+    source:
+      recordingMode === "hls"
+        ? { type: "local" }
+        : recordingMode === "desktopMP4"
+        ? { type: "desktopMP4" }
+        : undefined,
   });
 
   if (

@@ -69,7 +69,7 @@ export const VideoPlayer = memo(
         controls={false}
         muted
       >
-        <source src={videoSrc} type="application/x-mpegURL" />
+        <source src={videoSrc} type="video/mp4" />
       </video>
     );
   })

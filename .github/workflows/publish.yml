@@ -1,0 +1,97 @@
+name: "publish"
+
+# change this when ready to release if you want CI/CD
+on: workflow_dispatch
+
+env:
+  CN_APPLICATION: cap/cap
+  APP_CARGO_TOML: apps/desktop-solid/src-tauri/Cargo.toml
+
+jobs:
+  cap-desktop-release:
+    permissions:
+      contents: write
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read version number
+        uses: SebRollen/toml-action@v1.0.2
+        id: read_version
+        with:
+          file: ${{ env.APP_CARGO_TOML }}
+          field: "package.version"
+
+      - name: create draft release
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
+          api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Create API Key File
+        run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
+
+      - name: Rust setup
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: cd apps/desktop-solid && pnpm install
+
+      - name: Create .env file in root
+        run: |
+          echo "appVersion=${{ steps.read_version.outputs.value }}" >> .env
+          echo "CAP_DESKTOP_SENTRY_URL=https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200" >> .env
+
+      - name: Copy .env to apps/desktop-solid
+        run: cp .env apps/desktop-solid/.env
+
+      - name: Output .env file
+        run: cat apps/desktop-solid/.env
+
+      - name: Build MacOS Apps
+        # Install x86_64-apple-darwin for mac and build Tauri binaries
+        # Build both intel and apple silicon
+        working-directory: apps/desktop-solid
+        run: |
+          rustup target add x86_64-apple-darwin
+          pnpm install
+          node .github/prebuild.js x86_64
+          pnpm tauri build --target x86_64-apple-darwin
+          node .github/prebuild.js aarch64
+          pnpm tauri build --target aarch64-apple-darwin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: api.p8
+
+          TAURI_PRIVATE_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_KEY_SIGNING_PASSWORD: ${{ secrets.TAURI_KEY_SIGNING_PASSWORD }}
+
+      - name: upload assets
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release upload ${{ env.CN_APPLICATION }} --framework tauri
+          api-key: ${{ secrets.CN_API_KEY }}
+          working-directory: ./apps/desktop-solid/src-tauri

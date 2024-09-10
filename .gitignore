@@ -30,3 +30,6 @@ target
 .turbo
 pnpm-lock.yaml
 .zed
+.output
+.vinxi
+native-deps

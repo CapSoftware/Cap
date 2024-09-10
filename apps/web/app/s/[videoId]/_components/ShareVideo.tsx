@@ -1,5 +1,6 @@
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { VideoPlayer } from "./VideoPlayer";
+import { MP4VideoPlayer } from "./MP4VideoPlayer";
 import { useState, useEffect, useRef } from "react";
 import {
   Play,
@@ -326,7 +327,9 @@ export const ShareVideo = ({
 
   let videoSrc: string;
 
-  if (
+  if (data.source.type === "desktopMP4") {
+    videoSrc = `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+  } else if (
     // v.cap.so is only available in prod
     process.env.NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
@@ -384,7 +387,11 @@ export const ShareVideo = ({
             </div>
           </div>
         )}
-        <VideoPlayer ref={videoRef} videoSrc={videoSrc} />
+        {data.source.type === "desktopMP4" ? (
+          <MP4VideoPlayer ref={videoRef} videoSrc={videoSrc} />
+        ) : (
+          <VideoPlayer ref={videoRef} videoSrc={videoSrc} />
+        )}
       </div>
       <div className="absolute bottom-0 z-20 w-full text-white bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-all">
         <div

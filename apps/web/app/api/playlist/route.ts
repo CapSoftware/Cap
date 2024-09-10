@@ -123,6 +123,25 @@ export async function GET(request: NextRequest) {
         headers: getHeaders(origin),
       });
     }
+    if (video.source.type === "desktopMP4") {
+      const playlistUrl = await getSignedUrl(
+        s3Client,
+        new GetObjectCommand({
+          Bucket: bucket,
+          Key: `${userId}/${videoId}/result.mp4`,
+        }),
+        { expiresIn: 3600 }
+      );
+
+      console.log({ playlistUrl });
+      return new Response(null, {
+        status: 302,
+        headers: {
+          ...getHeaders(origin),
+          Location: playlistUrl,
+        },
+      });
+    }
 
     // Handle screen, video, and now audio types
     let objectsCommand, prefix;

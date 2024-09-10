@@ -1,10 +1,10 @@
 module.exports = function (app, options) {
   const config = {
     content: [
-      `../../apps/${app}/pages/**/*.{js,ts,jsx,tsx,mdx}`,
-      `../../apps/${app}/components/**/*.{js,ts,jsx,tsx,mdx}`,
-      `../../apps/${app}/app/**/*.{js,ts,jsx,tsx,mdx}`,
-      `../../apps/${app}/src/**/*.{js,ts,jsx,tsx,mdx}`,
+      `../../apps/*/pages/**/*.{js,ts,jsx,tsx,mdx}`,
+      `../../apps/*/components/**/*.{js,ts,jsx,tsx,mdx}`,
+      `../../apps/*/app/**/*.{js,ts,jsx,tsx,mdx}`,
+      `../../apps/*/src/**/*.{js,ts,jsx,tsx,mdx}`,
       "../../packages/*/src/**/*.{ts,tsx,html,stories.tsx}",
     ],
     theme: {
@@ -97,6 +97,8 @@ module.exports = function (app, options) {
     plugins: [
       require("tailwindcss-animate"),
       require("@tailwindcss/typography"),
+      require("@kobalte/tailwindcss"),
+      require("tailwind-scrollbar"),
     ],
   };
   return config;
