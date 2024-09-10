@@ -10,7 +10,14 @@ const queryClient = new QueryClient();
 
 export default function App() {
   return (
-    <ErrorBoundary fallback={(e) => <p>{e.toString()}</p>}>
+    <ErrorBoundary
+      fallback={(e: Error) => (
+        <>
+          <p>{e.toString()}</p>
+          <p>{e.stack?.toString()}</p>
+        </>
+      )}
+    >
       <QueryClientProvider client={queryClient}>
         <Router
           root={(props) => {

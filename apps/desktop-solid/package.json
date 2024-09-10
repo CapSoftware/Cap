@@ -2,7 +2,7 @@
   "name": "desktop-solid",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "dotenv -e ../../.env -- tauri dev",
     "localdev": "vinxi dev --port 3001",
     "build": "vinxi build",
     "tauri": "tauri"
