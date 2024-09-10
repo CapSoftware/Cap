@@ -193,7 +193,7 @@ function Inner() {
 
   return (
     <div
-      class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg leading-5"
+      class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg leading-5 animate-in fade-in"
       data-tauri-drag-region
     >
       <Header />
@@ -210,7 +210,10 @@ function Inner() {
                       open: true,
                       type: "crop",
                       position: {
-                        ...(state.background.crop?.position ?? { x: 0, y: 0 }),
+                        ...(state.background.crop?.position ?? {
+                          x: 0,
+                          y: 0,
+                        }),
                       },
                       size: {
                         ...(state.background.crop?.size ?? {
