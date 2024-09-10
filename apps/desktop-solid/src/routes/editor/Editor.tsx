@@ -534,6 +534,7 @@ function ShareButton() {
     >
       {(sharing) => {
         const url = () => new URL(sharing().link);
+
         return (
           <a
             class="rounded-full h-[2rem] px-[1rem] flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100"
