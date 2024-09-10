@@ -173,7 +173,6 @@ impl EditorInstance {
 
         tokio::spawn(async move {
             loop {
-                println!("receiving playback event");
                 let event = *handle.receive_event().await;
 
                 match event {
