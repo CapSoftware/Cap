@@ -1,5 +1,6 @@
 import million from "million/compiler";
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 /** @type {import('next').NextConfig} */
 
@@ -13,6 +14,9 @@ if (process.env.DB_PLANETSCALE_HOST !== undefined) {
 
 import fs from "fs";
 import path from "path";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const packageJson = JSON.parse(
   fs.readFileSync(path.resolve("./package.json"), "utf8")
