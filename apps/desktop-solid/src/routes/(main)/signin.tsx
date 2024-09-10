@@ -27,7 +27,11 @@ const signInAction = action(async () => {
     config: { response: callbackTemplate },
   });
 
-  await shell.open(`https://cap.so/api/desktop/session/request?port=${port}`);
+  await shell.open(
+    `${
+      import.meta.env.VITE_SERVER_URL
+    }/api/desktop/session/request?port=${port}`
+  );
 
   const url = await new Promise<URL>((r) => {
     res = r;

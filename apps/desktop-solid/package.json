@@ -2,8 +2,8 @@
   "name": "desktop-solid",
   "type": "module",
   "scripts": {
-    "dev": "vinxi dev --port 1420",
-    "build": "vinxi build",
+    "dev": "tauri dev",
+    "build": "tauri build",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -52,6 +52,7 @@
     "@iconify/json": "^2.2.239",
     "@tauri-apps/cli": ">=2.0.0-rc.0",
     "@types/dom-webcodecs": "^0.1.11",
-    "typescript": "^5.2.2"
+    "typescript": "^5.2.2",
+    "vite": "^5.4.3"
   }
 }

@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "so.cap.desktop-solid",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm vinxi dev --port 1420",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm vinxi build",
     "frontendDist": "../.output/public"
   },
   "app": {

@@ -113,7 +113,7 @@ async fn get_s3_config(
     auth_token: &str,
 ) -> Result<S3UploadMeta, String> {
     let config_url = format!(
-        "{}/api/desktop/video/create?origin={}",
+        "{}/api/desktop/video/create?origin={}&recordingMode=desktopMP4",
         server_url_base, server_url_base
     );
 
