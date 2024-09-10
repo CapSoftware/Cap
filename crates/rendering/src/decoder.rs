@@ -270,7 +270,7 @@ impl AsyncVideoDecoderHandle {
         self.sender
             .send(VideoDecoderMessage::GetFrame(frame_number, tx))
             .unwrap();
-        rx.await.unwrap()
+        rx.await.ok().flatten()
     }
 }
 

@@ -158,7 +158,10 @@ pub async fn start_capturing(
         let mut file = File::create(&pipe_path).unwrap();
 
         loop {
-            frame_rx.changed().await.unwrap();
+            if frame_rx.changed().await.is_err() {
+            	println!("Closing display pipe writer");
+             return;
+            }
 
             let frame = frame_rx.borrow();
             file.write_all(&frame).ok();

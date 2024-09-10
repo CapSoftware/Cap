@@ -18,12 +18,6 @@ use cap_ffmpeg::FFmpeg;
 use cap_project::ProjectConfiguration;
 use display::{list_capture_windows, Bounds, CaptureTarget};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
-use ffmpeg_sidecar::{
-    command::ffmpeg_is_installed,
-    download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
-    paths::sidecar_dir,
-    version::ffmpeg_version,
-};
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;

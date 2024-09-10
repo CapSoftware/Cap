@@ -1,10 +1,7 @@
 // credit @filleduchaos
 
-use mp4::Mp4Reader;
 use reqwest::{multipart::Form, Client, StatusCode};
-use std::fs::File;
-use std::io::{BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(serde::Deserialize)]
 struct S3UploadMeta {
