@@ -373,6 +373,7 @@ function formatTime(secs: number) {
 
 function Header() {
   const [os] = createResource(() => platform());
+
   return (
     <header
       class={cx(
@@ -523,15 +524,31 @@ function ExportButton() {
 }
 
 function ShareButton() {
+  const { videoId } = useEditorContext();
+  const [meta] = createResource(() => commands.getRecordingMeta(videoId));
+
   return (
-    <button
-      class="rounded-full h-[2rem] px-[1rem] flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100"
-      type="button"
+    <Show
+      when={meta()?.sharing}
+      fallback={<Button disabled>Create shareable link</Button>}
     >
-      <span class="text-[0.875rem] text-gray-500">
-        cap.link/z2ha3dv61q5hrde
-      </span>
-    </button>
+      {(sharing) => {
+        const url = () => new URL(sharing().link);
+        return (
+          <a
+            class="rounded-full h-[2rem] px-[1rem] flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100"
+            href={sharing().link}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <span class="text-[0.875rem] text-gray-500">
+              {url().host}
+              {url().pathname}
+            </span>
+          </a>
+        );
+      }}
+    </Show>
   );
 }
 

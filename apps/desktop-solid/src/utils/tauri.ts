@@ -164,6 +164,9 @@ async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Prom
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async getRecordingMeta(id: string) : Promise<RecordingMeta> {
+    return await TAURI_INVOKE("get_recording_meta", { id });
 }
 }
 
@@ -195,11 +198,13 @@ showCapturesPanel: "show-captures-panel"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
+export type AudioMeta = { path: string }
 export type AuthStore = { token: string; expires: number }
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
 export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number] }
 export type Bounds = { x: number; y: number; width: number; height: number }
 export type CameraConfiguration = { hide: boolean; mirror: boolean; position: CameraPosition; rounding: number; shadow: number }
+export type CameraMeta = { path: string }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
@@ -209,6 +214,7 @@ export type Crop = { position: XY<number>; size: XY<number> }
 export type CurrentRecordingChanged = JsonValue<InProgressRecording | null>
 export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: CursorType }
 export type CursorType = "pointer" | "circle"
+export type Display = { path: string }
 export type DisplaySource = { variant: "screen" } | { variant: "window"; bounds: Bounds }
 export type EditorStateChanged = { playhead_position: number }
 export type HotkeysConfiguration = { show: boolean }
@@ -221,11 +227,13 @@ export type OSPermissionSettings = { macOS: MacOSPermissionSettings }
 export type OSPermissionsCheck = ({ os: "macOS" } & MacOSPermissionsCheck) | { os: "other" }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
+export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null; recordings: ProjectRecordings; path: string }
+export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
 export type Video = { duration: number; width: number; height: number; fps: number }
 export type VideoType = "screen" | "output"

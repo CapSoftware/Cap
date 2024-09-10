@@ -72,14 +72,14 @@ impl InProgressRecording {
                     .unwrap()
                     .to_owned(),
             },
-            camera: self.camera.as_ref().map(|camera| Camera {
+            camera: self.camera.as_ref().map(|camera| CameraMeta {
                 path: camera
                     .output_path
                     .strip_prefix(&self.recording_dir)
                     .unwrap()
                     .to_owned(),
             }),
-            audio: self.audio.as_ref().map(|(audio, _)| Audio {
+            audio: self.audio.as_ref().map(|(audio, _)| AudioMeta {
                 path: audio
                     .output_path
                     .strip_prefix(&self.recording_dir)

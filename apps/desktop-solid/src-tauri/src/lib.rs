@@ -15,7 +15,7 @@ mod upload;
 use auth::AuthStore;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::FFmpeg;
-use cap_project::{ProjectConfiguration, RecordingMeta, Sharing};
+use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta};
 use display::{list_capture_windows, Bounds, CaptureTarget};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use image::{ImageBuffer, Rgba};
@@ -1155,7 +1155,7 @@ async fn upload_rendered_video(
             .await
             .unwrap();
 
-        meta.sharing = Some(Sharing {
+        meta.sharing = Some(SharingMeta {
             link: uploaded_video.link.clone(),
             id: uploaded_video.id.clone(),
         });
@@ -1188,6 +1188,13 @@ async fn upload_rendered_video(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn get_recording_meta(app: AppHandle, id: String) -> RecordingMeta {
+    let meta = RecordingMeta::load_for_project(&recording_path(&app, &id)).unwrap();
+    meta
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1223,7 +1230,8 @@ pub fn run() {
             open_main_window,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
-            upload_rendered_video
+            upload_rendered_video,
+            get_recording_meta
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1370,4 +1378,8 @@ async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<E
 // use EditorInstance.project_path instead of this
 fn recordings_path(app: &AppHandle) -> PathBuf {
     app.path().app_data_dir().unwrap().join("recordings")
+}
+
+fn recording_path(app: &AppHandle, recording_id: &str) -> PathBuf {
+    recordings_path(app).join(format!("{}.cap", recording_id))
 }

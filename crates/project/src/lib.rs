@@ -12,17 +12,17 @@ pub struct Display {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct Camera {
+pub struct CameraMeta {
     pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct Audio {
+pub struct AudioMeta {
     pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct Sharing {
+pub struct SharingMeta {
     pub id: String,
     pub link: String,
 }
@@ -34,12 +34,12 @@ pub struct RecordingMeta {
     pub project_path: PathBuf,
     pub pretty_name: String,
     #[serde(default)]
-    pub sharing: Option<Sharing>,
+    pub sharing: Option<SharingMeta>,
     pub display: Display,
     #[serde(default)]
-    pub camera: Option<Camera>,
+    pub camera: Option<CameraMeta>,
     #[serde(default)]
-    pub audio: Option<Audio>,
+    pub audio: Option<AudioMeta>,
 }
 
 impl RecordingMeta {
