@@ -2,7 +2,8 @@
   "name": "desktop-solid",
   "type": "module",
   "scripts": {
-    "dev": "vinxi dev --port 1420",
+    "dev": "tauri dev",
+    "localdev": "vinxi dev --port 3001",
     "build": "vinxi build",
     "tauri": "tauri"
   },
