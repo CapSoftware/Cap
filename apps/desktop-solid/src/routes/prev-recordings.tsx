@@ -114,7 +114,6 @@ export default function () {
 
                 const uploadVideo = createMutation(() => ({
                   mutationFn: async () => {
-                    console.log("bruh");
                     const res = await commands.uploadRenderedVideo(
                       videoId,
                       presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG

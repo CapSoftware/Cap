@@ -418,6 +418,7 @@ import {
   ASPECT_RATIOS,
   DEFAULT_GRADIENT_FROM,
   DEFAULT_GRADIENT_TO,
+  DEFAULT_PROJECT_CONFIG,
 } from "./projectConfig";
 import { createMutation } from "@tanstack/solid-query";
 
@@ -524,13 +525,33 @@ function ExportButton() {
 }
 
 function ShareButton() {
-  const { videoId } = useEditorContext();
-  const [meta] = createResource(() => commands.getRecordingMeta(videoId));
+  const { videoId, presets } = useEditorContext();
+  const [meta, metaActions] = createResource(() =>
+    commands.getRecordingMeta(videoId)
+  );
+
+  const uploadVideo = createMutation(() => ({
+    mutationFn: async () => {
+      const res = await commands.uploadRenderedVideo(
+        videoId,
+        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+      );
+      if (res.status !== "ok") throw new Error(res.error);
+    },
+    onSuccess: () => metaActions.refetch(),
+  }));
 
   return (
     <Show
       when={meta()?.sharing}
-      fallback={<Button disabled>Create shareable link</Button>}
+      fallback={
+        <Button
+          disabled={uploadVideo.isPending}
+          onClick={() => uploadVideo.mutate()}
+        >
+          Create Shareable Link
+        </Button>
+      }
     >
       {(sharing) => {
         const url = () => new URL(sharing().link);
