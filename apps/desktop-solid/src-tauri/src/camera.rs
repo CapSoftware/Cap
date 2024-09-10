@@ -25,7 +25,7 @@ pub fn create_camera_window(app: AppHandle) {
             WINDOW_LABEL,
             WebviewUrl::App(CAMERA_ROUTE.into()),
         )
-        .title("Cap Camera")
+        .title("Cap")
         .maximized(false)
         .resizable(false)
         .shadow(false)

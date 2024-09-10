@@ -251,17 +251,17 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
 }
 
 fn create_in_progress_recording_window(app: &AppHandle) {
-		let monitor = app.primary_monitor().unwrap().unwrap();
+    let monitor = app.primary_monitor().unwrap().unwrap();
 
-		let width = 200.0;
-		let height = 40.0;
+    let width = 200.0;
+    let height = 40.0;
 
     WebviewWindow::builder(
         app,
         IN_PROGRESS_RECORDINGS_LABEL,
         tauri::WebviewUrl::App("/in-progress-recording".into()),
     )
-    .title("Cap In Progress Recording")
+    .title("Cap")
     .maximized(false)
     .resizable(false)
     .fullscreen(false)
@@ -273,8 +273,8 @@ fn create_in_progress_recording_window(app: &AppHandle) {
     .content_protected(true)
     .inner_size(width, height)
     .position(
-		    ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
-		    (monitor.size().height as f64) / monitor.scale_factor() - height - 60.0,
+        ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
+        (monitor.size().height as f64) / monitor.scale_factor() - height - 60.0,
     )
     .build()
     .ok();
@@ -848,7 +848,7 @@ fn show_previous_recordings_window(app: AppHandle) {
         PREV_RECORDINGS_WINDOW,
         tauri::WebviewUrl::App("/prev-recordings".into()),
     )
-    .title("Cap Recordings")
+    .title("Cap")
     .maximized(false)
     .resizable(false)
     .fullscreen(false)
@@ -1224,8 +1224,7 @@ pub fn run() {
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
 
-            let handle = app.handle();
-            tray::create_tray(handle).unwrap();
+            tray::create_tray(app_handle).unwrap();
 
             Ok(())
         })

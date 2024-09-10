@@ -82,7 +82,7 @@ pub fn open_permissions_window(app: &impl Manager<Wry>) {
     }
 
     WebviewWindow::builder(app, "permissions", WebviewUrl::App("/permissions".into()))
-        .title("Cap Permissions")
+        .title("Cap")
         .inner_size(300.0, 325.0)
         .resizable(false)
         .maximized(false)
