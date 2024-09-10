@@ -1114,49 +1114,48 @@ function PresetsDropdown() {
                       </MenuItem>
                       <KDropdownMenu.Portal>
                         {showSettings() && (
-                          <>
-                            BRUH
-                            <MenuItemList<typeof KDropdownMenu.SubContent>
-                              as={KDropdownMenu.SubContent}
-                              class={cx(
-                                "animate-in fade-in slide-in-from-left-1 w-44",
-                                dropdownContainerClasses
-                              )}
+                          <MenuItemList<typeof KDropdownMenu.SubContent>
+                            as={KDropdownMenu.SubContent}
+                            class={cx(
+                              "animate-in fade-in slide-in-from-left-1 w-44",
+                              dropdownContainerClasses
+                            )}
+                          >
+                            <DropdownItem
+                              onSelect={() =>
+                                setProject(reconcile(preset.config))
+                              }
                             >
-                              <DropdownItem
-                                onSelect={() => setProject(preset.config)}
-                              >
-                                Apply
-                              </DropdownItem>
-                              <DropdownItem
-                                onSelect={() => presets.setDefault(i())}
-                              >
-                                Set as default
-                              </DropdownItem>
-                              <DropdownItem
-                                onSelect={() =>
-                                  setDialog({
-                                    type: "renamePreset",
-                                    presetIndex: i(),
-                                    open: true,
-                                  })
-                                }
-                              >
-                                Rename
-                              </DropdownItem>
-                              <DropdownItem
-                                onClick={() =>
-                                  setDialog({
-                                    type: "deletePreset",
-                                    presetIndex: i(),
-                                    open: true,
-                                  })
-                                }
-                              >
-                                Delete
-                              </DropdownItem>
-                            </MenuItemList>
-                          </>
+                              Apply
+                            </DropdownItem>
+                            <DropdownItem
+                              onSelect={() => presets.setDefault(i())}
+                            >
+                              Set as default
+                            </DropdownItem>
+                            <DropdownItem
+                              onSelect={() =>
+                                setDialog({
+                                  type: "renamePreset",
+                                  presetIndex: i(),
+                                  open: true,
+                                })
+                              }
+                            >
+                              Rename
+                            </DropdownItem>
+                            <DropdownItem
+                              onClick={() =>
+                                setDialog({
+                                  type: "deletePreset",
+                                  presetIndex: i(),
+                                  open: true,
+                                })
+                              }
+                            >
+                              Delete
+                            </DropdownItem>
+                          </MenuItemList>
                         )}
                       </KDropdownMenu.Portal>
                     </KDropdownMenu.Sub>
