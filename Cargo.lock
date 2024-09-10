@@ -1559,6 +1559,7 @@ dependencies = [
  "tauri-plugin-decorum",
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
+ "tauri-plugin-oauth",
  "tauri-plugin-os",
  "tauri-plugin-process",
  "tauri-plugin-shell",
@@ -5706,6 +5707,20 @@ dependencies = [
  "thiserror",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "tauri-plugin-oauth"
+version = "0.0.0-alpha.0"
+source = "git+https://github.com/FabianLars/tauri-plugin-oauth?branch=v2#3537dd0a2a8f8a868d8e89a0002c8a5c588a27f7"
+dependencies = [
+ "httparse",
+ "log",
+ "serde",
+ "tauri",
+ "tauri-plugin",
+ "thiserror",
+ "url",
 ]
 
 [[package]]

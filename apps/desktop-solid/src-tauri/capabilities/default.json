@@ -4,7 +4,7 @@
   "description": "Capability for the main window",
   "windows": ["*"],
   "permissions": [
-    "core:default",
+    "core:event:default",
     "core:window:allow-close",
     "core:window:allow-hide",
     "core:window:allow-show",
@@ -21,6 +21,7 @@
     "fs:default",
     "dialog:allow-save",
     "store:default",
-    "process:default"
+    "process:default",
+    "oauth:allow-start"
   ]
 }

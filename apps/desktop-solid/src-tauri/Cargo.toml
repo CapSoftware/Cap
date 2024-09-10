@@ -23,18 +23,24 @@ tauri = { version = "2.0.0-rc", features = [
 	"image-png",
 ] }
 tauri-plugin-shell = "2.0.0-rc"
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+tauri-plugin-store = "2.0.0-rc.0"
+tauri-plugin-os = "2.0.0-rc.0"
+tauri-plugin-process = "2.0.0-rc.0"
+tauri-plugin-decorum = "1.0.0"
+tauri-plugin-dialog = "2.0.0-rc.0"
+tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
+tauri-specta = { version = "=2.0.0-rc.14", features = ["derive", "typescript"] }
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 specta = "=2.0.0-rc.19"
-tauri-specta = { version = "=2.0.0-rc.14", features = ["derive", "typescript"] }
 specta-typescript = "0.0.6"
-tauri-plugin-decorum = "1.0.0"
 swift-rs = "1.0.6"
 nix = { version = "0.29.0", features = ["fs"] }
 tokio = { version = "1.39.2", features = ["macros", "process", "fs"] }
 uuid = { version = "1.10.0", features = ["v4"] }
 scap = { git = "https://github.com/CapSoftware/scap" }
-tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
 wgpu = "22.1.0"
 bytemuck = { version = "1.7", features = ["derive"] }
@@ -48,12 +54,7 @@ nokhwa = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1",
 	"input-avfoundation",
 	"serialize",
 ] }
-cap-utils = { path = "../../../crates/utils" }
-cap-project = { path = "../../../crates/project" }
-cap-rendering = { path = "../../../crates/rendering" }
-cap-ffmpeg = { path = "../../../crates/ffmpeg" }
 axum = { version = "0.7.5", features = ["ws"] }
-tauri-plugin-dialog = "2.0.0-rc.0"
 tracing = "0.1.40"
 cpal = "0.15.3"
 indexmap = "2.5.0"
@@ -61,9 +62,11 @@ num-traits = "0.2.19"
 tempfile = "3.12.0"
 ffmpeg-next = "7.0.4"
 chrono = "0.4.38"
-tauri-plugin-store = "2.0.0-rc.0"
-tauri-plugin-os = "2.0.0-rc.0"
-tauri-plugin-process = "2.0.0-rc.0"
+
+cap-utils = { path = "../../../crates/utils" }
+cap-project = { path = "../../../crates/project" }
+cap-rendering = { path = "../../../crates/rendering" }
+cap-ffmpeg = { path = "../../../crates/ffmpeg" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

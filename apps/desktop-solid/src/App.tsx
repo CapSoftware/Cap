@@ -1,14 +1,10 @@
-import {
-  Router,
-  useCurrentMatches,
-  useMatch,
-  useResolvedPath,
-} from "@solidjs/router";
+import { Router } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
 import { ErrorBoundary, Suspense } from "solid-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 
 import "@cap/ui-solid/main.css";
+import "unfonts.css";
 
 const queryClient = new QueryClient();
 

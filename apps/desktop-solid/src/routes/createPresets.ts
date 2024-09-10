@@ -1,17 +1,7 @@
 import { createResource, onCleanup } from "solid-js";
-import { Store } from "@tauri-apps/plugin-store";
 
 import type { ProjectConfiguration } from "../utils/tauri";
-
-const store = new Store("frontend-stuff");
-
-export type PresetsStore = {
-  presets: Array<{
-    name: string;
-    config: ProjectConfiguration;
-  }>;
-  default?: number;
-};
+import { presetsStore, type PresetsStore } from "../store";
 
 export type CreatePreset = {
   name: string;
@@ -21,14 +11,11 @@ export type CreatePreset = {
 
 export function createPresets() {
   const [query, queryActions] = createResource(async () => {
-    return (
-      (await store.get<PresetsStore>("presets")) ??
-      ({ presets: [] } as PresetsStore)
-    );
+    return (await presetsStore.get()) ?? ({ presets: [] } as PresetsStore);
   });
 
   const [cleanup] = createResource(() =>
-    store.onKeyChange<PresetsStore>("presets", (data) => {
+    presetsStore.listen((data) => {
       if (data) queryActions.mutate(data);
     })
   );
@@ -40,8 +27,7 @@ export function createPresets() {
 
     const newValue = fn(p);
 
-    await store.set("presets", newValue);
-    await store.save();
+    await presetsStore.set(newValue);
   }
 
   return {
