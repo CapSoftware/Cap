@@ -237,9 +237,9 @@ const editorButtonStyles = cva(
     variants: {
       variant: {
         primary:
-          "text-gray-500 hover:ui-not-pressed:bg-gray-100 ui-expanded:bg-gray-100 outline-blue-300",
+          "text-gray-500 enabled:hover:ui-not-pressed:bg-gray-100 ui-expanded:bg-gray-100 outline-blue-300",
         danger:
-          "text-gray-500 hover:ui-not-pressed:bg-gray-100 ui-expanded:bg-red-300 ui-pressed:bg-red-300 ui-expanded:text-gray-50 ui-pressed:text-gray-50 outline-red-300",
+          "text-gray-500 enabled:hover:ui-not-pressed:bg-gray-100 ui-expanded:bg-red-300 ui-pressed:bg-red-300 ui-expanded:text-gray-50 ui-pressed:text-gray-50 outline-red-300",
       },
     },
     defaultVariants: { variant: "primary" },
@@ -250,9 +250,9 @@ const editorButtonLeftIconStyles = cva("transition-colors duration-100", {
   variants: {
     variant: {
       primary:
-        "text-gray-400 group-hover:not-ui-group-disabled:text-gray-500 ui-group-expanded:text-gray-500",
+        "text-gray-400 enabled:group-hover:not-ui-group-disabled:text-gray-500 ui-group-expanded:text-gray-500",
       danger:
-        "text-gray-400 group-hover:text-gray-500 ui-group-expanded:text-gray-50 ui-group-pressed:text-gray-50",
+        "text-gray-400 enabled:group-hover:text-gray-500 ui-group-expanded:text-gray-50 ui-group-pressed:text-gray-50",
     },
   },
   defaultVariants: { variant: "primary" },
