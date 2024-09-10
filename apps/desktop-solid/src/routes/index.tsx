@@ -14,6 +14,7 @@ import { SwitchTab, Button } from "@cap/ui-solid";
 import { createCameraForLabel, createCameras } from "../utils/media";
 import {
   createAudioDevicesQuery,
+  createCurrentRecordingQuery,
   createOptionsQuery,
   createWindowsQuery,
 } from "../utils/queries";
@@ -26,16 +27,17 @@ import {
   MenuItem,
   topRightAnimateClasses,
 } from "./editor/ui";
+import { createMutation } from "@tanstack/solid-query";
 
 export default function () {
   const cameras = createCameras();
   const options = createOptionsQuery();
   const windows = createWindowsQuery();
   const audioDevices = createAudioDevicesQuery();
+  const currentRecording = createCurrentRecordingQuery();
 
   const camera = createCameraForLabel(() => options.data?.cameraLabel ?? "");
 
-  const [isRecording, setIsRecording] = createSignal(false);
   const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
 
   events.showCapturesPanel.listen(() => {
@@ -54,6 +56,15 @@ export default function () {
       }
     }
   };
+
+  const isRecording = () => !currentRecording.data;
+
+  const toggleRecording = createMutation(() => ({
+    mutationFn: async () => {
+      if (!isRecording()) await commands.startRecording();
+      else await commands.stopRecording();
+    },
+  }));
 
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: workaround
@@ -339,24 +350,17 @@ export default function () {
                     </KSelect>
                   </div>
                   <Button
+                    disabled={toggleRecording.isPending}
                     variant={isRecording() ? "destructive" : "primary"}
                     size="md"
-                    onClick={() => {
-                      if (!isRecording())
-                        commands
-                          .startRecording()
-                          .then(() => setIsRecording(true));
-                      else
-                        commands
-                          .stopRecording()
-                          .then(() => setIsRecording(false));
-                    }}
+                    onClick={() => toggleRecording.mutate()}
                   >
                     {isRecording() ? "Stop Recording" : "Start Recording"}
                   </Button>
                   <a
                     href="https://cap.so/dashboard"
                     target="_blank"
+                    rel="noreferrer"
                     class="text-gray-400 text-[0.875rem] mx-auto hover:text-gray-500 hover:underline"
                   >
                     Open Cap on Web

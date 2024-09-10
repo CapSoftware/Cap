@@ -1,9 +1,9 @@
 import { createQuery } from "@tanstack/solid-query";
 import { createEffect, Show, Suspense } from "solid-js";
-import { getCurrentRecording } from "../utils/queries";
+import { createCurrentRecordingQuery } from "../utils/queries";
 
 export default function () {
-  const currentRecording = createQuery(() => getCurrentRecording);
+  const currentRecording = createCurrentRecordingQuery();
 
   createEffect(() => console.log(currentRecording.data));
 

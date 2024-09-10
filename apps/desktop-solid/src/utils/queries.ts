@@ -18,7 +18,7 @@ const getOptions = queryOptions({
   },
 });
 
-export const getCurrentRecording = queryOptions({
+const getCurrentRecording = queryOptions({
   queryKey: ["currentRecording"] as const,
   queryFn: async () => {
     const o = await commands.getCurrentRecording();
@@ -54,4 +54,10 @@ export function createAudioDevicesQuery() {
   createTimer(() => devices.refetch(), 1000, setInterval);
 
   return devices;
+}
+export function createCurrentRecordingQuery() {
+  const currentRecording = createQuery(() => getCurrentRecording);
+  createQueryInvalidate(currentRecording, "currentRecordingChanged");
+
+  return currentRecording;
 }

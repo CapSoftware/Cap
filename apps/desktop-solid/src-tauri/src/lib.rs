@@ -11,7 +11,7 @@ mod recording;
 mod tray;
 
 use camera::{create_camera_window, list_cameras};
-use cap_ffmpeg::ffmpeg_path_as_str;
+use cap_ffmpeg::FFmpeg;
 use cap_project::ProjectConfiguration;
 use display::{list_capture_windows, Bounds, CaptureTarget};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::fs::File;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, Write};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
@@ -71,10 +71,18 @@ pub enum VideoType {
 }
 
 const WINDOW_CAPTURE_OCCLUDER_LABEL: &str = "window-capture-occluder";
+const IN_PROGRESS_RECORDINGS_LABEL: &str = "in-progress-recordings";
 
 impl App {
     pub fn set_current_recording(&mut self, new_value: InProgressRecording) {
+        let option = Some(new_value);
+        let json = JsonValue::new(&option);
+
+        let new_value = option.unwrap();
+
         let current_recording = self.current_recording.insert(new_value);
+
+        CurrentRecordingChanged(json).emit(&self.handle).ok();
 
         if let DisplaySource::Window { .. } = &current_recording.display_source {
             match self
@@ -191,6 +199,12 @@ struct JsonValue<T>(
     #[specta(type = Bruh<T>)] serde_json::Value,
 );
 
+impl<T> Clone for JsonValue<T> {
+    fn clone(&self) -> Self {
+        Self(PhantomData, self.1.clone())
+    }
+}
+
 impl<T: Serialize> JsonValue<T> {
     fn new(value: &T) -> Self {
         Self(PhantomData, json!(value))
@@ -205,6 +219,9 @@ async fn get_current_recording(
     let state = state.read().await;
     Ok(JsonValue::new(&state.current_recording))
 }
+
+#[derive(Serialize, Type, tauri_specta::Event, Clone)]
+pub struct CurrentRecordingChanged(JsonValue<Option<InProgressRecording>>);
 
 #[tauri::command]
 #[specta::specta]
@@ -228,14 +245,45 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         window.minimize().ok();
     }
 
+    create_in_progress_recording_window(&app);
+
     Ok(())
+}
+
+fn create_in_progress_recording_window(app: &AppHandle) {
+		let monitor = app.primary_monitor().unwrap().unwrap();
+
+		let width = 200.0;
+		let height = 40.0;
+
+    WebviewWindow::builder(
+        app,
+        IN_PROGRESS_RECORDINGS_LABEL,
+        tauri::WebviewUrl::App("/in-progress-recording".into()),
+    )
+    .title("Cap In Progress Recording")
+    .maximized(false)
+    .resizable(false)
+    .fullscreen(false)
+    .decorations(false)
+    .shadow(true)
+    .always_on_top(true)
+    .transparent(true)
+    .visible_on_all_workspaces(true)
+    .content_protected(true)
+    .inner_size(width, height)
+    .position(
+		    ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
+		    (monitor.size().height as f64) / monitor.scale_factor() - height - 60.0,
+    )
+    .build()
+    .ok();
 }
 
 #[tauri::command]
 #[specta::specta]
 async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
-    let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
 
     let Some(mut current_recording) = state.clear_current_recording() else {
         return Err("Recording not in progress".to_string());
@@ -243,10 +291,19 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
 
     current_recording.stop().await;
 
+    if let Some(window) = app.get_webview_window(IN_PROGRESS_RECORDINGS_LABEL) {
+        window.close().ok();
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        window.unminimize().ok();
+    }
+
     std::fs::create_dir_all(current_recording.recording_dir.join("screenshots")).ok();
     dbg!(&current_recording.display.output_path);
 
-    Command::new(&ffmpeg_binary_path_str)
+    FFmpeg::new()
+        .command
         .args(["-ss", "0:00:00", "-i"])
         .arg(&current_recording.display.output_path)
         .args(["-frames:v", "1", "-q:v", "2"])
@@ -258,7 +315,8 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         .output()
         .unwrap();
 
-    Command::new(&ffmpeg_binary_path_str)
+    FFmpeg::new()
+        .command
         .args(["-ss", "0:00:00", "-i"])
         .arg(&current_recording.display.output_path)
         .args(["-frames:v", "1", "-vf", "scale=100:-1"])
@@ -1038,11 +1096,13 @@ fn open_in_finder(path: PathBuf) {
 #[tauri::command]
 #[specta::specta]
 async fn list_audio_devices() -> Result<Vec<String>, ()> {
-		tokio::task::spawn_blocking(|| {
-			let devices = audio::get_input_devices();
+    tokio::task::spawn_blocking(|| {
+        let devices = audio::get_input_devices();
 
-    	devices.keys().cloned().collect()
-		}).await.map_err(|_| ())
+        devices.keys().cloned().collect()
+    })
+    .await
+    .map_err(|_| ())
 }
 
 #[tauri::command]
@@ -1114,7 +1174,8 @@ pub fn run() {
             ShowCapturesPanel,
             NewRecordingAdded,
             RenderFrameEvent,
-            EditorStateChanged
+            EditorStateChanged,
+            CurrentRecordingChanged
         ])
         .ty::<ProjectConfiguration>();
 
@@ -1137,6 +1198,8 @@ pub fn run() {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
+            let app_handle = app.handle();
+
             if let Err(_error) = handle_ffmpeg_installation() {
                 println!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now");
                 // TODO: UI message instead
@@ -1144,7 +1207,7 @@ pub fn run() {
             };
 
             if permissions::do_permissions_check().necessary_granted() {
-            		open_main_window(app.handle().clone());
+            		open_main_window(app_handle.clone());
 						} else {
 								permissions::open_permissions_window(app);
             }

@@ -163,12 +163,14 @@ async doPermissionsCheck() : Promise<OSPermissionsCheck> {
 
 
 export const events = __makeEvents__<{
+currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
 newRecordingAdded: NewRecordingAdded,
 recordingOptionsChanged: RecordingOptionsChanged,
 renderFrameEvent: RenderFrameEvent,
 showCapturesPanel: ShowCapturesPanel
 }>({
+currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
 newRecordingAdded: "new-recording-added",
 recordingOptionsChanged: "recording-options-changed",
@@ -195,6 +197,7 @@ export type CameraYPosition = "top" | "bottom"
 export type CaptureTarget = { type: "screen" } | { type: "window"; id: number }
 export type CaptureWindow = { id: number; name: string }
 export type Crop = { position: XY<number>; size: XY<number> }
+export type CurrentRecordingChanged = JsonValue<InProgressRecording | null>
 export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: CursorType }
 export type CursorType = "pointer" | "circle"
 export type DisplaySource = { variant: "screen" } | { variant: "window"; bounds: Bounds }

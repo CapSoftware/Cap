@@ -1,12 +1,5 @@
 import { createContextProvider } from "@solid-primitives/context";
-import {
-  type Accessor,
-  createEffect,
-  createResource,
-  createSignal,
-  on,
-  onCleanup,
-} from "solid-js";
+import { createEffect, createSignal, on } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import { debounce } from "@solid-primitives/scheduled";
 import { createUndoHistory } from "@solid-primitives/history";
@@ -39,7 +32,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const editorInstanceContext = useEditorInstanceContext();
     const [project, setProject] = createStore<ProjectConfiguration>(
       props.editorInstance.savedProjectConfig ??
-        props.presets.presets[props.presets.default ?? 0].config ??
+        props.presets.presets[props.presets.default ?? 0]?.config ??
         DEFAULT_PROJECT_CONFIG
     );
 

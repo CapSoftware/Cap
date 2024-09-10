@@ -1,7 +1,7 @@
 use ffmpeg_sidecar::paths::sidecar_dir;
 use std::path::Path;
 
-pub fn ffmpeg_path_as_str() -> Result<String, String> {
+pub(crate) fn ffmpeg_path_as_str() -> Result<String, String> {
     let binary_name = if cfg!(target_os = "windows") {
         "ffmpeg.exe"
     } else {

@@ -89,7 +89,7 @@ pub async fn start_capturing(
             _ => None,
         };
 
-        let excluded_titles = ["Cap", "Cap Camera", "Cap Recordings"];
+        let excluded_titles = ["Cap", "Cap Camera", "Cap Recordings", "Cap In Progress Recording"];
         let excluded_targets: Vec<scap::Target> = targets
             .into_iter()
             .filter(|target| match target {
