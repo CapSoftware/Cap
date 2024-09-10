@@ -178,12 +178,10 @@ impl EditorInstance {
                 match event {
                     playback::PlaybackEvent::Start => {}
                     playback::PlaybackEvent::Frame(frame_number) => {
-                        println!("playback frame: {frame_number}");
                         self.modify_and_emit_state(|state| {
                             state.playhead_position = frame_number;
                         })
                         .await;
-                        println!("playback frame: {frame_number} done")
                     }
                     playback::PlaybackEvent::Stop => {
                         return;
