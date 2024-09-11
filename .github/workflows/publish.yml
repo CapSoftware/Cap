@@ -77,9 +77,9 @@ jobs:
         run: |
           echo "appVersion=${{ steps.read_version.outputs.value }}" >> .env
           echo "CAP_DESKTOP_SENTRY_URL=https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200" >> .env
-          echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" > .env
-          echo "NEXTAUTH_URL=${NEXT_PUBLIC_URL}" > .env
-          echo "VITE_SERVER_URL=${NEXT_PUBLIC_URL}" > .env
+          echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" >> .env
+          echo 'NEXTAUTH_URL=${NEXT_PUBLIC_URL}' >> .env
+          echo 'VITE_SERVER_URL=${NEXT_PUBLIC_URL}' >> .env
 
       - name: Copy .env to apps/desktop-solid
         run: cp .env apps/desktop-solid/.env
@@ -92,7 +92,6 @@ jobs:
         # Build both intel and apple silicon
         working-directory: apps/desktop-solid
         run: |
-          rustup target add x86_64-apple-darwin
           pnpm install
           node ${{ github.workspace }}/.github/prebuild.js x86_64
           pnpm tauri build --target x86_64-apple-darwin
