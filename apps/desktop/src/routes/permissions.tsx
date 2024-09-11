@@ -23,16 +23,32 @@ export default function () {
 
   const [currentStep, setCurrentStep] = createSignal(0);
 
-  const permissionsGranted = () => {
+  const permissionsGranted = async () => {
     const c = check.latest;
     if (c?.os === "macOS") {
-      return c?.screenRecording && c?.camera && c?.microphone;
+      const hasScreenRecording = c?.screenRecording;
+      let hasCamera = c?.camera;
+      let hasMicrophone = c?.microphone;
+
+      if (!hasCamera || !hasMicrophone) {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          hasCamera = devices.some((device) => device.kind === "videoinput");
+          hasMicrophone = devices.some(
+            (device) => device.kind === "audioinput"
+          );
+        } catch (error) {
+          console.error("Error enumerating devices:", error);
+        }
+      }
+
+      return hasScreenRecording && hasCamera && hasMicrophone;
     }
     return false;
   };
 
-  createEffect(() => {
-    if (permissionsGranted()) {
+  createEffect(async () => {
+    if (await permissionsGranted()) {
       commands.openMainWindow();
       const window = getCurrentWindow();
       window.close();
