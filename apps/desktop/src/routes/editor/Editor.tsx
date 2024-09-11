@@ -551,8 +551,16 @@ function ShareButton() {
         <Button
           disabled={uploadVideo.isPending}
           onClick={() => uploadVideo.mutate()}
+          class="flex items-center space-x-1"
         >
-          Create Shareable Link
+          {uploadVideo.isPending ? (
+            <>
+              <span>Uploading Cap</span>
+              <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+            </>
+          ) : (
+            "Create Shareable Link"
+          )}
         </Button>
       }
     >
