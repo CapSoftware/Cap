@@ -24,6 +24,46 @@ jobs:
           file: ${{ env.APP_CARGO_TOML }}
           field: "package.version"
 
+      - name: Create tag
+        id: create_tag
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = "cap-${{ steps.read_version.outputs.value }}";
+            const tagRef = `tags/${tag}`;
+
+            const TAG_EXISTED = "tag_existed";
+
+            async function main() {
+              let tagExisted = true;
+
+              try {
+                await github.rest.git.getRef({
+                  ref: tagRef,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                });
+
+                tagExisted = true;
+                core.notice(`Release skipped as tag '${tag}' already exists. Update the version in '${{ env.APP_CARGO_TOML }}' to perform a release.`);
+              } catch (error) {
+                if ("status" in error && error.status === 404) tagExisted = false;
+                else throw error;
+              }
+
+             	core.setOutput(TAG_EXISTED, tagExisted);
+
+              if (!tagExisted)
+                await github.rest.git.createRef({
+                  ref: `refs/${tagRef}`,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  sha: context.sha,
+                });
+            }
+
+            main();
+
       - name: create draft release
         uses: crabnebula-dev/cloud-release@v0
         with:
