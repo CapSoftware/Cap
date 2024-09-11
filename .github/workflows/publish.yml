@@ -145,6 +145,8 @@ jobs:
           node ${{ github.workspace }}/.github/prebuild.js ${{ matrix.settings.prebuild }}
           pnpm tauri build --target ${{ matrix.settings.target }}
         env:
+          # https://github.com/tauri-apps/tauri-action/issues/740
+          CI: false
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # codesigning
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
