@@ -1,7 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cap",
-  "version": "0.1.0",
   "identifier": "so.cap.desktop-solid",
   "build": {
     "beforeDevCommand": "pnpm localdev",
@@ -24,7 +23,8 @@
       "endpoints": [
         "https://cdn.crabnebula.app/update/cap/cap/{{target}}-{{arch}}/{{current_version}}"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERFOUVERkYwMENGRDdDM0EKUldRNmZQME04TitlM3AvZ3cwRVVET1ZMTjl4OU1COFJQM2NEVzFONzkzc2UxQlVUejBDVm4xS1YK"
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyOTAzOTdFNzJFQkRFOTMKUldTVDN1dHlmam1RNHFXb1VYTXlrQk1iMFFkcjN0YitqZlA5WnZNY0ZtQ1dvM1dxK211M3VIYUQK"
     }
   },
   "bundle": {

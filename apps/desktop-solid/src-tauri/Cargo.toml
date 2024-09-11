@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.2.0"
+version = "0.3.0-alpha.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -29,6 +29,7 @@ tauri-plugin-os = "2.0.0-rc.0"
 tauri-plugin-process = "2.0.0-rc.0"
 tauri-plugin-decorum = "1.0.0"
 tauri-plugin-dialog = "2.0.0-rc.0"
+tauri-plugin-updater = "2.0.0-rc.0"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
 tauri-specta = { version = "=2.0.0-rc.14", features = ["derive", "typescript"] }
 
@@ -40,7 +41,7 @@ swift-rs = "1.0.6"
 nix = { version = "0.29.0", features = ["fs"] }
 tokio = { version = "1.39.2", features = ["macros", "process", "fs"] }
 uuid = { version = "1.10.0", features = ["v4"] }
-scap = { git = "https://github.com/CapSoftware/scap" }
+scap = { git = "https://github.com/CapSoftware/scap", rev = "691bd88798d3" }
 ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
 wgpu = "22.1.0"
 bytemuck = { version = "1.7", features = ["derive"] }
