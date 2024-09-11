@@ -31,7 +31,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const tag = "cap-${{ steps.read_version.outputs.value }}";
+            const tag = "cap-v${{ steps.read_version.outputs.value }}";
             const tagRef = `tags/${tag}`;
 
             const TAG_EXISTED = "tag_existed";
@@ -140,21 +140,17 @@ jobs:
         run: cat apps/desktop-solid/.env
 
       - name: Build MacOS Apps
-        # Install x86_64-apple-darwin for mac and build Tauri binaries
-        # Build both intel and apple silicon
         working-directory: apps/desktop-solid
         run: |
-          pnpm install
           node ${{ github.workspace }}/.github/prebuild.js ${{ matrix.settings.prebuild }}
           pnpm tauri build --target ${{ matrix.settings.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # codesigning
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # notarization
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ github.workspace }}/api.p8
