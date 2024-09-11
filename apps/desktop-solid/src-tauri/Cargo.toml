@@ -29,6 +29,7 @@ tauri-plugin-os = "2.0.0-rc.0"
 tauri-plugin-process = "2.0.0-rc.0"
 tauri-plugin-decorum = "1.0.0"
 tauri-plugin-dialog = "2.0.0-rc.0"
+tauri-plugin-updater = "2.0.0-rc.0"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
 tauri-specta = { version = "=2.0.0-rc.14", features = ["derive", "typescript"] }
 
