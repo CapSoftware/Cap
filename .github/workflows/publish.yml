@@ -97,10 +97,10 @@ jobs:
         working-directory: apps/desktop-solid
         run: |
           pnpm install
-          node ${{ github.workspace }}/.github/prebuild.js aarch64
-          pnpm tauri build --target aarch64-apple-darwin
           node ${{ github.workspace }}/.github/prebuild.js x86_64
           pnpm tauri build --target x86_64-apple-darwin
+          node ${{ github.workspace }}/.github/prebuild.js aarch64
+          pnpm tauri build --target aarch64-apple-darwin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
