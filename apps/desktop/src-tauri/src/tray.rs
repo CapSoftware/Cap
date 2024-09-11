@@ -1,4 +1,4 @@
-use crate::NewRecordingAdded;
+use crate::{NewRecordingAdded, RecordingStarted, RecordingStopped, RequestStopRecording};
 use cap_project::RecordingMeta;
 use std::path::PathBuf;
 use std::result::Result;
@@ -11,6 +11,16 @@ use tauri::{
 use tauri_specta::Event;
 
 pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    // Add version menu item as the first item
+    let version = env!("CARGO_PKG_VERSION");
+    let version_i = MenuItem::with_id(
+        app,
+        "version",
+        format!("Cap v{}", version),
+        false,
+        None::<&str>,
+    )?;
+
     let new_recording_i =
         MenuItem::with_id(app, "new_recording", "New Recording", true, None::<&str>)?;
 
@@ -19,13 +29,22 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let quit_i = MenuItem::with_id(app, "quit", "Quit Cap", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app, &[&new_recording_i, &prev_recordings_submenu, &quit_i])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &version_i,
+            &new_recording_i,
+            &prev_recordings_submenu,
+            &quit_i,
+        ],
+    )?;
+    let app_handle = app.clone();
     let _ = TrayIconBuilder::with_id("tray")
         .icon(Image::from_bytes(include_bytes!(
             "../icons/tray-default-icon.png"
         ))?)
         .menu(&menu)
-        .menu_on_left_click(true)
+        .menu_on_left_click(false)
         .on_menu_event(move |app, event| {
             match event.id.as_ref() {
                 "new_recording" => {
@@ -53,6 +72,11 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 }
             }
         })
+        .on_tray_icon_event(move |_, event| {
+            if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                let _ = RequestStopRecording.emit(&app_handle);
+            }
+        })
         .build(app);
 
     let app_handle = app.clone();
@@ -64,45 +88,81 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         }
     });
 
+    RecordingStarted::listen_any(app, {
+        let app_handle = app.clone();
+        move |_| {
+            if let Some(tray) = app_handle.tray_by_id("tray") {
+                if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/tray-stop-icon.png")) {
+                    let _ = tray.set_icon(Some(icon));
+                }
+            }
+        }
+    });
+
+    RecordingStopped::listen_any(app, {
+        let app_handle = app.clone();
+        move |_| {
+            if let Some(tray) = app_handle.tray_by_id("tray") {
+                if let Ok(icon) =
+                    Image::from_bytes(include_bytes!("../icons/tray-default-icon.png"))
+                {
+                    let _ = tray.set_icon(Some(icon));
+                }
+            }
+        }
+    });
+
     Ok(())
 }
 
 fn create_prev_recordings_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
     let prev_recordings = get_prev_recordings(app).unwrap_or_default();
 
-    let items: Vec<MenuItemKind<R>> = prev_recordings
-        .iter()
-        .filter_map(|path| {
-            let Ok(meta) = RecordingMeta::load_for_project(path) else {
-                return None;
-            };
-            let pretty_name = meta.pretty_name.clone();
-            let id = pretty_name.clone();
+    let items: Vec<MenuItemKind<R>> = if prev_recordings.is_empty() {
+        vec![MenuItem::with_id(
+            app,
+            "no_recordings",
+            "No recordings yet",
+            false,
+            None::<&str>,
+        )
+        .map(MenuItemKind::MenuItem)
+        .unwrap()]
+    } else {
+        prev_recordings
+            .iter()
+            .filter_map(|path| {
+                let Ok(meta) = RecordingMeta::load_for_project(path) else {
+                    return None;
+                };
+                let pretty_name = meta.pretty_name.clone();
+                let id = pretty_name.clone();
 
-            let thumbnail_path = path.join("screenshots").join("thumbnail.png");
-            if thumbnail_path.exists() {
-                match Image::from_path(&thumbnail_path) {
-                    Ok(image) => IconMenuItem::with_id(
-                        app,
-                        &id,
-                        &pretty_name,
-                        true,
-                        Some(image),
-                        None::<&str>,
-                    )
-                    .map(MenuItemKind::Icon)
-                    .ok(),
-                    Err(_) => MenuItem::with_id(app, &id, &pretty_name, true, None::<&str>)
-                        .map(MenuItemKind::MenuItem)
+                let thumbnail_path = path.join("screenshots").join("thumbnail.png");
+                if thumbnail_path.exists() {
+                    match Image::from_path(&thumbnail_path) {
+                        Ok(image) => IconMenuItem::with_id(
+                            app,
+                            &id,
+                            &pretty_name,
+                            true,
+                            Some(image),
+                            None::<&str>,
+                        )
+                        .map(MenuItemKind::Icon)
                         .ok(),
+                        Err(_) => MenuItem::with_id(app, &id, &pretty_name, true, None::<&str>)
+                            .map(MenuItemKind::MenuItem)
+                            .ok(),
+                    }
+                } else {
+                    MenuItem::with_id(app, &id, &pretty_name, true, None::<&str>)
+                        .map(MenuItemKind::MenuItem)
+                        .ok()
                 }
-            } else {
-                MenuItem::with_id(app, &id, &pretty_name, true, None::<&str>)
-                    .map(MenuItemKind::MenuItem)
-                    .ok()
-            }
-        })
-        .collect();
+            })
+            .collect()
+    };
 
     let items_ref: Vec<&dyn IsMenuItem<R>> = items
         .iter()
@@ -134,13 +194,25 @@ fn get_prev_recordings<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<PathBuf>, t
 fn handle_new_recording_added<R: Runtime>(app: &AppHandle<R>, path: PathBuf) -> tauri::Result<()> {
     if let Some(tray_handle) = app.tray_by_id("tray") {
         // Recreate the entire menu
+        let version = env!("CARGO_PKG_VERSION");
+        let version_i = MenuItem::with_id(
+            app,
+            "version",
+            format!("Cap v{}", version),
+            false,
+            None::<&str>,
+        )?;
         let new_recording_i =
             MenuItem::with_id(app, "new_recording", "New Recording", true, None::<&str>)?;
         let prev_recordings_submenu = create_prev_recordings_submenu(app)?;
         let quit_i = MenuItem::with_id(app, "quit", "Quit Cap", true, None::<&str>)?;
 
-        let menu_items: Vec<&dyn IsMenuItem<R>> =
-            vec![&new_recording_i, &prev_recordings_submenu, &quit_i];
+        let menu_items: Vec<&dyn IsMenuItem<R>> = vec![
+            &version_i,
+            &new_recording_i,
+            &prev_recordings_submenu,
+            &quit_i,
+        ];
         let menu = Menu::with_items(app, &menu_items)?;
 
         // Set the updated menu

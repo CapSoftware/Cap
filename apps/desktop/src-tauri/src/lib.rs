@@ -173,6 +173,17 @@ pub struct NewRecordingAdded {
     path: PathBuf,
 }
 
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RecordingStarted;
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RecordingStopped {
+    path: PathBuf,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestStopRecording;
+
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
 #[tauri::command]
@@ -248,6 +259,8 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
     }
 
     create_in_progress_recording_window(&app);
+
+    RecordingStarted.emit(&app).ok();
 
     Ok(())
 }
@@ -335,6 +348,12 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     ShowCapturesPanel.emit(&app).ok();
 
     NewRecordingAdded {
+        path: recording_dir.clone(),
+    }
+    .emit(&app)
+    .ok();
+
+    RecordingStopped {
         path: recording_dir,
     }
     .emit(&app)
@@ -1193,7 +1212,7 @@ async fn upload_rendered_video(
 
 #[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
 struct RecordingMetaChanged {
-		id: String,
+    id: String,
 }
 
 #[tauri::command(async)]
@@ -1246,7 +1265,10 @@ pub fn run() {
             RenderFrameEvent,
             EditorStateChanged,
             CurrentRecordingChanged,
-            RecordingMetaChanged
+            RecordingMetaChanged,
+            RecordingStarted,
+            RecordingStopped,
+            RequestStopRecording,
         ])
         .ty::<ProjectConfiguration>()
         .ty::<AuthStore>();
@@ -1271,7 +1293,7 @@ pub fn run() {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
-            let app_handle = app.handle();
+            let app_handle = app.handle().clone();
 
             if let Err(_error) = FFmpeg::install_if_necessary() {
                 println!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now");
@@ -1280,13 +1302,13 @@ pub fn run() {
             };
 
             if permissions::do_permissions_check().necessary_granted() {
-            		open_main_window(app_handle.clone());
-						} else {
-								permissions::open_permissions_window(app);
+                open_main_window(app_handle.clone());
+            } else {
+                permissions::open_permissions_window(app);
             }
 
             app.manage(Arc::new(RwLock::new(App {
-                handle: app.handle().clone(),
+                handle: app_handle.clone(),
                 start_recording_options: RecordingOptions {
                     capture_target: CaptureTarget::Screen,
                     camera_label: None,
@@ -1297,7 +1319,16 @@ pub fn run() {
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
 
-            tray::create_tray(app_handle).unwrap();
+            tray::create_tray(&app_handle).unwrap();
+
+            RequestStopRecording::listen_any(app, move |_| {
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = stop_recording(app_handle.clone(), app_handle.state()).await {
+                        eprintln!("Failed to stop recording: {}", e);
+                    }
+                });
+            });
 
             Ok(())
         })

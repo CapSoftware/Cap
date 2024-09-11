@@ -179,7 +179,10 @@ editorStateChanged: EditorStateChanged,
 newRecordingAdded: NewRecordingAdded,
 recordingMetaChanged: RecordingMetaChanged,
 recordingOptionsChanged: RecordingOptionsChanged,
+recordingStarted: RecordingStarted,
+recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
+requestStopRecording: RequestStopRecording,
 showCapturesPanel: ShowCapturesPanel
 }>({
 currentRecordingChanged: "current-recording-changed",
@@ -187,7 +190,10 @@ editorStateChanged: "editor-state-changed",
 newRecordingAdded: "new-recording-added",
 recordingMetaChanged: "recording-meta-changed",
 recordingOptionsChanged: "recording-options-changed",
+recordingStarted: "recording-started",
+recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
+requestStopRecording: "request-stop-recording",
 showCapturesPanel: "show-captures-panel"
 })
 
@@ -233,8 +239,11 @@ export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null;
 export type RecordingMetaChanged = { id: string }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
+export type RecordingStarted = null
+export type RecordingStopped = { path: string }
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
+export type RequestStopRecording = null
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null; recordings: ProjectRecordings; path: string }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
