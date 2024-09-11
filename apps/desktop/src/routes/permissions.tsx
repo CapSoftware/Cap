@@ -27,24 +27,39 @@ export default function () {
     const c = check.latest;
     if (c?.os === "macOS") {
       const hasScreenRecording = c?.screenRecording;
-      let hasCamera = c?.camera;
-      let hasMicrophone = c?.microphone;
-
-      if (!hasCamera || !hasMicrophone) {
-        try {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          hasCamera = devices.some((device) => device.kind === "videoinput");
-          hasMicrophone = devices.some(
-            (device) => device.kind === "audioinput"
-          );
-        } catch (error) {
-          console.error("Error enumerating devices:", error);
-        }
-      }
+      const hasCamera = c?.camera || (await checkCameraPermission());
+      const hasMicrophone =
+        c?.microphone || (await checkMicrophonePermission());
 
       return hasScreenRecording && hasCamera && hasMicrophone;
     }
     return false;
+  };
+
+  const checkCameraPermission = async () => {
+    try {
+      const cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+      });
+      cameraStream.getTracks().forEach((track) => track.stop());
+      return true;
+    } catch (error) {
+      console.error("Error requesting camera permission:", error);
+      return false;
+    }
+  };
+
+  const checkMicrophonePermission = async () => {
+    try {
+      const microphoneStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+      microphoneStream.getTracks().forEach((track) => track.stop());
+      return true;
+    } catch (error) {
+      console.error("Error requesting microphone permission:", error);
+      return false;
+    }
   };
 
   createEffect(async () => {
