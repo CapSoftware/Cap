@@ -67,6 +67,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: pnpm
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -74,7 +75,7 @@ jobs:
           version: 8.10.5
 
       - name: Install dependencies
-        run: cd apps/desktop-solid && pnpm install
+        run: pnpm install
 
       - name: Create .env file in root
         run: |
