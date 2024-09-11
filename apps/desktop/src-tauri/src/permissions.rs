@@ -1,6 +1,5 @@
 use std::process::Command;
 
-use nokhwa_bindings_macos::AVAuthorizationStatus;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, WebviewUrl, WebviewWindow, Wry};
 
@@ -41,6 +40,7 @@ pub fn open_permission_settings(settings: OSPermissionSettings) {
 #[serde(rename_all = "camelCase")]
 pub struct MacOSPermissionsCheck {
     screen_recording: bool,
+    microphone: bool,
 }
 
 #[derive(Serialize, Deserialize, specta::Type)]
@@ -66,13 +66,16 @@ pub fn do_permissions_check() -> OSPermissionsCheck {
     {
         OSPermissionsCheck::MacOS(MacOSPermissionsCheck {
             screen_recording: scap::has_permission(),
-            // microphone: {
-            //     let cls = objc::class!(AVCaptureDevice);
-            //     let status: AVAuthorizationStatus = unsafe {
-            //         objc::msg_send![cls, authorizationStatusForMediaType:AVMediaType::Video.into_ns_str()]
-            //     };
-            //     matches!(status, AVAuthorizationStatus::Authorized)
-            // },
+            microphone: {
+                use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
+                use objc::*;
+
+                let cls = objc::class!(AVCaptureDevice);
+                let status: AVAuthorizationStatus = unsafe {
+                    msg_send![cls, authorizationStatusForMediaType:AVMediaType::Video.into_ns_str()]
+                };
+                matches!(status, AVAuthorizationStatus::Authorized)
+            },
         })
     }
 
