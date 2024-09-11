@@ -44,6 +44,39 @@ pub fn open_permission_settings(settings: OSPermissionSettings) {
     }
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn request_permission(permission: OSPermissionSettings) {
+    match permission {
+        OSPermissionSettings::MacOS(macos) => {
+            #[cfg(target_os = "macos")]
+            {
+                use objc::{runtime::*, *};
+                let cls = class!(AVCaptureDevice);
+                use nokhwa_bindings_macos::core_media::AVMediaTypeAudio;
+                use tauri_nspanel::block::ConcreteBlock;
+
+                match macos {
+                    MacOSPermissionSettings::ScreenRecording => {
+                        scap::request_permission();
+                    }
+                    MacOSPermissionSettings::Camera => {
+                        nokhwa::nokhwa_initialize(|_| {});
+                    }
+                    MacOSPermissionSettings::Microphone => unsafe {
+                        let wrapper = move |_: BOOL| {};
+
+                        let objc_fn_block: ConcreteBlock<(BOOL,), (), _> =
+                            ConcreteBlock::new(wrapper);
+                        let objc_fn_pass = objc_fn_block.copy();
+                        let _: () = msg_send![cls, requestAccessForMediaType:(AVMediaTypeAudio.clone()) completionHandler:objc_fn_pass];
+                    },
+                }
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct MacOSPermissionsCheck {

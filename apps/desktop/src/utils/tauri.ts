@@ -157,6 +157,9 @@ async openPermissionSettings(settings: OSPermissionSettings) : Promise<void> {
 async doPermissionsCheck() : Promise<OSPermissionsCheck> {
     return await TAURI_INVOKE("do_permissions_check");
 },
+async requestPermission(permission: OSPermissionSettings) : Promise<void> {
+    await TAURI_INVOKE("request_permission", { permission });
+},
 async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("upload_rendered_video", { videoId, project }) };

@@ -1257,6 +1257,7 @@ pub fn run() {
             open_main_window,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
+            permissions::request_permission,
             upload_rendered_video,
             get_recording_meta
         ])

@@ -52,7 +52,6 @@ pub fn create_camera_window(app: AppHandle) {
     }
 }
 
-
 #[tauri::command]
 #[specta::specta]
 pub fn list_cameras() -> Vec<String> {
@@ -91,7 +90,7 @@ pub async fn start_capturing(
     std::thread::spawn(move || {
         use nokhwa::{pixel_format::*, utils::*, *};
 
-        nokhwa::nokhwa_initialize(|granted| {
+        nokhwa::nokhwa_initialize(move |granted| {
             if granted {
                 println!("Camera access granted");
             } else {

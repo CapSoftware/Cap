@@ -56,8 +56,12 @@ export default function () {
     }
   };
 
+  createEffect(() => {
+    commands.requestPermission({ macOS: currentPermission().key });
+  });
+
   return (
-    <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100 border rounded-lg border-gray-200">
+    <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100 border rounded-lg border-gray-200 w-screen h-screen">
       <div class="space-y-[0.2rem] flex-1">
         <IconCapLogo class="size-[3rem]" />
         <h1 class="text-[1rem] font-[700]">Permissions Required</h1>
@@ -79,16 +83,18 @@ export default function () {
                   {latestCheck()[currentPermission().key] ? (
                     <span class="text-green-600">Granted</span>
                   ) : (
-                    <Button
-                      onClick={() => {
-                        commands.openPermissionSettings({
-                          macOS: currentPermission().key,
-                        });
-                      }}
-                      disabled={check.latest?.[currentPermission().key]}
-                    >
-                      Open {currentPermission().name} Settings {}
-                    </Button>
+                    <>
+                      <Button
+                        onClick={() => {
+                          commands.openPermissionSettings({
+                            macOS: currentPermission().key,
+                          });
+                        }}
+                        disabled={check.latest?.[currentPermission().key]}
+                      >
+                        Open {currentPermission().name} Settings {}
+                      </Button>
+                    </>
                   )}
                 </div>
               </div>
