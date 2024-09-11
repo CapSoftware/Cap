@@ -33,16 +33,16 @@ export default function () {
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <button
           disabled={stopRecording.isPending}
-          class="p-[0.25rem] text-red-300 gap-[0.25rem] flex flex-row items-center hover:bg-red-transparent-20 transition-colors rounded-lg"
+          class="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.25rem] flex flex-row items-center hover:bg-red-transparent-20 transition-colors rounded-lg"
           type="button"
           onClick={() => stopRecording.mutate()}
         >
           <IconCapStopCircle />
-          <span class="font-[700] text-[0.875rem]">
+          <span class="font-[500] text-[0.875rem]">
             {formatTime((time() - start) / 1000)}
           </span>
         </button>
-        <ActionButton disabled>
+        {/* <ActionButton disabled>
           <IconCapPauseCircle />
         </ActionButton>
         <ActionButton disabled>
@@ -50,7 +50,7 @@ export default function () {
         </ActionButton>
         <ActionButton disabled>
           <IconCapTrash />
-        </ActionButton>
+        </ActionButton> */}
       </div>
       <div
         class="bg-white-transparent-5 cursor-move flex items-center justify-center  p-[0.25rem] border-l border-white-transparent-5"

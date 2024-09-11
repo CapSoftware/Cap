@@ -268,7 +268,7 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
 fn create_in_progress_recording_window(app: &AppHandle) {
     let monitor = app.primary_monitor().unwrap().unwrap();
 
-    let width = 200.0;
+    let width = 120.0;
     let height = 40.0;
 
     WebviewWindow::builder(
@@ -286,10 +286,11 @@ fn create_in_progress_recording_window(app: &AppHandle) {
     .transparent(true)
     .visible_on_all_workspaces(true)
     .content_protected(true)
+    .accept_first_mouse(true)
     .inner_size(width, height)
     .position(
         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
-        (monitor.size().height as f64) / monitor.scale_factor() - height - 60.0,
+        (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
     )
     .build()
     .ok();
