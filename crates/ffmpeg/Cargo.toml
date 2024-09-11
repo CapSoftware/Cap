@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 ffmpeg-sidecar = "1.1.0"
 cap-utils = { path = "../utils" }
+tauri = { workspace = true }
+tauri-plugin-shell = "2.0.0-rc"

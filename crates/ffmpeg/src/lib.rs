@@ -1,26 +1,16 @@
-mod utils;
-pub use utils::*;
-
+use cap_utils::create_named_pipe;
 use std::{
     ffi::OsString,
     io::{Read, Write},
     ops::Deref,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
-
-use ffmpeg_sidecar::{
-    command::ffmpeg_is_installed,
-    download::{check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg},
-    paths::sidecar_dir,
-    version::ffmpeg_version,
-};
-
-use cap_utils::create_named_pipe;
+use tauri::utils::platform;
 
 pub struct FFmpegProcess {
     pub ffmpeg_stdin: ChildStdin,
@@ -202,6 +192,8 @@ impl ApplyFFmpegArgs for FFmpegRawVideoInput {
             command.args(["-r", &self.fps.to_string()]);
         }
 
+        dbg!(PathBuf::from(&self.input).exists());
+
         // if self.offset != 0.0 {
         //     command.args(["-itsoffset", &self.offset.to_string()]);
         // }
@@ -247,18 +239,10 @@ pub struct FFmpeg {
     source_index: u8,
 }
 
-impl Default for FFmpeg {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl FFmpeg {
     pub fn new() -> Self {
-        let ffmpeg_binary_path_str = ffmpeg_path_as_str().unwrap().to_owned();
-
         Self {
-            command: Command::new(ffmpeg_binary_path_str),
+            command: Command::new(dbg!(relative_command_path("ffmpeg").unwrap())).into(),
             source_index: 0,
         }
     }
@@ -309,29 +293,14 @@ impl FFmpeg {
     pub fn start(self) -> FFmpegProcess {
         FFmpegProcess::spawn(self.command)
     }
+}
 
-    pub fn install_if_necessary() -> Result<(), String> {
-        if ffmpeg_is_installed() {
-            return Ok(());
-        }
-
-        match check_latest_version() {
-            Ok(version) => println!("Latest available version: {}", version),
-            Err(e) => println!("Skipping version check due to error: {e}"),
-        }
-
-        let download_url = ffmpeg_download_url().map_err(|e| e.to_string())?;
-        let destination = sidecar_dir().map_err(|e| e.to_string())?;
-
-        let archive_path =
-            download_ffmpeg_package(download_url, &destination).map_err(|e| e.to_string())?;
-
-        unpack_ffmpeg(&archive_path, &destination).map_err(|e| e.to_string())?;
-
-        let version = ffmpeg_version().map_err(|e| e.to_string())?;
-
-        println!("Done! Installed FFmpeg version {} 🏁", version);
-
-        Ok(())
+fn relative_command_path(command: impl AsRef<Path>) -> Result<PathBuf, tauri_plugin_shell::Error> {
+    match platform::current_exe()?.parent() {
+        #[cfg(windows)]
+        Some(exe_dir) => Ok(exe_dir.join(command.as_ref()).with_extension("exe")),
+        #[cfg(not(windows))]
+        Some(exe_dir) => Ok(exe_dir.join(command.as_ref())),
+        None => Err(tauri_plugin_shell::Error::CurrentExeHasNoParent),
     }
 }

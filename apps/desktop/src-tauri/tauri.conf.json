@@ -3,9 +3,9 @@
   "productName": "Cap",
   "identifier": "so.cap.desktop",
   "build": {
-    "beforeDevCommand": "pnpm localdev",
+    "beforeDevCommand": "node scripts/prepareSidecars.js && pnpm localdev",
     "devUrl": "http://localhost:3001",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "node scripts/prepareSidecars.js && pnpm build",
     "frontendDist": "../.output/public"
   },
   "app": {
@@ -37,6 +37,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "externalBin": ["../../../target/binaries/ffmpeg"]
   }
 }

@@ -8,7 +8,8 @@
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",
     "db:generate": "dotenv -e .env -- pnpm --dir packages/database db:generate",
-    "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose"
+    "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
+    "postinstall": "node scripts/postinstall.js"
   },
   "devDependencies": {
     "@turbo/gen": "^1.9.7",

@@ -142,6 +142,7 @@ jobs:
       - name: Build MacOS Apps
         working-directory: apps/desktop
         run: |
+          export TARGET_TRIPLE=${{ matrix.settings.target }}
           node ${{ github.workspace }}/.github/prebuild.js ${{ matrix.settings.prebuild }}
           pnpm tauri build --target ${{ matrix.settings.target }}
         env:

@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { exec as execCb } from "node:child_process";
 import { env } from "node:process";
 import { promisify } from "node:util";
-import extract from "extract-zip";
 
 const exec = promisify(execCb);
 const signId = env.APPLE_SIGNING_IDENTITY || "-";

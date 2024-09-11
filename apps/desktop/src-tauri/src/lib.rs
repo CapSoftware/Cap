@@ -862,6 +862,7 @@ async fn remove_fake_window(
 
 const PREV_RECORDINGS_WINDOW: &str = "prev-recordings";
 
+// must not be async bc of panel
 #[tauri::command]
 #[specta::specta]
 fn show_previous_recordings_window(app: AppHandle) {
@@ -908,7 +909,7 @@ fn show_previous_recordings_window(app: AppHandle) {
     window.make_transparent().ok();
     let panel = window.to_panel().unwrap();
 
-    panel.set_level(NSMainMenuWindowLevel + 1);
+    panel.set_level(NSMainMenuWindowLevel);
 
     panel.set_collection_behaviour(
         NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
@@ -962,7 +963,7 @@ fn show_previous_recordings_window(app: AppHandle) {
     });
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 fn open_editor(app: AppHandle, id: String) {
     let window = WebviewWindow::builder(
@@ -983,7 +984,7 @@ fn open_editor(app: AppHandle, id: String) {
     window.set_traffic_lights_inset(20.0, 48.0).unwrap();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 fn close_previous_recordings_window(app: AppHandle) {
     if let Ok(panel) = app.get_webview_panel(PREV_RECORDINGS_WINDOW) {
@@ -1006,7 +1007,7 @@ fn on_recording_options_change(app: &AppHandle, options: &RecordingOptions) {
     RecordingOptionsChanged.emit(app).ok();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(app: AppHandle) {
     let panel = app.get_webview_panel(PREV_RECORDINGS_WINDOW).unwrap();
@@ -1089,7 +1090,7 @@ async fn save_project_config(app: AppHandle, video_id: String, config: ProjectCo
     .unwrap();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 fn open_in_finder(path: PathBuf) {
     Command::new("open")
@@ -1111,7 +1112,7 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
     .map_err(|_| ())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 fn open_main_window(app: AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -1296,12 +1297,6 @@ pub fn run() {
 
             let app_handle = app.handle().clone();
 
-            if let Err(_error) = FFmpeg::install_if_necessary() {
-                println!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now");
-                // TODO: UI message instead
-                panic!("Failed to install FFmpeg, which is required for Cap to function. Shutting down now")
-            };
-
             if permissions::do_permissions_check().necessary_granted() {
                 open_main_window(app_handle.clone());
             } else {
@@ -1313,7 +1308,7 @@ pub fn run() {
                 start_recording_options: RecordingOptions {
                     capture_target: CaptureTarget::Screen,
                     camera_label: None,
-                    audio_input_name: None
+                    audio_input_name: None,
                 },
                 current_recording: None,
             })));
@@ -1334,21 +1329,21 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-        		let label = window.label();
-        		if label.starts_with("editor-") {
-		          	if let WindowEvent::CloseRequested {..} = event {
-										let id = label.strip_prefix("editor-").unwrap().to_string();
+            let label = window.label();
+            if label.starts_with("editor-") {
+                if let WindowEvent::CloseRequested { .. } = event {
+                    let id = label.strip_prefix("editor-").unwrap().to_string();
 
-										let app = window.app_handle().clone();
+                    let app = window.app_handle().clone();
 
-										tokio::spawn(async move {
-											if let Some(editor) = remove_editor_instance(&app, id.clone()).await {
-												editor.dispose().await;
-											}
-										});
-								}
-          	}
-				})
+                    tokio::spawn(async move {
+                        if let Some(editor) = remove_editor_instance(&app, id.clone()).await {
+                            editor.dispose().await;
+                        }
+                    });
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
