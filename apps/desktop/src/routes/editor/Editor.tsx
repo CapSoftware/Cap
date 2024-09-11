@@ -27,14 +27,11 @@ import {
   createRoot,
   createSignal,
   on,
-  onCleanup,
   onMount,
 } from "solid-js";
 import { platform } from "@tauri-apps/plugin-os";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
-import { Equal } from "effect";
-import { Store } from "@tauri-apps/plugin-store";
 import { createWritableMemo } from "@solid-primitives/memo";
 
 import {
@@ -44,7 +41,6 @@ import {
   type CursorType,
   type RenderProgress,
   commands,
-  ProjectConfiguration,
 } from "../../utils/tauri";
 import { EditorContextProvider, useEditorContext } from "./context";
 import {

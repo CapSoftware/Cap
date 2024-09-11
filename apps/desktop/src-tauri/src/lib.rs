@@ -10,6 +10,7 @@ mod playback;
 mod project_recordings;
 mod recording;
 mod tray;
+mod updater;
 mod upload;
 
 use auth::AuthStore;
@@ -1292,11 +1293,14 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_oauth::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
 
             let app_handle = app.handle().clone();
+
+            tokio::spawn(updater::check_for_updates(app.handle().clone()));
 
             if permissions::do_permissions_check().necessary_granted() {
                 open_main_window(app_handle.clone());
