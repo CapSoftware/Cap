@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.read_version.outputs.value }}
+      needs_release: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
     permissions:
       contents: write
     steps:
@@ -26,6 +27,7 @@ jobs:
 
       - name: Create tag
         id: create_tag
+        if: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
         uses: actions/github-script@v7
         with:
           script: |
@@ -45,7 +47,7 @@ jobs:
                 });
 
                 tagExisted = true;
-                core.notice(`Release skipped as tag '${tag}' already exists. Update the version in '${{ env.APP_CARGO_TOML }}' to perform a release.`);
+                core.notice(`Release skipped as tag '${tag}' already exists. Update the version in '${{ env.APP_CARGO_TOML }}' before starting another release.`);
               } catch (error) {
                 if ("status" in error && error.status === 404) tagExisted = false;
                 else throw error;
@@ -72,6 +74,7 @@ jobs:
 
   build:
     needs: draft
+    if: ${{ needs.draft.outputs.needs_release == 'true' }}
     permissions:
       contents: write
     runs-on: macos-latest
