@@ -42,7 +42,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 8.10.5
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -70,9 +70,9 @@ jobs:
         run: |
           rustup target add x86_64-apple-darwin
           pnpm install
-          node .github/prebuild.js x86_64
+          node ${{ github.workspace }}/.github/prebuild.js x86_64
           pnpm tauri build --target x86_64-apple-darwin
-          node .github/prebuild.js aarch64
+          node ${{ github.workspace }}/.github/prebuild.js aarch64
           pnpm tauri build --target aarch64-apple-darwin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

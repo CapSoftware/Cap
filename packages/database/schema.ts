@@ -68,6 +68,7 @@ export const accounts = mysqlTable(
     token_type: varchar("token_type", { length: 255 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    tempColumn: text("tempColumn"),
   },
   (table) => ({
     userIdIndex: index("user_id_idx").on(table.userId),
@@ -156,11 +157,11 @@ export const videos = mysqlTable(
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     source: json("source")
-      .$type<
-        { type: "MediaConvert" } | { type: "local" } | { type: "desktopMP4" }
-      >()
-      .notNull()
-      .default({ type: "MediaConvert" }),
+    .$type<
+      { type: "MediaConvert" } | { type: "local" } | { type: "desktopMP4" }
+    >()
+    .notNull()
+    .default({ type: "MediaConvert" }),
   },
   (table) => ({
     idIndex: index("id_idx").on(table.id),
