@@ -96,8 +96,6 @@ jobs:
         # Build both intel and apple silicon
         working-directory: apps/desktop-solid
         run: |
-          xcode-select --install
-          sudo xcodebuild -runFirstLaunch
           pnpm install
           node ${{ github.workspace }}/.github/prebuild.js x86_64
           pnpm tauri build --target x86_64-apple-darwin
@@ -115,7 +113,7 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: api.p8
           APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
       - name: upload assets
