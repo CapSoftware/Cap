@@ -47,19 +47,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Read version number
-        uses: SebRollen/toml-action@v1.0.2
-        id: read_version
-        with:
-          file: ${{ env.APP_CARGO_TOML }}
-          field: "package.version"
-
-      - name: create draft release
-        uses: crabnebula-dev/cloud-release@v0
-        with:
-          command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
-          api-key: ${{ secrets.CN_API_KEY }}
-
       - name: Create API Key File
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
 
@@ -97,7 +84,7 @@ jobs:
 
       - name: Create .env file in root
         run: |
-          echo "appVersion=${{ steps.read_version.outputs.value }}" >> .env
+          echo "appVersion=${{ needs.draft.outputs.version }}" >> .env
           echo "CAP_DESKTOP_SENTRY_URL=https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200" >> .env
           echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" >> .env
           echo 'NEXTAUTH_URL=${NEXT_PUBLIC_URL}' >> .env
