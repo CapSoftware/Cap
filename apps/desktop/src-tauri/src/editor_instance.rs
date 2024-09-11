@@ -1,6 +1,7 @@
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
 use crate::{editor, AudioData};
+use cap_ffmpeg::FFmpeg;
 use cap_project::{ProjectConfiguration, RecordingMeta};
 use cap_rendering::decoder::AsyncVideoDecoder;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
@@ -78,7 +79,8 @@ impl EditorInstance {
                 let audio_path = project_path.join(&meta.path);
 
                 // TODO: Use ffmpeg crate instead of command line
-                let stdout = Command::new("ffmpeg")
+                let stdout = FFmpeg::new()
+                    .command
                     .arg("-i")
                     .arg(audio_path)
                     .args(["-f", "f64le", "-acodec", "pcm_f64le"])
