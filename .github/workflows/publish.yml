@@ -8,11 +8,42 @@ env:
   APP_CARGO_TOML: apps/desktop-solid/src-tauri/Cargo.toml
 
 jobs:
-  cap-desktop-release:
+  draft:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.read_version.outputs.value }}
+      needs_release: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version number
+        uses: SebRollen/toml-action@v1.0.2
+        id: read_version
+        with:
+          file: ${{ env.APP_CARGO_TOML }}
+          field: "package.version"
+
+      - name: create draft release
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
+          api-key: ${{ secrets.CN_API_KEY }}
+
+  build:
+    needs: draft
     permissions:
       contents: write
     runs-on: macos-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-apple-darwin
+            prebuild: x86_64
+          - target: aarch64-apple-darwin
+            prebuild: aarch64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,24 +64,10 @@ jobs:
       - name: Create API Key File
         run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
 
-      - name: Ensure signing identity
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          CERTIFICATE_PATH=${{ runner.temp }}/certificate.p12
-          KEYCHAIN_PATH=${{ runner.temp }}/build.keychain
-
-          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
-
-          # Maybe set password in secrets?? This gets cleaned up at the beginning and end of each job though.
-          security create-keychain -p "" $KEYCHAIN_PATH
-          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-          security default-keychain -s $KEYCHAIN_PATH
-          security unlock-keychain -p "" $KEYCHAIN_PATH
-          security import $CERTIFICATE_PATH -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
-          security set-key-partition-list -S apple-tool:,apple: -k "" $KEYCHAIN_PATH
-          security list-keychain -d user -s $KEYCHAIN_PATH
+      - uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
       - name: Verify certificate
         run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
@@ -58,10 +75,12 @@ jobs:
       - name: Rust setup
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-darwin, aarch64-apple-darwin
+          targets: ${{ matrix.settings.target }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.settings.target }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -97,10 +116,8 @@ jobs:
         working-directory: apps/desktop-solid
         run: |
           pnpm install
-          node ${{ github.workspace }}/.github/prebuild.js x86_64
-          pnpm tauri build --target x86_64-apple-darwin
-          node ${{ github.workspace }}/.github/prebuild.js aarch64
-          pnpm tauri build --target aarch64-apple-darwin
+          node ${{ github.workspace }}/.github/prebuild.js ${{ matrix.settings.prebuild }}
+          pnpm tauri build --target ${{ matrix.settings.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -121,4 +138,3 @@ jobs:
         with:
           command: release upload ${{ env.CN_APPLICATION }} --framework tauri
           api-key: ${{ secrets.CN_API_KEY }}
-          working-directory: ./apps/desktop-solid/src-tauri
