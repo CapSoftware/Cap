@@ -56,10 +56,9 @@ jobs:
         run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
 
       - name: Rust setup
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          cache: true
+          targets: x86_64-apple-darwin, aarch64-apple-darwin
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
