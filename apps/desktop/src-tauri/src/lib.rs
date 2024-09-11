@@ -894,7 +894,7 @@ fn show_previous_recordings_window(app: AppHandle) {
     .accept_first_mouse(true)
     .content_protected(true)
     .inner_size(
-        800.0,
+        350.0,
         (monitor.size().height as f64) / monitor.scale_factor(),
     )
     .position(0.0, 0.0)

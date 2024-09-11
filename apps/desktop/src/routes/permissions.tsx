@@ -3,8 +3,14 @@ import { Button } from "@cap/ui-solid";
 import { exit } from "@tauri-apps/plugin-process";
 
 import { commands } from "../utils/tauri";
-import { createEffect, createResource, Suspense, Switch } from "solid-js";
-import { Match } from "solid-js";
+import {
+  createEffect,
+  createResource,
+  Suspense,
+  Switch,
+  Match,
+  createSignal,
+} from "solid-js";
 import { createTimer } from "@solid-primitives/timer";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -15,9 +21,14 @@ export default function () {
 
   createTimer(() => checkActions.refetch(), 100, setInterval);
 
+  const [currentStep, setCurrentStep] = createSignal(0);
+
   const permissionsGranted = () => {
     const c = check.latest;
-    if (c?.os === "macOS") return c?.screenRecording;
+    if (c?.os === "macOS") {
+      return c?.screenRecording && c?.camera && c?.microphone;
+    }
+    return false;
   };
 
   createEffect(() => {
@@ -28,60 +39,69 @@ export default function () {
     }
   });
 
+  const steps = [
+    { name: "Screen Recording", key: "screenRecording" },
+    { name: "Camera", key: "camera" },
+    { name: "Microphone", key: "microphone" },
+  ] as const;
+
+  const currentPermission = () => steps[currentStep()];
+
+  const nextStep = () => {
+    if (
+      currentStep() < steps.length - 1 &&
+      check.latest?.[currentPermission().key]
+    ) {
+      setCurrentStep(currentStep() + 1);
+    }
+  };
+
   return (
-    <div class="rounded-lg bg-gray-50 w-screen h-screen text-sm flex flex-col divide-y divide-gray-200">
-      <div
-        class={cx(
-          "pl-[1rem] flex flex-row items-center font-[500] h-[2.9rem] shrink-0"
-        )}
-        data-tauri-drag-region
-      >
-        <span data-tauri-drag-region>Recording Permissions</span>
+    <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100 border rounded-lg border-gray-200">
+      <div class="space-y-[0.2rem] flex-1">
+        <IconCapLogo class="size-[3rem]" />
+        <h1 class="text-[1rem] font-[700]">Permissions Required</h1>
+        <p class="text-gray-400 text-[0.75rem]">
+          Cap needs permissions to run properly. Microphone and camera
+          permissions are required, but won't be used unless you choose a camera
+          or microphone option.
+        </p>
       </div>
-      <Suspense fallback={<div class="w-full flex-1 bg-gray-100" />}>
+      <Suspense fallback={<div class="w-full flex-1" />}>
         <Switch>
-          <Match
-            when={(() => {
-              const c = check.latest;
-              if (c?.os === "macOS") return c;
-            })()}
-          >
-            {(check) => (
-              <div class="flex flex-col items-center justify-center gap-4 flex-1">
-                <div class="flex flex-col items-center gap-2">
-                  <span>Screen Recording Permission</span>
-                  {check().screenRecording ? (
-                    <span>Granted</span>
+          <Match when={check.latest?.os === "macOS"}>
+            {(latestCheck) => (
+              <div class="flex flex-col items-start gap-4">
+                <div class="flex flex-col items-start gap-1">
+                  <span class="font-[500]">
+                    {currentPermission().name} Permission
+                  </span>
+                  {latestCheck()[currentPermission().key] ? (
+                    <span class="text-green-600">Granted</span>
                   ) : (
                     <Button
                       onClick={() => {
                         commands.openPermissionSettings({
-                          macOS: "screenRecording",
+                          macOS: currentPermission().key,
                         });
                       }}
+                      disabled={check.latest?.[currentPermission().key]}
                     >
-                      Open Settings
+                      Open {currentPermission().name} Settings {}
                     </Button>
                   )}
                 </div>
-                {/*<div class="flex flex-col items-center gap-2">
-        <span>Accessibility Permission</span>
-        <Button
-          onClick={() => {
-            commands.openPermissionSettings({ macOS: "accessibility" });
-          }}
-        >
-          Open Settings
-        </Button>
-      </div>*/}
               </div>
             )}
           </Match>
         </Switch>
       </Suspense>
-      <div class="flex flex-row-reverse p-2 gap-2">
-        <Button disabled={!permissionsGranted()}>
-          {permissionsGranted() ? "Continue" : "Waiting"}
+      <div class="flex flex-row-reverse gap-2">
+        <Button
+          onClick={() => nextStep()}
+          disabled={!check.latest?.[currentPermission().key]}
+        >
+          {currentStep() === steps.length - 1 ? "Continue" : "Next"}
         </Button>
         <Button variant="secondary" onClick={() => exit()}>
           Quit

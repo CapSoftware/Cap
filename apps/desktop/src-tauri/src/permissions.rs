@@ -7,7 +7,8 @@ use tauri::{Manager, WebviewUrl, WebviewWindow, Wry};
 #[serde(rename_all = "camelCase")]
 pub enum MacOSPermissionSettings {
     ScreenRecording,
-    // Accessibility,
+    Camera,
+    Microphone,
 }
 
 #[derive(Serialize, Deserialize, specta::Type)]
@@ -26,12 +27,19 @@ pub fn open_permission_settings(settings: OSPermissionSettings) {
 					.arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
 					.spawn()
 					.expect("Failed to open Screen Recording settings");
-            } //    MacOSPermissionSettings::Accessibility => {
-              //        Command::new("open")
-              // .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-              // .spawn()
-              // .expect("Failed to open Accessibility settings");
-              //    }
+            }
+            MacOSPermissionSettings::Camera => {
+                Command::new("open")
+                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
+                    .spawn()
+                    .expect("Failed to open Camera settings");
+            }
+            MacOSPermissionSettings::Microphone => {
+                Command::new("open")
+                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+                    .spawn()
+                    .expect("Failed to open Microphone settings");
+            }
         },
     }
 }
@@ -41,6 +49,7 @@ pub fn open_permission_settings(settings: OSPermissionSettings) {
 pub struct MacOSPermissionsCheck {
     screen_recording: bool,
     microphone: bool,
+    camera: bool,
 }
 
 #[derive(Serialize, Deserialize, specta::Type)]
@@ -53,7 +62,7 @@ pub enum OSPermissionsCheck {
 impl OSPermissionsCheck {
     pub fn necessary_granted(&self) -> bool {
         match self {
-            Self::MacOS(macos) => macos.screen_recording,
+            Self::MacOS(macos) => macos.screen_recording && macos.microphone && macos.camera,
             Self::Other => true,
         }
     }
@@ -67,6 +76,16 @@ pub fn do_permissions_check() -> OSPermissionsCheck {
         OSPermissionsCheck::MacOS(MacOSPermissionsCheck {
             screen_recording: scap::has_permission(),
             microphone: {
+                use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
+                use objc::*;
+
+                let cls = objc::class!(AVCaptureDevice);
+                let status: AVAuthorizationStatus = unsafe {
+                    msg_send![cls, authorizationStatusForMediaType:AVMediaType::Audio.into_ns_str()]
+                };
+                matches!(status, AVAuthorizationStatus::Authorized)
+            },
+            camera: {
                 use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
                 use objc::*;
 
