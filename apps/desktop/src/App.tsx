@@ -11,12 +11,16 @@ const queryClient = new QueryClient();
 export default function App() {
   return (
     <ErrorBoundary
-      fallback={(e: Error) => (
-        <>
-          <p>{e.toString()}</p>
-          <p>{e.stack?.toString()}</p>
-        </>
-      )}
+      fallback={(e: Error) => {
+        console.log("An error was caught by the root error boundary");
+        console.log(e);
+        return (
+          <>
+            <p>{e.toString()}</p>
+            <p>{e.stack?.toString()}</p>
+          </>
+        );
+      }}
     >
       <QueryClientProvider client={queryClient}>
         <Router

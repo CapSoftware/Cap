@@ -6,6 +6,8 @@ import { action, redirect, useAction, useSubmission } from "@solidjs/router";
 
 import callbackTemplate from "./callback.template";
 import { authStore } from "../../store";
+import { clientEnv } from "../../utils/env";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const signInAction = action(async () => {
   let res: (url: URL) => void;
@@ -28,9 +30,7 @@ const signInAction = action(async () => {
   });
 
   await shell.open(
-    `${
-      import.meta.env.VITE_SERVER_URL
-    }/api/desktop/session/request?port=${port}`
+    `${clientEnv.VITE_SERVER_URL}/api/desktop/session/request?port=${port}`
   );
 
   const url = await new Promise<URL>((r) => {
@@ -45,6 +45,10 @@ const signInAction = action(async () => {
   }
 
   await authStore.set({ token, expires });
+
+  getCurrentWindow()
+    .setFocus()
+    .catch(() => {});
 
   return redirect("/");
 });
