@@ -2,6 +2,8 @@ use crate::{NewRecordingAdded, RecordingStarted, RecordingStopped, RequestStopRe
 use cap_project::RecordingMeta;
 use std::path::PathBuf;
 use std::result::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::{
     image::Image,
     menu::{IconMenuItem, IsMenuItem, Menu, MenuItem, MenuItemKind, Submenu},
@@ -39,12 +41,13 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         ],
     )?;
     let app_handle = app.clone();
+    let is_recording = Arc::new(AtomicBool::new(false));
     let _ = TrayIconBuilder::with_id("tray")
         .icon(Image::from_bytes(include_bytes!(
             "../icons/tray-default-icon.png"
         ))?)
         .menu(&menu)
-        .menu_on_left_click(false)
+        .menu_on_left_click(true)
         .on_menu_event(move |app, event| {
             match event.id.as_ref() {
                 "new_recording" => {
@@ -72,9 +75,17 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 }
             }
         })
-        .on_tray_icon_event(move |_, event| {
-            if let tauri::tray::TrayIconEvent::Click { .. } = event {
-                let _ = RequestStopRecording.emit(&app_handle);
+        .on_tray_icon_event({
+            let is_recording = Arc::clone(&is_recording);
+            let app_handle = app_handle.clone();
+            move |tray, event| {
+                if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                    if is_recording.load(Ordering::Relaxed) {
+                        let _ = RequestStopRecording.emit(&app_handle);
+                    } else {
+                        let _ = tray.set_visible(true);
+                    }
+                }
             }
         })
         .build(app);
@@ -90,7 +101,9 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     RecordingStarted::listen_any(app, {
         let app_handle = app.clone();
+        let is_recording = Arc::clone(&is_recording);
         move |_| {
+            is_recording.store(true, Ordering::Relaxed);
             if let Some(tray) = app_handle.tray_by_id("tray") {
                 if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/tray-stop-icon.png")) {
                     let _ = tray.set_icon(Some(icon));
@@ -101,7 +114,9 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     RecordingStopped::listen_any(app, {
         let app_handle = app.clone();
+        let is_recording = Arc::clone(&is_recording);
         move |_| {
+            is_recording.store(false, Ordering::Relaxed);
             if let Some(tray) = app_handle.tray_by_id("tray") {
                 if let Ok(icon) =
                     Image::from_bytes(include_bytes!("../icons/tray-default-icon.png"))
