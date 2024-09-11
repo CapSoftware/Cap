@@ -109,8 +109,8 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: api.p8
           APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
-          TAURI_PRIVATE_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_KEY_SIGNING_PASSWORD: ${{ secrets.TAURI_KEY_SIGNING_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_SIGNING_PASSWORD }}
 
       - name: upload assets
         uses: crabnebula-dev/cloud-release@v0
