@@ -4,7 +4,7 @@
 #[tokio::main]
 async fn main() {
     // let project_path = PathBuf::from(
-    //     r#"/Users/brendonovich/Library/Application Support/so.cap.desktop-solid/recordings/414f2abd-8186-479f-85e7-08a64411a33c.cap"#,
+    //     r#"/Users/brendonovich/Library/Application Support/so.cap.desktop/recordings/414f2abd-8186-479f-85e7-08a64411a33c.cap"#,
     // );
 
     // let mut project: ProjectConfiguration = ProjectConfiguration::default();

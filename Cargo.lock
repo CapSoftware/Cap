@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.2.0"
+version = "0.3.0-alpha.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4958,7 +4958,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.5"
-source = "git+https://github.com/brendonovich/scap?rev=691bd88798d3#691bd88798d39478e09afb04d460e113097bb855"
+source = "git+https://github.com/CapSoftware/scap?rev=691bd88798d3#691bd88798d39478e09afb04d460e113097bb855"
 dependencies = [
  "cocoa 0.25.0",
  "core-graphics-helmer-fork",

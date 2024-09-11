@@ -1,5 +1,5 @@
 {
-  "name": "desktop-solid",
+  "name": "@cap/desktop",
   "type": "module",
   "scripts": {
     "dev": "dotenv -e ../../.env -- tauri dev",

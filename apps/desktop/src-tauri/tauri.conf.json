@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cap",
-  "identifier": "so.cap.desktop-solid",
+  "identifier": "so.cap.desktop",
   "build": {
     "beforeDevCommand": "pnpm localdev",
     "devUrl": "http://localhost:3001",

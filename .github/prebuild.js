@@ -85,11 +85,13 @@ rustflags = [
   });
 
   await fs.writeFile(
-    `${__root}/apps/desktop-solid/src-tauri/tauri.macos.conf.json`,
+    `${__root}/apps/desktop/src-tauri/tauri.macos.conf.json`,
     JSON.stringify(
       {
         bundle: {
-          macOS: { frameworks: [path.join(nativeDeps, "Spacedrive.framework")] },
+          macOS: {
+            frameworks: [path.join(nativeDeps, "Spacedrive.framework")],
+          },
         },
       },
       null,

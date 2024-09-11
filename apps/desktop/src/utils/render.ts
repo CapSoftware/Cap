@@ -2,7 +2,7 @@ import { writeFile, readFile } from "@tauri-apps/plugin-fs";
 import MP4Box from "mp4box";
 
 const outputFilePath =
-  "/Users/richie/Library/Application Support/so.cap.desktop-solid/recordings/ac2909e0-2f5e-45ff-95e3-8efb50a56a12.cap/output/result.mp4";
+  "/Users/richie/Library/Application Support/so.cap.desktop/recordings/ac2909e0-2f5e-45ff-95e3-8efb50a56a12.cap/output/result.mp4";
 
 interface VideoSettings {
   webcamSize: { width: number; height: number };

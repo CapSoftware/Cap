@@ -5,7 +5,7 @@ on: workflow_dispatch
 
 env:
   CN_APPLICATION: cap/cap
-  APP_CARGO_TOML: apps/desktop-solid/src-tauri/Cargo.toml
+  APP_CARGO_TOML: apps/desktop/src-tauri/Cargo.toml
 
 jobs:
   draft:
@@ -133,14 +133,14 @@ jobs:
           echo 'NEXTAUTH_URL=${NEXT_PUBLIC_URL}' >> .env
           echo 'VITE_SERVER_URL=${NEXT_PUBLIC_URL}' >> .env
 
-      - name: Copy .env to apps/desktop-solid
-        run: cp .env apps/desktop-solid/.env
+      - name: Copy .env to apps/desktop
+        run: cp .env apps/desktop/.env
 
       - name: Output .env file
-        run: cat apps/desktop-solid/.env
+        run: cat apps/desktop/.env
 
       - name: Build MacOS Apps
-        working-directory: apps/desktop-solid
+        working-directory: apps/desktop
         run: |
           node ${{ github.workspace }}/.github/prebuild.js ${{ matrix.settings.prebuild }}
           pnpm tauri build --target ${{ matrix.settings.target }}
