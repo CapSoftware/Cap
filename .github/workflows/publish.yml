@@ -96,6 +96,8 @@ jobs:
         # Build both intel and apple silicon
         working-directory: apps/desktop-solid
         run: |
+          xcode-select --install
+          sudo xcodebuild -runFirstLaunch
           pnpm install
           node ${{ github.workspace }}/.github/prebuild.js x86_64
           pnpm tauri build --target x86_64-apple-darwin
