@@ -15,6 +15,7 @@ import {
 import { useEditorInstanceContext } from "./editorInstanceContext";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import type { PresetsStore } from "../createPresets";
+import { createElementBounds } from "@solid-primitives/bounds";
 
 export type CurrentDialog =
   | { type: "createPreset" }
@@ -56,6 +57,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       open: false,
     });
 
+    const [previewTime, setPreviewTime] = createSignal<number>();
+    const [playbackTime, setPlaybackTime] = createSignal<number>(0);
+    const [playing, setPlaying] = createSignal(false);
+
     return {
       ...editorInstanceContext,
       editorInstance: props.editorInstance,
@@ -66,6 +71,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       selectedTab,
       setSelectedTab,
       history: createStoreHistory(project, setProject),
+      playbackTime,
+      setPlaybackTime,
+      playing,
+      setPlaying,
+      previewTime,
+      setPreviewTime,
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok
