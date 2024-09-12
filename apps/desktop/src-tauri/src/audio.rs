@@ -269,3 +269,16 @@ pub async fn start_capturing(
 
     (capture, rx.await.unwrap())
 }
+
+pub fn play_audio<const N: usize>(bytes: &'static [u8; N]) {
+    use rodio::{Decoder, OutputStream, Sink};
+    use std::io::Cursor;
+
+    if let Ok((_, stream)) = OutputStream::try_default() {
+        let file = Cursor::new(bytes);
+        let source = Decoder::new(file).unwrap();
+        let sink = Sink::try_new(&stream).unwrap();
+        sink.append(source);
+        sink.sleep_until_end();
+    }
+}
