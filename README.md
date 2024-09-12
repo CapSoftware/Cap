@@ -32,10 +32,6 @@ Cap is the open source alternative to Loom. It's a video messaging tool that all
 
 We're working on a self-hosting guide for Cap. This will include one-click deployment buttons for Vercel and Render, as well as an option to self host with Docker. Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> if you want to help contribute to this particular project.
 
-# Roadmap
-
-View what's currently in progress, and what's planned for the future: [Cap Roadmap](https://cap.so/roadmap)
-
 # Monorepo App Architecture
 
 We use a combination of Rust, React (Next.js), TypeScript, Tauri, Drizzle (ORM), MySQL, TailwindCSS throughout this Turborepo powered monorepo.

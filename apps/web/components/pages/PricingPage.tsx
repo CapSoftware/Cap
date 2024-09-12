@@ -231,15 +231,6 @@ export const PricingPage = () => {
                         </li>
                       ))}
                     </ul>
-                    <p className="text-white italic">
-                      View the full Cap Roadmap{" "}
-                      <a
-                        href="/roadmap"
-                        className="underline font-medium text-white"
-                      >
-                        here
-                      </a>
-                    </p>
                   </div>
                 </div>
               </CardFooter>
