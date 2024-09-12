@@ -151,13 +151,13 @@ async openEditor(id: string) : Promise<void> {
 async openMainWindow() : Promise<void> {
     await TAURI_INVOKE("open_main_window");
 },
-async openPermissionSettings(settings: OSPermissionSettings) : Promise<void> {
-    await TAURI_INVOKE("open_permission_settings", { settings });
+async openPermissionSettings(permission: OSPermission) : Promise<void> {
+    await TAURI_INVOKE("open_permission_settings", { permission });
 },
-async doPermissionsCheck() : Promise<OSPermissionsCheck> {
-    return await TAURI_INVOKE("do_permissions_check");
+async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
+    return await TAURI_INVOKE("do_permissions_check", { initialCheck });
 },
-async requestPermission(permission: OSPermissionSettings) : Promise<void> {
+async requestPermission(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("request_permission", { permission });
 },
 async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<Result<null, string>> {
@@ -231,11 +231,10 @@ export type EditorStateChanged = { playhead_position: number }
 export type HotkeysConfiguration = { show: boolean }
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
 export type JsonValue<T> = [T]
-export type MacOSPermissionSettings = "screenRecording" | "camera" | "microphone"
-export type MacOSPermissionsCheck = { screenRecording: boolean; microphone: boolean; camera: boolean }
 export type NewRecordingAdded = { path: string }
-export type OSPermissionSettings = { macOS: MacOSPermissionSettings }
-export type OSPermissionsCheck = ({ os: "macOS" } & MacOSPermissionsCheck) | { os: "other" }
+export type OSPermission = "screenRecording" | "camera" | "microphone"
+export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
+export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
 export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null }
