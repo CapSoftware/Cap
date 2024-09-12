@@ -3,6 +3,7 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     ptr::{null, null_mut},
+    slice,
     sync::{mpsc, Arc},
 };
 
@@ -78,11 +79,13 @@ impl AsyncVideoDecoder {
             use ffmpeg_next::format::Pixel;
             use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
 
+            let mut scaler_input_format = hw_device
+                .as_ref()
+                .map(|d| d.pix_fmt)
+                .unwrap_or(decoder.format());
+
             let mut scaler = Context::get(
-                hw_device
-                    .as_ref()
-                    .map(|d| d.pix_fmt)
-                    .unwrap_or(decoder.format()),
+                scaler_input_format,
                 decoder.width(),
                 decoder.height(),
                 Pixel::RGBA,
@@ -203,10 +206,43 @@ impl AsyncVideoDecoder {
                                     let sw_frame = try_transfer_hwframe(&temp_frame);
                                     let frame = sw_frame.as_ref().unwrap_or(&temp_frame);
 
+                                    if frame.format() != scaler_input_format {
+                                        // Reinitialize the scaler with the new input format
+                                        scaler_input_format = frame.format();
+                                        scaler = Context::get(
+                                            scaler_input_format,
+                                            decoder.width(),
+                                            decoder.height(),
+                                            Pixel::RGBA,
+                                            decoder.width(),
+                                            decoder.height(),
+                                            Flags::BILINEAR,
+                                        )
+                                        .unwrap();
+                                    }
+
                                     let mut rgb_frame = frame::Video::empty();
                                     scaler.run(frame, &mut rgb_frame).unwrap();
 
-                                    let frame = Arc::new(rgb_frame.data(0).to_vec());
+                                    let width = rgb_frame.width() as usize;
+                                    let height = rgb_frame.height() as usize;
+                                    let stride = rgb_frame.stride(0) as usize;
+                                    let data = rgb_frame.data(0);
+
+                                    let expected_size = width * height * 4;
+
+                                    let mut frame_buffer = Vec::with_capacity(expected_size);
+
+                                    let data_ptr = data.as_ptr();
+
+                                    for y in 0..height {
+                                        let line_start = unsafe { data_ptr.add(y * stride) };
+                                        let line =
+                                            unsafe { slice::from_raw_parts(line_start, width * 4) };
+                                        frame_buffer.extend_from_slice(line);
+                                    }
+
+                                    let frame = Arc::new(frame_buffer);
 
                                     if current_frame == frame_number {
                                         if let Some(sender) = sender.take() {
