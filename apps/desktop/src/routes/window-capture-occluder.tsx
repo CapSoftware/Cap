@@ -1,19 +1,16 @@
-import { createQuery } from "@tanstack/solid-query";
-import { createEffect, Show, Suspense } from "solid-js";
+import { Show, Suspense } from "solid-js";
 import { createCurrentRecordingQuery } from "../utils/queries";
 
 export default function () {
   const currentRecording = createCurrentRecordingQuery();
 
-  createEffect(() => console.log(currentRecording.data));
-
   return (
     <Suspense>
       <Show
         when={
-          currentRecording.data?.[0] &&
-          currentRecording.data[0].displaySource.variant === "window" &&
-          currentRecording.data[0].displaySource.bounds
+          currentRecording.data &&
+          currentRecording.data.displaySource.variant === "window" &&
+          currentRecording.data.displaySource.bounds
         }
       >
         {(bounds) => (
