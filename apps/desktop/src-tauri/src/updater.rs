@@ -15,48 +15,39 @@ pub async fn check_for_updates(app: AppHandle) -> Result<(), ()> {
         return Ok(());
     };
 
-    let should_update = tokio::task::spawn_blocking({
-        let version = update.version.clone();
-        let app = app.clone();
-        move || {
-            app.dialog()
-                .message(format!(
-                    "Version {} of Cap is available, would you like to install it?",
-                    version
-                ))
-                .title("Update Cap")
-                .ok_button_label("Update")
-                .cancel_button_label("Ignore")
-                .blocking_show()
-        }
-    })
-    .await
-    .unwrap();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message(format!(
+            "Version {} of Cap is available, would you like to install it?",
+            update.version
+        ))
+        .title("Update Cap")
+        .ok_button_label("Update")
+        .cancel_button_label("Ignore")
+        .show(|install| {
+            tx.send(install).ok();
+        });
 
-    if !should_update {
+    if !rx.await.unwrap() {
         return Ok(());
     }
 
     update.download_and_install(|_, _| {}, || {}).await.unwrap();
 
-    let should_restart = tokio::task::spawn_blocking({
-        let version = update.version.clone();
-        let app = app.clone();
-        move || {
-            app.dialog()
-                .message(format!(
-                    "Cap v{version} has been installed, restart Cap to finish updating.",
-                ))
-                .title("Update Cap")
-                .ok_button_label("Restart Now")
-                .cancel_button_label("Restart Later")
-                .blocking_show()
-        }
-    })
-    .await
-    .unwrap();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .message(format!(
+            "Cap v{} has been installed, restart Cap to finish updating.",
+            update.version
+        ))
+        .title("Update Cap")
+        .ok_button_label("Restart Now")
+        .cancel_button_label("Restart Later")
+        .show(|restart| {
+            tx.send(restart).ok();
+        });
 
-    if should_restart {
+    if rx.await.unwrap() {
         app.restart();
     }
 
