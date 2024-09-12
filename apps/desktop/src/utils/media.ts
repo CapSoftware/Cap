@@ -1,4 +1,3 @@
-import { createTimer } from "@solid-primitives/timer";
 import {
   type Accessor,
   createEffect,
@@ -11,15 +10,22 @@ import { commands } from "./tauri";
 
 export function createDevices() {
   const [devices, { refetch }] = createResource(async () => {
-    await navigator.mediaDevices.getUserMedia({ video: true });
-    return await navigator.mediaDevices.enumerateDevices();
+    try {
+      await navigator.mediaDevices.getUserMedia({ video: true });
+      return await navigator.mediaDevices.enumerateDevices();
+    } catch (error) {
+      console.error("Error accessing media devices:", error);
+      return [];
+    }
   });
 
   onMount(() => {
-    navigator.mediaDevices.addEventListener("devicechange", refetch);
-    onCleanup(() =>
-      navigator.mediaDevices.removeEventListener("devicechange", refetch)
-    );
+    if (navigator.mediaDevices) {
+      navigator.mediaDevices.addEventListener("devicechange", refetch);
+      onCleanup(() =>
+        navigator.mediaDevices.removeEventListener("devicechange", refetch)
+      );
+    }
   });
 
   return () => devices.latest ?? [];
@@ -28,11 +34,15 @@ export function createDevices() {
 export function createCameras() {
   const devices = createDevices();
 
-  const [rustCameras, { refetch }] = createResource(() =>
-    commands.listCameras()
-  );
+  const [rustCameras, { refetch }] = createResource(async () => {
+    try {
+      return await commands.listCameras();
+    } catch (error) {
+      console.error("Error listing cameras:", error);
+      return [];
+    }
+  });
 
-  // createTimer(refetch, 5 * 1000, setInterval);
   createEffect(on(devices, refetch));
 
   return () => {
@@ -52,7 +62,12 @@ export function createCameraForLabel(label: Accessor<string>) {
   const cameras = createCameras();
 
   return () => {
-    const camera = cameras().find((camera) => camera.label === label());
-    return camera;
+    try {
+      const camera = cameras().find((camera) => camera.label === label());
+      return camera || null;
+    } catch (error) {
+      console.error("Error finding camera for label:", error);
+      return null;
+    }
   };
 }

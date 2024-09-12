@@ -59,8 +59,12 @@ export default function () {
 
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
-      if (!isRecording()) await commands.startRecording();
-      else await commands.stopRecording();
+      try {
+        if (!isRecording()) await commands.startRecording();
+        else await commands.stopRecording();
+      } catch (error) {
+        console.error("Error toggling recording:", error);
+      }
     },
   }));
 
@@ -75,6 +79,10 @@ export default function () {
     }
   });
 
+  const windowsData = createMemo(() => windows.data ?? []);
+  const audioDevicesData = createMemo(() => audioDevices.data ?? []);
+  const camerasData = createMemo(() => cameras() ?? []);
+
   return (
     <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50">
       <Show when={auth() && options.data}>
@@ -82,18 +90,18 @@ export default function () {
           const selectedWindow = createMemo(() => {
             const d = options().captureTarget;
             if (d.type !== "window") return;
-            return (windows.data ?? []).find((data) => data.id === d.id);
+            return windowsData().find((data) => data.id === d.id);
           });
 
           const audioDevice = () =>
-            audioDevices.data?.find((d) => d.name === options().audioInputName);
+            audioDevicesData().find((d) => d.name === options().audioInputName);
 
           createEffect(() => console.log(audioDevice()));
 
           return (
             <>
               <KSelect<CaptureWindow | null>
-                options={windows.data ?? []}
+                options={windowsData()}
                 optionValue="id"
                 optionTextValue="name"
                 placeholder="Window"
@@ -161,7 +169,7 @@ export default function () {
                         {(item) => (
                           <>
                             <span class="flex-1 truncate">
-                              {item.selectedOption().name}
+                              {item.selectedOption()?.name ?? "Select Window"}
                             </span>
 
                             <IconCapChevronDown class="size-4 shrink-0 ui-group-expanded:-rotate-180 transform transition-transform" />
@@ -176,17 +184,29 @@ export default function () {
                     as={KSelect.Content}
                     class={topRightAnimateClasses}
                   >
-                    <KSelect.Listbox
-                      class="max-h-52 max-w-64"
-                      as={MenuItemList}
-                    />
+                    <Show
+                      when={windowsData().length > 0}
+                      fallback={
+                        <div class="p-2 text-gray-500">
+                          No windows available
+                        </div>
+                      }
+                    >
+                      <KSelect.Listbox
+                        class="max-h-52 max-w-64"
+                        as={MenuItemList}
+                      />
+                    </Show>
                   </PopperContent>
                 </KSelect.Portal>
               </KSelect>
               <div class="flex flex-col gap-[0.25rem] items-stretch">
                 <label class="text-gray-400 text-[0.875rem]">Camera</label>
                 <KSelect<CameraOption>
-                  options={[{ deviceId: "", label: "No Camera" }, ...cameras()]}
+                  options={[
+                    { deviceId: "", label: "No Camera" },
+                    ...camerasData(),
+                  ]}
                   optionValue="deviceId"
                   optionTextValue="label"
                   placeholder="No Camera"
@@ -257,7 +277,7 @@ export default function () {
               <div class="flex flex-col gap-[0.25rem] items-stretch">
                 <label class="text-gray-400">Microphone</label>
                 <KSelect<{ name: string }>
-                  options={[{ name: "No Audio" }, ...(audioDevices.data ?? [])]}
+                  options={[{ name: "No Audio" }, ...audioDevicesData()]}
                   optionValue="name"
                   optionTextValue="name"
                   placeholder="No Audio"
