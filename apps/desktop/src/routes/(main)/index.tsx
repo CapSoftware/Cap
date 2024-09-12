@@ -96,8 +96,6 @@ export default function () {
           const audioDevice = () =>
             audioDevicesData().find((d) => d.name === options().audioInputName);
 
-          createEffect(() => console.log(audioDevice()));
-
           return (
             <>
               <KSelect<CaptureWindow | null>
