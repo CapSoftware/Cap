@@ -624,7 +624,7 @@ function Dialogs() {
                   <>
                     <Dialog.Header>
                       <div class="flex flex-row space-x-[0.75rem]">
-                        <AspectRatioSelect />
+                        {/*<AspectRatioSelect />*/}
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
                           <span>Size</span>
                           <div class="w-[3.25rem]">

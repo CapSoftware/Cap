@@ -26,7 +26,6 @@ import { makePersisted } from "@solid-primitives/storage";
 import { commands, events } from "../utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "./createPresets";
-import { createQueryInvalidate } from "../utils/events";
 
 type RecordingEntry = {
   path: string;

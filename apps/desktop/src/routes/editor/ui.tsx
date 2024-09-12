@@ -4,6 +4,7 @@ import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Polymorphic, type PolymorphicProps } from "@kobalte/core/polymorphic";
 import { Slider as KSlider } from "@kobalte/core/slider";
 import { Switch as KSwitch } from "@kobalte/core/switch";
+import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
 import { cva, cx, type VariantProps } from "cva";
 import {
   type ComponentProps,
@@ -296,3 +297,29 @@ export const topLeftAnimateClasses =
 
 export const topRightAnimateClasses =
   "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-right";
+
+export function ComingSoonTooltip(
+  props: ComponentProps<typeof KTooltip> & any
+) {
+  const [trigger, root] = splitProps(props, ["children", "as"]);
+  return (
+    <KTooltip placement="top" openDelay={0} closeDelay={0} {...root}>
+      <KTooltip.Trigger as={trigger.as ?? "div"}>
+        {trigger.children}
+      </KTooltip.Trigger>
+      <KTooltip.Portal>
+        <KTooltip.Content
+          class="p-2 font-medium bg-gray-500 text-white ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out"
+          style={{
+            color: "white",
+            "border-radius": "8px",
+            "font-size": "12px",
+            "z-index": "1000",
+          }}
+        >
+          Coming Soon
+        </KTooltip.Content>
+      </KTooltip.Portal>
+    </KTooltip>
+  );
+}

@@ -3,14 +3,15 @@ import {
   RadioGroup,
 } from "@kobalte/core/radio-group";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
+import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
 import { cx } from "cva";
-import { type Component, For, Show } from "solid-js";
+import { type Component, For, ParentProps, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 
 import type { BackgroundSource, CursorType } from "../../utils/tauri";
 import { useEditorContext } from "./context";
-import { Field, Slider, Subfield, Toggle } from "./ui";
+import { ComingSoonTooltip, Field, Slider, Subfield, Toggle } from "./ui";
 import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
 
 const BACKGROUND_SOURCES = {
@@ -103,28 +104,24 @@ export function ConfigSidebar() {
                 switch (tab) {
                   case "wallpaper": {
                     setProject("background", "source", {
-                      type: "wallpaper",
                       ...backgrounds.wallpaper,
                     });
                     return;
                   }
                   case "image": {
                     setProject("background", "source", {
-                      type: "image",
                       ...backgrounds.image,
                     });
                     return;
                   }
                   case "color": {
                     setProject("background", "source", {
-                      type: "color",
                       ...backgrounds.color,
                     });
                     return;
                   }
                   case "gradient": {
                     setProject("background", "source", {
-                      type: "gradient",
                       ...backgrounds.gradient,
                     });
                     return;
@@ -159,15 +156,24 @@ export function ConfigSidebar() {
                   </For>
                 </div>
                 <For each={BACKGROUND_SOURCES_LIST}>
-                  {(item, i) => (
-                    <KTabs.Trigger
-                      class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
-                      value={item}
-                      disabled={item === "wallpaper" || item === "image"}
-                    >
-                      {BACKGROUND_SOURCES[item]}
-                    </KTabs.Trigger>
-                  )}
+                  {(item) => {
+                    const comingSoon = item === "wallpaper" || item === "image";
+
+                    const el = (props?: object) => (
+                      <KTabs.Trigger
+                        class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
+                        value={item}
+                        disabled={comingSoon}
+                        {...props}
+                      >
+                        {BACKGROUND_SOURCES[item]}
+                      </KTabs.Trigger>
+                    );
+
+                    if (comingSoon) return <ComingSoonTooltip as={el} />;
+
+                    return el({});
+                  }}
                 </For>
                 <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden">
                   <div class="bg-gray-100 flex-1" />
@@ -271,15 +277,17 @@ export function ConfigSidebar() {
             </KTabs>
           </Field>
 
-          <Field name="Background Blur" icon={<IconCapBlur />}>
-            <Slider
-              disabled
-              value={[project.background.blur]}
-              onChange={(v) => setProject("background", "blur", v[0])}
-              minValue={0}
-              maxValue={100}
-            />
-          </Field>
+          <ComingSoonTooltip>
+            <Field name="Background Blur" icon={<IconCapBlur />}>
+              <Slider
+                disabled
+                value={[project.background.blur]}
+                onChange={(v) => setProject("background", "blur", v[0])}
+                minValue={0}
+                maxValue={100}
+              />
+            </Field>
+          </ComingSoonTooltip>
           <Field name="Padding" icon={<IconCapPadding />}>
             <Slider
               value={[project.background.padding]}
@@ -298,15 +306,17 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
-          <Field name="Inset" icon={<IconCapInset />}>
-            <Slider
-              disabled
-              value={[project.background.inset]}
-              onChange={(v) => setProject("background", "inset", v[0])}
-              minValue={0}
-              maxValue={100}
-            />
-          </Field>
+          <ComingSoonTooltip>
+            <Field name="Inset" icon={<IconCapInset />}>
+              <Slider
+                disabled
+                value={[project.background.inset]}
+                onChange={(v) => setProject("background", "inset", v[0])}
+                minValue={0}
+                maxValue={100}
+              />
+            </Field>
+          </ComingSoonTooltip>
         </KTabs.Content>
         <KTabs.Content value="camera" class="flex flex-col gap-[1.5rem]">
           <Field name="Camera" icon={<IconCapCamera />}>
@@ -376,14 +386,17 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
-          <Field name="Shadow" icon={<IconCapShadow />}>
-            <Slider
-              value={[project.camera.shadow]}
-              onChange={(v) => setProject("camera", "shadow", v[0])}
-              minValue={0}
-              maxValue={100}
-            />
-          </Field>
+          <ComingSoonTooltip>
+            <Field name="Shadow" icon={<IconCapShadow />}>
+              <Slider
+                disabled
+                value={[project.camera.shadow]}
+                onChange={(v) => setProject("camera", "shadow", v[0])}
+                minValue={0}
+                maxValue={100}
+              />
+            </Field>
+          </ComingSoonTooltip>
         </KTabs.Content>
         <KTabs.Content value="transcript" class="flex flex-col gap-6">
           <Field name="Transcript" icon={<IconCapMessageBubble />}>
@@ -403,68 +416,80 @@ export function ConfigSidebar() {
         <KTabs.Content value="audio" class="flex flex-col gap-6">
           <Field name="Audio" icon={<IconCapAudioOn />}>
             <div class="flex flex-col gap-3 ">
-              <Subfield name="Mute Audio">
-                <Toggle disabled />
-              </Subfield>
-              <Subfield name="Improve Mic Quality">
-                <Toggle disabled />
-              </Subfield>
+              <ComingSoonTooltip>
+                <Subfield name="Mute Audio">
+                  <Toggle disabled />
+                </Subfield>
+              </ComingSoonTooltip>
+              <ComingSoonTooltip>
+                <Subfield name="Improve Mic Quality">
+                  <Toggle disabled />
+                </Subfield>
+              </ComingSoonTooltip>
             </div>
           </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
           <Field name="Cursor" icon={<IconCapCursor />}>
-            <Subfield name="Hide cursor when not moving">
-              <Toggle disabled />
-            </Subfield>
+            <ComingSoonTooltip>
+              <Subfield name="Hide cursor when not moving">
+                <Toggle disabled />
+              </Subfield>
+            </ComingSoonTooltip>
           </Field>
-          <Field name="Size" icon={<IconCapEnlarge />}>
-            <Slider
-              disabled
-              value={[project.cursor.size]}
-              onChange={(v) => setProject("cursor", "size", v[0])}
-              minValue={0}
-              maxValue={100}
-            />
-          </Field>
-          <Field name="Type" icon={<IconCapCursor />}>
-            <ul class="flex flex-row gap-2 text-gray-400">
-              <For
-                each={
-                  [
-                    { type: "pointer", icon: IconCapCursor },
-                    { type: "circle", icon: IconCapCircle },
-                  ] satisfies Array<{
-                    icon: Component;
-                    type: CursorType;
-                  }>
-                }
-              >
-                {(item) => (
-                  <li>
-                    <button
-                      disabled
-                      type="button"
-                      onClick={() => setProject("cursor", "type", item.type)}
-                      data-selected={project.cursor.type === item.type}
-                      class="border border-black-transparent-5 bg-gray-100 rounded-lg p-[0.625rem] text-gray-400 data-[selected='true']:text-gray-500 disabled:text-gray-300 focus-visible:outline-blue-300 focus-visible:outline outline-1 outline-offset-1"
-                    >
-                      <Dynamic
-                        component={item.icon}
-                        class="size-[1.75rem] mx-auto"
-                      />
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Field>
+          <ComingSoonTooltip>
+            <Field name="Size" icon={<IconCapEnlarge />}>
+              <Slider
+                disabled
+                value={[project.cursor.size]}
+                onChange={(v) => setProject("cursor", "size", v[0])}
+                minValue={0}
+                maxValue={100}
+              />
+            </Field>
+          </ComingSoonTooltip>
+          <ComingSoonTooltip>
+            <Field name="Type" icon={<IconCapCursor />}>
+              <ul class="flex flex-row gap-2 text-gray-400">
+                <For
+                  each={
+                    [
+                      { type: "pointer", icon: IconCapCursor },
+                      { type: "circle", icon: IconCapCircle },
+                    ] satisfies Array<{
+                      icon: Component;
+                      type: CursorType;
+                    }>
+                  }
+                >
+                  {(item) => (
+                    <li>
+                      <button
+                        disabled
+                        type="button"
+                        onClick={() => setProject("cursor", "type", item.type)}
+                        data-selected={project.cursor.type === item.type}
+                        class="border border-black-transparent-5 bg-gray-100 rounded-lg p-[0.625rem] text-gray-400 data-[selected='true']:text-gray-500 disabled:text-gray-300 focus-visible:outline-blue-300 focus-visible:outline outline-1 outline-offset-1"
+                      >
+                        <Dynamic
+                          component={item.icon}
+                          class="size-[1.75rem] mx-auto"
+                        />
+                      </button>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Field>
+          </ComingSoonTooltip>
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>
-            <Subfield name="Show hotkeys">
-              <Toggle disabled />
-            </Subfield>
+            <ComingSoonTooltip>
+              <Subfield name="Show hotkeys">
+                <Toggle disabled />
+              </Subfield>
+            </ComingSoonTooltip>
           </Field>
         </KTabs.Content>
       </div>
