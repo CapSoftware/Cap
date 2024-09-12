@@ -157,7 +157,9 @@ export default function () {
                 const [imageExists, setImageExists] = createSignal(true);
 
                 const isLoading = () =>
-                  copyVideo.isPending || saveVideo.isPending;
+                  copyVideo.isPending ||
+                  saveVideo.isPending ||
+                  uploadVideo.isPending;
 
                 createFakeWindowBounds(ref, () => recording.path);
 
@@ -203,8 +205,9 @@ export default function () {
                             <div
                               class={cx(
                                 "w-full h-full absolute inset-0 transition-all",
-                                isLoading() ||
-                                  "opacity-0 group-hover:opacity-100",
+                                isLoading()
+                                  ? "opacity-100"
+                                  : "opacity-0 group-hover:opacity-100",
                                 "backdrop-blur bg-gray-500/80 text-white p-2"
                               )}
                             >
@@ -242,7 +245,9 @@ export default function () {
                                 forceOpen={copyVideo.isPending}
                                 tooltipPlacement="left"
                                 onClick={() => copyVideo.mutate()}
-                                disabled={saveVideo.isPending}
+                                disabled={
+                                  saveVideo.isPending || uploadVideo.isPending
+                                }
                               >
                                 <Switch
                                   fallback={<IconCapCopy class="size-[1rem]" />}
@@ -276,7 +281,9 @@ export default function () {
                                 forceOpen={uploadVideo.isPending}
                                 tooltipPlacement="left"
                                 onClick={() => uploadVideo.mutate()}
-                                disabled={uploadVideo.isPending}
+                                disabled={
+                                  copyVideo.isPending || saveVideo.isPending
+                                }
                               >
                                 <Switch
                                   fallback={
@@ -305,7 +312,9 @@ export default function () {
                                   variant="secondary"
                                   size="sm"
                                   onClick={() => saveVideo.mutate()}
-                                  disabled={copyVideo.isPending}
+                                  disabled={
+                                    copyVideo.isPending || uploadVideo.isPending
+                                  }
                                 >
                                   <Switch fallback="Save">
                                     <Match when={saveVideo.isPending}>
@@ -333,8 +342,10 @@ export default function () {
                             <div
                               style={{ color: "white", "font-size": "14px" }}
                               class={cx(
-                                "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all group-hover:opacity-0",
-                                isLoading() && "opacity-0"
+                                "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all",
+                                isLoading()
+                                  ? "opacity-0"
+                                  : "group-hover:opacity-0"
                               )}
                             >
                               <p class="flex items-center">

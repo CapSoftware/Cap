@@ -25,6 +25,7 @@ use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
 use project_recordings::ProjectRecordings;
 use recording::{DisplaySource, InProgressRecording};
+use rodio::{Decoder, OutputStream, Sink};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -265,6 +266,14 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
     window.eval("window.location.reload()").unwrap();
     window.show().unwrap();
 
+    if let Ok((_, stream)) = OutputStream::try_default() {
+        let file = std::fs::File::open("sounds/start-recording.ogg").unwrap();
+        let source = Decoder::new(BufReader::new(file)).unwrap();
+        let sink = Sink::try_new(&stream).unwrap();
+        sink.append(source);
+        sink.sleep_until_end();
+    }
+
     RecordingStarted.emit(&app).ok();
 
     Ok(())
@@ -366,6 +375,14 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     }
     .emit(&app)
     .ok();
+
+    if let Ok((_, stream)) = OutputStream::try_default() {
+        let file = std::fs::File::open("sounds/stop-recording.ogg").unwrap();
+        let source = Decoder::new(BufReader::new(file)).unwrap();
+        let sink = Sink::try_new(&stream).unwrap();
+        sink.append(source);
+        sink.sleep_until_end();
+    }
 
     Ok(())
 }
