@@ -1,0 +1,15 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "productName": "Cap",
+  "identifier": "so.cap.desktop",
+  "plugins": {
+    "updater": {
+      "active": true
+    }
+  },
+  "bundle": {
+    "macOS": {
+      "entitlements": "Entitlements.plist"
+    }
+  }
+}

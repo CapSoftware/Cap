@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
-  "productName": "Cap",
-  "identifier": "so.cap.desktop",
+  "productName": "Cap - Development",
+  "identifier": "so.cap.desktop.dev",
   "build": {
     "beforeDevCommand": "node scripts/prepareSidecars.js && pnpm localdev",
     "devUrl": "http://localhost:3001",
@@ -20,6 +20,7 @@
   },
   "plugins": {
     "updater": {
+      "active": false,
       "endpoints": [
         "https://cdn.crabnebula.app/update/cap/cap/{{target}}-{{arch}}/{{current_version}}"
       ],

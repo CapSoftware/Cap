@@ -1302,7 +1302,7 @@ pub fn run() {
 
             tokio::spawn(updater::check_for_updates(app.handle().clone()));
 
-            if permissions::do_permissions_check().necessary_granted() {
+            if permissions::do_permissions_check(true).necessary_granted() {
                 open_main_window(app_handle.clone());
             } else {
                 permissions::open_permissions_window(app);
