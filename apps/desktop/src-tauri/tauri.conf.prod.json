@@ -6,5 +6,10 @@
     "updater": {
       "active": true
     }
+  },
+  "bundle": {
+    "macOS": {
+      "entitlements": "Entitlements.plist"
+    }
   }
 }
