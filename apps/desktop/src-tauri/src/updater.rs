@@ -1,4 +1,4 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -46,6 +46,10 @@ pub async fn check_for_updates(app: AppHandle) -> Result<(), ()> {
         .show(|restart| {
             tx.send(restart).ok();
         });
+
+    for (_, window) in app.webview_windows() {
+        window.close().ok();
+    }
 
     if rx.await.unwrap() {
         app.restart();

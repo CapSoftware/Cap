@@ -1126,6 +1126,8 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
 #[tauri::command(async)]
 #[specta::specta]
 fn open_main_window(app: AppHandle) {
+    tokio::spawn(updater::check_for_updates(app.clone()));
+
     if let Some(window) = app.get_webview_window("main") {
         window.set_focus().ok();
         return;
@@ -1309,8 +1311,6 @@ pub fn run() {
             specta_builder.mount_events(app);
 
             let app_handle = app.handle().clone();
-
-            tokio::spawn(updater::check_for_updates(app.handle().clone()));
 
             if permissions::do_permissions_check(true).necessary_granted() {
                 open_main_window(app_handle.clone());
