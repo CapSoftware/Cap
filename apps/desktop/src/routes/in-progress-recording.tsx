@@ -1,4 +1,4 @@
-import { createSignal, type ComponentProps } from "solid-js";
+import { createEffect, createSignal, type ComponentProps } from "solid-js";
 
 import { commands } from "../utils/tauri";
 import { createTimer } from "@solid-primitives/timer";
@@ -17,6 +17,11 @@ export default function () {
     100,
     setInterval
   );
+
+  createEffect(() => {
+    stopped = false;
+    setTime(Date.now());
+  });
 
   const stopRecording = createMutation(() => ({
     mutationFn: async () => {

@@ -156,11 +156,6 @@ export default function () {
 
                 const [imageExists, setImageExists] = createSignal(true);
 
-                onCleanup(() => {
-                  if (recordings.length === 0)
-                    commands.closePreviousRecordingsWindow();
-                });
-
                 const isLoading = () =>
                   copyVideo.isPending || saveVideo.isPending;
 

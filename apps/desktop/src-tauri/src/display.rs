@@ -7,9 +7,7 @@ use scap::{
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tokio::{
-    sync::{oneshot, watch},
-};
+use tokio::sync::{oneshot, watch};
 
 use crate::macos;
 use cap_ffmpeg::NamedPipeCapture;
@@ -89,8 +87,14 @@ pub async fn start_capturing(
             _ => None,
         };
 
-        let excluded_titles = ["Cap", "Cap Camera", "Cap Recordings", "Cap In Progress Recording"];
+        let excluded_titles = [
+            "Cap",
+            "Cap Camera",
+            "Cap Recordings",
+            "Cap In Progress Recording",
+        ];
         let excluded_targets: Vec<scap::Target> = targets
+            .clone()
             .into_iter()
             .filter(|target| match target {
                 Target::Window(scap_window)
@@ -159,8 +163,8 @@ pub async fn start_capturing(
 
         loop {
             if frame_rx.changed().await.is_err() {
-            	println!("Closing display pipe writer");
-             return;
+                println!("Closing display pipe writer");
+                return;
             }
 
             let frame = frame_rx.borrow();

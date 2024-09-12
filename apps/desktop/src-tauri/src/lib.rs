@@ -259,7 +259,11 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         window.minimize().ok();
     }
 
-    create_in_progress_recording_window(&app);
+    let window = app
+        .get_webview_window(IN_PROGRESS_RECORDINGS_LABEL)
+        .unwrap();
+    window.eval("window.location.reload()").unwrap();
+    window.show().unwrap();
 
     RecordingStarted.emit(&app).ok();
 
@@ -277,7 +281,7 @@ fn create_in_progress_recording_window(app: &AppHandle) {
         IN_PROGRESS_RECORDINGS_LABEL,
         tauri::WebviewUrl::App("/in-progress-recording".into()),
     )
-    .title("Cap")
+    .title("Cap In Progress Recording")
     .maximized(false)
     .resizable(false)
     .fullscreen(false)
@@ -293,6 +297,7 @@ fn create_in_progress_recording_window(app: &AppHandle) {
         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
     )
+    .visible(false)
     .build()
     .ok();
 }
@@ -308,9 +313,10 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
 
     current_recording.stop().await;
 
-    if let Some(window) = app.get_webview_window(IN_PROGRESS_RECORDINGS_LABEL) {
-        window.close().ok();
-    }
+    let window = app
+        .get_webview_window(IN_PROGRESS_RECORDINGS_LABEL)
+        .unwrap();
+    window.hide().unwrap();
 
     if let Some(window) = app.get_webview_window("main") {
         window.unminimize().ok();
@@ -1321,6 +1327,8 @@ pub fn run() {
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
 
             tray::create_tray(&app_handle).unwrap();
+
+            let _window = create_in_progress_recording_window(&app.app_handle());
 
             RequestStopRecording::listen_any(app, move |_| {
                 let app_handle = app_handle.clone();
