@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.0-alpha.10"
+version = "0.3.0-alpha.11"
 description = "Effortless, instant screen sharing. Open source and cross-platform."
 authors = ["you"]
 edition = "2021"
