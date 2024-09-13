@@ -1,24 +1,17 @@
-import { cx } from "cva";
 import { Button } from "@cap/ui-solid";
 import { exit } from "@tauri-apps/plugin-process";
 
-import {
-  commands,
-  OSPermission,
-  OSPermissionStatus,
-  OSPermissionsCheck,
-} from "../utils/tauri";
+import { commands, type OSPermissionStatus } from "../utils/tauri";
 import {
   createEffect,
   createResource,
   Suspense,
-  Switch,
-  Match,
   createSignal,
   Show,
 } from "solid-js";
 import { createTimer } from "@solid-primitives/timer";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Transition } from "solid-transition-group";
 
 function isPermitted(status?: OSPermissionStatus): boolean {
   return status === "granted" || status === "notNeeded";
@@ -85,32 +78,46 @@ export default function () {
         </p>
       </div>
       <Suspense fallback={<div class="w-full flex-1" />}>
-        <div class="flex flex-col items-start gap-1">
-          <h4 class="font-[500] text-[0.875rem]">
-            {currentStep().name} Permission
-          </h4>
-          <div class="w-full flex gap-2">
-            <Show
-              when={currentStepStatus() !== "denied"}
-              fallback={
-                <Button onClick={openSettings} class="flex-1">
-                  Open Settings
+        <Transition
+          mode="outin"
+          enterActiveClass="transition-opacity"
+          exitActiveClass="transition-opacity"
+          enterClass="opacity-0"
+          exitToClass="opacity-0"
+        >
+          <Show when={currentStep()} keyed>
+            <div class="flex flex-col items-start gap-1">
+              <h4 class="font-[500] text-[0.875rem]">
+                {currentStep().name} Permission
+              </h4>
+              <div class="w-full flex gap-2">
+                <Show
+                  when={currentStepStatus() !== "denied"}
+                  fallback={
+                    <Button onClick={openSettings} class="flex-1">
+                      Open Settings
+                    </Button>
+                  }
+                >
+                  <Button
+                    onClick={requestPermission}
+                    disabled={currentStepStatus() !== "empty"}
+                    class="flex-1"
+                  >
+                    Grant
+                  </Button>
+                </Show>
+                <Button
+                  variant="secondary"
+                  class="flex-1"
+                  onClick={() => exit()}
+                >
+                  Quit
                 </Button>
-              }
-            >
-              <Button
-                onClick={requestPermission}
-                disabled={currentStepStatus() !== "empty"}
-                class="flex-1"
-              >
-                Grant
-              </Button>
-            </Show>
-            <Button variant="secondary" class="flex-1" onClick={() => exit()}>
-              Quit
-            </Button>
-          </div>
-        </div>
+              </div>
+            </div>
+          </Show>
+        </Transition>
       </Suspense>
     </div>
   );

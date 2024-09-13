@@ -79,29 +79,28 @@ export default function () {
     }
   });
 
-  const windowsData = createMemo(() => windows.data ?? []);
-  const audioDevicesData = createMemo(() => audioDevices.data ?? []);
-  const camerasData = createMemo(() => cameras() ?? []);
-
   createUpdateCheck();
 
   return (
     <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50">
       <Show when={auth() && options.data}>
         {(options) => {
-          const selectedWindow = createMemo(() => {
+          const selectedWindow = () => {
             const d = options().captureTarget;
             if (d.type !== "window") return;
-            return windowsData().find((data) => data.id === d.id);
-          });
+            return windows.data?.find((data) => data.id === d.id);
+          };
 
-          const audioDevice = () =>
-            audioDevicesData().find((d) => d.name === options().audioInputName);
+          const audioDevice = () => {
+            return audioDevices.data?.find(
+              (d) => d.name === options().audioInputName
+            );
+          };
 
           return (
             <>
               <KSelect<CaptureWindow | null>
-                options={windowsData()}
+                options={windows.data ?? []}
                 optionValue="id"
                 optionTextValue="name"
                 placeholder="Window"
@@ -185,7 +184,7 @@ export default function () {
                     class={topRightAnimateClasses}
                   >
                     <Show
-                      when={windowsData().length > 0}
+                      when={(windows.data ?? []).length > 0}
                       fallback={
                         <div class="p-2 text-gray-500">
                           No windows available
@@ -203,10 +202,7 @@ export default function () {
               <div class="flex flex-col gap-[0.25rem] items-stretch">
                 <label class="text-gray-400 text-[0.875rem]">Camera</label>
                 <KSelect<CameraOption>
-                  options={[
-                    { deviceId: "", label: "No Camera" },
-                    ...camerasData(),
-                  ]}
+                  options={[{ deviceId: "", label: "No Camera" }, ...cameras()]}
                   optionValue="deviceId"
                   optionTextValue="label"
                   placeholder="No Camera"
@@ -232,8 +228,10 @@ export default function () {
                 >
                   <KSelect.Trigger class="h-[2rem] px-[0.375rem] flex flex-row gap-[0.375rem] border rounded-lg border-gray-200 w-full items-center disabled:text-gray-400 transition-colors KSelect">
                     <IconCapCamera class="text-gray-400 size-[1.25rem]" />
-                    <KSelect.Value<CameraOption> class="flex-1 text-left truncate">
-                      {(state) => <>{state.selectedOption().label}</>}
+                    <KSelect.Value<
+                      CameraOption | undefined
+                    > class="flex-1 text-left truncate">
+                      {(state) => <>{state.selectedOption()?.label}</>}
                     </KSelect.Value>
                     <button
                       type="button"
@@ -277,7 +275,7 @@ export default function () {
               <div class="flex flex-col gap-[0.25rem] items-stretch">
                 <label class="text-gray-400">Microphone</label>
                 <KSelect<{ name: string }>
-                  options={[{ name: "No Audio" }, ...audioDevicesData()]}
+                  options={[{ name: "No Audio" }, ...(audioDevices.data ?? [])]}
                   optionValue="name"
                   optionTextValue="name"
                   placeholder="No Audio"

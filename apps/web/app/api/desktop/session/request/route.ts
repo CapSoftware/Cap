@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
   }
 
   const returnUrl = new URL(
-    `http://localhost:${port}?token=${tokenValue}&expires=${decodedToken?.exp}`
+    `http://127.0.0.1:${port}?token=${tokenValue}&expires=${decodedToken?.exp}`
   );
 
   return Response.redirect(returnUrl.href);
