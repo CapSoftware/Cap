@@ -29,7 +29,6 @@ use serde_json::json;
 use specta::Type;
 use std::fs::File;
 use std::io::{BufReader, Write};
-use std::sync::atomic::AtomicBool;
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
