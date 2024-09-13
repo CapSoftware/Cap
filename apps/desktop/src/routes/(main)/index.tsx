@@ -65,9 +65,6 @@ export default function () {
     },
   }));
 
-  // important for redirect, trust me
-  createAsync(() => getAuth());
-
   createEventListener(window, "mousedown", (e: MouseEvent) => {
     if (windowSelectOpen()) {
       const target = e.target as HTMLElement;
@@ -76,6 +73,9 @@ export default function () {
       }
     }
   });
+
+  // important for sign in redirect, trust me
+  createAsync(() => getAuth());
 
   createUpdateCheck();
 
