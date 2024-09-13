@@ -20,9 +20,10 @@
     "core:webview:allow-create-webview-window",
     "shell:default",
     "fs:default",
-    "dialog:allow-save",
+    "dialog:default",
     "store:default",
     "process:default",
-    "oauth:allow-start"
+    "oauth:allow-start",
+    "updater:default"
   ]
 }

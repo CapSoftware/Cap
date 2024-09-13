@@ -113,6 +113,9 @@ importers:
       '@tauri-apps/plugin-store':
         specifier: 2.0.0-rc.0
         version: 2.0.0-rc.0
+      '@tauri-apps/plugin-updater':
+        specifier: 2.0.0-rc.0
+        version: 2.0.0-rc.0
       '@types/react-tooltip':
         specifier: ^4.2.4
         version: 4.2.4(react-dom@18.2.0(react@18.2.0))(react@18.2.0)
@@ -4864,11 +4867,11 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@8.3.0-beta.4':
-    resolution: {integrity: sha512-ngdtu1Dn9cq2GoK7RL0cTDxnRZ4altblAW7bX9U6WXHHAxP83mIDvbnm+7IDoYuSRwm9KgLf+k8YiarCZTBEHQ==}
+  '@storybook/builder-vite@8.4.0-alpha.0':
+    resolution: {integrity: sha512-gFeW+fuUN4s9rzGZAUZunU6n1+Ck7js29f6DRyUGSSwXxGwgwvqT8MdS5v1tqEdoKG+QwLNek1pTY6s6UugLdg==}
     peerDependencies:
       '@preact/preset-vite': '*'
-      storybook: ^8.3.0-beta.4
+      storybook: ^8.4.0-alpha.0
       typescript: '>= 4.3.x'
       vite: ^4.0.0 || ^5.0.0
       vite-plugin-glimmerx: '*'
@@ -4891,10 +4894,10 @@ packages:
     peerDependencies:
       storybook: ^8.2.9
 
-  '@storybook/csf-plugin@8.3.0-beta.4':
-    resolution: {integrity: sha512-VgldiH9nC/P97KEnXyDkS63GxXlfaz7BWdnkqJk+mmnLCnxqJMckQ8fOdjuKOdmOSQMF8r1NjVpRHnMJeCpg3A==}
+  '@storybook/csf-plugin@8.4.0-alpha.0':
+    resolution: {integrity: sha512-BAhSUEBd+y314f2DEdSSPddpgzk9fTk2lXP205HGZESaP1bpBbMdIEqM6wC/BuX7Em/HZ8iZIhHqFKnX9XknIQ==}
     peerDependencies:
-      storybook: ^8.3.0-beta.4
+      storybook: ^8.4.0-alpha.0
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -5138,6 +5141,9 @@ packages:
 
   '@tauri-apps/plugin-store@2.0.0-rc.0':
     resolution: {integrity: sha512-KqiEzq6EdRwxrl0/FwyNLwumDBM91xTchdu2a8vfkNub30GuP9z7RskP9ifVRI1gbxfa5TUDi0hKFk/SP7TANQ==}
+
+  '@tauri-apps/plugin-updater@2.0.0-rc.0':
+    resolution: {integrity: sha512-EKajf/sBpFif0cwXhTo3BmNvTZ2t2DDLRyhA8FFKugZNoOeqU97bHhPT5DIqMUPRE1tyDk9o7sXm8dKf7oz+EA==}
 
   '@testing-library/dom@10.1.0':
     resolution: {integrity: sha512-wdsYKy5zupPyLCW2Je5DLHSxSfbIp6h80WoHOQc+RPtmPGA52O9x5MJEkv92Sjonpq+poOAtUKhh1kBGAXBrNA==}
@@ -16806,9 +16812,9 @@ snapshots:
       react: 18.2.0
       react-dom: 18.2.0(react@18.2.0)
 
-  '@storybook/builder-vite@8.3.0-beta.4(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))':
+  '@storybook/builder-vite@8.4.0-alpha.0(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))':
     dependencies:
-      '@storybook/csf-plugin': 8.3.0-beta.4(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))
+      '@storybook/csf-plugin': 8.4.0-alpha.0(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))
       '@types/find-cache-dir': 3.2.1
       browser-assert: 1.2.1
       es-module-lexer: 1.5.4
@@ -16867,7 +16873,7 @@ snapshots:
       storybook: 8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10)
       unplugin: 1.12.1
 
-  '@storybook/csf-plugin@8.3.0-beta.4(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))':
+  '@storybook/csf-plugin@8.4.0-alpha.0(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))':
     dependencies:
       storybook: 8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10)
       unplugin: 1.12.1
@@ -17091,6 +17097,10 @@ snapshots:
       '@tauri-apps/api': 2.0.0-rc.4
 
   '@tauri-apps/plugin-store@2.0.0-rc.0':
+    dependencies:
+      '@tauri-apps/api': 2.0.0-rc.4
+
+  '@tauri-apps/plugin-updater@2.0.0-rc.0':
     dependencies:
       '@tauri-apps/api': 2.0.0-rc.4
 
@@ -23936,7 +23946,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6)):
     dependencies:
-      '@storybook/builder-vite': 8.3.0-beta.4(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))
+      '@storybook/builder-vite': 8.4.0-alpha.0(storybook@8.2.9(@babel/preset-env@7.25.3(@babel/core@7.25.2))(bufferutil@4.0.8)(utf-8-validate@5.0.10))(typescript@5.5.4)(vite@5.4.0(@types/node@20.14.2)(terser@5.31.6))
     transitivePeerDependencies:
       - '@preact/preset-vite'
       - storybook

@@ -10,7 +10,6 @@ mod playback;
 mod project_recordings;
 mod recording;
 mod tray;
-mod updater;
 mod upload;
 
 use auth::AuthStore;
@@ -30,6 +29,7 @@ use serde_json::json;
 use specta::Type;
 use std::fs::File;
 use std::io::{BufReader, Write};
+use std::sync::atomic::AtomicBool;
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
@@ -1137,8 +1137,6 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
 #[tauri::command(async)]
 #[specta::specta]
 fn open_main_window(app: AppHandle) {
-    tokio::spawn(updater::check_for_updates(app.clone()));
-
     if let Some(window) = app.get_webview_window("main") {
         window.set_focus().ok();
         return;
@@ -1244,7 +1242,6 @@ struct RecordingMetaChanged {
 #[tauri::command(async)]
 #[specta::specta]
 fn get_recording_meta(app: AppHandle, id: String) -> RecordingMeta {
-    
     RecordingMeta::load_for_project(&recording_path(&app, &id)).unwrap()
 }
 

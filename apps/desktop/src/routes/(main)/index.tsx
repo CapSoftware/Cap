@@ -11,7 +11,7 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { SwitchTab, Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
 import { createEventListener } from "@solid-primitives/event-listener";
-import { cache, createAsync, redirect } from "@solidjs/router";
+import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 
 import { createCameraForLabel, createCameras } from "../../utils/media";
 import {
@@ -82,6 +82,8 @@ export default function () {
   const windowsData = createMemo(() => windows.data ?? []);
   const audioDevicesData = createMemo(() => audioDevices.data ?? []);
   const camerasData = createMemo(() => cameras() ?? []);
+
+  createUpdateCheck();
 
   return (
     <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50">
@@ -369,4 +371,30 @@ export default function () {
       </Show>
     </div>
   );
+}
+
+import * as dialog from "@tauri-apps/plugin-dialog";
+import * as updater from "@tauri-apps/plugin-updater";
+
+let hasChecked = false;
+function createUpdateCheck() {
+  const navigate = useNavigate();
+
+  onMount(async () => {
+    if (hasChecked) return;
+    hasChecked = true;
+
+    await new Promise((res) => setTimeout(res, 1000));
+
+    const update = await updater.check();
+    if (!update) return;
+
+    const shouldUpdate = await dialog.confirm(
+      `Version ${update.version} of Cap is available, would you like to install it?`,
+      { title: "Update Cap", okLabel: "Update", cancelLabel: "Ignore" }
+    );
+
+    if (!shouldUpdate) return;
+    navigate("/update");
+  });
 }
