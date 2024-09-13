@@ -105,10 +105,10 @@ pub async fn upload_video(
         status,
         error_body
     );
-    return Err(format!(
+    Err(format!(
         "Failed to upload file. Status: {}. Body: {}",
         status, error_body
-    ));
+    ))
 }
 
 async fn get_s3_config(
@@ -201,7 +201,7 @@ fn build_video_upload_body(
     let stream = input
         .streams()
         .best(ffmpeg_next::media::Type::Video)
-        .ok_or_else(|| format!("Failed to find appropriate video stream in file"))?;
+        .ok_or_else(|| "Failed to find appropriate video stream in file".to_string())?;
 
     let duration_millis = input.duration() as f64 / 1000.;
 

@@ -34,7 +34,7 @@ use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
 };
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent, Wry};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
@@ -678,11 +678,11 @@ async fn create_editor_instance(
         frames_socket_url: format!("ws://localhost:{}{FRAMES_WS_PATH}", editor_instance.ws_port),
         recording_duration: editor_instance.recordings.duration(),
         saved_project_config: std::fs::read_to_string(
-            &editor_instance.project_path.join("project-config.json"),
+            editor_instance.project_path.join("project-config.json"),
         )
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok()),
-        recordings: editor_instance.recordings.clone(),
+        recordings: editor_instance.recordings,
         path: editor_instance.project_path.clone(),
     })
 }
@@ -1244,8 +1244,8 @@ struct RecordingMetaChanged {
 #[tauri::command(async)]
 #[specta::specta]
 fn get_recording_meta(app: AppHandle, id: String) -> RecordingMeta {
-    let meta = RecordingMeta::load_for_project(&recording_path(&app, &id)).unwrap();
-    meta
+    
+    RecordingMeta::load_for_project(&recording_path(&app, &id)).unwrap()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1343,7 +1343,7 @@ pub fn run() {
 
             tray::create_tray(&app_handle).unwrap();
 
-            let _window = create_in_progress_recording_window(&app.app_handle());
+            create_in_progress_recording_window(app.app_handle());
 
             RequestStopRecording::listen_any(app, move |_| {
                 let app_handle = app_handle.clone();

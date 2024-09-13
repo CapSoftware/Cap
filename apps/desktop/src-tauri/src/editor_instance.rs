@@ -6,7 +6,7 @@ use cap_project::{ProjectConfiguration, RecordingMeta};
 use cap_rendering::decoder::AsyncVideoDecoder;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
 use std::ops::Deref;
-use std::{path::PathBuf, process::Command, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
 
 type PreviewFrameInstruction = (u32, ProjectConfiguration);

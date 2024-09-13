@@ -3,7 +3,6 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     ptr::{null, null_mut},
-    slice,
     sync::{mpsc, Arc},
 };
 
@@ -226,7 +225,7 @@ impl AsyncVideoDecoder {
 
                                     let width = rgb_frame.width() as usize;
                                     let height = rgb_frame.height() as usize;
-                                    let stride = rgb_frame.stride(0) as usize;
+                                    let stride = rgb_frame.stride(0);
                                     let data = rgb_frame.data(0);
 
                                     let expected_size = width * height * 4;

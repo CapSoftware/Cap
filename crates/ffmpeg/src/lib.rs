@@ -239,10 +239,16 @@ pub struct FFmpeg {
     source_index: u8,
 }
 
+impl Default for FFmpeg {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FFmpeg {
     pub fn new() -> Self {
         Self {
-            command: Command::new(dbg!(relative_command_path("ffmpeg").unwrap())).into(),
+            command: Command::new(dbg!(relative_command_path("ffmpeg").unwrap())),
             source_index: 0,
         }
     }
