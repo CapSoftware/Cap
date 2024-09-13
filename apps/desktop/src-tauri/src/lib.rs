@@ -989,6 +989,7 @@ fn open_editor(app: AppHandle, id: String) {
     .title("Cap Editor")
     .hidden_title(true)
     .title_bar_style(tauri::TitleBarStyle::Overlay)
+    .accept_first_mouse(true)
     .theme(Some(tauri::Theme::Light))
     .build()
     .unwrap();
