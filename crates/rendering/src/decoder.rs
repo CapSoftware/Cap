@@ -233,13 +233,9 @@ impl AsyncVideoDecoder {
 
                                     let mut frame_buffer = Vec::with_capacity(expected_size);
 
-                                    let data_ptr = data.as_ptr();
-
-                                    for y in 0..height {
-                                        let line_start = unsafe { data_ptr.add(y * stride) };
-                                        let line =
-                                            unsafe { slice::from_raw_parts(line_start, width * 4) };
-                                        frame_buffer.extend_from_slice(line);
+                                    // account for stride > width
+                                    for line_data in data.chunks_exact(stride) {
+                                        frame_buffer.extend_from_slice(&line_data[0..width * 4]);
                                     }
 
                                     let frame = Arc::new(frame_buffer);
