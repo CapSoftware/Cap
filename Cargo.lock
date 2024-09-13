@@ -1406,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.0-alpha.20"
+version = "0.3.0-alpha.21"
 dependencies = [
  "anyhow",
  "axum",
