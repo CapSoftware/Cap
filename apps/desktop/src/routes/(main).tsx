@@ -8,28 +8,25 @@ export default function (props: RouteSectionProps) {
   return (
     <div class="rounded-[1.5rem] bg-gray-100 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden">
       <Header />
-      {/*<Transition
+      <Transition
         mode="outin"
-        enterClass="opacity-0 -translate-y-0.5"
-        enterActiveClass="transition-[opacity,transform] duration-200"
-        enterToClass="opacity-100 translate-0"
-        exitClass="opacity-100"
-        exitActiveClass="transition-[opacity,transform] duration-20"
+        enterActiveClass="transition-opacity duration-100"
+        exitActiveClass="transition-opacity duration-100"
+        enterClass="opacity-0"
         exitToClass="opacity-0"
-        appear={false}
-      >*/}
-      <Suspense
-        fallback={
-          <div class="w-full h-full flex items-center justify-center bg-gray-100">
-            <div class="animate-spin">
-              <IconCapLogo class="size-[4rem]" />
-            </div>
-          </div>
-        }
       >
-        {props.children}
-      </Suspense>
-      {/*</Transition>*/}
+        <Suspense
+          fallback={
+            <div class="w-full h-full flex items-center justify-center bg-gray-100">
+              <div class="animate-spin">
+                <IconCapLogo class="size-[4rem]" />
+              </div>
+            </div>
+          }
+        >
+          {props.children}
+        </Suspense>
+      </Transition>
     </div>
   );
 }

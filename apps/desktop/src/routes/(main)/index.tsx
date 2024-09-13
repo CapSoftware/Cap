@@ -1,12 +1,5 @@
 import { cx } from "cva";
-import {
-  Show,
-  type ValidComponent,
-  createEffect,
-  createMemo,
-  createSignal,
-  onMount,
-} from "solid-js";
+import { Show, type ValidComponent, createSignal, onMount } from "solid-js";
 import { Select as KSelect } from "@kobalte/core/select";
 import { SwitchTab, Button } from "@cap/ui-solid";
 import { createMutation } from "@tanstack/solid-query";
@@ -31,8 +24,14 @@ import {
 import { authStore } from "../../store";
 
 const getAuth = cache(async () => {
-  return (await authStore.get()) ?? redirect("/signin");
+  const value = await authStore.get();
+  if (!value) return redirect("/signin");
+  return value;
 }, "getAuth");
+
+export const route = {
+  load: () => getAuth(),
+};
 
 export default function () {
   const cameras = createCameras();
@@ -40,8 +39,6 @@ export default function () {
   const windows = createWindowsQuery();
   const audioDevices = createAudioDevicesQuery();
   const currentRecording = createCurrentRecordingQuery();
-
-  const camera = createCameraForLabel(() => options.data?.cameraLabel ?? "");
 
   const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
 
@@ -68,7 +65,8 @@ export default function () {
     },
   }));
 
-  const auth = createAsync(() => getAuth());
+  // important for redirect, trust me
+  createAsync(() => getAuth());
 
   createEventListener(window, "mousedown", (e: MouseEvent) => {
     if (windowSelectOpen()) {
@@ -83,8 +81,12 @@ export default function () {
 
   return (
     <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50">
-      <Show when={auth() && options.data}>
+      <Show when={options.data}>
         {(options) => {
+          const camera = createCameraForLabel(
+            () => options().cameraLabel ?? ""
+          );
+
           const selectedWindow = () => {
             const d = options().captureTarget;
             if (d.type !== "window") return;

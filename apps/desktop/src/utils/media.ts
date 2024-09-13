@@ -62,12 +62,7 @@ export function createCameraForLabel(label: Accessor<string>) {
   const cameras = createCameras();
 
   return () => {
-    try {
-      const camera = cameras().find((camera) => camera.label === label());
-      return camera || null;
-    } catch (error) {
-      console.error("Error finding camera for label:", error);
-      return null;
-    }
+    const camera = cameras().find((camera) => camera.label === label());
+    return camera || null;
   };
 }
