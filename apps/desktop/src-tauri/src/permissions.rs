@@ -85,7 +85,7 @@ pub enum OSPermissionStatus {
 }
 
 impl OSPermissionStatus {
-    fn permitted(&self) -> bool {
+    pub fn permitted(&self) -> bool {
         match self {
             Self::NotNeeded | Self::Granted => true,
             _ => false,
@@ -96,9 +96,9 @@ impl OSPermissionStatus {
 #[derive(Serialize, Deserialize, Debug, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OSPermissionsCheck {
-    screen_recording: OSPermissionStatus,
-    microphone: OSPermissionStatus,
-    camera: OSPermissionStatus,
+    pub screen_recording: OSPermissionStatus,
+    pub microphone: OSPermissionStatus,
+    pub camera: OSPermissionStatus,
 }
 
 impl OSPermissionsCheck {

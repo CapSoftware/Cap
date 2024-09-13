@@ -888,9 +888,11 @@ fn show_previous_recordings_window(app: AppHandle) {
         return;
     };
 
-    let monitor = app.primary_monitor().unwrap().unwrap();
+    let Some(monitor) = app.primary_monitor().ok().flatten() else {
+        return;
+    };
 
-    let window = WebviewWindow::builder(
+    let Some(window) = WebviewWindow::builder(
         &app,
         PREV_RECORDINGS_WINDOW,
         tauri::WebviewUrl::App("/prev-recordings".into()),
@@ -911,7 +913,9 @@ fn show_previous_recordings_window(app: AppHandle) {
     )
     .position(0.0, 0.0)
     .build()
-    .unwrap();
+    .ok() else {
+        return;
+    };
 
     use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
     use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
@@ -1114,6 +1118,13 @@ fn open_in_finder(path: PathBuf) {
 #[tauri::command]
 #[specta::specta]
 async fn list_audio_devices() -> Result<Vec<String>, ()> {
+    if !permissions::do_permissions_check(false)
+        .microphone
+        .permitted()
+    {
+        return Ok(vec![]);
+    }
+
     tokio::task::spawn_blocking(|| {
         let devices = audio::get_input_devices();
 
@@ -1126,7 +1137,7 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
 #[tauri::command(async)]
 #[specta::specta]
 fn open_main_window(app: AppHandle) {
-    // tokio::spawn(updater::check_for_updates(app.clone()));
+    tokio::spawn(updater::check_for_updates(app.clone()));
 
     if let Some(window) = app.get_webview_window("main") {
         window.set_focus().ok();

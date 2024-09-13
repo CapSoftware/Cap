@@ -22,10 +22,10 @@
 		</dict>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Request camera access for WebRTC</string>
+	<string>Cap uses your camera to record you in your Caps</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Request microphone access for WebRTC</string>
+	<string>Cap uses your microphone to record you in your Caps</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Request screen capture access</string>
+	<string>Cap captures your screen as part of recording your Caps</string>
 </dict>
 </plist>

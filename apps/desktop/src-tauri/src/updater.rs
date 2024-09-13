@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_updater::UpdaterExt;
@@ -16,6 +18,7 @@ pub async fn check_for_updates(app: AppHandle) -> Result<(), ()> {
     };
 
     let (tx, rx) = tokio::sync::oneshot::channel();
+
     app.dialog()
         .message(format!(
             "Version {} of Cap is available, would you like to install it?",
@@ -24,7 +27,7 @@ pub async fn check_for_updates(app: AppHandle) -> Result<(), ()> {
         .title("Update Cap")
         .ok_button_label("Update")
         .cancel_button_label("Ignore")
-        .show(|install| {
+        .show(move |install| {
             tx.send(install).ok();
         });
 
@@ -32,7 +35,14 @@ pub async fn check_for_updates(app: AppHandle) -> Result<(), ()> {
         return Ok(());
     }
 
-    update.download_and_install(|_, _| {}, || {}).await.unwrap();
+    update
+        .download_and_install(
+            |_, _| {},
+            || {
+            },
+        )
+        .await
+        .unwrap();
 
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
@@ -46,10 +56,6 @@ pub async fn check_for_updates(app: AppHandle) -> Result<(), ()> {
         .show(|restart| {
             tx.send(restart).ok();
         });
-
-    for (_, window) in app.webview_windows() {
-        window.close().ok();
-    }
 
     if rx.await.unwrap() {
         app.restart();

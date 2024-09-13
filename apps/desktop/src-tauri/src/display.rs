@@ -33,9 +33,13 @@ pub enum CaptureTarget {
     Window { id: u32 },
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn list_capture_windows() -> Vec<CaptureWindow> {
+    if !scap::has_permission() {
+        return vec![];
+    }
+
     let targets = scap::get_all_targets();
 
     let windows = macos::get_on_screen_windows();
