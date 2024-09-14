@@ -170,6 +170,9 @@ async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Prom
 },
 async getRecordingMeta(id: string) : Promise<RecordingMeta> {
     return await TAURI_INVOKE("get_recording_meta", { id });
+},
+async openFeedbackWindow() : Promise<void> {
+    await TAURI_INVOKE("open_feedback_window");
 }
 }
 

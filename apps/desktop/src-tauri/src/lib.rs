@@ -1144,7 +1144,7 @@ fn open_main_window(app: AppHandle) {
 
     let Some(window) = WebviewWindow::builder(&app, "main", tauri::WebviewUrl::App("/".into()))
         .title("Cap")
-        .inner_size(300.0, 325.0)
+        .inner_size(300.0, 375.0)
         .resizable(false)
         .maximized(false)
         .shadow(true)
@@ -1158,6 +1158,28 @@ fn open_main_window(app: AppHandle) {
     else {
         return;
     };
+
+    window.create_overlay_titlebar().unwrap();
+    #[cfg(target_os = "macos")]
+    window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn open_feedback_window(app: AppHandle) {
+    let window =
+        WebviewWindow::builder(&app, "feedback", tauri::WebviewUrl::App("/feedback".into()))
+            .title("Cap Feedback")
+            .inner_size(400.0, 400.0)
+            .resizable(false)
+            .maximized(false)
+            .shadow(true)
+            .accept_first_mouse(true)
+            .transparent(true)
+            .hidden_title(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .build()
+            .unwrap();
 
     window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]
@@ -1280,7 +1302,8 @@ pub fn run() {
             permissions::do_permissions_check,
             permissions::request_permission,
             upload_rendered_video,
-            get_recording_meta
+            get_recording_meta,
+            open_feedback_window
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

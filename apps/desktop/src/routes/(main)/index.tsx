@@ -80,7 +80,7 @@ export default function () {
   createUpdateCheck();
 
   return (
-    <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50">
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
       <Show when={options.data}>
         {(options) => {
           const camera = createCameraForLabel(
@@ -101,6 +101,20 @@ export default function () {
 
           return (
             <>
+              <div class="absolute top-3 right-3">
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  onClick={() => {
+                    commands.openFeedbackWindow();
+                  }}
+                >
+                  Feedback
+                </Button>
+              </div>
+              <div class="flex items-center justify-between">
+                <IconCapLogoFull class="w-[90px] h-auto" />
+              </div>
               <KSelect<CaptureWindow | null>
                 options={windows.data ?? []}
                 optionValue="id"
