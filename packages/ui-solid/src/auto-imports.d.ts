@@ -27,6 +27,7 @@ declare global {
   const IconCapInset: typeof import('~icons/cap/inset.jsx')['default']
   const IconCapLayout: typeof import('~icons/cap/layout.jsx')['default']
   const IconCapLogo: typeof import('~icons/cap/logo.jsx')['default']
+  const IconCapLogoFull: typeof import('~icons/cap/logo-full.jsx')['default']
   const IconCapMessageBubble: typeof import('~icons/cap/message-bubble.jsx')['default']
   const IconCapMicrophone: typeof import('~icons/cap/microphone.jsx')['default']
   const IconCapMoreVertical: typeof import('~icons/cap/more-vertical.jsx')['default']
@@ -46,4 +47,6 @@ declare global {
   const IconCapUpload: typeof import('~icons/cap/upload.jsx')['default']
   const IconLucideCheck: typeof import('~icons/lucide/check.jsx')['default']
   const IconLucideLoaderCircle: typeof import('~icons/lucide/loader-circle.jsx')['default']
+  const IconLucideMessageSquareText: typeof import('~icons/lucide/message-square-text.jsx')['default']
+  const IconLucideSmile: typeof import('~icons/lucide/smile.jsx')['default']
 }
