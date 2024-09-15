@@ -1,3 +1,4 @@
+use crate::display::FPS;
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
 use crate::{editor, AudioData};
@@ -214,8 +215,14 @@ impl EditorInstance {
                     continue;
                 };
 
+                let Some(time) = project.timeline.as_ref().and_then(|timeline| {
+                    timeline.get_recording_time(frame_number as f64 / FPS as f64)
+                }) else {
+                    continue;
+                };
+
                 let Some((screen_frame, camera_frame)) =
-                    self.decoders.get_frames(frame_number).await
+                    self.decoders.get_frames((time * FPS as f64) as u32).await
                 else {
                     return;
                 };

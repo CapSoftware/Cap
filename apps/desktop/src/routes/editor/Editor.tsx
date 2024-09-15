@@ -1,9 +1,7 @@
 import { Button } from "@cap/ui-solid";
-import { createElementBounds } from "@solid-primitives/bounds";
 import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
 import { useSearchParams } from "@solidjs/router";
-import { cx } from "cva";
 import {
   For,
   Match,
@@ -12,16 +10,17 @@ import {
   batch,
   createEffect,
   createMemo,
-  createResource,
   createRoot,
   createSignal,
   on,
   onMount,
 } from "solid-js";
-import { platform } from "@tauri-apps/plugin-os";
-import { createStore, reconcile } from "solid-js/store";
+import { createStore } from "solid-js/store";
+import { createMutation } from "@tanstack/solid-query";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { events, type RenderProgress, commands } from "../../utils/tauri";
+import { events, commands } from "../../utils/tauri";
 import { EditorContextProvider, useEditorContext } from "./context";
 import {
   Dialog,
@@ -31,6 +30,14 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
+import {
+  EditorInstanceContextProvider,
+  useEditorInstanceContext,
+} from "./editorInstanceContext";
+import { Header } from "./Header";
+import { Player } from "./Player";
+import { ConfigSidebar } from "./ConfigSidebar";
+import { Timeline } from "./Timeline";
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -65,7 +72,6 @@ function Inner() {
   const {
     project,
     videoId,
-    editorInstance,
     playbackTime,
     setPlaybackTime,
     playing,
@@ -82,7 +88,7 @@ function Inner() {
 
   const renderFrame = throttle((time: number) => {
     events.renderFrameEvent.emit({
-      frame_number: Math.floor(time * 30),
+      frame_number: Math.max(Math.floor(time * 30), 0),
       project: project,
     });
   }, 1000 / 60);
@@ -155,288 +161,6 @@ function Inner() {
         <Timeline />
       </div>
       <Dialogs />
-    </div>
-  );
-}
-
-function Header() {
-  const [os] = createResource(() => platform());
-
-  return (
-    <header
-      class={cx(
-        "flex flex-row justify-between items-center",
-        os() === "macos" && "pl-[4.3rem]"
-      )}
-      data-tauri-drag-region
-    >
-      <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]">
-        <div class="flex flex-row items-center gap-[0.375rem]">
-          <div class="size-[1.5rem] rounded-[0.25rem] bg-gray-500 bg-black" />
-          <span>My Workspace</span>
-        </div>
-        <span class="text-gray-400">/</span>
-        <div class="flex flex-row items-center gap-[0.375rem]">
-          <span>Cap Title</span>
-        </div>
-      </div>
-      <div
-        class="flex flex-row gap-4 font-medium items-center"
-        data-tauri-drag-region
-      >
-        <ShareButton />
-        <ExportButton />
-      </div>
-    </header>
-  );
-}
-
-import { createEventListenerMap } from "@solid-primitives/event-listener";
-import { Channel, convertFileSrc } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
-import {
-  EditorInstanceContextProvider,
-  useEditorInstanceContext,
-} from "./editorInstanceContext";
-import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
-import { createMutation } from "@tanstack/solid-query";
-import { ConfigSidebar } from "./ConfigSidebar";
-import { Player } from "./Player";
-import { formatTime } from "./utils";
-
-function ExportButton() {
-  const { videoId, project } = useEditorContext();
-
-  const [state, setState] = createStore<
-    | { open: false; type: "idle" }
-    | ({ open: boolean } & (
-        | { type: "inProgress"; progress: number; totalFrames: number }
-        | { type: "finished"; path: string }
-      ))
-  >({ open: false, type: "idle" });
-
-  return (
-    <>
-      <Button
-        variant="primary"
-        size="md"
-        onClick={() => {
-          save({
-            filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-          }).then((p) => {
-            if (!p) return;
-
-            setState(
-              reconcile({
-                open: true,
-                type: "inProgress",
-                progress: 0,
-                totalFrames: 0,
-              })
-            );
-
-            const progress = new Channel<RenderProgress>();
-            progress.onmessage = (p) => {
-              if (p.type === "FrameRendered" && state.type === "inProgress")
-                setState({ progress: p.current_frame });
-              if (
-                p.type === "EstimatedTotalFrames" &&
-                state.type === "inProgress"
-              ) {
-                console.log("Total frames: ", p.total_frames);
-                setState({ totalFrames: p.total_frames });
-              }
-            };
-
-            return commands
-              .renderToFile(p, videoId, project, progress)
-              .then(() => {
-                setState({ ...state, type: "finished", path: p });
-              });
-          });
-        }}
-      >
-        Export
-      </Button>
-      <Dialog.Root
-        open={state.open}
-        onOpenChange={(o) => {
-          if (!o) setState(reconcile({ ...state, open: false }));
-        }}
-      >
-        <DialogContent
-          title="Export Recording"
-          confirm={
-            <Show when={state.type === "finished" && state}>
-              {(state) => (
-                <Button
-                  onClick={() => {
-                    commands.openInFinder(state().path);
-                  }}
-                >
-                  Open in Finder
-                </Button>
-              )}
-            </Show>
-          }
-        >
-          <Switch>
-            <Match when={state.type === "finished"}>Finished exporting</Match>
-            <Match when={state.type === "inProgress" && state}>
-              {(state) => (
-                <>
-                  <div class="w-full bg-gray-200 rounded-full h-2.5">
-                    <div
-                      class="bg-blue-300 h-2.5 rounded-full"
-                      style={{
-                        width: `${Math.min(
-                          (state().progress / (state().totalFrames || 1)) * 100,
-                          100
-                        )}%`,
-                      }}
-                    />
-                  </div>
-                </>
-              )}
-            </Match>
-          </Switch>
-        </DialogContent>
-      </Dialog.Root>
-    </>
-  );
-}
-
-function ShareButton() {
-  const { videoId, presets } = useEditorContext();
-  const [meta, metaActions] = createResource(() =>
-    commands.getRecordingMeta(videoId)
-  );
-
-  const uploadVideo = createMutation(() => ({
-    mutationFn: async () => {
-      const res = await commands.uploadRenderedVideo(
-        videoId,
-        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-      );
-      if (res.status !== "ok") throw new Error(res.error);
-    },
-    onSuccess: () => metaActions.refetch(),
-  }));
-
-  return (
-    <Show
-      when={meta()?.sharing}
-      fallback={
-        <Button
-          disabled={uploadVideo.isPending}
-          onClick={() => uploadVideo.mutate()}
-          class="flex items-center space-x-1"
-        >
-          {uploadVideo.isPending ? (
-            <>
-              <span>Uploading Cap</span>
-              <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
-            </>
-          ) : (
-            "Create Shareable Link"
-          )}
-        </Button>
-      }
-    >
-      {(sharing) => {
-        const url = () => new URL(sharing().link);
-
-        return (
-          <a
-            class="rounded-full h-[2rem] px-[1rem] flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100"
-            href={sharing().link}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <span class="text-[0.875rem] text-gray-500">
-              {url().host}
-              {url().pathname}
-            </span>
-          </a>
-        );
-      }}
-    </Show>
-  );
-}
-
-function Timeline() {
-  const {
-    project,
-    videoId,
-    editorInstance,
-    playbackTime,
-    setPlaybackTime,
-    playing,
-    setPlaying,
-    previewTime,
-    setPreviewTime,
-  } = useEditorContext();
-
-  const duration = () => editorInstance.recordingDuration;
-
-  const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
-  const timelineBounds = createElementBounds(timelineRef);
-
-  return (
-    <div class="px-[0.75rem] py-[2rem] relative">
-      <Show when={previewTime()}>
-        {(time) => (
-          <div
-            class="w-px bg-black-transparent-20 absolute left-5 top-4 bottom-0 z-10 pointer-events-none"
-            style={{
-              transform: `translateX(${
-                (time() / duration()) * (timelineBounds.width ?? 0)
-              }px)`,
-            }}
-          >
-            <div class="size-2 bg-black-transparent-20 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
-          </div>
-        )}
-      </Show>
-      <div
-        class="w-px bg-red-300 absolute left-5 top-4 bottom-0 z-10"
-        style={{
-          transform: `translateX(${
-            (playbackTime() / duration()) * (timelineBounds.width ?? 0)
-          }px)`,
-        }}
-      >
-        <div class="size-2 bg-red-300 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
-      </div>
-      <div class="relative h-[3rem] border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden">
-        <div class="bg-blue-300 w-[0.5rem]" />
-        <div
-          ref={setTimelineRef}
-          class="bg-blue-50 relative w-full h-full flex flex-row items-end justify-end px-[0.5rem] py-[0.25rem]"
-          onMouseDown={(e) => {
-            const { left, width } = e.currentTarget.getBoundingClientRect();
-            commands.setPlayheadPosition(
-              videoId,
-              Math.round(30 * duration() * ((e.clientX - left) / width))
-            );
-          }}
-          onMouseMove={(e) => {
-            const { left, width } = e.currentTarget.getBoundingClientRect();
-            setPreviewTime(
-              Math.max(duration() * ((e.clientX - left) / width), 0)
-            );
-          }}
-          onMouseLeave={() => {
-            setPreviewTime(undefined);
-          }}
-        >
-          <span class="text-black-transparent-60 text-[0.625rem]">0:00</span>
-          <span class="text-black-transparent-60 text-[0.625rem] ml-auto">
-            {formatTime(duration())}
-          </span>
-        </div>
-        <div class="bg-blue-300 w-[0.5rem]" />
-      </div>
     </div>
   );
 }
