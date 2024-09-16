@@ -197,13 +197,10 @@ impl AsyncVideoDecoder {
                                 last_decoded_frame = Some(current_frame);
 
                                 while decoder.receive_frame(&mut temp_frame).is_ok() {
-                                    // println!(
-                                    //     "decoded frame {current_frame}. will cache: {}",
-                                    //     !too_great_for_cache_bounds && !too_small_for_cache_bounds
-                                    // );
+                                    let hw_frame =
+                                        hw_device.as_ref().and_then(|d| d.get_hwframe(&temp_frame));
 
-                                    let sw_frame = try_transfer_hwframe(&temp_frame);
-                                    let frame = sw_frame.as_ref().unwrap_or(&temp_frame);
+                                    let frame = hw_frame.as_ref().unwrap_or(&temp_frame);
 
                                     if frame.format() != scaler_input_format {
                                         // Reinitialize the scaler with the new input format
@@ -221,7 +218,7 @@ impl AsyncVideoDecoder {
                                     }
 
                                     let mut rgb_frame = frame::Video::empty();
-                                    scaler.run(frame, &mut rgb_frame).unwrap();
+                                    scaler.run(&frame, &mut rgb_frame).unwrap();
 
                                     let width = rgb_frame.width() as usize;
                                     let height = rgb_frame.height() as usize;
@@ -397,24 +394,26 @@ fn ff_find_decoder(
     }
 }
 
-fn try_transfer_hwframe(src: &Video) -> Option<Video> {
-    unsafe {
-        if src.format() == HW_PIX_FMT.get().into() {
-            let mut sw_frame = frame::Video::empty();
-
-            if av_hwframe_transfer_data(sw_frame.as_mut_ptr(), src.as_ptr(), 0) >= 0 {
-                return Some(sw_frame);
-            };
-        }
-    }
-
-    None
-}
-
 struct HwDevice {
     pub device_type: AVHWDeviceType,
     pub pix_fmt: Pixel,
     ctx: *mut AVBufferRef,
+}
+
+impl HwDevice {
+    pub fn get_hwframe(&self, src: &Video) -> Option<Video> {
+        unsafe {
+            if src.format() == HW_PIX_FMT.get().into() {
+                let mut sw_frame = frame::Video::empty();
+
+                if av_hwframe_transfer_data(sw_frame.as_mut_ptr(), src.as_ptr(), 0) >= 0 {
+                    return Some(sw_frame);
+                };
+            }
+        }
+
+        None
+    }
 }
 
 impl Drop for HwDevice {

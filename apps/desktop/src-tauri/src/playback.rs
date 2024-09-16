@@ -54,13 +54,11 @@ impl Playback {
             let mut frame_number = self.start_frame_number + 1;
             let uniforms = ProjectUniforms::new(&self.render_constants, &self.project);
 
-            let duration = // self.recordings.duration().min(
-                self.project
-                    .timeline()
-                    .map(|t| t.duration())
-                    .unwrap_or(f64::MAX);
-            //     ,
-            // );
+            let duration = self
+                .project
+                .timeline()
+                .map(|t| t.duration())
+                .unwrap_or(f64::MAX);
 
             if let Some(audio) = self.audio.clone() {
                 AudioPlayback {
@@ -79,7 +77,9 @@ impl Playback {
                 };
 
                 let time = if let Some(timeline) = self.project.timeline() {
-                    match timeline.get_recording_time(frame_number as f64 / FPS as f64) {
+                    match timeline.get_recording_time(
+                        start.elapsed().as_secs_f64() + self.start_frame_number as f64 / FPS as f64, /* frame_number as f64 / FPS as f64 */
+                    ) {
                         Some(time) => time,
                         None => break,
                     }
@@ -105,6 +105,7 @@ impl Playback {
                             .await;
 
                         event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
+
 
                         frame_number += 1;
                     }
@@ -158,9 +159,6 @@ impl AudioPlayback {
             let mut config = supported_config.config();
             config.channels = 1;
 
-            dbg!(audio.sample_rate);
-            dbg!(&config);
-
             let data = audio.buffer.clone();
             let duration = data.len() as f64 / audio.sample_rate as f64;
             let mut time = self.start_frame_number as f64 / FPS as f64;
@@ -171,7 +169,6 @@ impl AudioPlayback {
                 data.len() as f64 * self.start_frame_number as f64 / (FPS as f64 * self.duration);
 
             let resample_ratio = audio.sample_rate as f64 / config.sample_rate.0 as f64;
-            dbg!(resample_ratio);
 
             let next_sample = move || {
                 time += time_inc;
