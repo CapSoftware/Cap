@@ -39,6 +39,7 @@ impl FFmpegProcess {
 
     pub fn stop(&mut self) {
         self.ffmpeg_stdin.write_all(b"q").ok();
+        self.ffmpeg_stdin.flush().ok();
         println!("Sent stop command to FFmpeg");
     }
 
@@ -105,25 +106,51 @@ impl FFmpegProcess {
         self.ffmpeg_stdin.flush()?;
         Ok(())
     }
+
+    pub fn pause(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
+            kill(Pid::from_raw(self.cmd.id() as i32), Signal::SIGSTOP)?;
+            println!("Sent SIGSTOP to FFmpeg");
+        }
+        Ok(())
+    }
+
+    pub fn resume(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
+            kill(Pid::from_raw(self.cmd.id() as i32), Signal::SIGCONT)?;
+            println!("Sent SIGCONT to FFmpeg");
+        }
+        Ok(())
+    }
 }
 
 pub struct NamedPipeCapture {
     path: PathBuf,
     is_stopped: Arc<AtomicBool>,
+    is_paused: Arc<AtomicBool>,
 }
 
 impl NamedPipeCapture {
-    pub fn new(path: &PathBuf) -> (Self, Arc<AtomicBool>) {
+    pub fn new(path: &PathBuf) -> (Self, Arc<AtomicBool>, Arc<AtomicBool>) {
         create_named_pipe(path).unwrap();
 
         let stop = Arc::new(AtomicBool::new(false));
+        let pause = Arc::new(AtomicBool::new(false));
 
         (
             Self {
                 path: path.clone(),
                 is_stopped: stop.clone(),
+                is_paused: pause.clone(),
             },
             stop.clone(),
+            pause.clone(),
         )
     }
 
@@ -133,6 +160,20 @@ impl NamedPipeCapture {
 
     pub fn stop(&self) {
         self.is_stopped.store(true, Ordering::Relaxed);
+    }
+
+    pub fn pause(&mut self) -> Result<(), String> {
+        self.is_paused.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn resume(&mut self) -> Result<(), String> {
+        self.is_paused.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.is_paused.load(Ordering::Relaxed)
     }
 }
 

@@ -59,6 +59,8 @@ pub struct App {
     handle: AppHandle,
     #[serde(skip)]
     current_recording: Option<InProgressRecording>,
+    #[serde(skip)]
+    paused: bool,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -268,6 +270,28 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
 
     RecordingStarted.emit(&app).ok();
 
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let mut state = state.write().await;
+    if let Some(ref mut recording) = state.current_recording {
+        recording.pause().await?;
+        state.paused = true;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let mut state = state.write().await;
+    if let Some(ref mut recording) = state.current_recording {
+        recording.resume().await?;
+        state.paused = false;
+    }
     Ok(())
 }
 
@@ -1276,6 +1300,8 @@ pub fn run() {
             create_camera_window,
             start_recording,
             stop_recording,
+            pause_recording,
+            resume_recording,
             list_cameras,
             list_capture_windows,
             list_audio_devices,
@@ -1357,6 +1383,7 @@ pub fn run() {
                     audio_input_name: None,
                 },
                 current_recording: None,
+                paused: false,
             })));
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));

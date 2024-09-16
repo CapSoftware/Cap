@@ -89,6 +89,35 @@ impl InProgressRecording {
         }
         .save_for_project();
     }
+    pub async fn pause(&mut self) -> Result<(), String> {
+        self.ffmpeg_process.pause().map_err(|e| e.to_string())?;
+
+        self.display.capture.pause()?;
+        if let Some(camera) = &mut self.camera {
+            camera.capture.pause()?;
+        }
+        if let Some(audio) = &mut self.audio {
+            audio.1.pause()?;
+            audio.0.capture.pause()?;
+        }
+        println!("Sent pause command to FFmpeg");
+        Ok(())
+    }
+
+    pub async fn resume(&mut self) -> Result<(), String> {
+        self.display.capture.resume()?;
+        if let Some(camera) = &mut self.camera {
+            camera.capture.resume()?;
+        }
+        if let Some(audio) = &mut self.audio {
+            audio.1.resume()?;
+            audio.0.capture.resume()?;
+        }
+
+        self.ffmpeg_process.resume().map_err(|e| e.to_string())?;
+        println!("Sent resume command to FFmpeg");
+        Ok(())
+    }
 }
 
 pub struct FFmpegCaptureOutput<T> {

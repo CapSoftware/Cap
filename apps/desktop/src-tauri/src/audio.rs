@@ -82,6 +82,26 @@ impl AudioCapturer {
         Ok(())
     }
 
+    pub fn pause(&mut self) -> Result<(), String> {
+        if let Some(ref mut stream) = self.stream {
+            stream
+                .pause()
+                .map_err(|_| "Failed to pause stream".to_string())
+        } else {
+            Err("Stream not started".to_string())
+        }
+    }
+
+    pub fn resume(&mut self) -> Result<(), String> {
+        if let Some(ref mut stream) = self.stream {
+            stream
+                .play()
+                .map_err(|_| "Failed to resume stream".to_string())
+        } else {
+            Err("Stream not started".to_string())
+        }
+    }
+
     pub fn stop(&mut self) -> Result<(), String> {
         if let Some(ref mut stream) = self.stream {
             stream.pause().map_err(|_| "Failed to pause stream")?;
@@ -232,7 +252,7 @@ pub async fn start_capturing(
     pipe_path: PathBuf,
     start_writing_rx: watch::Receiver<bool>,
 ) -> (NamedPipeCapture, Instant) {
-    let (capture, is_stopped) = NamedPipeCapture::new(&pipe_path);
+    let (capture, is_stopped, is_paused) = NamedPipeCapture::new(&pipe_path);
 
     let (tx, rx) = oneshot::channel();
 
@@ -251,11 +271,16 @@ pub async fn start_capturing(
 
         while let Some(bytes) = receiver.recv().await {
             if is_stopped.load(Ordering::Relaxed) {
-                println!("Stopping receiving camera frames");
+                println!("Stopping receiving audio frames");
                 return;
             }
 
             if !*start_writing_rx.borrow() {
+                continue;
+            }
+
+            if is_paused.load(Ordering::Relaxed) {
+                // Skip writing data to pipe while paused
                 continue;
             }
 

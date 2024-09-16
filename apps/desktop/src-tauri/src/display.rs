@@ -125,7 +125,7 @@ pub async fn start_capturing(
 
     let [width, height] = capturer.get_output_frame_size();
 
-    let (capture, is_stopped) = NamedPipeCapture::new(&pipe_path);
+    let (capture, is_stopped, is_paused) = NamedPipeCapture::new(&pipe_path);
 
     let (tx, rx) = oneshot::channel();
 
@@ -139,6 +139,11 @@ pub async fn start_capturing(
             if is_stopped.load(Ordering::Relaxed) {
                 println!("Stopping receiving capture frames");
                 return;
+            }
+
+            if is_paused.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
             }
 
             let frame = capturer.get_next_frame();

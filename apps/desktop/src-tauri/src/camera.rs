@@ -82,7 +82,7 @@ pub async fn start_capturing(
 ) -> (CameraFormat, NamedPipeCapture, Instant) {
     let (video_info_tx, video_info_rx) = oneshot::channel();
 
-    let (capture, is_stopped) = NamedPipeCapture::new(&pipe_path);
+    let (capture, is_stopped, is_paused) = NamedPipeCapture::new(&pipe_path);
 
     let (start_tx, start_rx) = oneshot::channel();
     let (frame_tx, mut frame_rx) = watch::channel(None);

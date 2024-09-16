@@ -40,6 +40,22 @@ async stopRecording() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async pauseRecording() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pause_recording") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async resumeRecording() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("resume_recording") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async listCameras() : Promise<string[]> {
     return await TAURI_INVOKE("list_cameras");
 },

@@ -659,6 +659,7 @@ version = "0.1.0"
 dependencies = [
  "cap-utils",
  "ffmpeg-sidecar 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "nix 0.29.0",
  "tauri",
  "tauri-plugin-shell",
 ]
