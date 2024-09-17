@@ -15,6 +15,7 @@ type PreviewFrameInstruction = (u32, ProjectConfiguration);
 pub struct EditorState {
     pub playhead_position: u32,
     pub playback_task: Option<PlaybackHandle>,
+    pub preview_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 pub struct EditorInstance {
@@ -123,12 +124,14 @@ impl EditorInstance {
             state: Mutex::new(EditorState {
                 playhead_position: 0,
                 playback_task: None,
+                preview_task: None,
             }),
             on_state_change: Box::new(on_state_change),
             preview_tx,
         });
 
-        this.clone().spawn_preview_renderer(preview_rx);
+        this.state.lock().await.preview_task =
+            Some(this.clone().spawn_preview_renderer(preview_rx));
 
         this
     }
@@ -144,6 +147,10 @@ impl EditorInstance {
             println!("stopping playback");
             handle.stop();
         };
+        if let Some(task) = state.preview_task.take() {
+            println!("stopping preview");
+            task.abort();
+        }
     }
 
     pub async fn modify_and_emit_state(&self, modify: impl Fn(&mut EditorState)) {
@@ -204,10 +211,10 @@ impl EditorInstance {
     fn spawn_preview_renderer(
         self: Arc<Self>,
         mut preview_rx: watch::Receiver<Option<PreviewFrameInstruction>>,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                preview_rx.changed().await.ok();
+                preview_rx.changed().await.unwrap();
                 let Some((frame_number, project)) = preview_rx.borrow().deref().clone() else {
                     continue;
                 };
@@ -221,7 +228,7 @@ impl EditorInstance {
                 let Some((screen_frame, camera_frame)) =
                     self.decoders.get_frames((time * FPS as f64) as u32).await
                 else {
-                    return;
+                    continue;
                 };
 
                 self.renderer
@@ -233,7 +240,7 @@ impl EditorInstance {
                     )
                     .await;
             }
-        });
+        })
     }
 }
 
@@ -285,8 +292,8 @@ async fn create_frames_ws(frame_rx: mpsc::UnboundedReceiver<SocketMessage>) -> u
 
                     match chunk {
                         SocketMessage::Frame { width, height, mut data } => {
-                        		data.extend_from_slice(&height.to_le_bytes());
-                          	data.extend_from_slice(&width.to_le_bytes());
+                                data.extend_from_slice(&height.to_le_bytes());
+                              data.extend_from_slice(&width.to_le_bytes());
 
                             socket.send(Message::Binary(data)).await.unwrap();
                         }
