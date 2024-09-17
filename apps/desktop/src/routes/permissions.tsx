@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { exit } from "@tauri-apps/plugin-process";
 
-import { commands, type OSPermissionStatus } from "../utils/tauri";
+import { commands, type OSPermissionStatus } from "~/utils/tauri";
 import {
   createEffect,
   createResource,

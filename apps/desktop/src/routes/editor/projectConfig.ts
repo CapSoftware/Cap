@@ -1,4 +1,4 @@
-import type { AspectRatio, ProjectConfiguration } from "../../utils/tauri";
+import type { AspectRatio, ProjectConfiguration } from "~/utils/tauri";
 
 export type RGBColor = [number, number, number];
 

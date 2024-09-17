@@ -1,5 +1,6 @@
 import { defineConfig } from "@solidjs/start/config";
 import capUIPlugin from "@cap/ui-solid/vite";
+import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
   ssr: false,
@@ -19,6 +20,12 @@ export default defineConfig({
     // 3. to make use of `TAURI_DEBUG` and other env variables
     // https://tauri.studio/v1/api/config#buildconfig.beforedevcommand
     envPrefix: ["VITE_", "TAURI_"],
-    plugins: [capUIPlugin],
+    plugins: [
+      capUIPlugin,
+      tsconfigPaths({
+        // If this isn't set Vinxi hangs on startup
+        root: ".",
+      }),
+    ],
   }),
 });

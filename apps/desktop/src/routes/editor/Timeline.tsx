@@ -1,7 +1,8 @@
 import { createElementBounds } from "@solid-primitives/bounds";
 import { For, Show, createRoot, createSignal, onMount } from "solid-js";
 
-import { commands } from "../../utils/tauri";
+import { commands } from "~/utils/tauri";
+
 import { useEditorContext } from "./context";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { formatTime } from "./utils";

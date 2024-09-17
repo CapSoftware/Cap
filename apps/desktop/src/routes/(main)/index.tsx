@@ -6,14 +6,14 @@ import { createMutation } from "@tanstack/solid-query";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 
-import { createCameraForLabel, createCameras } from "../../utils/media";
+import { createCameraForLabel, createCameras } from "~/utils/media";
 import {
   createAudioDevicesQuery,
   createCurrentRecordingQuery,
   createOptionsQuery,
   createWindowsQuery,
-} from "../../utils/queries";
-import { type CaptureWindow, commands, events } from "../../utils/tauri";
+} from "~/utils/queries";
+import { type CaptureWindow, commands, events } from "~/utils/tauri";
 import {
   MenuItemList,
   PopperContent,
@@ -21,7 +21,7 @@ import {
   MenuItem,
   topRightAnimateClasses,
 } from "../editor/ui";
-import { authStore } from "../../store";
+import { authStore } from "~/store";
 
 const getAuth = cache(async () => {
   const value = await authStore.get();
@@ -112,8 +112,14 @@ export default function () {
                   Feedback
                 </Button>
               </div>
-              <div class="flex items-center justify-between">
+              <div class="flex items-center justify-between pb-[0.25rem]">
                 <IconCapLogoFull class="w-[90px] h-auto" />
+                {/*<button
+                  type="button"
+                  onClick={() => commands.openSettingsWindow()}
+                >
+                  <IconCapSettings class="text-gray-400 hover:text-gray-500" />
+                </button>*/}
               </div>
               <KSelect<CaptureWindow | null>
                 options={windows.data ?? []}
@@ -393,6 +399,8 @@ import * as updater from "@tauri-apps/plugin-updater";
 
 let hasChecked = false;
 function createUpdateCheck() {
+  if (import.meta.env.DEV) return;
+
   const navigate = useNavigate();
 
   onMount(async () => {
