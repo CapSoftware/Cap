@@ -7,7 +7,6 @@ import { reconcile } from "solid-js/store";
 
 import { type AspectRatio, commands } from "~/utils/tauri";
 import { useEditorContext } from "./context";
-import { OUTPUT_SIZE } from "./editorInstanceContext";
 import { ASPECT_RATIOS } from "./projectConfig";
 import {
   ComingSoonTooltip,
@@ -31,7 +30,6 @@ export function Player() {
     currentFrame,
     setDialog,
     playbackTime,
-    setPlaybackTime,
     playing,
     setPlaying,
   } = useEditorContext();
@@ -103,7 +101,10 @@ export function Player() {
 
             const containerAspect = () => {
               if (containerBounds.width && containerBounds.height) {
-                return containerBounds.width / containerBounds.height;
+                return (
+                  (containerBounds.width - padding * 2) /
+                  (containerBounds.height - padding * 2)
+                );
               }
 
               return 1;
@@ -112,37 +113,37 @@ export function Player() {
             const frameAspect = () =>
               currentFrame().width / currentFrame().height;
 
-            const width = () => {
+            const size = () => {
               if (frameAspect() < containerAspect()) {
-                return (
-                  ((containerBounds.height ?? 0) - padding * 2) * frameAspect()
-                );
+                const height = (containerBounds.height ?? 0) - padding * 2;
+
+                return {
+                  width: height * frameAspect(),
+                  height,
+                };
               }
 
-              return (containerBounds.width ?? 0) - padding * 2;
-            };
+              const width = (containerBounds.width ?? 0) - padding * 2;
 
-            const height = () => {
-              if (frameAspect() > containerAspect()) {
-                return width() / frameAspect();
-              }
-
-              return (containerBounds.height ?? 0) - padding * 2;
+              return {
+                width,
+                height: width / frameAspect(),
+              };
             };
 
             return (
               <canvas
                 style={{
                   left: `${Math.max(
-                    ((containerBounds.width ?? 0) - width()) / 2,
+                    ((containerBounds.width ?? 0) - size().width) / 2,
                     padding
                   )}px`,
                   top: `${Math.max(
-                    ((containerBounds.height ?? 0) - height()) / 2,
+                    ((containerBounds.height ?? 0) - size().height) / 2,
                     padding
                   )}px`,
-                  width: `${width()}px`,
-                  height: `${height()}px`,
+                  width: `${size().width}px`,
+                  height: `${size().height}px`,
                 }}
                 class="bg-blue-50 absolute rounded"
                 // biome-ignore lint/style/noNonNullAssertion: ref
@@ -216,79 +217,77 @@ function AspectRatioSelect() {
   const { project, setProject } = useEditorContext();
 
   return (
-    <ComingSoonTooltip>
-      <KSelect<AspectRatio | "auto">
-        value={project.aspectRatio ?? "auto"}
-        onChange={(v) => {
-          if (v === null) return;
-          setProject("aspectRatio", v === "auto" ? null : v);
-        }}
-        defaultValue="auto"
-        options={
-          ["auto", "wide", "vertical", "square", "classic", "tall"] as const
-        }
-        multiple={false}
-        itemComponent={(props) => {
-          const item = () =>
-            ASPECT_RATIOS[
-              props.item.rawValue === "auto" ? "auto" : props.item.rawValue
-            ];
+    <KSelect<AspectRatio | "auto">
+      value={project.aspectRatio ?? "auto"}
+      onChange={(v) => {
+        if (v === null) return;
+        setProject("aspectRatio", v === "auto" ? null : v);
+      }}
+      defaultValue="auto"
+      options={
+        ["auto", "wide", "vertical", "square", "classic", "tall"] as const
+      }
+      multiple={false}
+      itemComponent={(props) => {
+        const item = () =>
+          props.item.rawValue === "auto"
+            ? null
+            : ASPECT_RATIOS[props.item.rawValue];
 
-          return (
-            <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-              <KSelect.ItemLabel class="flex-1">
-                {props.item.rawValue === "auto"
-                  ? "Auto"
-                  : ASPECT_RATIOS[props.item.rawValue].name}
-                <Show when={item()}>
-                  {(item) => (
-                    <span class="text-gray-400">
-                      {"⋅"}
-                      {item().ratio[0]}:{item().ratio[1]}
-                    </span>
-                  )}
-                </Show>
-              </KSelect.ItemLabel>
-              <KSelect.ItemIndicator class="ml-auto">
-                <IconCapCircleCheck />
-              </KSelect.ItemIndicator>
-            </MenuItem>
-          );
-        }}
-        placement="top-start"
+        return (
+          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
+            <KSelect.ItemLabel class="flex-1">
+              {props.item.rawValue === "auto"
+                ? "Auto"
+                : ASPECT_RATIOS[props.item.rawValue].name}
+              <Show when={item()}>
+                {(item) => (
+                  <span class="text-gray-400">
+                    {"⋅"}
+                    {item().ratio[0]}:{item().ratio[1]}
+                  </span>
+                )}
+              </Show>
+            </KSelect.ItemLabel>
+            <KSelect.ItemIndicator class="ml-auto">
+              <IconCapCircleCheck />
+            </KSelect.ItemIndicator>
+          </MenuItem>
+        );
+      }}
+      placement="top-start"
+    >
+      <EditorButton<typeof KSelect.Trigger>
+        as={KSelect.Trigger}
+        leftIcon={<IconCapLayout />}
+        rightIcon={
+          <KSelect.Icon>
+            <IconCapChevronDown />
+          </KSelect.Icon>
+        }
       >
-        <EditorButton<typeof KSelect.Trigger>
-          as={KSelect.Trigger}
-          leftIcon={<IconCapLayout />}
-          rightIcon={
-            <KSelect.Icon>
-              <IconCapChevronDown />
-            </KSelect.Icon>
-          }
+        <KSelect.Value<AspectRatio | "auto">>
+          {(state) => {
+            const text = () => {
+              const option = state.selectedOption();
+              return option === "auto" ? "Auto" : ASPECT_RATIOS[option].name;
+            };
+            return <>{text()}</>;
+          }}
+        </KSelect.Value>
+      </EditorButton>
+      <KSelect.Portal>
+        <PopperContent<typeof KSelect.Content>
+          as={KSelect.Content}
+          class={topLeftAnimateClasses}
         >
-          <KSelect.Value<AspectRatio | "auto">>
-            {(state) => {
-              const text = () => {
-                const option = state.selectedOption();
-                return option === "auto" ? "Auto" : ASPECT_RATIOS[option].name;
-              };
-              return <>{text()}</>;
-            }}
-          </KSelect.Value>
-        </EditorButton>
-        <KSelect.Portal>
-          <PopperContent<typeof KSelect.Content>
-            as={KSelect.Content}
-            class={topLeftAnimateClasses}
-          >
-            <MenuItemList<typeof KSelect.Listbox>
-              as={KSelect.Listbox}
-              class="w-[12.5rem]"
-            />
-          </PopperContent>
-        </KSelect.Portal>
-      </KSelect>
-    </ComingSoonTooltip>
+          <MenuItemList<typeof KSelect.Listbox>
+            as={KSelect.Listbox}
+            class="w-[12.5rem]"
+          />
+        </PopperContent>
+      </KSelect.Portal>
+    </KSelect>
   );
 }
 
