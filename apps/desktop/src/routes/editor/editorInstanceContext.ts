@@ -1,9 +1,9 @@
 import { createContextProvider } from "@solid-primitives/context";
 import { createResource, createSignal } from "solid-js";
 
-import { events, commands } from "../../utils/tauri";
+import { events, commands } from "~/utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
-import { createPresets } from "../createPresets";
+import { createPresets } from "~/utils/createPresets";
 
 export const OUTPUT_SIZE = {
   width: 1920,

@@ -20,7 +20,7 @@ import { createMutation } from "@tanstack/solid-query";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { events, commands } from "../../utils/tauri";
+import { events, commands } from "~/utils/tauri";
 import { EditorContextProvider, useEditorContext } from "./context";
 import {
   Dialog,

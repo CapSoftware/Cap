@@ -1,14 +1,6 @@
 import { useNavigate } from "@solidjs/router";
 import { check } from "@tauri-apps/plugin-updater";
-import {
-  createResource,
-  createSignal,
-  Match,
-  onMount,
-  Show,
-  Switch,
-} from "solid-js";
-import * as dialog from "@tauri-apps/plugin-dialog";
+import { createResource, Match, Show, Switch } from "solid-js";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { Button } from "@cap/ui-solid";
 

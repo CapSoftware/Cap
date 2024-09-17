@@ -1,7 +1,7 @@
 import { createResource, onCleanup } from "solid-js";
 
-import type { ProjectConfiguration } from "../utils/tauri";
-import { presetsStore, type PresetsStore } from "../store";
+import type { ProjectConfiguration } from "~/utils/tauri";
+import { presetsStore, type PresetsStore } from "~/store";
 
 export type CreatePreset = {
   name: string;

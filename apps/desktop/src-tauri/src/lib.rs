@@ -21,7 +21,6 @@ use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
-use nix::libc::pthread_introspection_hook_t;
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
 use project_recordings::ProjectRecordings;
@@ -1252,6 +1251,28 @@ async fn open_feedback_window(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
+async fn open_settings_window(app: AppHandle) {
+    let window =
+        WebviewWindow::builder(&app, "settings", tauri::WebviewUrl::App("/settings".into()))
+            .title("Cap Settings")
+            .inner_size(600.0, 450.0)
+            .resizable(true)
+            .maximized(false)
+            .shadow(true)
+            .accept_first_mouse(true)
+            .transparent(true)
+            .hidden_title(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .build()
+            .unwrap();
+
+    window.create_overlay_titlebar().unwrap();
+    #[cfg(target_os = "macos")]
+    window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn upload_rendered_video(
     app: AppHandle,
     video_id: String,
@@ -1367,7 +1388,8 @@ pub fn run() {
             permissions::request_permission,
             upload_rendered_video,
             get_recording_meta,
-            open_feedback_window
+            open_feedback_window,
+            open_settings_window
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

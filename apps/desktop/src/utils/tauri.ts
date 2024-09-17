@@ -173,6 +173,9 @@ async getRecordingMeta(id: string) : Promise<RecordingMeta> {
 },
 async openFeedbackWindow() : Promise<void> {
     await TAURI_INVOKE("open_feedback_window");
+},
+async openSettingsWindow() : Promise<void> {
+    await TAURI_INVOKE("open_settings_window");
 }
 }
 

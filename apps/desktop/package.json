@@ -55,6 +55,7 @@
     "@tauri-apps/cli": ">=2.0.0-rc.0",
     "@types/dom-webcodecs": "^0.1.11",
     "typescript": "^5.2.2",
-    "vite": "^5.4.3"
+    "vite": "^5.4.3",
+    "vite-tsconfig-paths": "^5.0.1"
   }
 }

@@ -9,7 +9,7 @@ import { type Component, For, ParentProps, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 
-import type { BackgroundSource, CursorType } from "../../utils/tauri";
+import type { BackgroundSource, CursorType } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { ComingSoonTooltip, Field, Slider, Subfield, Toggle } from "./ui";
 import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";

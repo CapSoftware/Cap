@@ -5,7 +5,7 @@ import { cx } from "cva";
 import { For, Show, Suspense, createEffect, createSignal } from "solid-js";
 import { reconcile } from "solid-js/store";
 
-import { type AspectRatio, commands } from "../../utils/tauri";
+import { type AspectRatio, commands } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import {
   ComingSoonTooltip,

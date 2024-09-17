@@ -1,6 +1,6 @@
 import { Store } from "@tauri-apps/plugin-store";
 
-import type { AuthStore, ProjectConfiguration } from "./utils/tauri";
+import type { AuthStore, ProjectConfiguration } from "~/utils/tauri";
 
 const store = new Store("store");
 

@@ -1,5 +1,5 @@
 import { Show, Suspense } from "solid-js";
-import { createCurrentRecordingQuery } from "../utils/queries";
+import { createCurrentRecordingQuery } from "~/utils/queries";
 
 export default function () {
   const currentRecording = createCurrentRecordingQuery();
