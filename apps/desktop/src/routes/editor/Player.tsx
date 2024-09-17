@@ -7,6 +7,8 @@ import { reconcile } from "solid-js/store";
 
 import { type AspectRatio, commands } from "~/utils/tauri";
 import { useEditorContext } from "./context";
+import { OUTPUT_SIZE } from "./editorInstanceContext";
+import { ASPECT_RATIOS } from "./projectConfig";
 import {
   ComingSoonTooltip,
   DropdownItem,
@@ -17,9 +19,8 @@ import {
   dropdownContainerClasses,
   topLeftAnimateClasses,
 } from "./ui";
-import { ASPECT_RATIOS } from "./projectConfig";
-import { OUTPUT_SIZE } from "./editorInstanceContext";
 import { formatTime } from "./utils";
+import { createElementBounds } from "@solid-primitives/bounds";
 
 export function Player() {
   const {
@@ -41,12 +42,16 @@ export function Player() {
     const frame = currentFrame();
     if (!frame) return;
     const ctx = canvasRef.getContext("2d");
-    ctx?.putImageData(frame, 0, 0);
+    ctx?.putImageData(frame.data, 0, 0);
   });
+
+  const [canvasContainerRef, setCanvasContainerRef] =
+    createSignal<HTMLDivElement>();
+  const containerBounds = createElementBounds(canvasContainerRef);
 
   return (
     <div class="flex flex-col divide-y flex-1">
-      <div class="flex flex-row justify-between font-medium p-[0.75rem] text-[0.875rem]">
+      <div class="flex flex-row justify-between font-medium p-[0.75rem] text-[0.875rem] z-10 bg-gray-50">
         <div class="flex flex-row items-center gap-[0.5rem]">
           <AspectRatioSelect />
           <EditorButton
@@ -91,17 +96,66 @@ export function Player() {
           </EditorButton>
         </div>
       </div>
-      <div class="bg-gray-100 flex items-center justify-center flex-1 flex-row object-contain p-4">
-        <canvas
-          class="bg-blue-50 w-full"
-          // biome-ignore lint/style/noNonNullAssertion: ref
-          ref={canvasRef!}
-          id="canvas"
-          width={OUTPUT_SIZE.width}
-          height={OUTPUT_SIZE.height}
-        />
+      <div ref={setCanvasContainerRef} class="bg-gray-100 flex-1 relative">
+        <Show when={currentFrame()}>
+          {(currentFrame) => {
+            const padding = 16;
+
+            const containerAspect = () => {
+              if (containerBounds.width && containerBounds.height) {
+                return containerBounds.width / containerBounds.height;
+              }
+
+              return 1;
+            };
+
+            const frameAspect = () =>
+              currentFrame().width / currentFrame().height;
+
+            const width = () => {
+              if (frameAspect() < containerAspect()) {
+                return (
+                  ((containerBounds.height ?? 0) - padding * 2) * frameAspect()
+                );
+              }
+
+              return (containerBounds.width ?? 0) - padding * 2;
+            };
+
+            const height = () => {
+              if (frameAspect() > containerAspect()) {
+                return width() / frameAspect();
+              }
+
+              return (containerBounds.height ?? 0) - padding * 2;
+            };
+
+            return (
+              <canvas
+                style={{
+                  left: `${Math.max(
+                    ((containerBounds.width ?? 0) - width()) / 2,
+                    padding
+                  )}px`,
+                  top: `${Math.max(
+                    ((containerBounds.height ?? 0) - height()) / 2,
+                    padding
+                  )}px`,
+                  width: `${width()}px`,
+                  height: `${height()}px`,
+                }}
+                class="bg-blue-50 absolute rounded"
+                // biome-ignore lint/style/noNonNullAssertion: ref
+                ref={canvasRef!}
+                id="canvas"
+                width={currentFrame().width}
+                height={currentFrame().height}
+              />
+            );
+          }}
+        </Show>
       </div>
-      <div class="flex flex-row items-center p-[0.75rem]">
+      <div class="flex flex-row items-center p-[0.75rem] z-10 bg-gray-50">
         <div class="flex-1" />
         <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
           <span>{formatTime(playbackTime())}</span>
@@ -164,7 +218,6 @@ function AspectRatioSelect() {
   return (
     <ComingSoonTooltip>
       <KSelect<AspectRatio | "auto">
-        disabled
         value={project.aspectRatio ?? "auto"}
         onChange={(v) => {
           if (v === null) return;
@@ -178,7 +231,7 @@ function AspectRatioSelect() {
         itemComponent={(props) => {
           const item = () =>
             ASPECT_RATIOS[
-              props.item.rawValue === "auto" ? "wide" : props.item.rawValue
+              props.item.rawValue === "auto" ? "auto" : props.item.rawValue
             ];
 
           return (

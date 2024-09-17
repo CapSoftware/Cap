@@ -10,7 +10,7 @@ use wgpu::util::DeviceExt;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use cap_project::{
-    BackgroundSource, CameraXPosition, CameraYPosition, Crop, ProjectConfiguration, XY,
+    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, ProjectConfiguration, XY,
 };
 
 use std::time::Instant;
@@ -22,7 +22,6 @@ pub use decoder::DecodedFrame;
 pub struct RenderOptions {
     pub camera_size: Option<(u32, u32)>,
     pub screen_size: (u32, u32),
-    pub output_size: (u32, u32),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -194,12 +193,6 @@ pub struct RenderVideoConstants {
     pub options: RenderOptions,
     composite_video_frame_pipeline: CompositeVideoFramePipeline,
     gradient_or_color_pipeline: GradientOrColorPipeline,
-    pub output_texture: wgpu::Texture,
-    pub output_texture_view: wgpu::TextureView,
-    pub output_texture_size: wgpu::Extent3d,
-    pub output_buffer: wgpu::Buffer,
-    pub padded_bytes_per_row: u32,
-    pub unpadded_bytes_per_row: u32,
 }
 
 impl RenderVideoConstants {
@@ -215,45 +208,6 @@ impl RenderVideoConstants {
             .await
             .map_err(|e| e.to_string())?;
 
-        let output_texture_size = wgpu::Extent3d {
-            width: options.output_size.0,
-            height: options.output_size.1,
-            depth_or_array_layers: 1,
-        };
-
-        let output_texture = device.create_texture(
-            &(wgpu::TextureDescriptor {
-                size: output_texture_size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                label: Some("output_texture"),
-                view_formats: &[],
-            }),
-        );
-
-        // Calculate the aligned bytes per row
-        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
-        let unpadded_bytes_per_row = options.output_size.0 * 4;
-        let padding = (align - (unpadded_bytes_per_row % align)) % align;
-        let padded_bytes_per_row = unpadded_bytes_per_row + padding;
-
-        // Ensure the padded_bytes_per_row is a multiple of 4 (32 bits)
-        let padded_bytes_per_row = (padded_bytes_per_row + 3) & !3;
-
-        let output_buffer_size = (padded_bytes_per_row * options.output_size.1) as u64;
-
-        let output_buffer = device.create_buffer(
-            &(wgpu::BufferDescriptor {
-                size: output_buffer_size,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                label: Some("Output Buffer"),
-                mapped_at_creation: false,
-            }),
-        );
-
         Ok(Self {
             composite_video_frame_pipeline: CompositeVideoFramePipeline::new(&device),
             gradient_or_color_pipeline: GradientOrColorPipeline::new(&device),
@@ -262,19 +216,13 @@ impl RenderVideoConstants {
             queue,
             device,
             options,
-            output_texture_size,
-            output_texture_view: output_texture
-                .create_view(&wgpu::TextureViewDescriptor::default()),
-            output_texture,
-            output_buffer,
-            unpadded_bytes_per_row,
-            padded_bytes_per_row,
         })
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct ProjectUniforms {
+    pub output_size: (u32, u32),
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
 }
@@ -285,48 +233,85 @@ const CAMERA_UV_WIDTH: f32 = 0.3;
 const SCREEN_MAX_PADDING: f32 = 0.4;
 
 impl ProjectUniforms {
+    fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
+        project.background.crop.clone().unwrap_or(Crop {
+            position: XY { x: 0, y: 0 },
+            size: XY {
+                x: options.screen_size.0,
+                y: options.screen_size.1,
+            },
+        })
+    }
+
+    fn get_padding(options: &RenderOptions, project: &ProjectConfiguration) -> f32 {
+        let crop = Self::get_crop(options, project);
+
+        let basis = u32::max(crop.size.x, crop.size.y);
+        let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
+
+        basis as f32 * padding_factor
+    }
+
+    pub fn get_output_size(options: &RenderOptions, project: &ProjectConfiguration) -> (u32, u32) {
+        let crop = Self::get_crop(options, project);
+
+        let crop_aspect = crop.aspect_ratio();
+
+        let padding = Self::get_padding(options, project) * 2.0;
+
+        let aspect = match &project.aspect_ratio {
+            None => {
+                return (
+                    (crop.size.x as f32 + padding) as u32,
+                    (crop.size.y as f32 + padding) as u32,
+                );
+            }
+            Some(AspectRatio::Square) => 1.0,
+            Some(AspectRatio::Wide) => 16.0 / 9.0,
+            Some(AspectRatio::Vertical) => 9.0 / 16.0,
+            Some(AspectRatio::Classic) => 4.0 / 3.0,
+            Some(AspectRatio::Tall) => 3.0 / 4.0,
+        };
+
+        if crop_aspect > aspect {
+            (crop.size.x, (crop.size.x as f32 / aspect) as u32)
+        } else if crop_aspect < aspect {
+            ((crop.size.y as f32 * aspect) as u32, crop.size.y)
+        } else {
+            (crop.size.x, crop.size.y)
+        }
+    }
+
     pub fn new(constants: &RenderVideoConstants, project: &ProjectConfiguration) -> Self {
         let options = &constants.options;
-        let output_size = [options.output_size.0 as f32, options.output_size.1 as f32];
-        let output_aspect = output_size[0] / output_size[1];
+        let output_size = Self::get_output_size(options, project);
+        let output_aspect = output_size.0 as f32 / output_size.1 as f32;
 
         let display = {
+            let output_size = [output_size.0 as f32, output_size.1 as f32];
             let size = [options.screen_size.0 as f32, options.screen_size.1 as f32];
 
-            let crop_bounds = {
-                let crop = project.background.crop.clone().unwrap_or(Crop {
-                    position: XY { x: 0.0, y: 0.0 },
-                    size: XY {
-                        x: size[0],
-                        y: size[1],
-                    },
-                });
+            let crop = Self::get_crop(options, project);
 
-                [
-                    crop.position.x,
-                    crop.position.y,
-                    crop.position.x + crop.size.x,
-                    crop.position.y + crop.size.y,
-                ]
-            };
+            let crop_bounds = [
+                crop.position.x as f32,
+                crop.position.y as f32,
+                (crop.position.x + crop.size.x) as f32,
+                (crop.position.y + crop.size.y) as f32,
+            ];
 
             let cropped_size = [
                 crop_bounds[2] - crop_bounds[0],
                 crop_bounds[3] - crop_bounds[1],
             ];
-            let cropped_aspect = cropped_size[0] / cropped_size[1];
+            let cropped_aspect = cropped_size[0] as f32 / cropped_size[1] as f32;
 
+            let padding = Self::get_padding(options, project);
             let is_height_constrained = cropped_aspect <= output_aspect;
-            let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
-
-            let padding = [
-                output_size[0] * padding_factor * !is_height_constrained as u8 as f32,
-                output_size[1] * padding_factor * is_height_constrained as u8 as f32,
-            ];
 
             let available_size = [
-                output_size[0] - 2.0 * padding[0],
-                output_size[1] - 2.0 * padding[1],
+                output_size[0] - 2.0 * padding,
+                output_size[1] - 2.0 * padding,
             ];
 
             let target_size = if is_height_constrained {
@@ -341,9 +326,9 @@ impl ProjectUniforms {
             ];
 
             let target_start = if is_height_constrained {
-                [target_offset[0], padding[1]]
+                [target_offset[0], padding]
             } else {
-                [padding[0], target_offset[1]]
+                [padding, target_offset[1]]
             };
 
             let target_bounds = [
@@ -371,8 +356,10 @@ impl ProjectUniforms {
             .camera_size
             .filter(|_| !project.camera.hide)
             .map(|camera_size| {
+                let output_size = [output_size.0 as f32, output_size.1 as f32];
+
                 let frame_size = [camera_size.0 as f32, camera_size.1 as f32];
-                let min_axis = frame_size[0].min(frame_size[1]);
+                let min_axis = output_size[0].min(output_size[1]);
 
                 let size = [
                     min_axis * CAMERA_UV_WIDTH + CAMERA_PADDING,
@@ -420,7 +407,11 @@ impl ProjectUniforms {
                 }
             });
 
-        Self { display, camera }
+        Self {
+            output_size,
+            display,
+            camera,
+        }
     }
 }
 
@@ -431,10 +422,6 @@ pub async fn produce_frame(
         composite_video_frame_pipeline,
         gradient_or_color_pipeline,
         queue,
-        output_texture_size,
-        output_buffer,
-        padded_bytes_per_row,
-        unpadded_bytes_per_row,
         ..
     }: &RenderVideoConstants,
     screen_frame: &Vec<u8>,
@@ -450,8 +437,8 @@ pub async fn produce_frame(
 
     let output_texture_desc = wgpu::TextureDescriptor {
         size: wgpu::Extent3d {
-            width: options.output_size.0,
-            height: options.output_size.1,
+            width: uniforms.output_size.0,
+            height: uniforms.output_size.1,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -543,23 +530,6 @@ pub async fn produce_frame(
             },
         );
 
-        // let padding = 30.0;
-        // let frame_size = (frame_size.0 as f32, frame_size.1 as f32);
-        // let output_size = (options.output_size.0 as f32, options.output_size.1 as f32);
-        // let x_scale = output_size.0 / frame_size.0;
-        // let target_bounds = [
-        //     padding,
-        //     padding,
-        //     output_size.0 - padding,
-        //     frame_size.1 * x_scale - padding * x_scale,
-        // ];
-        // let target_size = [
-        //     target_bounds[2] - target_bounds[0],
-        //     target_bounds[3] - target_bounds[1],
-        // ];
-        // let rounding_pc = 0.1;
-        // let rounding_px = f32::min(target_size[0], target_size[1]) * 0.5 * rounding_pc;
-
         do_render_pass(
             &mut encoder,
             get_either(texture_views, output_is_left),
@@ -567,16 +537,6 @@ pub async fn produce_frame(
             composite_video_frame_pipeline.bind_group(
                 device,
                 &uniforms.display.to_buffer(device),
-                // &dbg!(CompositeVideoFrameUniforms {
-                //     output_size: [output_size.0, output_size.1],
-                //     frame_size: [frame_size.0, frame_size.1],
-                //     crop_bounds: [0.0, 0.0, frame_size.0, frame_size.1],
-                //     target_bounds,
-                //     target_size,
-                //     rounding_px,
-                //     ..Default::default()
-                // })
-                // .to_buffer(device),
                 &texture_view,
                 get_either(texture_views, !output_is_left),
             ),
@@ -629,18 +589,6 @@ pub async fn produce_frame(
             },
         );
 
-        // let padding = 30.0;
-        // let frame_size = (camera_size.0 as f32, camera_size.1 as f32);
-        // let output_size = (options.output_size.0 as f32, options.output_size.1 as f32);
-        // let x_scale = output_size.0 / frame_size.0;
-        // let target_bounds = [padding, padding, 300.0, 300.0];
-        // let target_size = [
-        //     target_bounds[2] - target_bounds[0],
-        //     target_bounds[3] - target_bounds[1],
-        // ];
-        // let rounding_pc = 0.1;
-        // let rounding_px = f32::min(target_size[0], target_size[1]) * 0.5 * rounding_pc;
-
         do_render_pass(
             &mut encoder,
             get_either(texture_views, output_is_left),
@@ -648,21 +596,6 @@ pub async fn produce_frame(
             composite_video_frame_pipeline.bind_group(
                 device,
                 &uniforms.to_buffer(device),
-                // &dbg!(CompositeVideoFrameUniforms {
-                //     output_size: [output_size.0, output_size.1],
-                //     frame_size: [frame_size.0, frame_size.1],
-                //     crop_bounds: [
-                //         (frame_size.0 - frame_size.1) / 2.0,
-                //         0.0,
-                //         frame_size.0 - (frame_size.0 - frame_size.1) / 2.0,
-                //         frame_size.1
-                //     ],
-                //     target_bounds,
-                //     target_size,
-                //     rounding_px,
-                //     ..Default::default()
-                // })
-                // .to_buffer(device),
                 &texture_view,
                 get_either(texture_views, !output_is_left),
             ),
@@ -672,6 +605,32 @@ pub async fn produce_frame(
     }
 
     queue.submit(std::iter::once(encoder.finish()));
+
+    let output_texture_size = wgpu::Extent3d {
+        width: uniforms.output_size.0,
+        height: uniforms.output_size.1,
+        depth_or_array_layers: 1,
+    };
+
+    // Calculate the aligned bytes per row
+    let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+    let unpadded_bytes_per_row = uniforms.output_size.0 * 4;
+    let padding = (align - (unpadded_bytes_per_row % align)) % align;
+    let padded_bytes_per_row = unpadded_bytes_per_row + padding;
+
+    // Ensure the padded_bytes_per_row is a multiple of 4 (32 bits)
+    let padded_bytes_per_row = (padded_bytes_per_row + 3) & !3;
+
+    let output_buffer_size = (padded_bytes_per_row * uniforms.output_size.1) as u64;
+
+    let output_buffer = device.create_buffer(
+        &(wgpu::BufferDescriptor {
+            size: output_buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            label: Some("Output Buffer"),
+            mapped_at_creation: false,
+        }),
+    );
 
     {
         let mut encoder = device.create_command_encoder(
@@ -688,14 +647,14 @@ pub async fn produce_frame(
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::ImageCopyBuffer {
-                buffer: output_buffer,
+                buffer: &output_buffer,
                 layout: wgpu::ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(*padded_bytes_per_row),
-                    rows_per_image: Some(options.output_size.1),
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(uniforms.output_size.1),
                 },
             },
-            *output_texture_size,
+            output_texture_size,
         );
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -719,9 +678,9 @@ pub async fn produce_frame(
     let data = buffer_slice.get_mapped_range();
     let padded_data: Vec<u8> = data.to_vec(); // Ensure the type is Vec<u8>
     let mut image_data =
-        Vec::with_capacity((options.output_size.0 * options.output_size.1 * 4) as usize);
-    for chunk in padded_data.chunks(*padded_bytes_per_row as usize) {
-        image_data.extend_from_slice(&chunk[..*unpadded_bytes_per_row as usize]);
+        Vec::with_capacity((uniforms.output_size.0 * uniforms.output_size.1 * 4) as usize);
+    for chunk in padded_data.chunks(padded_bytes_per_row as usize) {
+        image_data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
     }
 
     // Unmap the buffer

@@ -10,9 +10,18 @@ export const OUTPUT_SIZE = {
   height: 1080,
 };
 
+export type FrameData = { width: number; height: number; data: ImageData };
+
 export const [EditorInstanceContextProvider, useEditorInstanceContext] =
   createContextProvider((props: { videoId: string }) => {
-    const [currentFrame, setCurrentFrame] = createSignal<ImageData>();
+    let res: ((frame: FrameData) => void) | undefined;
+
+    const [currentFrame, currentFrameActions] = createResource(
+      () =>
+        new Promise<FrameData>((r) => {
+          res = r;
+        })
+    );
 
     const [editorInstance] = createResource(async () => {
       const instance = await commands.createEditorInstance(props.videoId);
@@ -27,13 +36,35 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
       };
       ws.binaryType = "arraybuffer";
       ws.onmessage = (event) => {
-        const clamped = new Uint8ClampedArray(event.data);
+        const buffer = event.data as ArrayBuffer;
+        const clamped = new Uint8ClampedArray(buffer);
+
+        const widthArr = clamped.slice(clamped.length - 4);
+        const heightArr = clamped.slice(clamped.length - 8, clamped.length - 4);
+
+        const width =
+          widthArr[0] +
+          (widthArr[1] << 8) +
+          (widthArr[2] << 16) +
+          (widthArr[3] << 24);
+        const height =
+          heightArr[0] +
+          (heightArr[1] << 8) +
+          (heightArr[2] << 16) +
+          (heightArr[3] << 24);
+
         const imageData = new ImageData(
-          clamped,
-          OUTPUT_SIZE.width,
-          OUTPUT_SIZE.height
+          clamped.slice(0, clamped.length - 8),
+          width,
+          height
         );
-        setCurrentFrame(imageData);
+
+        if (res) {
+          res({ data: imageData, width, height });
+          res = undefined;
+        } else {
+          currentFrameActions.mutate({ data: imageData, width, height });
+        }
       };
 
       return instance.data;

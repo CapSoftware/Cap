@@ -57,7 +57,7 @@ export function ConfigSidebar() {
   return (
     <KTabs
       value={selectedTab()}
-      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden w-[25.5rem]"
+      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden w-[25.5rem] z-10 bg-gray-50"
     >
       <KTabs.List class="h-[3.5rem] flex flex-row divide-x divide-gray-200 text-black/50 text-lg relative z-40 overflow-x-auto border-b border-gray-200">
         <For

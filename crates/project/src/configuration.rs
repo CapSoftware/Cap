@@ -39,8 +39,14 @@ pub struct XY<T> {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
-    pub position: XY<f32>,
-    pub size: XY<f32>,
+    pub position: XY<u32>,
+    pub size: XY<u32>,
+}
+
+impl Crop {
+    pub fn aspect_ratio(&self) -> f32 {
+        self.size.x as f32 / self.size.y as f32
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]

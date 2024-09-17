@@ -16,6 +16,7 @@ use auth::AuthStore;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::FFmpeg;
 use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta};
+use cap_rendering::ProjectUniforms;
 use cap_utils::create_named_pipe;
 use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
@@ -444,6 +445,8 @@ async fn render_to_file_impl(
     let output_path_clone = output_path.clone();
     let recording_dir_clone = recording_dir.clone();
 
+    let output_size = ProjectUniforms::get_output_size(&options, &project);
+
     let ffmpeg_handle = tokio::spawn({
         let project = project.clone();
         async move {
@@ -495,8 +498,8 @@ async fn render_to_file_impl(
             create_named_pipe(&video_pipe_path).unwrap();
 
             ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
-                width: options.output_size.0,
-                height: options.output_size.1,
+                width: output_size.0,
+                height: output_size.1,
                 fps: 30,
                 pix_fmt: "rgba",
                 input: video_pipe_path.clone().into_os_string(),
@@ -584,8 +587,8 @@ async fn render_to_file_impl(
 
             // Save the first frame as a screenshot and thumbnail
             if let Some(frame_data) = first_frame {
-                let width = options.output_size.0;
-                let height = options.output_size.1;
+                let width = output_size.0;
+                let height = output_size.1;
                 let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
                     ImageBuffer::from_raw(width, height, frame_data)
                         .expect("Failed to create image from frame data");
