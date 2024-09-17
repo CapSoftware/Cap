@@ -1,5 +1,5 @@
 import { Button } from "@cap/ui-solid";
-import { clientEnv } from "../../utils/env";
+import { clientEnv } from "~/utils/env";
 import { createSignal, onMount, Show } from "solid-js";
 import { authStore } from "../../store";
 import { getCurrentWindow } from "@tauri-apps/api/window";

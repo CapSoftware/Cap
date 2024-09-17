@@ -1,6 +1,6 @@
 import { createEffect, createSignal, type ComponentProps } from "solid-js";
 
-import { commands } from "../utils/tauri";
+import { commands } from "~/utils/tauri";
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
 

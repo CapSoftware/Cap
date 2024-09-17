@@ -23,9 +23,9 @@ import { TransitionGroup } from "solid-transition-group";
 import { createStore, produce } from "solid-js/store";
 import { makePersisted } from "@solid-primitives/storage";
 
-import { commands, events } from "../utils/tauri";
+import { commands, events } from "~/utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
-import { createPresets } from "./createPresets";
+import { createPresets } from "~/utils/createPresets";
 
 type RecordingEntry = {
   path: string;

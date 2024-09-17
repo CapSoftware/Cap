@@ -20,7 +20,7 @@ import { createMutation } from "@tanstack/solid-query";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { events, commands } from "../../utils/tauri";
+import { events, commands } from "~/utils/tauri";
 import { EditorContextProvider, useEditorContext } from "./context";
 import {
   Dialog,
@@ -153,7 +153,7 @@ function Inner() {
       data-tauri-drag-region
     >
       <Header />
-      <div class="rounded-2xl shadow border flex-1 flex flex-col divide-y bg-white">
+      <div class="rounded-2xl overflow-hidden  shadow border flex-1 flex flex-col divide-y bg-white">
         <div class="flex flex-row flex-1 divide-x overflow-y-hidden">
           <Player />
           <ConfigSidebar />
@@ -434,43 +434,35 @@ function Dialogs() {
                                         display.height,
                                     };
 
-                                    batch(() => {
-                                      if (original.position.x + diff.x < 0)
-                                        setCrop("position", "x", 0);
-                                      else if (
-                                        original.position.x + diff.x >
-                                        display.width - crop.size.x
-                                      )
-                                        setCrop(
-                                          "position",
-                                          "x",
+                                    const x = Math.floor(
+                                      (() => {
+                                        if (original.position.x + diff.x < 0)
+                                          return 0;
+                                        if (
+                                          original.position.x + diff.x >
                                           display.width - crop.size.x
-                                        );
-                                      else
-                                        setCrop(
-                                          "position",
-                                          "x",
-                                          original.position.x + diff.x
-                                        );
+                                        )
+                                          return display.width - crop.size.x;
 
-                                      if (original.position.y + diff.y < 0)
-                                        setCrop("position", "y", 0);
-                                      else if (
-                                        original.position.y + diff.y >
-                                        display.height - crop.size.y
-                                      )
-                                        setCrop(
-                                          "position",
-                                          "y",
+                                        return original.position.x + diff.x;
+                                      })()
+                                    );
+
+                                    const y = Math.floor(
+                                      (() => {
+                                        if (original.position.y + diff.y < 0)
+                                          return 0;
+                                        if (
+                                          original.position.y + diff.y >
                                           display.height - crop.size.y
-                                        );
-                                      else
-                                        setCrop(
-                                          "position",
-                                          "y",
-                                          original.position.y + diff.y
-                                        );
-                                    });
+                                        )
+                                          return display.height - crop.size.y;
+
+                                        return original.position.y + diff.y;
+                                      })()
+                                    );
+
+                                    setCrop("position", { x, y });
                                   },
                                 });
                               });
@@ -539,34 +531,41 @@ function Dialogs() {
                                                 setCrop(
                                                   "size",
                                                   "x",
-                                                  clamp(
-                                                    original.size.x + diff.x,
-                                                    MIN_SIZE,
-                                                    editorInstance.recordings
-                                                      .display.width -
-                                                      crop.position.x
+                                                  Math.floor(
+                                                    clamp(
+                                                      original.size.x + diff.x,
+                                                      MIN_SIZE,
+                                                      editorInstance.recordings
+                                                        .display.width -
+                                                        crop.position.x
+                                                    )
                                                   )
                                                 );
                                               } else {
                                                 setCrop(
                                                   "position",
                                                   "x",
-                                                  clamp(
-                                                    original.position.x +
-                                                      diff.x,
-                                                    0,
-                                                    editorInstance.recordings
-                                                      .display.width - MIN_SIZE
+                                                  Math.floor(
+                                                    clamp(
+                                                      original.position.x +
+                                                        diff.x,
+                                                      0,
+                                                      editorInstance.recordings
+                                                        .display.width -
+                                                        MIN_SIZE
+                                                    )
                                                   )
                                                 );
                                                 setCrop(
                                                   "size",
                                                   "x",
-                                                  clamp(
-                                                    original.size.x - diff.x,
-                                                    MIN_SIZE,
-                                                    editorInstance.recordings
-                                                      .display.width
+                                                  Math.floor(
+                                                    clamp(
+                                                      original.size.x - diff.x,
+                                                      MIN_SIZE,
+                                                      editorInstance.recordings
+                                                        .display.width
+                                                    )
                                                   )
                                                 );
                                               }
@@ -575,34 +574,41 @@ function Dialogs() {
                                                 setCrop(
                                                   "size",
                                                   "y",
-                                                  clamp(
-                                                    original.size.y + diff.y,
-                                                    MIN_SIZE,
-                                                    editorInstance.recordings
-                                                      .display.height -
-                                                      crop.position.y
+                                                  Math.floor(
+                                                    clamp(
+                                                      original.size.y + diff.y,
+                                                      MIN_SIZE,
+                                                      editorInstance.recordings
+                                                        .display.height -
+                                                        crop.position.y
+                                                    )
                                                   )
                                                 );
                                               } else {
                                                 setCrop(
                                                   "position",
                                                   "y",
-                                                  clamp(
-                                                    original.position.y +
-                                                      diff.y,
-                                                    0,
-                                                    editorInstance.recordings
-                                                      .display.height - MIN_SIZE
+                                                  Math.floor(
+                                                    clamp(
+                                                      original.position.y +
+                                                        diff.y,
+                                                      0,
+                                                      editorInstance.recordings
+                                                        .display.height -
+                                                        MIN_SIZE
+                                                    )
                                                   )
                                                 );
                                                 setCrop(
                                                   "size",
                                                   "y",
-                                                  clamp(
-                                                    original.size.y - diff.y,
-                                                    MIN_SIZE,
-                                                    editorInstance.recordings
-                                                      .display.height
+                                                  Math.floor(
+                                                    clamp(
+                                                      original.size.y - diff.y,
+                                                      MIN_SIZE,
+                                                      editorInstance.recordings
+                                                        .display.height
+                                                    )
                                                   )
                                                 );
                                               }

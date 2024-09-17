@@ -120,8 +120,6 @@ impl AsyncVideoDecoder {
             while let Ok(r) = peekable_requests.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(frame_number, sender) => {
-                        // println!("received request for frame {frame_number}");
-
                         let mut sender = if let Some(cached) = cache.get(&frame_number) {
                             sender.send(Some(cached.clone())).ok();
                             continue;

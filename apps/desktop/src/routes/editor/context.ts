@@ -1,21 +1,20 @@
 import { createContextProvider } from "@solid-primitives/context";
-import { createEffect, createSignal, on } from "solid-js";
-import { createStore, reconcile, unwrap } from "solid-js/store";
-import { debounce } from "@solid-primitives/scheduled";
-import { createUndoHistory } from "@solid-primitives/history";
 import { captureStoreUpdates, trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
+import { createUndoHistory } from "@solid-primitives/history";
+import { debounce } from "@solid-primitives/scheduled";
+import { createEffect, createSignal, on } from "solid-js";
+import { createStore, reconcile, unwrap } from "solid-js/store";
 
+import type { PresetsStore } from "../../store";
 import {
-  type SerializedEditorInstance,
   type ProjectConfiguration,
-  commands,
+  type SerializedEditorInstance,
   type XY,
-} from "../../utils/tauri";
+  commands,
+} from "~/utils/tauri";
 import { useEditorInstanceContext } from "./editorInstanceContext";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
-import type { PresetsStore } from "../createPresets";
-import { createElementBounds } from "@solid-primitives/bounds";
 
 export type CurrentDialog =
   | { type: "createPreset" }

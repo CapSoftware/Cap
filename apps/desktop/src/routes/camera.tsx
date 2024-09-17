@@ -18,9 +18,9 @@ import { createStore } from "solid-js/store";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { cx } from "cva";
 
-import { createCameraForLabel } from "../utils/media";
-import { createOptionsQuery } from "../utils/queries";
-import { commands } from "../utils/tauri";
+import { createCameraForLabel } from "~/utils/media";
+import { createOptionsQuery } from "~/utils/queries";
+import { commands } from "~/utils/tauri";
 
 namespace CameraWindow {
   export type Size = "sm" | "lg";

@@ -4,7 +4,8 @@ import { Match, Show, Switch, createResource } from "solid-js";
 import { platform } from "@tauri-apps/plugin-os";
 import { createStore, reconcile } from "solid-js/store";
 
-import { type RenderProgress, commands } from "../../utils/tauri";
+import { type RenderProgress, commands } from "~/utils/tauri";
+
 import { useEditorContext } from "./context";
 import { Dialog, DialogContent } from "./ui";
 

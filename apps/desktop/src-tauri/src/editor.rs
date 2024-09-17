@@ -7,6 +7,8 @@ use tokio::{
     task::JoinHandle,
 };
 
+use crate::editor_instance::SocketMessage;
+
 struct EditorState {
     config: ProjectConfiguration,
     playback_position: u32,
@@ -107,7 +109,7 @@ pub enum RendererMessage {
 
 pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
-    frame_tx: mpsc::UnboundedSender<Vec<u8>>,
+    frame_tx: mpsc::UnboundedSender<SocketMessage>,
     render_constants: Arc<RenderVideoConstants>,
 }
 
@@ -118,7 +120,7 @@ pub struct RendererHandle {
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
-        frame_tx: mpsc::UnboundedSender<Vec<u8>>,
+        frame_tx: mpsc::UnboundedSender<SocketMessage>,
     ) -> RendererHandle {
         let (tx, rx) = mpsc::channel(4);
 
@@ -168,7 +170,13 @@ impl Renderer {
                             .await
                             .unwrap();
 
-                            frame_tx.send(frame).ok();
+                            frame_tx
+                                .send(SocketMessage::Frame {
+                                    data: frame,
+                                    width: uniforms.output_size.0,
+                                    height: uniforms.output_size.1,
+                                })
+                                .ok();
                             finished.send(()).ok();
                         }));
                     }
