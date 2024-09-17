@@ -1,5 +1,5 @@
 import { createElementBounds } from "@solid-primitives/bounds";
-import { Show, createRoot, createSignal, onMount } from "solid-js";
+import { For, Show, createRoot, createSignal, onMount } from "solid-js";
 
 import { commands } from "../../utils/tauri";
 import { useEditorContext } from "./context";
@@ -23,12 +23,6 @@ export function Timeline() {
   const [timelineRef, setTimelineRef] = createSignal<HTMLDivElement>();
   const timelineBounds = createElementBounds(timelineRef);
 
-  const trim = () =>
-    project.timeline?.segments[0] ?? {
-      start: 0,
-      end: duration(),
-    };
-
   onMount(() => {
     if (!project.timeline) {
       const resume = history.pause();
@@ -43,7 +37,7 @@ export function Timeline() {
 
   return (
     <div
-      class="py-[2rem] relative bg-red-transparent-10 overflow-hidden"
+      class="py-[2rem] relative overflow-hidden"
       style={{
         "padding-left": `${xPadding}px`,
         "padding-right": `${xPadding}px`,
@@ -97,95 +91,105 @@ export function Timeline() {
         >
           <div class="size-2 bg-red-300 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
         </div>
-        <div
-          class="relative h-[3rem] border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden"
-          style={{
-            width: `${(100 * (trim().end - trim().start)) / duration()}%`,
-          }}
+        <For
+          each={project.timeline?.segments ?? [{ start: 0, end: duration() }]}
         >
-          <div
-            class="bg-blue-300 w-[0.5rem] cursor-col-resize"
-            onMouseDown={(downEvent) => {
-              const start = trim().start;
+          {(segment, i) => {
+            return (
+              <div
+                class="relative h-[3rem] border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden"
+                style={{
+                  width: `${
+                    (100 * (segment.end - segment.start)) / duration()
+                  }%`,
+                }}
+              >
+                <div
+                  class="bg-blue-300 w-[0.5rem] cursor-col-resize"
+                  onMouseDown={(downEvent) => {
+                    const start = segment.start;
 
-              function update(event: MouseEvent) {
-                const { width } = timelineBounds;
-                setProject(
-                  "timeline",
-                  "segments",
-                  0,
-                  "start",
-                  Math.max(
-                    Math.min(
-                      trim().end,
-                      start +
-                        ((event.clientX - downEvent.clientX) / width) *
-                          duration()
-                    ),
-                    0
-                  )
-                );
-              }
+                    function update(event: MouseEvent) {
+                      const { width } = timelineBounds;
+                      setProject(
+                        "timeline",
+                        "segments",
+                        i(),
+                        "start",
+                        Math.max(
+                          Math.min(
+                            segment.end,
+                            start +
+                              ((event.clientX - downEvent.clientX) / width) *
+                                duration()
+                          ),
+                          0
+                        )
+                      );
+                    }
 
-              const resumeHistory = history.pause();
-              createRoot((dispose) => {
-                createEventListenerMap(window, {
-                  mousemove: update,
-                  mouseup: (e) => {
-                    dispose();
-                    resumeHistory();
-                    update(e);
-                  },
-                });
-              });
-            }}
-          />
-          <div class="bg-blue-50 relative w-full h-full flex flex-row items-end justify-end px-[0.5rem] py-[0.25rem]">
-            <span class="text-black-transparent-60 text-[0.625rem]">
-              {formatTime(trim().start)}
-            </span>
-            <span class="text-black-transparent-60 text-[0.625rem] ml-auto">
-              {formatTime(trim().end)}
-            </span>
-          </div>
-          <div
-            class="bg-blue-300 w-[0.5rem] cursor-col-resize"
-            onMouseDown={(downEvent) => {
-              const end = trim().end;
+                    const resumeHistory = history.pause();
+                    createRoot((dispose) => {
+                      createEventListenerMap(window, {
+                        mousemove: update,
+                        mouseup: (e) => {
+                          dispose();
+                          resumeHistory();
+                          update(e);
+                        },
+                      });
+                    });
+                  }}
+                />
+                <div class="bg-blue-50 relative w-full h-full flex flex-row items-end justify-end px-[0.5rem] py-[0.25rem]">
+                  <span class="text-black-transparent-60 text-[0.625rem]">
+                    {formatTime(segment.start)}
+                  </span>
+                  <span class="text-black-transparent-60 text-[0.625rem] ml-auto">
+                    {formatTime(segment.end)}
+                  </span>
+                </div>
+                <div
+                  class="bg-blue-300 w-[0.5rem] cursor-col-resize"
+                  onMouseDown={(downEvent) => {
+                    const end = segment.end;
 
-              function update(event: MouseEvent) {
-                const { width } = timelineBounds;
-                setProject(
-                  "timeline",
-                  "segments",
-                  0,
-                  "end",
-                  Math.max(
-                    trim().start,
-                    Math.min(
-                      duration(),
-                      end +
-                        ((event.clientX - downEvent.clientX) / width) *
-                          duration()
-                    )
-                  )
-                );
-              }
+                    function update(event: MouseEvent) {
+                      const { width } = timelineBounds;
+                      setProject(
+                        "timeline",
+                        "segments",
+                        i(),
+                        "end",
+                        Math.max(
+                          segment.start,
+                          Math.min(
+                            duration(),
+                            end +
+                              ((event.clientX - downEvent.clientX) / width) *
+                                duration()
+                          )
+                        )
+                      );
+                    }
 
-              const resumeHistory = history.pause();
-              createRoot((dispose) => {
-                createEventListenerMap(window, {
-                  mousemove: update,
-                  mouseup: (e) => {
-                    dispose();
-                    resumeHistory();
-                    update(e);
-                  },
-                });
-              });
-            }}
-          />
-        </div>
+                    const resumeHistory = history.pause();
+                    createRoot((dispose) => {
+                      createEventListenerMap(window, {
+                        mousemove: update,
+                        mouseup: (e) => {
+                          dispose();
+                          resumeHistory();
+                          update(e);
+                        },
+                      });
+                    });
+                  }}
+                />
+              </div>
+            );
+          }}
+        </For>
       </div>
     </div>
   );
