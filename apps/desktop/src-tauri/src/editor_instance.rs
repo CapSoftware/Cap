@@ -219,9 +219,9 @@ impl EditorInstance {
                     continue;
                 };
 
-                let Some(time) = project.timeline.as_ref().and_then(|timeline| {
+                let Some(time) = project.timeline.as_ref().map(|timeline| {
                     timeline.get_recording_time(frame_number as f64 / FPS as f64)
-                }) else {
+                }).unwrap_or(Some(frame_number as f64 / FPS as f64)) else {
                     continue;
                 };
 

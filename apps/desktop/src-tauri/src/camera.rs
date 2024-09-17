@@ -52,7 +52,7 @@ pub fn create_camera_window(app: AppHandle) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn list_cameras() -> Vec<String> {
     nokhwa::query(nokhwa::utils::ApiBackend::Auto)
