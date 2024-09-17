@@ -288,6 +288,7 @@ export default function () {
                       class={topLeftAnimateClasses}
                     >
                       <MenuItemList<typeof KSelect.Listbox>
+                        class="max-h-36 overflow-y-auto"
                         as={KSelect.Listbox}
                       />
                     </PopperContent>
@@ -362,7 +363,7 @@ export default function () {
                       class={topLeftAnimateClasses}
                     >
                       <MenuItemList<typeof KSelect.Listbox>
-                        class="max-h-40 overflow-y-auto"
+                        class="max-h-36 overflow-y-auto"
                         as={KSelect.Listbox}
                       />
                     </PopperContent>

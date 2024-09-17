@@ -22,6 +22,7 @@ use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
+use nix::libc::pthread_introspection_hook_t;
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
 use project_recordings::ProjectRecordings;
