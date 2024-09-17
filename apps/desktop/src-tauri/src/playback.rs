@@ -54,7 +54,11 @@ impl Playback {
             let mut frame_number = self.start_frame_number + 1;
             let uniforms = ProjectUniforms::new(&self.render_constants, &self.project);
 
-            let duration = self.recordings.duration();
+            let duration = self
+                .project
+                .timeline()
+                .map(|t| t.duration())
+                .unwrap_or(f64::MAX);
 
             if let Some(audio) = self.audio.clone() {
                 AudioPlayback {
@@ -62,6 +66,7 @@ impl Playback {
                     stop_rx: stop_rx.clone(),
                     start_frame_number: self.start_frame_number,
                     duration,
+                    project: self.project.clone(),
                 }
                 .spawn();
             };
@@ -71,11 +76,22 @@ impl Playback {
                     break;
                 };
 
+                let time = if let Some(timeline) = self.project.timeline() {
+                    match timeline.get_recording_time(
+                        start.elapsed().as_secs_f64() + self.start_frame_number as f64 / FPS as f64, /* frame_number as f64 / FPS as f64 */
+                    ) {
+                        Some(time) => time,
+                        None => break,
+                    }
+                } else {
+                    frame_number as f64 / FPS as f64
+                };
+
                 tokio::select! {
                     _ = stop_rx.changed() => {
                        break;
                     },
-                    Some((screen_frame, camera_frame)) = self.decoders.get_frames(frame_number) => {
+                    Some((screen_frame, camera_frame)) = self.decoders.get_frames((time * FPS as f64) as u32) => {
                         tokio::time::sleep_until(start + (frame_number - self.start_frame_number) * Duration::from_secs_f32(1.0 / FPS as f32)).await;
 
                         self
@@ -89,6 +105,7 @@ impl Playback {
                             .await;
 
                         event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
+
 
                         frame_number += 1;
                     }
@@ -124,6 +141,7 @@ struct AudioPlayback {
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
     duration: f64,
+    project: ProjectConfiguration,
 }
 
 impl AudioPlayback {
@@ -141,18 +159,23 @@ impl AudioPlayback {
             let mut config = supported_config.config();
             config.channels = 1;
 
-            dbg!(audio.sample_rate);
-            dbg!(&config);
-
             let data = audio.buffer.clone();
+            let duration = data.len() as f64 / audio.sample_rate as f64;
+            let mut time = self.start_frame_number as f64 / FPS as f64;
+
+            let time_inc = 1.0 / config.sample_rate.0 as f64;
 
             let mut clock =
                 data.len() as f64 * self.start_frame_number as f64 / (FPS as f64 * self.duration);
 
             let resample_ratio = audio.sample_rate as f64 / config.sample_rate.0 as f64;
-            dbg!(resample_ratio);
 
             let next_sample = move || {
+                time += time_inc;
+                let time = self.project.timeline()?.get_recording_time(time)?;
+
+                let index = time / duration * data.len() as f64;
+
                 clock += resample_ratio;
 
                 if clock >= data.len() as f64 {
@@ -160,10 +183,10 @@ impl AudioPlayback {
                 }
 
                 // Simple linear interpolation
-                let index = clock as usize;
-                let frac = clock.fract();
-                let current = data[index];
-                let next = data[(index + 1) % data.len()];
+                let index_int = index as usize;
+                let frac = index.fract();
+                let current = data[index_int];
+                let next = data[(index_int + 1) % data.len()];
                 Some(current * (1.0 - frac) + next * frac)
             };
 

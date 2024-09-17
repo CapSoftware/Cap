@@ -107,77 +107,34 @@ pub async fn render_video_to_channel(
 
     ffmpeg_next::init().unwrap();
 
-    let (screen_tx, mut screen_rx) =
-        tokio::sync::mpsc::unbounded_channel::<decoder::DecodedFrame>();
-
-    tokio::spawn(async move {
-        let now = Instant::now();
-
-        let mut i = 0;
-        loop {
-            match decoders.screen.get_frame(i).await {
-                Some(frame) => {
-                    if screen_tx.send(frame).is_err() {
-                        println!("Error sending screen frame to renderer");
-                        break;
-                    }
-                }
-                None => {
-                    println!("Reached end of screen stream");
-                    break;
-                }
-            }
-            i += 1;
-        }
-
-        println!("done decoding screen in {:.2?}", now.elapsed())
-    });
-
-    let mut camera_rx = decoders.camera.map(|decoder| {
-        println!("Setting up FFmpeg input for webcam recording...");
-        let (camera_tx, camera_rx) = tokio::sync::mpsc::unbounded_channel();
-
-        tokio::spawn(async move {
-            let now = Instant::now();
-
-            let mut i = 0;
-            loop {
-                match decoder.get_frame(i).await {
-                    Some(frame) => {
-                        if camera_tx.send(frame).is_err() {
-                            println!("Error sending screen frame to renderer");
-                            break;
-                        }
-                    }
-                    None => {
-                        println!("Reached end of screen stream");
-                        break;
-                    }
-                }
-                i += 1;
-            }
-
-            println!("done decoding camera in {:.2?}", now.elapsed())
-        });
-
-        camera_rx
-    });
-
     let start_time = Instant::now();
 
+    let duration = project.timeline().map(|t| t.duration()).unwrap_or(f64::MAX);
+
     let render_handle: tokio::task::JoinHandle<Result<u32, String>> = tokio::spawn(async move {
-        let mut frame_count = 0;
+        let mut frame_number = 0;
 
         let uniforms = ProjectUniforms::new(&constants, &project);
-        let background = Background::from(project.background.source);
+        let background = Background::from(project.background.source.clone());
 
         loop {
-            let Some(screen_frame) = screen_rx.recv().await else {
+            if frame_number as f64 > 30 as f64 * duration {
                 break;
             };
-            let camera_frame = match &mut camera_rx {
-                Some(rx) => rx.recv().await,
-                None => None,
+
+            let time = if let Some(timeline) = project.timeline() {
+                match timeline.get_recording_time(frame_number as f64 / 30 as f64) {
+                    Some(time) => time,
+                    None => break,
+                }
+            } else {
+                frame_number as f64 / 30 as f64
+            };
+
+            let Some((screen_frame, camera_frame)) =
+                decoders.get_frames((time * 30.0) as u32).await
+            else {
+                break;
             };
 
             let frame = match produce_frame(
@@ -197,16 +154,16 @@ pub async fn render_video_to_channel(
             };
 
             if sender.send(frame).is_err() {
-                eprintln!("Failed to send processed frame to FFmpeg");
+                eprintln!("Failed to send processed frame to channel");
                 break;
             }
 
-            frame_count += 1;
-            if frame_count % 60 == 0 {
+            frame_number += 1;
+            if frame_number % 60 == 0 {
                 let elapsed = start_time.elapsed();
                 println!(
-                    "Processed {} frames in {:?} seconds",
-                    frame_count,
+                    "Rendered {} frames in {:?} seconds",
+                    frame_number,
                     elapsed.as_secs_f32()
                 );
             }
@@ -214,7 +171,7 @@ pub async fn render_video_to_channel(
 
         println!("Render loop exited");
 
-        Ok(frame_count)
+        Ok(frame_number)
     });
 
     let total_frames = render_handle.await.map_err(|e| e.to_string())??;

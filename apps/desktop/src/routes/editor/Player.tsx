@@ -20,6 +20,7 @@ import {
 import { ASPECT_RATIOS } from "./projectConfig";
 import { OUTPUT_SIZE } from "./editorInstanceContext";
 import { formatTime } from "./utils";
+
 export function Player() {
   const {
     project,
@@ -131,7 +132,14 @@ export function Player() {
           <button type="button" disabled>
             <IconCapFrameLast class="size-[1rem]" />
           </button>
-          <span>{formatTime(editorInstance.recordingDuration)}</span>
+          <span>
+            {formatTime(
+              project.timeline?.segments.reduce(
+                (acc, s) => acc + (s.end - s.start) / s.timescale,
+                0
+              ) ?? editorInstance.recordingDuration
+            )}
+          </span>
         </div>
         <div class="flex-1 flex flex-row justify-end">
           <ComingSoonTooltip>

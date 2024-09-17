@@ -16,10 +16,12 @@ use auth::AuthStore;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::FFmpeg;
 use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta};
-use display::{list_capture_windows, Bounds, CaptureTarget};
+use cap_utils::create_named_pipe;
+use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
+use nix::libc::pthread_introspection_hook_t;
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
 use project_recordings::ProjectRecordings;
@@ -37,6 +39,8 @@ use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
+use tempfile::TempDir;
+use tokio::sync::mpsc;
 use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
@@ -417,6 +421,11 @@ async fn copy_file_to_path(src: String, dst: String) -> Result<(), String> {
     }
 }
 
+struct AudioRender {
+    data: AudioData,
+    pipe_tx: mpsc::UnboundedSender<Vec<f64>>,
+}
+
 async fn render_to_file_impl(
     editor_instance: &Arc<EditorInstance>,
     project: ProjectConfiguration,
@@ -436,124 +445,184 @@ async fn render_to_file_impl(
     let output_path_clone = output_path.clone();
     let recording_dir_clone = recording_dir.clone();
 
-    let ffmpeg_handle = tokio::spawn(async move {
-        println!("Starting FFmpeg output process...");
-        let mut ffmpeg = cap_ffmpeg::FFmpeg::new();
+    let ffmpeg_handle = tokio::spawn({
+        let project = project.clone();
+        async move {
+            println!("Starting FFmpeg output process...");
+            let mut ffmpeg = cap_ffmpeg::FFmpeg::new();
 
-        let audio_path = if let Some(audio) = &audio {
             let dir = tempfile::tempdir().unwrap();
-            let file_path = dir.path().join("audio.raw");
-            let mut file = std::fs::File::create(&file_path).unwrap();
+            let audio = if let Some(audio) = audio {
+                let pipe_path = dir.path().join("audio.pipe");
+                create_named_pipe(&pipe_path).unwrap();
 
-            file.write_all(
-                audio
-                    .buffer
-                    .iter()
-                    .flat_map(|f| f.to_le_bytes())
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-            .unwrap();
+                ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
+                    input: pipe_path.clone().into_os_string(),
+                    sample_format: "f64le".to_string(),
+                    sample_rate: audio.sample_rate,
+                    channels: 1,
+                    wallclock: false,
+                });
 
-            ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
-                input: file_path.clone().into_os_string(),
-                sample_format: "f64le".to_string(),
-                sample_rate: 44100,
-                channels: 1,
-                wallclock: false,
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f64>>();
+
+                tokio::spawn(async move {
+                    let mut file = std::fs::File::create(&pipe_path).unwrap();
+                    println!("audio pipe opened");
+
+                    while let Some(bytes) = rx.recv().await {
+                        println!("writing {} audio bytes", bytes.len() * 8);
+                        file.write_all(
+                            bytes
+                                .iter()
+                                .flat_map(|f| f.to_le_bytes())
+                                .collect::<Vec<_>>()
+                                .as_slice(),
+                        )
+                        .unwrap();
+                        println!("done writing to audio pipe");
+                    }
+                });
+
+                Some(AudioRender {
+                    data: audio,
+                    pipe_tx: tx,
+                })
+            } else {
+                None
+            };
+
+            let video_pipe_path = dir.path().join("video.pipe");
+            create_named_pipe(&video_pipe_path).unwrap();
+
+            ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
+                width: options.output_size.0,
+                height: options.output_size.1,
+                fps: 30,
+                pix_fmt: "rgba",
+                input: video_pipe_path.clone().into_os_string(),
             });
 
-            Some((file_path, file, dir))
-        } else {
-            None
-        };
+            let (video_tx, mut video_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
-        ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
-            width: options.output_size.0,
-            height: options.output_size.1,
-            fps: 30,
-            pix_fmt: "rgba",
-            input: "pipe:0".into(),
-        });
+            tokio::spawn(async move {
+                let mut file = std::fs::File::create(&video_pipe_path).unwrap();
+                println!("video pipe opened");
 
-        ffmpeg
-            .command
-            .args([
-                "-f", "mp4", /*, "-map", &format!("{}:v", ffmpeg_input.index) */
-            ])
-            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
-            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-            .arg("-y")
-            .arg(&output_path_clone);
+                while let Some(bytes) = video_rx.recv().await {
+                    println!("writing {} video bytes", bytes.len());
+                    file.write_all(&bytes).unwrap();
+                }
+                println!("done writing to video pipe");
+            });
 
-        let mut ffmpeg_process = ffmpeg.start();
+            ffmpeg
+                .command
+                .args([
+                    "-f", "mp4", /*, "-map", &format!("{}:v", ffmpeg_input.index) */
+                ])
+                .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+                .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
+                .arg("-y")
+                .arg(&output_path_clone);
 
-        let mut frame_count = 0;
-        let mut first_frame = None;
+            let mut ffmpeg_process = ffmpeg.start();
 
-        loop {
-            match rx_image_data.recv().await {
-                Some(frame) => {
-                    // println!("Sending image data to FFmpeg");
-                    on_progress(frame_count);
+            let mut frame_count = 0;
+            let mut first_frame = None;
 
-                    if frame_count == 0 {
-                        first_frame = Some(frame.clone());
+            loop {
+                match rx_image_data.recv().await {
+                    Some(frame) => {
+                        // println!("Sending image data to FFmpeg");
+                        on_progress(frame_count);
+
+                        if frame_count == 0 {
+                            first_frame = Some(frame.clone());
+                        }
+
+                        if let Some(audio) = &audio {
+                            let samples_per_frame = audio.data.sample_rate as f64 / FPS as f64;
+
+                            if let Some(timeline) = project.timeline() {
+                                if let Some(recording_time) =
+                                    timeline.get_recording_time(frame_count as f64 / FPS as f64)
+                                {
+                                    let start = recording_time * audio.data.sample_rate as f64;
+                                    let end = start + samples_per_frame;
+
+                                    let samples = &audio.data.buffer[start as usize..end as usize];
+                                    let mut samples_iter = samples.iter().copied();
+
+                                    let mut frame_samples = Vec::new();
+                                    for _ in 0..samples_per_frame as usize {
+                                        frame_samples.push(samples_iter.next().unwrap_or(0.0));
+                                    }
+
+                                    println!("sending audio");
+                                    audio.pipe_tx.send(frame_samples).unwrap();
+                                }
+                            }
+                        }
+
+                        video_tx.send(frame).unwrap();
+                        println!("sending video");
+                        // if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
+                        //     eprintln!("Error writing video frame: {:?}", e);
+                        //     break;
+                        // }
+
+                        frame_count += 1;
                     }
-
-                    frame_count += 1;
-                    if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
-                        eprintln!("Error writing video frame: {:?}", e);
+                    None => {
+                        println!("All frames sent to FFmpeg");
                         break;
                     }
                 }
-                None => {
-                    println!("All frames sent to FFmpeg");
-                    break;
-                }
             }
-        }
 
-        ffmpeg_process.stop();
+            ffmpeg_process.stop();
 
-        if let Some((audio_path, _, _)) = audio_path {
-            std::fs::remove_file(audio_path).ok();
-        }
-        // Save the first frame as a screenshot and thumbnail
-        if let Some(frame_data) = first_frame {
-            let width = options.output_size.0;
-            let height = options.output_size.1;
-            let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-                ImageBuffer::from_raw(width, height, frame_data)
-                    .expect("Failed to create image from frame data");
+            // Save the first frame as a screenshot and thumbnail
+            if let Some(frame_data) = first_frame {
+                let width = options.output_size.0;
+                let height = options.output_size.1;
+                let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+                    ImageBuffer::from_raw(width, height, frame_data)
+                        .expect("Failed to create image from frame data");
 
-            // Convert RGBA to RGB
-            let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
-                ImageBuffer::from_fn(width, height, |x, y| {
-                    let rgba = rgba_img.get_pixel(x, y);
-                    image::Rgb([rgba[0], rgba[1], rgba[2]])
+                // Convert RGBA to RGB
+                let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+                    ImageBuffer::from_fn(width, height, |x, y| {
+                        let rgba = rgba_img.get_pixel(x, y);
+                        image::Rgb([rgba[0], rgba[1], rgba[2]])
+                    });
+
+                let screenshots_dir = recording_dir_clone.join("screenshots");
+                std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
+                    eprintln!("Failed to create screenshots directory: {:?}", e);
                 });
 
-            let screenshots_dir = recording_dir_clone.join("screenshots");
-            std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
-                eprintln!("Failed to create screenshots directory: {:?}", e);
-            });
+                // Save full-size screenshot
+                let screenshot_path = screenshots_dir.join("display.jpg");
+                rgb_img.save(&screenshot_path).unwrap_or_else(|e| {
+                    eprintln!("Failed to save screenshot: {:?}", e);
+                });
 
-            // Save full-size screenshot
-            let screenshot_path = screenshots_dir.join("display.jpg");
-            rgb_img.save(&screenshot_path).unwrap_or_else(|e| {
-                eprintln!("Failed to save screenshot: {:?}", e);
-            });
-
-            // Create and save thumbnail
-            let thumbnail =
-                image::imageops::resize(&rgb_img, 100, 100, image::imageops::FilterType::Lanczos3);
-            let thumbnail_path = screenshots_dir.join("thumbnail.png");
-            thumbnail.save(&thumbnail_path).unwrap_or_else(|e| {
-                eprintln!("Failed to save thumbnail: {:?}", e);
-            });
-        } else {
-            eprintln!("No frames were processed, cannot save screenshot or thumbnail");
+                // Create and save thumbnail
+                let thumbnail = image::imageops::resize(
+                    &rgb_img,
+                    100,
+                    100,
+                    image::imageops::FilterType::Lanczos3,
+                );
+                let thumbnail_path = screenshots_dir.join("thumbnail.png");
+                thumbnail.save(&thumbnail_path).unwrap_or_else(|e| {
+                    eprintln!("Failed to save thumbnail: {:?}", e);
+                });
+            } else {
+                eprintln!("No frames were processed, cannot save screenshot or thumbnail");
+            }
         }
     });
 
@@ -742,7 +811,6 @@ async fn get_video_metadata(
     app: AppHandle,
     video_id: String,
     video_type: Option<VideoType>,
-    state: MutableState<'_, App>,
 ) -> Result<(f64, f64), String> {
     let video_id = if video_id.ends_with(".cap") {
         video_id.trim_end_matches(".cap").to_string()
@@ -1046,14 +1114,10 @@ async fn render_to_file(
     project: ProjectConfiguration,
     progress_channel: tauri::ipc::Channel<RenderProgress>,
 ) {
-    let (duration, _size) = get_video_metadata(
-        app.clone(),
-        video_id.clone(),
-        Some(VideoType::Screen),
-        app.state(),
-    )
-    .await
-    .unwrap();
+    let (duration, _size) =
+        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
+            .await
+            .unwrap();
 
     // 30 FPS (calculated for output video)
     let total_frames = (duration * 30.0).round() as u32;
