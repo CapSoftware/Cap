@@ -85,35 +85,19 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 function createStoreHistory<T extends Static>(
   ...[state, setState]: ReturnType<typeof createStore<T>>
 ) {
-  const getDelta = captureStoreUpdates(state);
+  // not working properly yet
+  // const getDelta = captureStoreUpdates(state);
 
   const [pauseCount, setPauseCount] = createSignal(0);
 
-  let clonedState: any;
   const history = createUndoHistory(() => {
     if (pauseCount() > 0) return;
 
-    const delta = getDelta();
-    if (!delta.length) return;
+    trackStore(state);
 
-    for (const { path, value } of delta) {
-      if (path.length === 0) {
-        clonedState = structuredClone(unwrap(value));
-      } else {
-        let target = { ...clonedState };
-        for (const key of path.slice(0, -1)) {
-          target[key] = Array.isArray(target[key])
-            ? [...target[key]]
-            : { ...target[key] };
-          target = target[key];
-        }
-        target[path[path.length - 1]!] = structuredClone(unwrap(value));
-        clonedState = target;
-      }
-    }
+    const copy = structuredClone(unwrap(state));
 
-    const snapshot = clonedState;
-    return () => setState(reconcile(snapshot));
+    return () => setState(reconcile(copy));
   });
 
   createEventListener(window, "keydown", (e) => {

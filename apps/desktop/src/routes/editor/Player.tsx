@@ -1,6 +1,7 @@
 import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
+import { createElementBounds } from "@solid-primitives/bounds";
 import { cx } from "cva";
 import { For, Show, Suspense, createEffect, createSignal } from "solid-js";
 import { reconcile } from "solid-js/store";
@@ -19,7 +20,6 @@ import {
   topLeftAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
-import { createElementBounds } from "@solid-primitives/bounds";
 
 export function Player() {
   const {
@@ -55,19 +55,17 @@ export function Player() {
           <EditorButton
             leftIcon={<IconCapCrop />}
             onClick={() => {
+              const display = editorInstance.recordings.display;
               setDialog({
                 open: true,
                 type: "crop",
                 position: {
-                  ...(project.background.crop?.position ?? {
-                    x: 0,
-                    y: 0,
-                  }),
+                  ...(project.background.crop?.position ?? { x: 0, y: 0 }),
                 },
                 size: {
                   ...(project.background.crop?.size ?? {
-                    x: editorInstance.recordings.display.width,
-                    y: editorInstance.recordings.display.height,
+                    x: display.width,
+                    y: display.height,
                   }),
                 },
               });
@@ -322,8 +320,6 @@ function PresetsDropdown() {
               >
                 {(preset, i) => {
                   const [showSettings, setShowSettings] = createSignal(false);
-
-                  console.log(presets.query());
 
                   return (
                     <KDropdownMenu.Sub gutter={16}>
