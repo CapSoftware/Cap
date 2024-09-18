@@ -60,6 +60,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const [playbackTime, setPlaybackTime] = createSignal<number>(0);
     const [playing, setPlaying] = createSignal(false);
 
+    const [split, setSplit] = createSignal(false);
+
     return {
       ...editorInstanceContext,
       editorInstance: props.editorInstance,
@@ -76,6 +78,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       setPlaying,
       previewTime,
       setPreviewTime,
+      split,
+      setSplit,
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok

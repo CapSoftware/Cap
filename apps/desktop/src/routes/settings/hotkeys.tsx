@@ -167,7 +167,9 @@ function Inner(props: { store: HotkeysStore | null }) {
         </Index>
       </ul>
       <div class="flex flex-row-reverse p-[1rem]">
-        <Button variant="secondary">Restore Defaults</Button>
+        <Button disabled variant="secondary">
+          Restore Defaults
+        </Button>
       </div>
     </div>
   );

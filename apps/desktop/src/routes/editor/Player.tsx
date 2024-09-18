@@ -20,6 +20,7 @@ import {
   topLeftAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
+import { flags } from "~/flags";
 
 export function Player() {
   const {
@@ -32,6 +33,8 @@ export function Player() {
     playbackTime,
     playing,
     setPlaying,
+    split,
+    setSplit,
   } = useEditorContext();
 
   let canvasRef: HTMLCanvasElement;
@@ -46,6 +49,19 @@ export function Player() {
   const [canvasContainerRef, setCanvasContainerRef] =
     createSignal<HTMLDivElement>();
   const containerBounds = createElementBounds(canvasContainerRef);
+
+  const splitButton = () => (
+    <EditorButton<typeof KToggleButton>
+      disabled={flags.split}
+      pressed={split()}
+      onChange={setSplit}
+      as={KToggleButton}
+      variant="danger"
+      leftIcon={<IconCapScissors />}
+    >
+      Split
+    </EditorButton>
+  );
 
   return (
     <div class="flex flex-col divide-y flex-1">
@@ -195,16 +211,11 @@ export function Player() {
           </span>
         </div>
         <div class="flex-1 flex flex-row justify-end">
-          <ComingSoonTooltip>
-            <EditorButton<typeof KToggleButton>
-              disabled
-              as={KToggleButton}
-              variant="danger"
-              leftIcon={<IconCapScissors />}
-            >
-              Split
-            </EditorButton>
-          </ComingSoonTooltip>
+          {flags.split ? (
+            splitButton()
+          ) : (
+            <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
+          )}
         </div>
       </div>
     </div>

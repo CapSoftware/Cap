@@ -1,10 +1,11 @@
 import { createElementBounds } from "@solid-primitives/bounds";
 import { For, Show, createRoot, createSignal, onMount } from "solid-js";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { cx } from "cva";
+import { produce } from "solid-js/store";
 
 import { commands } from "~/utils/tauri";
-
 import { useEditorContext } from "./context";
-import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { formatTime } from "./utils";
 
 export function Timeline() {
@@ -17,6 +18,7 @@ export function Timeline() {
     previewTime,
     setPreviewTime,
     history,
+    split,
   } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
@@ -35,6 +37,9 @@ export function Timeline() {
   });
 
   const xPadding = 12;
+
+  const segments = () =>
+    project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
 
   return (
     <div
@@ -62,11 +67,14 @@ export function Timeline() {
         setPreviewTime(undefined);
       }}
     >
-      <div ref={setTimelineRef}>
+      <div ref={setTimelineRef} class="flex flex-row">
         <Show when={previewTime()}>
           {(time) => (
             <div
-              class="w-px bg-black-transparent-20 absolute left-5 top-4 bottom-0 z-10 pointer-events-none"
+              class={cx(
+                "w-px absolute left-5 top-4 bottom-0 z-10 pointer-events-none bg-[currentColor] flex justify-center items-center",
+                split() ? "text-red-300" : "text-black-transparent-20"
+              )}
               style={{
                 left: `${xPadding}px`,
                 transform: `translateX(${
@@ -75,56 +83,101 @@ export function Timeline() {
                 }px)`,
               }}
             >
-              <div class="size-2 bg-black-transparent-20 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
+              <div class="size-2 bg-[currentColor] rounded-full absolute -top-2" />
+              <Show when={split()}>
+                <div class="absolute size-[2rem] bg-[currentColor] z-20 top-6 rounded-lg flex items-center justify-center">
+                  <IconCapScissors class="size-[1.25rem] text-gray-50 z-20" />
+                </div>
+              </Show>
             </div>
           )}
         </Show>
-        <div
-          class="w-px bg-red-300 absolute top-4 bottom-0 z-10"
-          style={{
-            left: `${xPadding}px`,
-            transform: `translateX(${Math.min(
-              (playbackTime() / editorInstance.recordingDuration) *
-                (timelineBounds.width ?? 0),
-              timelineBounds.width ?? 0
-            )}px)`,
-          }}
-        >
-          <div class="size-2 bg-red-300 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
-        </div>
-        <For
-          each={project.timeline?.segments ?? [{ start: 0, end: duration() }]}
-        >
-          {(segment, i) => {
-            return (
-              <div
-                class="relative h-[3rem] border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden"
-                style={{
-                  width: `${
-                    (100 * (segment.end - segment.start)) / duration()
-                  }%`,
-                }}
-              >
+        <Show when={!split()}>
+          <div
+            class="w-px bg-red-300 absolute top-4 bottom-0 z-10"
+            style={{
+              left: `${xPadding}px`,
+              transform: `translateX(${Math.min(
+                (playbackTime() / editorInstance.recordingDuration) *
+                  (timelineBounds.width ?? 0),
+                timelineBounds.width ?? 0
+              )}px)`,
+            }}
+          >
+            <div class="size-2 bg-red-300 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
+          </div>
+        </Show>
+        <For each={segments()}>
+          {(segment, i) => (
+            <div
+              class="border border-blue-300 rounded-[calc(0.75rem+1px)] relative h-[3rem]"
+              style={{
+                width: `${(100 * (segment.end - segment.start)) / duration()}%`,
+              }}
+              onMouseDown={(e) => {
+                if (!split()) return;
+                e.stopPropagation();
+
+                const rect = e.currentTarget.getBoundingClientRect();
+                const fraction = (e.clientX - rect.left) / rect.width;
+
+                const splitTime =
+                  segment.start + fraction * (segment.end - segment.start);
+
+                setProject(
+                  "timeline",
+                  "segments",
+                  produce((segments) => {
+                    console.log({ splitTime });
+                    segments.splice(i() + 1, 0, {
+                      start: splitTime,
+                      end: segment.end,
+                      timescale: 1,
+                    });
+                    segments[i()].end = splitTime;
+                  })
+                );
+
+                // console.log({ splitTime });
+              }}
+            >
+              <div class="h-full border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden">
                 <div
                   class="bg-blue-300 w-[0.5rem] cursor-col-resize"
                   onMouseDown={(downEvent) => {
                     const start = segment.start;
 
+                    const maxDuration =
+                      editorInstance.recordingDuration -
+                      segments().reduce(
+                        (acc, segment, segmentI) =>
+                          segmentI === i()
+                            ? acc
+                            : acc +
+                              (segment.end - segment.start) / segment.timescale,
+                        0
+                      );
+
                     function update(event: MouseEvent) {
                       const { width } = timelineBounds;
+
+                      const newStart =
+                        start +
+                        ((event.clientX - downEvent.clientX) / width!) *
+                          duration();
+
                       setProject(
                         "timeline",
                         "segments",
                         i(),
                         "start",
-                        Math.max(
-                          Math.min(
-                            segment.end,
-                            start +
-                              ((event.clientX - downEvent.clientX) / width) *
-                                duration()
+                        Math.min(
+                          Math.max(
+                            newStart,
+                            // Math.max(newStart, 0),
+                            segment.end - maxDuration
                           ),
-                          0
+                          segment.end - 1
                         )
                       );
                     }
@@ -155,21 +208,33 @@ export function Timeline() {
                   onMouseDown={(downEvent) => {
                     const end = segment.end;
 
+                    const maxDuration =
+                      editorInstance.recordingDuration -
+                      segments().reduce(
+                        (acc, segment, segmentI) =>
+                          segmentI === i()
+                            ? acc
+                            : acc +
+                              (segment.end - segment.start) / segment.timescale,
+                        0
+                      );
+
                     function update(event: MouseEvent) {
                       const { width } = timelineBounds;
+
+                      const newEnd =
+                        end +
+                        ((event.clientX - downEvent.clientX) / width) *
+                          duration();
+
                       setProject(
                         "timeline",
                         "segments",
                         i(),
                         "end",
                         Math.max(
-                          segment.start,
-                          Math.min(
-                            duration(),
-                            end +
-                              ((event.clientX - downEvent.clientX) / width) *
-                                duration()
-                          )
+                          Math.min(newEnd, segment.start + maxDuration),
+                          segment.start + 1
                         )
                       );
                     }
@@ -188,8 +253,8 @@ export function Timeline() {
                   }}
                 />
               </div>
-            );
-          }}
+            </div>
+          )}
         </For>
       </div>
     </div>
