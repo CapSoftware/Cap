@@ -12,7 +12,7 @@ pub enum OSPermission {
     Microphone,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn open_permission_settings(permission: OSPermission) {
     #[cfg(target_os = "macos")]
@@ -107,7 +107,7 @@ impl OSPermissionsCheck {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
     #[cfg(target_os = "macos")]
@@ -150,7 +150,7 @@ pub fn check_av_permission(media_type: AVMediaType) -> OSPermissionStatus {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn open_permissions_window(app: &impl Manager<Wry>) {
     if let Some(window) = app.get_webview_window("permissions") {

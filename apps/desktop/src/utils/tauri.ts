@@ -176,6 +176,14 @@ async openFeedbackWindow() : Promise<void> {
 },
 async openSettingsWindow() : Promise<void> {
     await TAURI_INVOKE("open_settings_window");
+},
+async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<Result<null, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_hotkey", { action, hotkey }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -234,7 +242,10 @@ export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type DisplaySource = { variant: "screen" } | { variant: "window"; bounds: Bounds }
 export type EditorStateChanged = { playhead_position: number }
+export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
+export type HotkeyAction = "startRecording" | "stopRecording"
 export type HotkeysConfiguration = { show: boolean }
+export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
 export type JsonValue<T> = [T]
 export type NewRecordingAdded = { path: string }

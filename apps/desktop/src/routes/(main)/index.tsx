@@ -114,12 +114,12 @@ export default function () {
               </div>
               <div class="flex items-center justify-between pb-[0.25rem]">
                 <IconCapLogoFull class="w-[90px] h-auto" />
-                {/*<button
+                <button
                   type="button"
                   onClick={() => commands.openSettingsWindow()}
                 >
                   <IconCapSettings class="text-gray-400 hover:text-gray-500" />
-                </button>*/}
+                </button>
               </div>
               <KSelect<CaptureWindow | null>
                 options={windows.data ?? []}

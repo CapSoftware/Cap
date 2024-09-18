@@ -1,6 +1,10 @@
 import { Store } from "@tauri-apps/plugin-store";
 
-import type { AuthStore, ProjectConfiguration } from "~/utils/tauri";
+import type {
+  AuthStore,
+  ProjectConfiguration,
+  HotkeysStore,
+} from "~/utils/tauri";
 
 const store = new Store("store");
 
@@ -30,4 +34,12 @@ export const authStore = {
   },
   listen: (fn: (data: AuthStore | null) => void) =>
     store.onKeyChange<AuthStore>("presets", fn),
+};
+
+export const hotkeysStore = {
+  get: () => store.get<HotkeysStore>("hotkeys"),
+  set: async (value: HotkeysStore) => {
+    await store.set("hotkeys", value);
+    await store.save();
+  },
 };

@@ -4,6 +4,7 @@ mod camera;
 mod display;
 mod editor;
 mod editor_instance;
+mod hotkeys;
 mod macos;
 mod permissions;
 mod playback;
@@ -22,7 +23,6 @@ use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
-use nix::libc::pthread_introspection_hook_t;
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
 use project_recordings::ProjectRecordings;
@@ -944,7 +944,7 @@ async fn remove_fake_window(
 const PREV_RECORDINGS_WINDOW: &str = "prev-recordings";
 
 // must not be async bc of panel
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 fn show_previous_recordings_window(app: AppHandle) {
     if let Some(window) = app.get_webview_window(PREV_RECORDINGS_WINDOW) {
@@ -987,26 +987,33 @@ fn show_previous_recordings_window(app: AppHandle) {
         return;
     };
 
-    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-    use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
     use tauri_plugin_decorum::WebviewWindowExt;
-
     window.make_transparent().ok();
-    let panel = window.to_panel().unwrap();
 
-    panel.set_level(NSMainMenuWindowLevel);
+    app.run_on_main_thread({
+        let window = window.clone();
+        move || {
+            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
-    panel.set_collection_behaviour(
-        NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
-            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
-            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
-    );
+            let panel = window.to_panel().unwrap();
 
-    // seems like this doesn't work properly -_-
-    #[allow(non_upper_case_globals)]
-    const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
-    panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
+            panel.set_level(NSMainMenuWindowLevel);
+
+            panel.set_collection_behaviour(
+                NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
+            );
+
+            // seems like this doesn't work properly -_-
+            #[allow(non_upper_case_globals)]
+            const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
+            panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
+        }
+    })
+    .ok();
 
     tokio::spawn(async move {
         let state = app.state::<FakeWindowBounds>();
@@ -1393,7 +1400,8 @@ pub fn run() {
             upload_rendered_video,
             get_recording_meta,
             open_feedback_window,
-            open_settings_window
+            open_settings_window,
+            hotkeys::set_hotkey
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1408,7 +1416,8 @@ pub fn run() {
             RequestStopRecording,
         ])
         .ty::<ProjectConfiguration>()
-        .ty::<AuthStore>();
+        .ty::<AuthStore>()
+        .ty::<hotkeys::HotkeysStore>();
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds
     specta_builder
@@ -1430,6 +1439,7 @@ pub fn run() {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
+            hotkeys::init(app.handle());
 
             let app_handle = app.handle().clone();
 
