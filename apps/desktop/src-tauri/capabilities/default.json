@@ -18,6 +18,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-set-position",
     "core:webview:allow-create-webview-window",
+    "core:app:allow-version",
     "shell:default",
     "fs:default",
     "dialog:default",

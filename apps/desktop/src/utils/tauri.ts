@@ -177,6 +177,9 @@ async openFeedbackWindow() : Promise<void> {
 async openSettingsWindow() : Promise<void> {
     await TAURI_INVOKE("open_settings_window");
 },
+async openChangelogWindow() : Promise<void> {
+    await TAURI_INVOKE("open_changelog_window");
+},
 async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<Result<null, null>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_hotkey", { action, hotkey }) };
@@ -199,6 +202,7 @@ recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
+requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
 showCapturesPanel: ShowCapturesPanel
 }>({
@@ -210,6 +214,7 @@ recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
+requestStartRecording: "request-start-recording",
 requestStopRecording: "request-stop-recording",
 showCapturesPanel: "show-captures-panel"
 })
@@ -262,6 +267,7 @@ export type RecordingStarted = null
 export type RecordingStopped = { path: string }
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
+export type RequestStartRecording = null
 export type RequestStopRecording = null
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null; recordings: ProjectRecordings; path: string }
 export type SharingMeta = { id: string; link: string }

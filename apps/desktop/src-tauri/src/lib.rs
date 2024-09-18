@@ -32,9 +32,14 @@ use serde_json::json;
 use specta::Type;
 use std::fs::File;
 use std::io::{BufReader, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
-    time::Duration,
+    collections::HashMap,
+    marker::PhantomData,
+    path::PathBuf,
+    process::Command,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
@@ -185,6 +190,9 @@ pub struct RecordingStarted;
 pub struct RecordingStopped {
     path: PathBuf,
 }
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestStartRecording;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestStopRecording;
@@ -1262,6 +1270,31 @@ async fn open_feedback_window(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
+async fn open_changelog_window(app: AppHandle) {
+    let window = WebviewWindow::builder(
+        &app,
+        "changelog",
+        tauri::WebviewUrl::App("/changelog".into()),
+    )
+    .title("Cap Changelog")
+    .inner_size(600.0, 450.0)
+    .resizable(true)
+    .maximized(false)
+    .shadow(true)
+    .accept_first_mouse(true)
+    .transparent(true)
+    .hidden_title(true)
+    .title_bar_style(tauri::TitleBarStyle::Overlay)
+    .build()
+    .unwrap();
+
+    window.create_overlay_titlebar().unwrap();
+    #[cfg(target_os = "macos")]
+    window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn open_settings_window(app: AppHandle) {
     let window =
         WebviewWindow::builder(&app, "settings", tauri::WebviewUrl::App("/settings".into()))
@@ -1401,6 +1434,7 @@ pub fn run() {
             get_recording_meta,
             open_feedback_window,
             open_settings_window,
+            open_changelog_window,
             hotkeys::set_hotkey
         ])
         .events(tauri_specta::collect_events![
@@ -1413,6 +1447,7 @@ pub fn run() {
             RecordingMetaChanged,
             RecordingStarted,
             RecordingStopped,
+            RequestStartRecording,
             RequestStopRecording,
         ])
         .ty::<ProjectConfiguration>()
@@ -1465,8 +1500,19 @@ pub fn run() {
 
             create_in_progress_recording_window(app.app_handle());
 
+            let app_handle_clone = app_handle.clone();
+            RequestStartRecording::listen_any(app, move |_| {
+                let app_handle = app_handle_clone.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = start_recording(app_handle.clone(), app_handle.state()).await {
+                        eprintln!("Failed to start recording: {}", e);
+                    }
+                });
+            });
+
+            let app_handle_clone = app_handle.clone();
             RequestStopRecording::listen_any(app, move |_| {
-                let app_handle = app_handle.clone();
+                let app_handle = app_handle_clone.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = stop_recording(app_handle.clone(), app_handle.state()).await {
                         eprintln!("Failed to stop recording: {}", e);
@@ -1481,9 +1527,7 @@ pub fn run() {
             if label.starts_with("editor-") {
                 if let WindowEvent::CloseRequested { .. } = event {
                     let id = label.strip_prefix("editor-").unwrap().to_string();
-
                     let app = window.app_handle().clone();
-
                     tokio::spawn(async move {
                         if let Some(editor) = remove_editor_instance(&app, id.clone()).await {
                             editor.dispose().await;

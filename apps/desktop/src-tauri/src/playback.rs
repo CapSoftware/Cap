@@ -182,8 +182,12 @@ impl AudioPlayback {
                     return None;
                 }
 
-                // Simple linear interpolation
+                // Add a check to prevent index_int from going out of bounds
                 let index_int = index as usize;
+                if index_int >= data.len() - 1 {
+                    return None;
+                }
+
                 let frac = index.fract();
                 let current = data[index_int];
                 let next = data[(index_int + 1) % data.len()];

@@ -1,12 +1,13 @@
-use std::collections::HashMap;
-
+use crate::{RequestStartRecording, RequestStopRecording};
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_store::{with_store, StoreCollection};
+use tauri_specta::Event;
 
 #[derive(Serialize, Deserialize, Type, PartialEq, Clone, Copy)]
 pub struct Hotkey {
@@ -68,7 +69,6 @@ impl HotkeysStore {
 }
 
 pub type HotkeysState = Mutex<HotkeysStore>;
-
 pub fn init(app: &AppHandle) {
     app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
@@ -84,10 +84,10 @@ pub fn init(app: &AppHandle) {
                     if &hotkey.to_shortcut() == shortcut {
                         match action {
                             HotkeyAction::StartRecording => {
-                                println!("start recording");
+                                let _ = RequestStartRecording.emit(app);
                             }
                             HotkeyAction::StopRecording => {
-                                println!("stop recording");
+                                let _ = RequestStopRecording.emit(app);
                             }
                         }
                     }

@@ -22,6 +22,10 @@ import {
   topRightAnimateClasses,
 } from "../editor/ui";
 import { authStore } from "~/store";
+import { createResource, createEffect } from "solid-js";
+import { createStore } from "solid-js/store";
+import { clientEnv } from "~/utils/env";
+import { getVersion } from "@tauri-apps/api/app";
 
 const getAuth = cache(async () => {
   const value = await authStore.get();
@@ -79,6 +83,63 @@ export default function () {
 
   createUpdateCheck();
 
+  const [changelogState, setChangelogState] = createStore({
+    hasUpdate: false,
+    lastOpenedVersion: localStorage.getItem("lastOpenedChangelogVersion") || "",
+    changelogClicked: JSON.parse(
+      localStorage.getItem("changelogClicked") || "false"
+    ),
+  });
+
+  const [currentVersion] = createResource(async () => {
+    const version = await getVersion();
+    return version;
+  });
+
+  const [changelogStatus] = createResource(
+    () => currentVersion(),
+    async (version) => {
+      if (!version) {
+        return { hasUpdate: false };
+      }
+      const response = await fetch(
+        `${clientEnv.VITE_SERVER_URL}/api/changelog/status?version=${version}`
+      );
+      const data = await response.json();
+      return data;
+    }
+  );
+
+  createEffect(() => {
+    if (changelogStatus.state === "ready" && currentVersion()) {
+      const hasUpdate = changelogStatus()?.hasUpdate || false;
+      if (
+        hasUpdate === true &&
+        changelogState.lastOpenedVersion !== currentVersion()
+      ) {
+        setChangelogState({
+          hasUpdate: true,
+          lastOpenedVersion: currentVersion(),
+          changelogClicked: false,
+        });
+      }
+    }
+  });
+
+  const handleChangelogClick = () => {
+    commands.openChangelogWindow();
+    const version = currentVersion();
+    if (version) {
+      setChangelogState({
+        hasUpdate: false,
+        lastOpenedVersion: version,
+        changelogClicked: true,
+      });
+      localStorage.setItem("lastOpenedChangelogVersion", version);
+      localStorage.setItem("changelogClicked", "true");
+    }
+  };
+
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
       <Show when={options.data}>
@@ -102,15 +163,32 @@ export default function () {
           return (
             <>
               <div class="absolute top-3 right-3">
-                <Button
-                  variant="secondary"
-                  size="xs"
-                  onClick={() => {
-                    commands.openFeedbackWindow();
-                  }}
-                >
-                  Feedback
-                </Button>
+                <div class="flex items-center gap-[0.25rem]">
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    onClick={() => {
+                      commands.openFeedbackWindow();
+                    }}
+                  >
+                    Feedback
+                  </Button>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={handleChangelogClick}
+                      class="relative"
+                    >
+                      <IconLucideBell class="w-[1.15rem] h-[1.15rem] text-gray-400 hover:text-gray-500" />
+                      {changelogState.hasUpdate && (
+                        <div
+                          style={{ "background-color": "#FF4747" }}
+                          class="block z-10 absolute top-0 right-0 w-2 h-2 rounded-full animate-bounce"
+                        />
+                      )}
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="flex items-center justify-between pb-[0.25rem]">
                 <IconCapLogoFull class="w-[90px] h-auto" />
@@ -118,7 +196,7 @@ export default function () {
                   type="button"
                   onClick={() => commands.openSettingsWindow()}
                 >
-                  <IconCapSettings class="text-gray-400 hover:text-gray-500" />
+                  <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
                 </button>
               </div>
               <KSelect<CaptureWindow | null>
@@ -159,7 +237,6 @@ export default function () {
                   value={options().captureTarget.type}
                   disabled={isRecording()}
                   onChange={(s) => {
-                    console.log({ s });
                     if (options().captureTarget.type === s) {
                       setWindowSelectOpen(false);
                       return;
