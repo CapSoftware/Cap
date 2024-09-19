@@ -141,12 +141,11 @@ pub async fn start_capturing(
                 return;
             }
 
+            let frame = capturer.get_next_frame();
+
             if is_paused.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(100));
                 continue;
             }
-
-            let frame = capturer.get_next_frame();
 
             if let Some(tx) = start_time.take() {
                 tx.send(Instant::now()).ok();

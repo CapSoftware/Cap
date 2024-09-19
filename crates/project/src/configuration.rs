@@ -25,7 +25,9 @@ pub enum BackgroundSource {
 
 impl Default for BackgroundSource {
     fn default() -> Self {
-        BackgroundSource::Color { value: [255, 0, 0] }
+        BackgroundSource::Color {
+            value: [71, 133, 255],
+        }
     }
 }
 
@@ -126,9 +128,9 @@ pub struct HotkeysConfiguration {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineSegment {
-    timescale: f64,
-    start: f64,
-    end: f64,
+    pub timescale: f64,
+    pub start: f64,
+    pub end: f64,
 }
 
 impl TimelineSegment {
@@ -171,7 +173,7 @@ impl TimelineConfiguration {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectConfiguration {
     pub aspect_ratio: Option<AspectRatio>,
@@ -187,5 +189,28 @@ pub struct ProjectConfiguration {
 impl ProjectConfiguration {
     pub fn timeline(&self) -> Option<&TimelineConfiguration> {
         self.timeline.as_ref()
+    }
+}
+
+impl Default for ProjectConfiguration {
+    fn default() -> Self {
+        ProjectConfiguration {
+            aspect_ratio: None,
+            background: BackgroundConfiguration {
+                source: BackgroundSource::default(),
+                ..Default::default()
+            },
+            camera: CameraConfiguration {
+                position: CameraPosition {
+                    x: CameraXPosition::Right,
+                    y: CameraYPosition::Bottom,
+                },
+                ..Default::default()
+            },
+            audio: AudioConfiguration::default(),
+            cursor: CursorConfiguration::default(),
+            hotkeys: HotkeysConfiguration::default(),
+            timeline: None,
+        }
     }
 }

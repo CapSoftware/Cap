@@ -1,7 +1,7 @@
 use nokhwa::utils::CameraFormat;
 use serde::Serialize;
 use specta::Type;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, time::Duration};
 use tokio::sync::watch;
 
@@ -34,7 +34,7 @@ pub struct InProgressRecording {
     pub camera: Option<FFmpegCaptureOutput<FFmpegRawVideoInput>>,
     #[serde(skip)]
     pub audio: Option<(FFmpegCaptureOutput<FFmpegRawAudioInput>, AudioCapturer)>,
-    // pub start: f64,
+    pub segments: Vec<f64>,
 }
 
 unsafe impl Send for InProgressRecording {}
@@ -92,26 +92,26 @@ impl InProgressRecording {
     pub async fn pause(&mut self) -> Result<(), String> {
         self.ffmpeg_process.pause().map_err(|e| e.to_string())?;
 
-        self.display.capture.pause()?;
+        self.display.capture.pause();
         if let Some(camera) = &mut self.camera {
-            camera.capture.pause()?;
+            camera.capture.pause();
         }
         if let Some(audio) = &mut self.audio {
             audio.1.pause()?;
-            audio.0.capture.pause()?;
+            audio.0.capture.pause();
         }
         println!("Sent pause command to FFmpeg");
         Ok(())
     }
 
     pub async fn resume(&mut self) -> Result<(), String> {
-        self.display.capture.resume()?;
+        self.display.capture.resume();
         if let Some(camera) = &mut self.camera {
-            camera.capture.resume()?;
+            camera.capture.resume();
         }
         if let Some(audio) = &mut self.audio {
             audio.1.resume()?;
-            audio.0.capture.resume()?;
+            audio.0.capture.resume();
         }
 
         self.ffmpeg_process.resume().map_err(|e| e.to_string())?;
@@ -296,6 +296,10 @@ pub async fn start(
     start_writing_tx.send(true).unwrap();
 
     InProgressRecording {
+        segments: vec![SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()],
         recording_dir,
         ffmpeg_process,
         display,

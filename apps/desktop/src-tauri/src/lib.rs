@@ -16,7 +16,9 @@ mod upload;
 use auth::AuthStore;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::FFmpeg;
-use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta};
+use cap_project::{
+    ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
+};
 use cap_rendering::ProjectUniforms;
 use cap_utils::create_named_pipe;
 use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
@@ -33,6 +35,7 @@ use specta::Type;
 use std::fs::File;
 use std::io::{BufReader, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashMap,
     marker::PhantomData,
@@ -69,8 +72,6 @@ pub struct App {
     handle: AppHandle,
     #[serde(skip)]
     current_recording: Option<InProgressRecording>,
-    #[serde(skip)]
-    paused: bool,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -290,9 +291,15 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
 #[specta::specta]
 async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
-    if let Some(ref mut recording) = state.current_recording {
+
+    if let Some(recording) = &mut state.current_recording {
         recording.pause().await?;
-        state.paused = true;
+        recording.segments.push(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64(),
+        );
     }
     Ok(())
 }
@@ -301,9 +308,15 @@ async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
 #[specta::specta]
 async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
-    if let Some(ref mut recording) = state.current_recording {
+
+    if let Some(recording) = &mut state.current_recording {
         recording.resume().await?;
-        state.paused = false;
+        recording.segments.push(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64(),
+        );
     }
     Ok(())
 }
@@ -350,6 +363,13 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     };
 
     current_recording.stop().await;
+
+    current_recording.segments.push(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64(),
+    );
 
     let window = app
         .get_webview_window(IN_PROGRESS_RECORDINGS_LABEL)
@@ -404,6 +424,35 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     }
     .emit(&app)
     .ok();
+
+    let config = {
+        let mut segments = vec![];
+
+        let mut passed_duration = 0.0;
+
+        for i in (0..current_recording.segments.len()).step_by(2) {
+            let start = passed_duration;
+
+            passed_duration += current_recording.segments[i + 1] - current_recording.segments[i];
+
+            segments.push(TimelineSegment {
+                start,
+                end: passed_duration,
+                timescale: 1.0,
+            });
+        }
+
+        ProjectConfiguration {
+            timeline: Some(TimelineConfiguration { segments }),
+            ..Default::default()
+        }
+    };
+
+    std::fs::write(
+        current_recording.recording_dir.join("project-config.json"),
+        serde_json::to_string_pretty(&json!(&config)).unwrap(),
+    )
+    .unwrap();
 
     audio::play_audio(include_bytes!("../sounds/stop-recording.ogg"));
 
@@ -1518,7 +1567,6 @@ pub fn run() {
                     audio_input_name: None,
                 },
                 current_recording: None,
-                paused: false,
             })));
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));

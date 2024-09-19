@@ -33,6 +33,7 @@ declare global {
   const IconCapMicrophone: typeof import('~icons/cap/microphone.jsx')['default']
   const IconCapMoreVertical: typeof import('~icons/cap/more-vertical.jsx')['default']
   const IconCapPadding: typeof import('~icons/cap/padding.jsx')['default']
+  const IconCapPauseCircle: typeof import('~icons/cap/pause-circle.jsx')['default']
   const IconCapPlayCircle: typeof import('~icons/cap/play-circle.jsx')['default']
   const IconCapPresets: typeof import('~icons/cap/presets.jsx')['default']
   const IconCapRedo: typeof import('~icons/cap/redo.jsx')['default']

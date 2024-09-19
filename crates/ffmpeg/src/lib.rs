@@ -149,8 +149,8 @@ impl NamedPipeCapture {
                 is_stopped: stop.clone(),
                 is_paused: pause.clone(),
             },
-            stop.clone(),
-            pause.clone(),
+            stop,
+            pause,
         )
     }
 
@@ -162,14 +162,13 @@ impl NamedPipeCapture {
         self.is_stopped.store(true, Ordering::Relaxed);
     }
 
-    pub fn pause(&mut self) -> Result<(), String> {
+    pub fn pause(&mut self) {
+        println!("setting is_paused to true");
         self.is_paused.store(true, Ordering::Relaxed);
-        Ok(())
     }
 
-    pub fn resume(&mut self) -> Result<(), String> {
+    pub fn resume(&mut self) {
         self.is_paused.store(false, Ordering::Relaxed);
-        Ok(())
     }
 
     pub fn is_paused(&self) -> bool {
