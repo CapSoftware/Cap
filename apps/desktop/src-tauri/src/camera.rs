@@ -12,7 +12,7 @@ pub const WINDOW_LABEL: &str = "camera";
 const CAMERA_ROUTE: &str = "/camera";
 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn create_camera_window(app: AppHandle) {
     if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
@@ -52,7 +52,7 @@ pub fn create_camera_window(app: AppHandle) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn list_cameras() -> Vec<String> {
     nokhwa::query(nokhwa::utils::ApiBackend::Auto)

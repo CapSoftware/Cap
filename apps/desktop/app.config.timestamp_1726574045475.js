@@ -1,8 +1,8 @@
+// app.config.ts
 import { defineConfig } from "@solidjs/start/config";
 import capUIPlugin from "@cap/ui-solid/vite";
 import tsconfigPaths from "vite-tsconfig-paths";
-
-export default defineConfig({
+var app_config_default = defineConfig({
   ssr: false,
   server: { preset: "static" },
   // https://vitejs.dev/config
@@ -14,8 +14,8 @@ export default defineConfig({
       strictPort: true,
       watch: {
         // 2. tell vite to ignore watching `src-tauri`
-        ignored: ["**/src-tauri/**"],
-      },
+        ignored: ["**/src-tauri/**"]
+      }
     },
     // 3. to make use of `TAURI_DEBUG` and other env variables
     // https://tauri.studio/v1/api/config#buildconfig.beforedevcommand
@@ -24,8 +24,11 @@ export default defineConfig({
       capUIPlugin,
       tsconfigPaths({
         // If this isn't set Vinxi hangs on startup
-        root: ".",
-      }),
-    ],
-  }),
+        root: "."
+      })
+    ]
+  })
 });
+export {
+  app_config_default as default
+};

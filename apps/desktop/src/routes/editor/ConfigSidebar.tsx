@@ -9,7 +9,7 @@ import { type Component, For, ParentProps, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 
-import type { BackgroundSource, CursorType } from "../../utils/tauri";
+import type { BackgroundSource, CursorType } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { ComingSoonTooltip, Field, Slider, Subfield, Toggle } from "./ui";
 import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
@@ -57,7 +57,7 @@ export function ConfigSidebar() {
   return (
     <KTabs
       value={selectedTab()}
-      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden w-[25.5rem]"
+      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden w-[25.5rem] z-10 bg-gray-50"
     >
       <KTabs.List class="h-[3.5rem] flex flex-row divide-x divide-gray-200 text-black/50 text-lg relative z-40 overflow-x-auto border-b border-gray-200">
         <For

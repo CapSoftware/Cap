@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.0-alpha.23"
+version = "0.3.0-alpha.25"
 description = "Effortless, instant screen sharing. Open source and cross-platform."
 authors = ["you"]
 edition = "2021"
@@ -31,6 +31,7 @@ tauri-plugin-decorum = "1.0.0"
 tauri-plugin-dialog = "2.0.0-rc.0"
 tauri-plugin-updater = "2.0.0-rc.0"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
+tauri-plugin-global-shortcut = "2.0.0-rc.0"
 tauri-specta = { version = "=2.0.0-rc.14", features = ["derive", "typescript"] }
 
 serde = { version = "1", features = ["derive"] }
@@ -71,6 +72,7 @@ cap-rendering = { path = "../../../crates/rendering" }
 cap-ffmpeg = { path = "../../../crates/ffmpeg" }
 reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
 dotenvy_macro = "0.15.7"
+global-hotkey = "0.5.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

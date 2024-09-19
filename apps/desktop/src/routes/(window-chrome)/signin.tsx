@@ -5,8 +5,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { action, redirect, useAction, useSubmission } from "@solidjs/router";
 
 import callbackTemplate from "./callback.template";
-import { authStore } from "../../store";
-import { clientEnv } from "../../utils/env";
+import { authStore } from "~/store";
+import { clientEnv } from "~/utils/env";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const signInAction = action(async () => {

@@ -1,3 +1,4 @@
+use crate::display::FPS;
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
 use crate::{editor, AudioData};
@@ -14,6 +15,7 @@ type PreviewFrameInstruction = (u32, ProjectConfiguration);
 pub struct EditorState {
     pub playhead_position: u32,
     pub playback_task: Option<PlaybackHandle>,
+    pub preview_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 pub struct EditorInstance {
@@ -56,12 +58,9 @@ impl EditorInstance {
 
         let recordings = ProjectRecordings::new(&meta);
 
-        const OUTPUT_SIZE: (u32, u32) = (1920, 1080);
-
         let render_options = RenderOptions {
             screen_size: (recordings.display.width, recordings.display.height),
             camera_size: recordings.camera.as_ref().map(|c| (c.width, c.height)),
-            output_size: OUTPUT_SIZE,
         };
 
         let screen_decoder =
@@ -125,12 +124,14 @@ impl EditorInstance {
             state: Mutex::new(EditorState {
                 playhead_position: 0,
                 playback_task: None,
+                preview_task: None,
             }),
             on_state_change: Box::new(on_state_change),
             preview_tx,
         });
 
-        this.clone().spawn_preview_renderer(preview_rx);
+        this.state.lock().await.preview_task =
+            Some(this.clone().spawn_preview_renderer(preview_rx));
 
         this
     }
@@ -146,6 +147,10 @@ impl EditorInstance {
             println!("stopping playback");
             handle.stop();
         };
+        if let Some(task) = state.preview_task.take() {
+            println!("stopping preview");
+            task.abort();
+        }
     }
 
     pub async fn modify_and_emit_state(&self, modify: impl Fn(&mut EditorState)) {
@@ -206,18 +211,24 @@ impl EditorInstance {
     fn spawn_preview_renderer(
         self: Arc<Self>,
         mut preview_rx: watch::Receiver<Option<PreviewFrameInstruction>>,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                preview_rx.changed().await.ok();
+                preview_rx.changed().await.unwrap();
                 let Some((frame_number, project)) = preview_rx.borrow().deref().clone() else {
                     continue;
                 };
 
+                let Some(time) = project.timeline.as_ref().map(|timeline| {
+                    timeline.get_recording_time(frame_number as f64 / FPS as f64)
+                }).unwrap_or(Some(frame_number as f64 / FPS as f64)) else {
+                    continue;
+                };
+
                 let Some((screen_frame, camera_frame)) =
-                    self.decoders.get_frames(frame_number).await
+                    self.decoders.get_frames((time * FPS as f64) as u32).await
                 else {
-                    return;
+                    continue;
                 };
 
                 self.renderer
@@ -229,13 +240,21 @@ impl EditorInstance {
                     )
                     .await;
             }
-        });
+        })
     }
 }
 
 pub const FRAMES_WS_PATH: &str = "/frames-ws";
 
-async fn create_frames_ws(frame_rx: mpsc::UnboundedReceiver<Vec<u8>>) -> u16 {
+pub enum SocketMessage {
+    Frame {
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+}
+
+async fn create_frames_ws(frame_rx: mpsc::UnboundedReceiver<SocketMessage>) -> u16 {
     use axum::{
         extract::{
             ws::{Message, WebSocket, WebSocketUpgrade},
@@ -246,7 +265,7 @@ async fn create_frames_ws(frame_rx: mpsc::UnboundedReceiver<Vec<u8>>) -> u16 {
     };
     use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
 
-    type RouterState = Arc<Mutex<UnboundedReceiver<Vec<u8>>>>;
+    type RouterState = Arc<Mutex<UnboundedReceiver<SocketMessage>>>;
 
     async fn ws_handler(
         ws: WebSocketUpgrade,
@@ -267,8 +286,17 @@ async fn create_frames_ws(frame_rx: mpsc::UnboundedReceiver<Vec<u8>>) -> u16 {
                     break;
                 }
                 msg = rx.recv() => {
-                    if let Some(chunk) = msg {
-                        socket.send(Message::Binary(chunk)).await.unwrap();
+                    let Some(chunk) = msg else {
+                        continue;
+                    };
+
+                    match chunk {
+                        SocketMessage::Frame { width, height, mut data } => {
+                                data.extend_from_slice(&height.to_le_bytes());
+                              data.extend_from_slice(&width.to_le_bytes());
+
+                            socket.send(Message::Binary(data)).await.unwrap();
+                        }
                     }
                 }
             }

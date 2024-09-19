@@ -1,4 +1,4 @@
-import type { AspectRatio, ProjectConfiguration } from "../../utils/tauri";
+import type { AspectRatio, ProjectConfiguration } from "~/utils/tauri";
 
 export type RGBColor = [number, number, number];
 
@@ -6,7 +6,7 @@ export const DEFAULT_GRADIENT_FROM = [71, 133, 255] satisfies RGBColor;
 export const DEFAULT_GRADIENT_TO = [255, 71, 102] satisfies RGBColor;
 
 export const DEFAULT_PROJECT_CONFIG: ProjectConfiguration = {
-  aspectRatio: "wide",
+  aspectRatio: null,
   background: {
     source: {
       type: "gradient",
@@ -14,14 +14,15 @@ export const DEFAULT_PROJECT_CONFIG: ProjectConfiguration = {
       to: DEFAULT_GRADIENT_TO,
     },
     blur: 0,
-    padding: 10,
-    rounding: 20,
+    padding: 0,
+    rounding: 0,
     inset: 0,
+    crop: null,
   },
   camera: {
     hide: false,
     mirror: false,
-    position: { x: "left", y: "top" },
+    position: { x: "right", y: "bottom" },
     rounding: 100,
     shadow: 50,
   },

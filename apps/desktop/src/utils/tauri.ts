@@ -189,6 +189,20 @@ async getRecordingMeta(id: string) : Promise<RecordingMeta> {
 },
 async openFeedbackWindow() : Promise<void> {
     await TAURI_INVOKE("open_feedback_window");
+},
+async openSettingsWindow() : Promise<void> {
+    await TAURI_INVOKE("open_settings_window");
+},
+async openChangelogWindow() : Promise<void> {
+    await TAURI_INVOKE("open_changelog_window");
+},
+async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<Result<null, null>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_hotkey", { action, hotkey }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -204,6 +218,7 @@ recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
+requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
 showCapturesPanel: ShowCapturesPanel
 }>({
@@ -215,6 +230,7 @@ recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
+requestStartRecording: "request-start-recording",
 requestStopRecording: "request-stop-recording",
 showCapturesPanel: "show-captures-panel"
 })
@@ -247,14 +263,17 @@ export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type DisplaySource = { variant: "screen" } | { variant: "window"; bounds: Bounds }
 export type EditorStateChanged = { playhead_position: number }
+export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
+export type HotkeyAction = "startRecording" | "stopRecording"
 export type HotkeysConfiguration = { show: boolean }
+export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
 export type JsonValue<T> = [T]
 export type NewRecordingAdded = { path: string }
 export type OSPermission = "screenRecording" | "camera" | "microphone"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus }
-export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration }
+export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
 export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null }
 export type RecordingMetaChanged = { id: string }
@@ -264,10 +283,13 @@ export type RecordingStarted = null
 export type RecordingStopped = { path: string }
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
+export type RequestStartRecording = null
 export type RequestStopRecording = null
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null; recordings: ProjectRecordings; path: string }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
+export type TimelineConfiguration = { segments: TimelineSegment[] }
+export type TimelineSegment = { timescale: number; start: number; end: number }
 export type Video = { duration: number; width: number; height: number; fps: number }
 export type VideoType = "screen" | "output"
 export type XY<T> = { x: T; y: T }

@@ -4,6 +4,7 @@ mod camera;
 mod display;
 mod editor;
 mod editor_instance;
+mod hotkeys;
 mod macos;
 mod permissions;
 mod playback;
@@ -16,7 +17,9 @@ use auth::AuthStore;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::FFmpeg;
 use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta};
-use display::{list_capture_windows, Bounds, CaptureTarget};
+use cap_rendering::ProjectUniforms;
+use cap_utils::create_named_pipe;
+use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
@@ -29,14 +32,21 @@ use serde_json::json;
 use specta::Type;
 use std::fs::File;
 use std::io::{BufReader, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
-    time::Duration,
+    collections::HashMap,
+    marker::PhantomData,
+    path::PathBuf,
+    process::Command,
+    sync::Arc,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
+use tempfile::TempDir;
+use tokio::sync::mpsc;
 use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
@@ -182,6 +192,9 @@ pub struct RecordingStarted;
 pub struct RecordingStopped {
     path: PathBuf,
 }
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestStartRecording;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestStopRecording;
@@ -441,6 +454,11 @@ async fn copy_file_to_path(src: String, dst: String) -> Result<(), String> {
     }
 }
 
+struct AudioRender {
+    data: AudioData,
+    pipe_tx: mpsc::UnboundedSender<Vec<f64>>,
+}
+
 async fn render_to_file_impl(
     editor_instance: &Arc<EditorInstance>,
     project: ProjectConfiguration,
@@ -460,124 +478,186 @@ async fn render_to_file_impl(
     let output_path_clone = output_path.clone();
     let recording_dir_clone = recording_dir.clone();
 
-    let ffmpeg_handle = tokio::spawn(async move {
-        println!("Starting FFmpeg output process...");
-        let mut ffmpeg = cap_ffmpeg::FFmpeg::new();
+    let output_size = ProjectUniforms::get_output_size(&options, &project);
 
-        let audio_path = if let Some(audio) = &audio {
+    let ffmpeg_handle = tokio::spawn({
+        let project = project.clone();
+        async move {
+            println!("Starting FFmpeg output process...");
+            let mut ffmpeg = cap_ffmpeg::FFmpeg::new();
+
             let dir = tempfile::tempdir().unwrap();
-            let file_path = dir.path().join("audio.raw");
-            let mut file = std::fs::File::create(&file_path).unwrap();
+            let audio = if let Some(audio) = audio {
+                let pipe_path = dir.path().join("audio.pipe");
+                create_named_pipe(&pipe_path).unwrap();
 
-            file.write_all(
-                audio
-                    .buffer
-                    .iter()
-                    .flat_map(|f| f.to_le_bytes())
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-            .unwrap();
+                ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
+                    input: pipe_path.clone().into_os_string(),
+                    sample_format: "f64le".to_string(),
+                    sample_rate: audio.sample_rate,
+                    channels: 1,
+                    wallclock: false,
+                });
 
-            ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
-                input: file_path.clone().into_os_string(),
-                sample_format: "f64le".to_string(),
-                sample_rate: 44100,
-                channels: 1,
-                wallclock: false,
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f64>>();
+
+                tokio::spawn(async move {
+                    let mut file = std::fs::File::create(&pipe_path).unwrap();
+                    println!("audio pipe opened");
+
+                    while let Some(bytes) = rx.recv().await {
+                        println!("writing {} audio bytes", bytes.len() * 8);
+                        file.write_all(
+                            bytes
+                                .iter()
+                                .flat_map(|f| f.to_le_bytes())
+                                .collect::<Vec<_>>()
+                                .as_slice(),
+                        )
+                        .unwrap();
+                        println!("done writing to audio pipe");
+                    }
+                });
+
+                Some(AudioRender {
+                    data: audio,
+                    pipe_tx: tx,
+                })
+            } else {
+                None
+            };
+
+            let video_pipe_path = dir.path().join("video.pipe");
+            create_named_pipe(&video_pipe_path).unwrap();
+
+            ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
+                width: output_size.0,
+                height: output_size.1,
+                fps: 30,
+                pix_fmt: "rgba",
+                input: video_pipe_path.clone().into_os_string(),
             });
 
-            Some((file_path, file, dir))
-        } else {
-            None
-        };
+            let (video_tx, mut video_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
-        ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
-            width: options.output_size.0,
-            height: options.output_size.1,
-            fps: 30,
-            pix_fmt: "rgba",
-            input: "pipe:0".into(),
-        });
+            tokio::spawn(async move {
+                let mut file = std::fs::File::create(&video_pipe_path).unwrap();
+                println!("video pipe opened");
 
-        ffmpeg
-            .command
-            .args([
-                "-f", "mp4", /*, "-map", &format!("{}:v", ffmpeg_input.index) */
-            ])
-            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
-            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-            .arg("-y")
-            .arg(&output_path_clone);
+                while let Some(bytes) = video_rx.recv().await {
+                    println!("writing {} video bytes", bytes.len());
+                    file.write_all(&bytes).unwrap();
+                }
+                println!("done writing to video pipe");
+            });
 
-        let mut ffmpeg_process = ffmpeg.start();
+            ffmpeg
+                .command
+                .args([
+                    "-f", "mp4", /*, "-map", &format!("{}:v", ffmpeg_input.index) */
+                ])
+                .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+                .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
+                .arg("-y")
+                .arg(&output_path_clone);
 
-        let mut frame_count = 0;
-        let mut first_frame = None;
+            let mut ffmpeg_process = ffmpeg.start();
 
-        loop {
-            match rx_image_data.recv().await {
-                Some(frame) => {
-                    // println!("Sending image data to FFmpeg");
-                    on_progress(frame_count);
+            let mut frame_count = 0;
+            let mut first_frame = None;
 
-                    if frame_count == 0 {
-                        first_frame = Some(frame.clone());
+            loop {
+                match rx_image_data.recv().await {
+                    Some(frame) => {
+                        // println!("Sending image data to FFmpeg");
+                        on_progress(frame_count);
+
+                        if frame_count == 0 {
+                            first_frame = Some(frame.clone());
+                        }
+
+                        if let Some(audio) = &audio {
+                            let samples_per_frame = audio.data.sample_rate as f64 / FPS as f64;
+
+                            if let Some(timeline) = project.timeline() {
+                                if let Some(recording_time) =
+                                    timeline.get_recording_time(frame_count as f64 / FPS as f64)
+                                {
+                                    let start = recording_time * audio.data.sample_rate as f64;
+                                    let end = start + samples_per_frame;
+
+                                    let samples = &audio.data.buffer[start as usize..end as usize];
+                                    let mut samples_iter = samples.iter().copied();
+
+                                    let mut frame_samples = Vec::new();
+                                    for _ in 0..samples_per_frame as usize {
+                                        frame_samples.push(samples_iter.next().unwrap_or(0.0));
+                                    }
+
+                                    println!("sending audio");
+                                    audio.pipe_tx.send(frame_samples).unwrap();
+                                }
+                            }
+                        }
+
+                        video_tx.send(frame).unwrap();
+                        println!("sending video");
+                        // if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
+                        //     eprintln!("Error writing video frame: {:?}", e);
+                        //     break;
+                        // }
+
+                        frame_count += 1;
                     }
-
-                    frame_count += 1;
-                    if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
-                        eprintln!("Error writing video frame: {:?}", e);
+                    None => {
+                        println!("All frames sent to FFmpeg");
                         break;
                     }
                 }
-                None => {
-                    println!("All frames sent to FFmpeg");
-                    break;
-                }
             }
-        }
 
-        ffmpeg_process.stop();
+            ffmpeg_process.stop();
 
-        if let Some((audio_path, _, _)) = audio_path {
-            std::fs::remove_file(audio_path).ok();
-        }
-        // Save the first frame as a screenshot and thumbnail
-        if let Some(frame_data) = first_frame {
-            let width = options.output_size.0;
-            let height = options.output_size.1;
-            let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-                ImageBuffer::from_raw(width, height, frame_data)
-                    .expect("Failed to create image from frame data");
+            // Save the first frame as a screenshot and thumbnail
+            if let Some(frame_data) = first_frame {
+                let width = output_size.0;
+                let height = output_size.1;
+                let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+                    ImageBuffer::from_raw(width, height, frame_data)
+                        .expect("Failed to create image from frame data");
 
-            // Convert RGBA to RGB
-            let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
-                ImageBuffer::from_fn(width, height, |x, y| {
-                    let rgba = rgba_img.get_pixel(x, y);
-                    image::Rgb([rgba[0], rgba[1], rgba[2]])
+                // Convert RGBA to RGB
+                let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+                    ImageBuffer::from_fn(width, height, |x, y| {
+                        let rgba = rgba_img.get_pixel(x, y);
+                        image::Rgb([rgba[0], rgba[1], rgba[2]])
+                    });
+
+                let screenshots_dir = recording_dir_clone.join("screenshots");
+                std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
+                    eprintln!("Failed to create screenshots directory: {:?}", e);
                 });
 
-            let screenshots_dir = recording_dir_clone.join("screenshots");
-            std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
-                eprintln!("Failed to create screenshots directory: {:?}", e);
-            });
+                // Save full-size screenshot
+                let screenshot_path = screenshots_dir.join("display.jpg");
+                rgb_img.save(&screenshot_path).unwrap_or_else(|e| {
+                    eprintln!("Failed to save screenshot: {:?}", e);
+                });
 
-            // Save full-size screenshot
-            let screenshot_path = screenshots_dir.join("display.jpg");
-            rgb_img.save(&screenshot_path).unwrap_or_else(|e| {
-                eprintln!("Failed to save screenshot: {:?}", e);
-            });
-
-            // Create and save thumbnail
-            let thumbnail =
-                image::imageops::resize(&rgb_img, 100, 100, image::imageops::FilterType::Lanczos3);
-            let thumbnail_path = screenshots_dir.join("thumbnail.png");
-            thumbnail.save(&thumbnail_path).unwrap_or_else(|e| {
-                eprintln!("Failed to save thumbnail: {:?}", e);
-            });
-        } else {
-            eprintln!("No frames were processed, cannot save screenshot or thumbnail");
+                // Create and save thumbnail
+                let thumbnail = image::imageops::resize(
+                    &rgb_img,
+                    100,
+                    100,
+                    image::imageops::FilterType::Lanczos3,
+                );
+                let thumbnail_path = screenshots_dir.join("thumbnail.png");
+                thumbnail.save(&thumbnail_path).unwrap_or_else(|e| {
+                    eprintln!("Failed to save thumbnail: {:?}", e);
+                });
+            } else {
+                eprintln!("No frames were processed, cannot save screenshot or thumbnail");
+            }
         }
     });
 
@@ -766,7 +846,6 @@ async fn get_video_metadata(
     app: AppHandle,
     video_id: String,
     video_type: Option<VideoType>,
-    state: MutableState<'_, App>,
 ) -> Result<(f64, f64), String> {
     let video_id = if video_id.ends_with(".cap") {
         video_id.trim_end_matches(".cap").to_string()
@@ -897,7 +976,7 @@ async fn remove_fake_window(
 const PREV_RECORDINGS_WINDOW: &str = "prev-recordings";
 
 // must not be async bc of panel
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 fn show_previous_recordings_window(app: AppHandle) {
     if let Some(window) = app.get_webview_window(PREV_RECORDINGS_WINDOW) {
@@ -940,26 +1019,33 @@ fn show_previous_recordings_window(app: AppHandle) {
         return;
     };
 
-    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
-    use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
     use tauri_plugin_decorum::WebviewWindowExt;
-
     window.make_transparent().ok();
-    let panel = window.to_panel().unwrap();
 
-    panel.set_level(NSMainMenuWindowLevel);
+    app.run_on_main_thread({
+        let window = window.clone();
+        move || {
+            use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+            use tauri_nspanel::WebviewWindowExt as NSPanelWebviewWindowExt;
 
-    panel.set_collection_behaviour(
-        NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
-            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
-            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
-    );
+            let panel = window.to_panel().unwrap();
 
-    // seems like this doesn't work properly -_-
-    #[allow(non_upper_case_globals)]
-    const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
-    panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
+            panel.set_level(NSMainMenuWindowLevel);
+
+            panel.set_collection_behaviour(
+                NSWindowCollectionBehavior::NSWindowCollectionBehaviorTransient
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorMoveToActiveSpace
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle,
+            );
+
+            // seems like this doesn't work properly -_-
+            #[allow(non_upper_case_globals)]
+            const NSWindowStyleMaskNonActivatingPanel: i32 = 1 << 7;
+            panel.set_style_mask(NSWindowStyleMaskNonActivatingPanel);
+        }
+    })
+    .ok();
 
     tokio::spawn(async move {
         let state = app.state::<FakeWindowBounds>();
@@ -1070,14 +1156,10 @@ async fn render_to_file(
     project: ProjectConfiguration,
     progress_channel: tauri::ipc::Channel<RenderProgress>,
 ) {
-    let (duration, _size) = get_video_metadata(
-        app.clone(),
-        video_id.clone(),
-        Some(VideoType::Screen),
-        app.state(),
-    )
-    .await
-    .unwrap();
+    let (duration, _size) =
+        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
+            .await
+            .unwrap();
 
     // 30 FPS (calculated for output video)
     let total_frames = (duration * 30.0).round() as u32;
@@ -1212,6 +1294,53 @@ async fn open_feedback_window(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
+async fn open_changelog_window(app: AppHandle) {
+    let window = WebviewWindow::builder(
+        &app,
+        "changelog",
+        tauri::WebviewUrl::App("/changelog".into()),
+    )
+    .title("Cap Changelog")
+    .inner_size(600.0, 450.0)
+    .resizable(true)
+    .maximized(false)
+    .shadow(true)
+    .accept_first_mouse(true)
+    .transparent(true)
+    .hidden_title(true)
+    .title_bar_style(tauri::TitleBarStyle::Overlay)
+    .build()
+    .unwrap();
+
+    window.create_overlay_titlebar().unwrap();
+    #[cfg(target_os = "macos")]
+    window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn open_settings_window(app: AppHandle) {
+    let window =
+        WebviewWindow::builder(&app, "settings", tauri::WebviewUrl::App("/settings".into()))
+            .title("Cap Settings")
+            .inner_size(600.0, 450.0)
+            .resizable(true)
+            .maximized(false)
+            .shadow(true)
+            .accept_first_mouse(true)
+            .transparent(true)
+            .hidden_title(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .build()
+            .unwrap();
+
+    window.create_overlay_titlebar().unwrap();
+    #[cfg(target_os = "macos")]
+    window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn upload_rendered_video(
     app: AppHandle,
     video_id: String,
@@ -1329,7 +1458,10 @@ pub fn run() {
             permissions::request_permission,
             upload_rendered_video,
             get_recording_meta,
-            open_feedback_window
+            open_feedback_window,
+            open_settings_window,
+            open_changelog_window,
+            hotkeys::set_hotkey
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1341,10 +1473,12 @@ pub fn run() {
             RecordingMetaChanged,
             RecordingStarted,
             RecordingStopped,
+            RequestStartRecording,
             RequestStopRecording,
         ])
         .ty::<ProjectConfiguration>()
-        .ty::<AuthStore>();
+        .ty::<AuthStore>()
+        .ty::<hotkeys::HotkeysStore>();
 
     #[cfg(debug_assertions)] // <- Only export on non-release builds
     specta_builder
@@ -1366,6 +1500,7 @@ pub fn run() {
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
+            hotkeys::init(app.handle());
 
             let app_handle = app.handle().clone();
 
@@ -1392,8 +1527,19 @@ pub fn run() {
 
             create_in_progress_recording_window(app.app_handle());
 
+            let app_handle_clone = app_handle.clone();
+            RequestStartRecording::listen_any(app, move |_| {
+                let app_handle = app_handle_clone.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = start_recording(app_handle.clone(), app_handle.state()).await {
+                        eprintln!("Failed to start recording: {}", e);
+                    }
+                });
+            });
+
+            let app_handle_clone = app_handle.clone();
             RequestStopRecording::listen_any(app, move |_| {
-                let app_handle = app_handle.clone();
+                let app_handle = app_handle_clone.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = stop_recording(app_handle.clone(), app_handle.state()).await {
                         eprintln!("Failed to stop recording: {}", e);
@@ -1408,9 +1554,7 @@ pub fn run() {
             if label.starts_with("editor-") {
                 if let WindowEvent::CloseRequested { .. } = event {
                     let id = label.strip_prefix("editor-").unwrap().to_string();
-
                     let app = window.app_handle().clone();
-
                     tokio::spawn(async move {
                         if let Some(editor) = remove_editor_instance(&app, id.clone()).await {
                             editor.dispose().await;

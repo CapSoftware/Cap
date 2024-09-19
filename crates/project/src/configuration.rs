@@ -39,8 +39,14 @@ pub struct XY<T> {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
-	pub position: XY<f32>,
-	pub size: XY<f32>
+    pub position: XY<u32>,
+    pub size: XY<u32>,
+}
+
+impl Crop {
+    pub fn aspect_ratio(&self) -> f32 {
+        self.size.x as f32 / self.size.y as f32
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
@@ -119,6 +125,54 @@ pub struct HotkeysConfiguration {
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct TimelineSegment {
+    timescale: f64,
+    start: f64,
+    end: f64,
+}
+
+impl TimelineSegment {
+    fn interpolate_time(&self, tick: f64) -> Option<f64> {
+        if tick > self.duration() {
+            None
+        } else {
+            Some(self.start + tick * self.timescale)
+        }
+    }
+
+    fn duration(&self) -> f64 {
+        (self.end - self.start) / self.timescale
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineConfiguration {
+    pub segments: Vec<TimelineSegment>,
+}
+
+impl TimelineConfiguration {
+    pub fn get_recording_time(&self, tick_time: f64) -> Option<f64> {
+        let mut accum_duration = 0.0;
+
+        for segment in &self.segments {
+            if tick_time < accum_duration + segment.duration() {
+                return segment.interpolate_time(tick_time - accum_duration);
+            }
+
+            accum_duration += segment.duration();
+        }
+
+        None
+    }
+
+    pub fn duration(&self) -> f64 {
+        self.segments.iter().map(|s| s.duration()).sum()
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectConfiguration {
     pub aspect_ratio: Option<AspectRatio>,
     pub background: BackgroundConfiguration,
@@ -126,4 +180,12 @@ pub struct ProjectConfiguration {
     pub audio: AudioConfiguration,
     pub cursor: CursorConfiguration,
     pub hotkeys: HotkeysConfiguration,
+    #[serde(default)]
+    pub timeline: Option<TimelineConfiguration>,
+}
+
+impl ProjectConfiguration {
+    pub fn timeline(&self) -> Option<&TimelineConfiguration> {
+        self.timeline.as_ref()
+    }
 }

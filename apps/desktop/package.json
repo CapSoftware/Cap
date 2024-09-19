@@ -42,6 +42,7 @@
     "effect": "^3.7.2",
     "mp4box": "^0.5.2",
     "solid-js": "^1.7.8",
+    "solid-markdown": "^2.0.13",
     "solid-presence": "^0.1.8",
     "solid-transition-group": "^0.2.3",
     "unplugin-auto-import": "^0.18.2",
@@ -55,6 +56,7 @@
     "@tauri-apps/cli": ">=2.0.0-rc.0",
     "@types/dom-webcodecs": "^0.1.11",
     "typescript": "^5.2.2",
-    "vite": "^5.4.3"
+    "vite": "^5.4.3",
+    "vite-tsconfig-paths": "^5.0.1"
   }
 }

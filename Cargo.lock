@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.0-alpha.23"
+version = "0.3.0-alpha.25"
 dependencies = [
  "anyhow",
  "axum",
@@ -1426,6 +1426,7 @@ dependencies = [
  "ffmpeg-sidecar 1.1.0 (git+https://github.com/CapSoftware/ffmpeg-sidecar?branch=main)",
  "futures",
  "futures-intrusive",
+ "global-hotkey",
  "image 0.25.2",
  "indexmap 2.5.0",
  "mp4",
@@ -1449,6 +1450,7 @@ dependencies = [
  "tauri-plugin-decorum",
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
+ "tauri-plugin-global-shortcut",
  "tauri-plugin-oauth",
  "tauri-plugin-os",
  "tauri-plugin-process",
@@ -2301,6 +2303,24 @@ name = "glob"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
+
+[[package]]
+name = "global-hotkey"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b436093d1598b05e3b7fddc097b2bad32763f53a1beb25ab6f9718c6a60acd09"
+dependencies = [
+ "bitflags 2.6.0",
+ "cocoa 0.25.0",
+ "crossbeam-channel",
+ "keyboard-types",
+ "objc",
+ "once_cell",
+ "serde",
+ "thiserror",
+ "windows-sys 0.52.0",
+ "x11-dl",
+]
 
 [[package]]
 name = "glow"
@@ -6018,6 +6038,21 @@ dependencies = [
  "thiserror",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "tauri-plugin-global-shortcut"
+version = "2.0.0-rc.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a596240a2ee580534e5d348b80b34ce4aa9c0219eaa63b393571d29201e9ea80"
+dependencies = [
+ "global-hotkey",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror",
 ]
 
 [[package]]

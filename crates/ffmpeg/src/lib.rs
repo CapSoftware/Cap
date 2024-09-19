@@ -289,7 +289,7 @@ impl Default for FFmpeg {
 impl FFmpeg {
     pub fn new() -> Self {
         Self {
-            command: Command::new(dbg!(relative_command_path("ffmpeg").unwrap())),
+            command: Command::new(relative_command_path("ffmpeg").unwrap()),
             source_index: 0,
         }
     }

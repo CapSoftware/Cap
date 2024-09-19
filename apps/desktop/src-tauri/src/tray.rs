@@ -1,4 +1,7 @@
-use crate::{NewRecordingAdded, RecordingStarted, RecordingStopped, RequestStopRecording};
+use crate::{
+    NewRecordingAdded, RecordingStarted, RecordingStopped, RequestStartRecording,
+    RequestStopRecording,
+};
 use cap_project::RecordingMeta;
 use std::path::PathBuf;
 use std::result::Result;
@@ -8,7 +11,7 @@ use tauri::{
     image::Image,
     menu::{IconMenuItem, IsMenuItem, Menu, MenuItem, MenuItemKind, Submenu},
     tray::TrayIconBuilder,
-    AppHandle, Manager, Runtime,
+    AppHandle, Manager, Runtime, WebviewWindow,
 };
 use tauri_specta::Event;
 
@@ -23,8 +26,13 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         None::<&str>,
     )?;
 
-    let new_recording_i =
-        MenuItem::with_id(app, "new_recording", "New Recording", true, None::<&str>)?;
+    let new_recording_i = MenuItem::with_id(
+        app,
+        "new_recording",
+        "Start New Recording",
+        true,
+        None::<&str>,
+    )?;
 
     // Create a submenu for previous recordings
     let prev_recordings_submenu = create_prev_recordings_submenu(app)?;
@@ -48,29 +56,57 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         ))?)
         .menu(&menu)
         .menu_on_left_click(true)
-        .on_menu_event(move |app, event| {
-            match event.id.as_ref() {
-                "new_recording" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
-                "quit" => {
-                    app.exit(0);
-                }
-                _ => {
-                    // Handle previous recording menu item clicks
-                    if event.id.as_ref().starts_with("Cap ") {
-                        if let Some(path) =
-                            get_recording_path_by_pretty_name(app, event.id.as_ref())
-                        {
-                            NewRecordingAdded { path }.emit(app).unwrap();
+        .on_menu_event({
+            let app_handle = app_handle.clone();
+            move |app: &AppHandle<R>, event| {
+                match event.id.as_ref() {
+                    "new_recording" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            window.set_focus().ok();
                         } else {
-                            println!("Unknown menu item clicked: {:?}", event);
+                            let Some(_window) = WebviewWindow::builder(
+                                &app.clone(),
+                                "main",
+                                tauri::WebviewUrl::App("/".into()),
+                            )
+                            .title("Cap")
+                            .inner_size(300.0, 375.0)
+                            .resizable(false)
+                            .maximized(false)
+                            .shadow(true)
+                            .accept_first_mouse(true)
+                            .transparent(true)
+                            .hidden_title(true)
+                            .title_bar_style(tauri::TitleBarStyle::Overlay)
+                            .theme(Some(tauri::Theme::Light))
+                            .build()
+                            .ok() else {
+                                return;
+                            };
                         }
-                    } else {
-                        println!("Unhandled menu item clicked: {:?}", event);
+
+                        let _ = RequestStartRecording.emit(&app_handle);
+
+                        // window.create_overlay_titlebar().unwrap();
+                        // #[cfg(target_os = "macos")]
+                        // window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {
+                        // Handle previous recording menu item clicks
+                        if event.id.as_ref().starts_with("Cap ") {
+                            if let Some(path) =
+                                get_recording_path_by_pretty_name(app, event.id.as_ref())
+                            {
+                                NewRecordingAdded { path }.emit(app).unwrap();
+                            } else {
+                                println!("Unknown menu item clicked: {:?}", event);
+                            }
+                        } else {
+                            println!("Unhandled menu item clicked: {:?}", event);
+                        }
                     }
                 }
             }
@@ -217,8 +253,13 @@ fn handle_new_recording_added<R: Runtime>(app: &AppHandle<R>, path: PathBuf) -> 
             false,
             None::<&str>,
         )?;
-        let new_recording_i =
-            MenuItem::with_id(app, "new_recording", "New Recording", true, None::<&str>)?;
+        let new_recording_i = MenuItem::with_id(
+            app,
+            "new_recording",
+            "Start New Recording",
+            true,
+            None::<&str>,
+        )?;
         let prev_recordings_submenu = create_prev_recordings_submenu(app)?;
         let quit_i = MenuItem::with_id(app, "quit", "Quit Cap", true, None::<&str>)?;
 

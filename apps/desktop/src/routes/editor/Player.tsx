@@ -1,12 +1,14 @@
 import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
+import { createElementBounds } from "@solid-primitives/bounds";
 import { cx } from "cva";
 import { For, Show, Suspense, createEffect, createSignal } from "solid-js";
 import { reconcile } from "solid-js/store";
 
-import { type AspectRatio, commands } from "../../utils/tauri";
+import { type AspectRatio, commands } from "~/utils/tauri";
 import { useEditorContext } from "./context";
+import { ASPECT_RATIOS } from "./projectConfig";
 import {
   ComingSoonTooltip,
   DropdownItem,
@@ -17,9 +19,9 @@ import {
   dropdownContainerClasses,
   topLeftAnimateClasses,
 } from "./ui";
-import { ASPECT_RATIOS } from "./projectConfig";
-import { OUTPUT_SIZE } from "./editorInstanceContext";
 import { formatTime } from "./utils";
+import { flags } from "~/flags";
+
 export function Player() {
   const {
     project,
@@ -29,9 +31,10 @@ export function Player() {
     currentFrame,
     setDialog,
     playbackTime,
-    setPlaybackTime,
     playing,
     setPlaying,
+    split,
+    setSplit,
   } = useEditorContext();
 
   let canvasRef: HTMLCanvasElement;
@@ -40,30 +43,45 @@ export function Player() {
     const frame = currentFrame();
     if (!frame) return;
     const ctx = canvasRef.getContext("2d");
-    ctx?.putImageData(frame, 0, 0);
+    ctx?.putImageData(frame.data, 0, 0);
   });
+
+  const [canvasContainerRef, setCanvasContainerRef] =
+    createSignal<HTMLDivElement>();
+  const containerBounds = createElementBounds(canvasContainerRef);
+
+  const splitButton = () => (
+    <EditorButton<typeof KToggleButton>
+      disabled={flags.split}
+      pressed={split()}
+      onChange={setSplit}
+      as={KToggleButton}
+      variant="danger"
+      leftIcon={<IconCapScissors />}
+    >
+      Split
+    </EditorButton>
+  );
 
   return (
     <div class="flex flex-col divide-y flex-1">
-      <div class="flex flex-row justify-between font-medium p-[0.75rem] text-[0.875rem]">
+      <div class="flex flex-row justify-between font-medium p-[0.75rem] text-[0.875rem] z-10 bg-gray-50">
         <div class="flex flex-row items-center gap-[0.5rem]">
           <AspectRatioSelect />
           <EditorButton
             leftIcon={<IconCapCrop />}
             onClick={() => {
+              const display = editorInstance.recordings.display;
               setDialog({
                 open: true,
                 type: "crop",
                 position: {
-                  ...(project.background.crop?.position ?? {
-                    x: 0,
-                    y: 0,
-                  }),
+                  ...(project.background.crop?.position ?? { x: 0, y: 0 }),
                 },
                 size: {
                   ...(project.background.crop?.size ?? {
-                    x: editorInstance.recordings.display.width,
-                    y: editorInstance.recordings.display.height,
+                    x: display.width,
+                    y: display.height,
                   }),
                 },
               });
@@ -90,17 +108,69 @@ export function Player() {
           </EditorButton>
         </div>
       </div>
-      <div class="bg-gray-100 flex items-center justify-center flex-1 flex-row object-contain p-4">
-        <canvas
-          class="bg-blue-50 w-full"
-          // biome-ignore lint/style/noNonNullAssertion: ref
-          ref={canvasRef!}
-          id="canvas"
-          width={OUTPUT_SIZE.width}
-          height={OUTPUT_SIZE.height}
-        />
+      <div ref={setCanvasContainerRef} class="bg-gray-100 flex-1 relative">
+        <Show when={currentFrame()}>
+          {(currentFrame) => {
+            const padding = 16;
+
+            const containerAspect = () => {
+              if (containerBounds.width && containerBounds.height) {
+                return (
+                  (containerBounds.width - padding * 2) /
+                  (containerBounds.height - padding * 2)
+                );
+              }
+
+              return 1;
+            };
+
+            const frameAspect = () =>
+              currentFrame().width / currentFrame().height;
+
+            const size = () => {
+              if (frameAspect() < containerAspect()) {
+                const height = (containerBounds.height ?? 0) - padding * 2;
+
+                return {
+                  width: height * frameAspect(),
+                  height,
+                };
+              }
+
+              const width = (containerBounds.width ?? 0) - padding * 2;
+
+              return {
+                width,
+                height: width / frameAspect(),
+              };
+            };
+
+            return (
+              <canvas
+                style={{
+                  left: `${Math.max(
+                    ((containerBounds.width ?? 0) - size().width) / 2,
+                    padding
+                  )}px`,
+                  top: `${Math.max(
+                    ((containerBounds.height ?? 0) - size().height) / 2,
+                    padding
+                  )}px`,
+                  width: `${size().width}px`,
+                  height: `${size().height}px`,
+                }}
+                class="bg-blue-50 absolute rounded"
+                // biome-ignore lint/style/noNonNullAssertion: ref
+                ref={canvasRef!}
+                id="canvas"
+                width={currentFrame().width}
+                height={currentFrame().height}
+              />
+            );
+          }}
+        </Show>
       </div>
-      <div class="flex flex-row items-center p-[0.75rem]">
+      <div class="flex flex-row items-center p-[0.75rem] z-10 bg-gray-50">
         <div class="flex-1" />
         <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
           <span>{formatTime(playbackTime())}</span>
@@ -131,19 +201,21 @@ export function Player() {
           <button type="button" disabled>
             <IconCapFrameLast class="size-[1rem]" />
           </button>
-          <span>{formatTime(editorInstance.recordingDuration)}</span>
+          <span>
+            {formatTime(
+              project.timeline?.segments.reduce(
+                (acc, s) => acc + (s.end - s.start) / s.timescale,
+                0
+              ) ?? editorInstance.recordingDuration
+            )}
+          </span>
         </div>
         <div class="flex-1 flex flex-row justify-end">
-          <ComingSoonTooltip>
-            <EditorButton<typeof KToggleButton>
-              disabled
-              as={KToggleButton}
-              variant="danger"
-              leftIcon={<IconCapScissors />}
-            >
-              Split
-            </EditorButton>
-          </ComingSoonTooltip>
+          {flags.split ? (
+            splitButton()
+          ) : (
+            <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
+          )}
         </div>
       </div>
     </div>
@@ -154,80 +226,77 @@ function AspectRatioSelect() {
   const { project, setProject } = useEditorContext();
 
   return (
-    <ComingSoonTooltip>
-      <KSelect<AspectRatio | "auto">
-        disabled
-        value={project.aspectRatio ?? "auto"}
-        onChange={(v) => {
-          if (v === null) return;
-          setProject("aspectRatio", v === "auto" ? null : v);
-        }}
-        defaultValue="auto"
-        options={
-          ["auto", "wide", "vertical", "square", "classic", "tall"] as const
-        }
-        multiple={false}
-        itemComponent={(props) => {
-          const item = () =>
-            ASPECT_RATIOS[
-              props.item.rawValue === "auto" ? "wide" : props.item.rawValue
-            ];
+    <KSelect<AspectRatio | "auto">
+      value={project.aspectRatio ?? "auto"}
+      onChange={(v) => {
+        if (v === null) return;
+        setProject("aspectRatio", v === "auto" ? null : v);
+      }}
+      defaultValue="auto"
+      options={
+        ["auto", "wide", "vertical", "square", "classic", "tall"] as const
+      }
+      multiple={false}
+      itemComponent={(props) => {
+        const item = () =>
+          props.item.rawValue === "auto"
+            ? null
+            : ASPECT_RATIOS[props.item.rawValue];
 
-          return (
-            <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-              <KSelect.ItemLabel class="flex-1">
-                {props.item.rawValue === "auto"
-                  ? "Auto"
-                  : ASPECT_RATIOS[props.item.rawValue].name}
-                <Show when={item()}>
-                  {(item) => (
-                    <span class="text-gray-400">
-                      {"⋅"}
-                      {item().ratio[0]}:{item().ratio[1]}
-                    </span>
-                  )}
-                </Show>
-              </KSelect.ItemLabel>
-              <KSelect.ItemIndicator class="ml-auto">
-                <IconCapCircleCheck />
-              </KSelect.ItemIndicator>
-            </MenuItem>
-          );
-        }}
-        placement="top-start"
+        return (
+          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
+            <KSelect.ItemLabel class="flex-1">
+              {props.item.rawValue === "auto"
+                ? "Auto"
+                : ASPECT_RATIOS[props.item.rawValue].name}
+              <Show when={item()}>
+                {(item) => (
+                  <span class="text-gray-400">
+                    {"⋅"}
+                    {item().ratio[0]}:{item().ratio[1]}
+                  </span>
+                )}
+              </Show>
+            </KSelect.ItemLabel>
+            <KSelect.ItemIndicator class="ml-auto">
+              <IconCapCircleCheck />
+            </KSelect.ItemIndicator>
+          </MenuItem>
+        );
+      }}
+      placement="top-start"
+    >
+      <EditorButton<typeof KSelect.Trigger>
+        as={KSelect.Trigger}
+        leftIcon={<IconCapLayout />}
+        rightIcon={
+          <KSelect.Icon>
+            <IconCapChevronDown />
+          </KSelect.Icon>
+        }
       >
-        <EditorButton<typeof KSelect.Trigger>
-          as={KSelect.Trigger}
-          leftIcon={<IconCapLayout />}
-          rightIcon={
-            <KSelect.Icon>
-              <IconCapChevronDown />
-            </KSelect.Icon>
-          }
+        <KSelect.Value<AspectRatio | "auto">>
+          {(state) => {
+            const text = () => {
+              const option = state.selectedOption();
+              return option === "auto" ? "Auto" : ASPECT_RATIOS[option].name;
+            };
+            return <>{text()}</>;
+          }}
+        </KSelect.Value>
+      </EditorButton>
+      <KSelect.Portal>
+        <PopperContent<typeof KSelect.Content>
+          as={KSelect.Content}
+          class={topLeftAnimateClasses}
         >
-          <KSelect.Value<AspectRatio | "auto">>
-            {(state) => {
-              const text = () => {
-                const option = state.selectedOption();
-                return option === "auto" ? "Auto" : ASPECT_RATIOS[option].name;
-              };
-              return <>{text()}</>;
-            }}
-          </KSelect.Value>
-        </EditorButton>
-        <KSelect.Portal>
-          <PopperContent<typeof KSelect.Content>
-            as={KSelect.Content}
-            class={topLeftAnimateClasses}
-          >
-            <MenuItemList<typeof KSelect.Listbox>
-              as={KSelect.Listbox}
-              class="w-[12.5rem]"
-            />
-          </PopperContent>
-        </KSelect.Portal>
-      </KSelect>
-    </ComingSoonTooltip>
+          <MenuItemList<typeof KSelect.Listbox>
+            as={KSelect.Listbox}
+            class="w-[12.5rem]"
+          />
+        </PopperContent>
+      </KSelect.Portal>
+    </KSelect>
   );
 }
 
@@ -262,8 +331,6 @@ function PresetsDropdown() {
               >
                 {(preset, i) => {
                   const [showSettings, setShowSettings] = createSignal(false);
-
-                  console.log(presets.query());
 
                   return (
                     <KDropdownMenu.Sub gutter={16}>
