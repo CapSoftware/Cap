@@ -1,11 +1,22 @@
-import { cx } from "cva";
-import { Show, type ValidComponent, createSignal, onMount } from "solid-js";
+import { Button, SwitchTab } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
-import { SwitchTab, Button } from "@cap/ui-solid";
-import { createMutation } from "@tanstack/solid-query";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
+import { createMutation } from "@tanstack/solid-query";
+import { getVersion } from "@tauri-apps/api/app";
+import { cx } from "cva";
+import {
+  Show,
+  type ValidComponent,
+  createEffect,
+  createResource,
+  createSignal,
+  onMount,
+} from "solid-js";
+import { createStore } from "solid-js/store";
 
+import { authStore } from "~/store";
+import { clientEnv } from "~/utils/env";
 import { createCameraForLabel, createCameras } from "~/utils/media";
 import {
   createAudioDevicesQuery,
@@ -15,17 +26,12 @@ import {
 } from "~/utils/queries";
 import { type CaptureWindow, commands, events } from "~/utils/tauri";
 import {
+  MenuItem,
   MenuItemList,
   PopperContent,
   topLeftAnimateClasses,
-  MenuItem,
   topRightAnimateClasses,
 } from "../editor/ui";
-import { authStore } from "~/store";
-import { createResource, createEffect } from "solid-js";
-import { createStore } from "solid-js/store";
-import { clientEnv } from "~/utils/env";
-import { getVersion } from "@tauri-apps/api/app";
 
 const getAuth = cache(async () => {
   const value = await authStore.get();
@@ -91,10 +97,7 @@ export default function () {
     ),
   });
 
-  const [currentVersion] = createResource(async () => {
-    const version = await getVersion();
-    return version;
-  });
+  const [currentVersion] = createResource(() => getVersion());
 
   const [changelogStatus] = createResource(
     () => currentVersion(),
@@ -105,8 +108,7 @@ export default function () {
       const response = await fetch(
         `${clientEnv.VITE_SERVER_URL}/api/changelog/status?version=${version}`
       );
-      const data = await response.json();
-      return data;
+      return await response.json();
     }
   );
 
