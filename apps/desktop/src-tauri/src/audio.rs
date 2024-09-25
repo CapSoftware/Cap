@@ -1,4 +1,3 @@
-use cap_ffmpeg::NamedPipeCapture;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, SampleFormat, SizedSample, Stream, StreamConfig, SupportedStreamConfig,
@@ -7,10 +6,8 @@ use ffmpeg_next as ffmpeg;
 use indexmap::IndexMap;
 use num_traits::ToBytes;
 use std::{
-    fs::File,
-    io::Write,
     path::PathBuf,
-    sync::{atomic::Ordering, Arc},
+    sync::Arc,
     time::Instant,
 };
 use tokio::sync::{
@@ -20,7 +17,7 @@ use tokio::sync::{
 
 use crate::{
     capture::CaptureController,
-    encoder::{H264Encoder, MP3Encoder},
+    encoder::MP3Encoder,
 };
 
 type SampleReceiver = mpsc::Receiver<Arc<Vec<f32>>>;

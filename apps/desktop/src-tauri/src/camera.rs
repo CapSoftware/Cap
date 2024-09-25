@@ -1,13 +1,10 @@
-use ffmpeg_next::{self as ffmpeg, format::Pixel};
-use nokhwa::utils::CameraFormat;
+use ffmpeg_next as ffmpeg;
 use serde::Serialize;
 use specta::Type;
-use std::{fs::File, io::Write, path::PathBuf, sync::atomic::Ordering, time::Instant};
+use std::{path::PathBuf, time::Instant};
 use tokio::sync::{oneshot, watch};
 
 use tauri::{AppHandle, Manager, WebviewUrl};
-
-use cap_ffmpeg::NamedPipeCapture;
 
 use crate::{
     capture::CaptureController,

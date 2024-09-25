@@ -1,17 +1,11 @@
 use ffmpeg_next::{
-    self as ffmpeg, codec as avcodec, encoder as avencoder, format as avformat,
-    frame::{self as avframe, Video},
+    format as avformat,
+    frame::Video,
     software,
 };
 use std::{
-    fs::File,
-    io::Write,
     path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::{Instant, SystemTime},
+    time::Instant,
 };
 
 use scap::{
@@ -28,7 +22,6 @@ use crate::{
     encoder::{bgra_frame, H264Encoder},
     macos,
 };
-use cap_ffmpeg::NamedPipeCapture;
 
 #[derive(Type, Serialize, Deserialize, Debug, Clone)]
 pub struct Bounds {

@@ -36,7 +36,6 @@ use serde_json::json;
 use specta::Type;
 use std::fs::File;
 use std::io::{BufReader, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashMap,
@@ -44,13 +43,12 @@ use std::{
     path::PathBuf,
     process::Command,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
-use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio::{
     sync::{Mutex, RwLock},

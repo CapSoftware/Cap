@@ -1,7 +1,7 @@
 use futures::future::OptionFuture;
 use serde::Serialize;
 use specta::Type;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, time::Duration};
 use tokio::sync::watch;
 
@@ -12,7 +12,6 @@ use crate::{
     Bounds, RecordingOptions,
 };
 
-use cap_ffmpeg::*;
 
 #[derive(Clone, Type, Serialize)]
 #[serde(rename_all = "camelCase", tag = "variant")]
@@ -109,13 +108,6 @@ impl InProgressRecording {
     }
 }
 
-pub struct FFmpegCaptureOutput<T> {
-    pub input: FFmpegInput<T>,
-    pub capture: NamedPipeCapture,
-    pub output_path: PathBuf,
-    pub start_time: Instant,
-}
-
 pub async fn start(
     recording_dir: PathBuf,
     recording_options: &RecordingOptions,
@@ -135,7 +127,7 @@ pub async fn start(
         OptionFuture::from(
             recording_options
                 .camera_label()
-                .and_then(|camera_label| camera::find_camera_by_label(camera_label))
+                .and_then(camera::find_camera_by_label)
                 .map(|camera_info| {
                     camera::start_capturing(
                         content_dir.join("camera.mp4"),

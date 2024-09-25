@@ -1,14 +1,9 @@
-use cap_utils::create_named_pipe;
 use std::{
     ffi::OsString,
     io::{Read, Write},
     ops::Deref,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
 };
 use tauri::utils::platform;
 
@@ -127,52 +122,6 @@ impl FFmpegProcess {
             println!("Sent SIGCONT to FFmpeg");
         }
         Ok(())
-    }
-}
-
-pub struct NamedPipeCapture {
-    path: PathBuf,
-    is_stopped: Arc<AtomicBool>,
-    is_paused: Arc<AtomicBool>,
-}
-
-impl NamedPipeCapture {
-    pub fn new(path: &PathBuf) -> (Self, Arc<AtomicBool>, Arc<AtomicBool>) {
-        create_named_pipe(path).unwrap();
-
-        let stop = Arc::new(AtomicBool::new(false));
-        let pause = Arc::new(AtomicBool::new(false));
-
-        (
-            Self {
-                path: path.clone(),
-                is_stopped: stop.clone(),
-                is_paused: pause.clone(),
-            },
-            stop,
-            pause,
-        )
-    }
-
-    pub fn path(&self) -> &PathBuf {
-        &self.path
-    }
-
-    pub fn stop(&self) {
-        self.is_stopped.store(true, Ordering::Relaxed);
-    }
-
-    pub fn pause(&mut self) {
-        println!("setting is_paused to true");
-        self.is_paused.store(true, Ordering::Relaxed);
-    }
-
-    pub fn resume(&mut self) {
-        self.is_paused.store(false, Ordering::Relaxed);
-    }
-
-    pub fn is_paused(&self) -> bool {
-        self.is_paused.load(Ordering::Relaxed)
     }
 }
 

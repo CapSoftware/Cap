@@ -104,7 +104,7 @@ pub fn bgra_frame(bytes: &[u8], width: u32, height: u32) -> ffmpeg::frame::Video
 pub fn uyvy422_frame(bytes: &[u8], width: u32, height: u32) -> ffmpeg::frame::Video {
     let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::UYVY422, width, height);
 
-    frame.data_mut(0).copy_from_slice(&bytes);
+    frame.data_mut(0).copy_from_slice(bytes);
 
     frame
 }
@@ -140,7 +140,7 @@ impl MP3Encoder {
         let mut stream = output.add_stream(audio_codec).unwrap();
         let stream_index = stream.index();
 
-        let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec.clone())
+        let mut encoder = ffmpeg::codec::context::Context::new_with_codec(codec)
             .encoder()
             .audio()
             .unwrap();
