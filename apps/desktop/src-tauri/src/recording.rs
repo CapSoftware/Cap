@@ -1,9 +1,16 @@
+use device_query::{DeviceQuery, DeviceState, MouseState};
 use nokhwa::utils::CameraFormat;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use std::{path::PathBuf, time::Duration};
+use std::{fs::File, io::Write, path::PathBuf, time::Duration};
 use tokio::sync::watch;
+
+use objc::rc::autoreleasepool;
+use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
+use objc::*;
+use tauri_nspanel::objc_foundation::{INSString, NSString};
 
 use crate::{
     audio::{self, AudioCapturer},
@@ -21,6 +28,17 @@ pub enum DisplaySource {
     Window { bounds: Bounds },
 }
 
+#[derive(Serialize, Deserialize, Clone, Type)]
+pub struct MouseEvent {
+    pub active_modifiers: Vec<String>,
+    pub cursor_id: String,
+    pub process_time_ms: f64,
+    pub event_type: String,
+    pub unix_time_ms: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Type, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InProgressRecording {
@@ -34,7 +52,12 @@ pub struct InProgressRecording {
     pub camera: Option<FFmpegCaptureOutput<FFmpegRawVideoInput>>,
     #[serde(skip)]
     pub audio: Option<(FFmpegCaptureOutput<FFmpegRawAudioInput>, AudioCapturer)>,
-    // pub start: f64,
+    #[serde(skip)]
+    pub mouse_moves: Arc<Mutex<Vec<MouseEvent>>>,
+    #[serde(skip)]
+    pub mouse_clicks: Arc<Mutex<Vec<MouseEvent>>>,
+    #[serde(skip)]
+    pub stop_signal: Arc<Mutex<bool>>,
 }
 
 unsafe impl Send for InProgressRecording {}
@@ -42,6 +65,9 @@ unsafe impl Sync for InProgressRecording {}
 
 impl InProgressRecording {
     pub async fn stop(&mut self) {
+        // Signal the mouse event tracking to stop
+        *self.stop_signal.lock().unwrap() = true;
+
         self.ffmpeg_process.stop();
 
         if let Err(e) = self.ffmpeg_process.wait() {
@@ -55,6 +81,19 @@ impl InProgressRecording {
         if let Some(audio) = &mut self.audio {
             audio.1.stop().ok();
         }
+
+        // Save mouse events to files
+        let mouse_moves_path = self.recording_dir.join("mousemoves.json");
+        let mouse_clicks_path = self.recording_dir.join("mouseclicks.json");
+
+        let mouse_moves = self.mouse_moves.lock().unwrap();
+        let mouse_clicks = self.mouse_clicks.lock().unwrap();
+
+        let mut mouse_moves_file = File::create(mouse_moves_path).unwrap();
+        let mut mouse_clicks_file = File::create(mouse_clicks_path).unwrap();
+
+        serde_json::to_writer(&mut mouse_moves_file, &*mouse_moves).unwrap();
+        serde_json::to_writer(&mut mouse_clicks_file, &*mouse_clicks).unwrap();
 
         use cap_project::*;
         RecordingMeta {
@@ -116,14 +155,6 @@ pub async fn start(
         start_audio_recording(&content_dir, recording_options, start_writing_rx.clone())
     );
 
-    // let latest_start_time = std::cmp::max(
-    //     display.2,
-    //     std::cmp::max(
-    //         camera.as_ref().map(|c| c.2).unwrap_or(now),
-    //         audio.as_ref().map(|a| a.1).unwrap_or(now),
-    //     ),
-    // );
-
     let display = {
         let ((width, height), capture, start_time) = display;
 
@@ -135,7 +166,6 @@ pub async fn start(
             height,
             fps: 0,
             pix_fmt: "bgra",
-            // offset: start_time.duration_since(latest_start_time).as_secs_f64(),
             ..Default::default()
         });
 
@@ -150,8 +180,6 @@ pub async fn start(
             .args(["-g", &keyframe_interval_str])
             .args(["-keyint_min", &keyframe_interval_str])
             .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-            // .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
-            // .args(["-movflags", "frag_keyframe+empty_moov"])
             .args([
                 "-vf",
                 &format!("fps={},scale=in_range=full:out_range=limited", display::FPS),
@@ -178,14 +206,12 @@ pub async fn start(
             width: format.resolution().width(),
             height: format.resolution().height(),
             fps,
-            // fps: format.frame_rate(),
             pix_fmt: match format.format() {
                 FrameFormat::YUYV => "uyvy422",
                 FrameFormat::RAWRGB => "rgb24",
                 FrameFormat::NV12 => "nv12",
                 _ => panic!("unimplemented"),
             },
-            // offset: start_time.duration_since(latest_start_time).as_secs_f64(),
         });
 
         let keyframe_interval_secs = 2;
@@ -230,7 +256,7 @@ pub async fn start(
             sample_format: capturer.sample_format().to_string(),
             sample_rate: capturer.sample_rate(),
             channels: capturer.channels(),
-            wallclock: true, // offset: start_time.duration_since(latest_start_time).as_secs_f64(),
+            wallclock: true,
         });
 
         ffmpeg
@@ -266,6 +292,56 @@ pub async fn start(
 
     start_writing_tx.send(true).unwrap();
 
+    // Initialize mouse event tracking
+    let mouse_moves = Arc::new(Mutex::new(Vec::new()));
+    let mouse_clicks = Arc::new(Mutex::new(Vec::new()));
+    let stop_signal = Arc::new(Mutex::new(false));
+
+    // Start mouse event tracking
+    let mouse_moves_clone = Arc::clone(&mouse_moves);
+    let mouse_clicks_clone = Arc::clone(&mouse_clicks);
+    let stop_signal_clone = Arc::clone(&stop_signal);
+    tokio::spawn(async move {
+        let device_state = DeviceState::new();
+        let mut last_mouse_state = device_state.get_mouse();
+        let start_time = Instant::now();
+
+        while !*stop_signal_clone.lock().unwrap() {
+            let mouse_state = device_state.get_mouse();
+            let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+            let unix_time = chrono::Utc::now().timestamp_millis() as f64;
+
+            if mouse_state.coords != last_mouse_state.coords {
+                let mouse_event = MouseEvent {
+                    active_modifiers: vec![],
+                    cursor_id: get_cursor_id(),
+                    process_time_ms: elapsed,
+                    event_type: "mouseMoved".to_string(),
+                    unix_time_ms: unix_time,
+                    x: mouse_state.coords.0 as f64,
+                    y: mouse_state.coords.1 as f64,
+                };
+                mouse_moves_clone.lock().unwrap().push(mouse_event);
+            }
+
+            if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
+                let mouse_event = MouseEvent {
+                    active_modifiers: vec![],
+                    cursor_id: get_cursor_id(),
+                    process_time_ms: elapsed,
+                    event_type: "mouseClicked".to_string(),
+                    unix_time_ms: unix_time,
+                    x: mouse_state.coords.0 as f64,
+                    y: mouse_state.coords.1 as f64,
+                };
+                mouse_clicks_clone.lock().unwrap().push(mouse_event);
+            }
+
+            last_mouse_state = mouse_state;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    });
+
     InProgressRecording {
         recording_dir,
         ffmpeg_process,
@@ -278,7 +354,65 @@ pub async fn start(
         },
         camera,
         audio,
+        mouse_moves,
+        mouse_clicks,
+        stop_signal,
     }
+}
+
+fn get_cursor_id() -> String {
+    autoreleasepool(|| {
+        // Get the NSCursor class
+        let nscursor_class = match Class::get("NSCursor") {
+            Some(cls) => cls,
+            None => return "Unknown".to_string(),
+        };
+
+        unsafe {
+            // Get the current cursor
+            let current_cursor: *mut Object = msg_send![nscursor_class, currentSystemCursor];
+            if current_cursor.is_null() {
+                return "Unknown".to_string();
+            }
+
+            // Define an array of known cursor names
+            let cursor_names = [
+                "arrowCursor",
+                "IBeamCursor",
+                "crosshairCursor",
+                "closedHandCursor",
+                "openHandCursor",
+                "pointingHandCursor",
+                "resizeLeftCursor",
+                "resizeRightCursor",
+                "resizeLeftRightCursor",
+                "resizeUpCursor",
+                "resizeDownCursor",
+                "resizeUpDownCursor",
+                "disappearingItemCursor",
+                "IBeamCursorForVerticalLayout",
+                "operationNotAllowedCursor",
+                "dragLinkCursor",
+                "dragCopyCursor",
+                "contextualMenuCursor",
+            ];
+
+            // Iterate through known cursor names
+            for cursor_name in cursor_names.iter() {
+                let sel = Sel::register(cursor_name);
+                let cursor: *mut Object = msg_send![nscursor_class, performSelector:sel];
+                if !cursor.is_null() {
+                    let is_equal: BOOL = msg_send![current_cursor, isEqual:cursor];
+                    if is_equal == YES {
+                        return cursor_name.to_string();
+                    }
+                }
+            }
+
+            // If no match is found, return "Unknown"
+            "Unknown".to_string()
+        }
+    })
 }
 
 async fn start_camera_recording(

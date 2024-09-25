@@ -65,6 +65,7 @@ tempfile = "3.12.0"
 ffmpeg-next.workspace = true
 chrono = "0.4.38"
 rodio = "0.19.0"
+device_query = "2.1.0"
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
@@ -81,6 +82,7 @@ nokhwa-bindings-macos = { git = "https://github.com/Brendonovich/nokhwa", rev = 
 objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
 cocoa = "0.26.0"
 objc = "0.2.7"
+dispatch = "0.2.0"
 
 # Optimize for smaller binary size
 [profile.release]

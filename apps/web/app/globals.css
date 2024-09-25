@@ -145,7 +145,7 @@ h2,
 h3,
 h4,
 h5 {
-  @apply font-semibold tracking-tighter !important;
+  @apply font-normal tracking-tighter text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem] !important;
 }
 
 a,
@@ -153,7 +153,7 @@ p,
 span,
 input,
 label {
-  @apply tracking-tight text-black;
+  @apply tracking-tight text-gray-400 font-normal text-[1.125rem] leading-[1.75rem];
 }
 
 a,
@@ -183,12 +183,7 @@ label {
 }
 
 .custom-bg {
-  background: radial-gradient(
-    50.01% 50.01% at 53.53% 49.99%,
-    var(--tertiary-3) 5.65%,
-    var(--tertiary) 78.48%,
-    #ffffff 100%
-  );
+  background: linear-gradient(180deg, #4785FF 0%, #85ADFF 100%);
 }
 
 .muted-custom-bg {

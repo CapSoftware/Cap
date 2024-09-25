@@ -1,8 +1,19 @@
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, WebviewUrl, WebviewWindow, Wry};
 
+use core_foundation::boolean::CFBoolean;
+use core_foundation::dictionary::{CFDictionary, CFDictionaryRef}; // Import CFDictionaryRef
+use core_foundation::string::CFString;
 #[cfg(target_os = "macos")]
 use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
+use std::os::raw::c_void;
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
+}
 
 #[derive(Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -10,6 +21,7 @@ pub enum OSPermission {
     ScreenRecording,
     Camera,
     Microphone,
+    Accessibility,
 }
 
 #[tauri::command(async)]
@@ -38,6 +50,12 @@ pub fn open_permission_settings(permission: OSPermission) {
                     .spawn()
                     .expect("Failed to open Microphone settings");
             }
+            OSPermission::Accessibility => {
+                Command::new("open")
+                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                    .spawn()
+                    .expect("Failed to open Accessibility settings");
+            }
         }
     }
 }
@@ -53,6 +71,7 @@ pub async fn request_permission(permission: OSPermission) {
             }
             OSPermission::Camera => request_av_permission(AVMediaType::Video),
             OSPermission::Microphone => request_av_permission(AVMediaType::Audio),
+            OSPermission::Accessibility => request_accessibility_permission(),
         }
     }
 }
@@ -99,11 +118,15 @@ pub struct OSPermissionsCheck {
     pub screen_recording: OSPermissionStatus,
     pub microphone: OSPermissionStatus,
     pub camera: OSPermissionStatus,
+    pub accessibility: OSPermissionStatus,
 }
 
 impl OSPermissionsCheck {
     pub fn necessary_granted(&self) -> bool {
-        self.screen_recording.permitted() && self.microphone.permitted() && self.camera.permitted()
+        self.screen_recording.permitted()
+            && self.microphone.permitted()
+            && self.camera.permitted()
+            && self.accessibility.permitted()
     }
 }
 
@@ -123,6 +146,10 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
             },
             microphone: check_av_permission(AVMediaType::Audio),
             camera: check_av_permission(AVMediaType::Video),
+            accessibility: {
+                let accessibility_status = check_accessibility_permission();
+                accessibility_status
+            },
         }
     }
 
@@ -132,6 +159,7 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
             screen_recording: OSPermissionStatus::NotNeeded,
             microphone: OSPermissionStatus::NotNeeded,
             camera: OSPermissionStatus::NotNeeded,
+            accessibility: OSPermissionStatus::NotNeeded,
         };
     }
 }
@@ -147,6 +175,39 @@ pub fn check_av_permission(media_type: AVMediaType) -> OSPermissionStatus {
         AVAuthorizationStatus::NotDetermined => OSPermissionStatus::Empty,
         AVAuthorizationStatus::Authorized => OSPermissionStatus::Granted,
         _ => OSPermissionStatus::Denied,
+    }
+}
+
+pub fn check_accessibility_permission() -> OSPermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        if unsafe { AXIsProcessTrusted() } {
+            OSPermissionStatus::Granted
+        } else {
+            OSPermissionStatus::Denied
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // For non-macOS platforms, assume permission is granted
+        OSPermissionStatus::NotNeeded
+    }
+}
+
+pub fn request_accessibility_permission() {
+    #[cfg(target_os = "macos")]
+    {
+        use core_foundation::base::TCFType;
+
+        let prompt_key = CFString::new("AXTrustedCheckOptionPrompt");
+        let prompt_value = CFBoolean::true_value();
+
+        let options =
+            CFDictionary::from_CFType_pairs(&[(prompt_key.as_CFType(), prompt_value.as_CFType())]);
+
+        unsafe {
+            AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef());
+        }
     }
 }
 

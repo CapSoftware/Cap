@@ -20,6 +20,7 @@ export * from "./components/Card";
 export * from "./components/NavigationMenu";
 export * from "./components/Dropdown";
 export * from "./components/Pagination";
+export * from "./components/Switch";
 
 // Forms & Inputs
 export * from "./components/input/Form";

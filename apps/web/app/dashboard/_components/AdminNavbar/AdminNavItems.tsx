@@ -47,12 +47,6 @@ export const AdminNavItems = () => {
       subNav: [],
     },
     {
-      name: "Web Recorder",
-      href: `/record`,
-      icon: Video,
-      subNav: [],
-    },
-    {
       name: "Download macOS App",
       href: `/download`,
       icon: Download,
@@ -128,10 +122,6 @@ export const AdminNavItems = () => {
         className="w-full flex flex-col justify-between h-full"
         aria-label="Sidebar"
       >
-        <Button href="/record" className="w-full mb-4">
-          <Video className="flex-shrink-0 w-6 h-6" aria-hidden="true" />
-          <span className="ml-2.5 text-white">Record a Cap</span>
-        </Button>
         <div className="space-y-1">
           {manageNavigation.map((item) => (
             <div>

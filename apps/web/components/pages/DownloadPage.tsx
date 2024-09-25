@@ -20,12 +20,9 @@ export const DownloadPage = () => {
 
   return (
     <div className="wrapper wrapper-sm py-32">
-      <div className="text-center space-y-6">
-        <LogoBadge className="w-20 h-auto mx-auto fade-in-down" />
-        <h1 className=" text-3xl md:text-4xl fade-in-down animate-delay-1">
-          Download Cap for macOS
-        </h1>
-        <p className="text-lg text-gray-600 max-w-sm mx-auto  fade-in-down animate-delay-2">
+      <div className="text-center space-y-4">
+        <h1 className="fade-in-down animate-delay-1">Download Cap</h1>
+        <p className="fade-in-down animate-delay-2">
           The quickest way to share your screen. Pin to your dock and record in
           seconds.
         </p>

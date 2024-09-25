@@ -9,21 +9,29 @@ import {
   CardHeader,
   CardContent,
   CardFooter,
+  Switch,
 } from "@cap/ui";
 import { Check, Construction } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { getProPlanId } from "@cap/utils";
 import toast from "react-hot-toast";
 import { useRouter } from "next/navigation";
+import { SimplePlans } from "../text/SimplePlans";
 
 export const PricingPage = () => {
   const [loading, setLoading] = useState(false);
+  const [isAnnual, setIsAnnual] = useState(true);
+  const [initialRender, setInitialRender] = useState(true);
   const { push } = useRouter();
+
+  useEffect(() => {
+    setInitialRender(false);
+  }, []);
 
   const planCheckout = async () => {
     setLoading(true);
 
-    const planId = getProPlanId();
+    const planId = getProPlanId(isAnnual ? "yearly" : "monthly");
 
     setLoading(true);
     const response = await fetch(`/api/settings/billing/subscribe`, {
@@ -52,40 +60,17 @@ export const PricingPage = () => {
     setLoading(false);
   };
 
-  const freeList = [
-    {
-      text: "Up to 25 videos",
-      available: true,
-    },
-    {
-      text: "Up to 5 mins/video",
-      available: true,
-    },
-    {
-      text: "Unlimited views",
-      available: true,
-    },
-    {
-      text: "Automatic audio transcriptions",
-      available: true,
-    },
-    {
-      text: "Basic analytics",
-      available: true,
-    },
-    {
-      text: "Community support via Discord",
-      available: true,
-    },
-  ];
-
   const proList = [
     {
-      text: "Unlimited videos",
+      text: "Unlimited cloud storage",
       available: true,
     },
     {
-      text: "Unlimited recording length",
+      text: "Connect custom S3 storage bucket",
+      available: true,
+    },
+    {
+      text: "Advanced teams features",
       available: true,
     },
     {
@@ -93,7 +78,7 @@ export const PricingPage = () => {
       available: true,
     },
     {
-      text: "Automatic audio transcriptions",
+      text: "Password protected videos",
       available: true,
     },
     {
@@ -138,154 +123,158 @@ export const PricingPage = () => {
   ];
 
   return (
-    <div className="custom-bg wrapper wrapper-sm py-20">
-      <div className="space-y-12">
-        <div className="text-center">
-          <h1
-            className={`text-4xl md:text-5xl ${
-              loading === false && "fade-in-down"
-            } mb-6`}
-          >
-            Early Adopter Pricing
-          </h1>
-          <p
-            className={`text-lg text-gray-600 max-w-md mx-auto ${
-              loading === false && "fade-in-down animate-delay-1"
-            }`}
-          >
-            Cap is currently in public beta, and we're offering special early
-            adopter pricing to our first users. This pricing will be locked in
-            for the lifetime of your subscription.
-          </p>
+    <div>
+      <div className="wrapper wrapper-sm py-20 space-y-24">
+        <div className="space-y-12">
+          <div className="text-center">
+            <div className={`mb-4 ${initialRender ? "fade-in-down" : ""}`}>
+              <SimplePlans />
+            </div>
+            <h1
+              className={`text-4xl md:text-5xl ${
+                initialRender ? "fade-in-down" : ""
+              } mb-6`}
+            >
+              Early Adopter Pricing
+            </h1>
+            <p
+              className={`max-w-[800px] mx-auto ${
+                initialRender ? "fade-in-down animate-delay-1" : ""
+              }`}
+            >
+              Cap is currently in public beta, and we're offering special early
+              adopter pricing to our first users. This pricing will be locked in
+              for the lifetime of your subscription.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
+            <Card
+              className={`bg-blue-300 p-3 md:p-8 rounded-xl min-h-[600px] flex-grow border-blue-500/20 ${
+                initialRender ? "fade-in-up animate-delay-2" : ""
+              }`}
+            >
+              <div className="space-y-3">
+                <CardHeader>
+                  <CardTitle className="text-3xl text-white">Cap Pro</CardTitle>
+                  <CardDescription className="text-white/80">
+                    For professional use and teams.
+                  </CardDescription>
+                  <div>
+                    <div className="flex items-center space-x-3">
+                      <h3 className="text-4xl text-white">
+                        {isAnnual ? "$59" : "$9"}
+                      </h3>
+                      <div>
+                        <p className="text-sm text-white/80">
+                          {isAnnual
+                            ? "per user, billed annually."
+                            : "per user, billed monthly."}
+                        </p>
+                        {isAnnual && (
+                          <p className="text-sm text-white/80">
+                            or, $9/month, billed monthly.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center mt-4 -mb-3 pt-4 border-t-2 border-white/20">
+                      <span className="text-xs text-white/80 mr-2">
+                        {isAnnual ? "Switch to monthly" : "Switch to annually"}
+                      </span>
+                      <Switch
+                        checked={!isAnnual}
+                        onCheckedChange={() => setIsAnnual(!isAnnual)}
+                      />
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <Button
+                    type="button"
+                    spinner={loading}
+                    onClick={() => planCheckout()}
+                    className="w-full"
+                    size="lg"
+                    variant="white"
+                  >
+                    Get Started with Pro
+                  </Button>
+                </CardContent>
+                <CardFooter>
+                  <div className="space-y-8">
+                    <div>
+                      <ul className="list-none p-0 space-y-3">
+                        {proList.map((item, index) => (
+                          <li
+                            key={index}
+                            className="flex items-center justify-start"
+                          >
+                            <div className="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
+                              <Check className="w-3 h-3 stroke-[4px] stroke-white" />
+                            </div>
+                            <span className="ml-2 text-lg text-white">
+                              {item.text}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </CardFooter>
+              </div>
+            </Card>
+            <Card
+              className={`bg-white p-3 md:p-8 rounded-xl min-h-[600px] flex-grow ${
+                initialRender ? "fade-in-down animate-delay-2" : ""
+              }`}
+            >
+              <div className="space-y-4">
+                <CardHeader>
+                  <CardTitle className="text-2xl">
+                    Cap Lite (Open Source)
+                  </CardTitle>
+                  <CardDescription className="text-lg">
+                    For personal and minimal use.
+                  </CardDescription>
+                  <h3 className="text-4xl">Free</h3>
+                </CardHeader>
+                <CardContent>
+                  <Button
+                    href="/download"
+                    className="w-full bg-gray-100 hover:bg-gray-200"
+                    variant="white"
+                    size="lg"
+                  >
+                    Try for Free
+                  </Button>
+                </CardContent>
+                <CardFooter>
+                  <div className="space-y-2">
+                    <div className="flex items-center">
+                      <div className="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-gray-500 justify-center rounded-full">
+                        <Check className="w-3 h-3 stroke-[4px] stroke-gray-500" />
+                      </div>
+                      <p className="ml-2 text-gray-500">
+                        Core features, including:
+                      </p>
+                    </div>
+                    <p className="pl-8">
+                      Screen & Window recording, Local video export, Powerful
+                      video editor (custom background gradients, transitions,
+                      etc) + many more.
+                    </p>
+                  </div>
+                </CardFooter>
+              </div>
+            </Card>
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
-          <Card
-            className={`bg-gradient-to-l from-primary to-primary-3 p-3 md:p-8 rounded-xl min-h-[600px] flex-grow border-primary-3 ${
-              loading === false && "fade-in-up animate-delay-2"
-            }`}
-          >
-            <div className="space-y-4">
-              <CardHeader>
-                <CardTitle className="text-3xl text-white">Cap Pro</CardTitle>
-                <CardDescription className="text-lg text-white">
-                  For professional use and teams
-                </CardDescription>
-                <h3 className="text-3xl text-white">$9/mo</h3>
-              </CardHeader>
-              <CardContent>
-                <Button
-                  type="button"
-                  spinner={loading}
-                  onClick={() => planCheckout()}
-                  className="w-full bg-secondary-2 hover:bg-secondary-3"
-                  size="lg"
-                  variant="outline"
-                >
-                  <span className="text-white">Get started with Pro</span>
-                </Button>
-              </CardContent>
-              <CardFooter>
-                <div className="space-y-8">
-                  <div>
-                    <h3 className="text-base text-white mb-3">
-                      What's included:
-                    </h3>
-                    <ul className="list-none p-0 space-y-3">
-                      {proList.map((item, index) => (
-                        <li
-                          key={index}
-                          className="flex items-center justify-start"
-                        >
-                          <div className="w-6 h-6 bg-white m-0 p-0 flex items-center justify-center rounded-full">
-                            {item.available ? (
-                              <Check className="w-4 h-4 text-black" />
-                            ) : (
-                              <Construction className="w-4 h-4 text-black" />
-                            )}
-                          </div>
-                          <span className="ml-4 text-lg text-white">
-                            {item.text}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <h3 className="text-base text-white mb-3">Coming soon:</h3>
-                    <ul className="list-none p-0 space-y-3 mb-6">
-                      {plannedFeatures.map((item, index) => (
-                        <li
-                          key={index}
-                          className="flex items-center justify-start"
-                        >
-                          <div className="w-6 h-6 bg-white m-0 p-0 flex items-center justify-center rounded-full">
-                            {item.available ? (
-                              <Check className="w-4 h-4 text-black" />
-                            ) : (
-                              <Construction className="w-4 h-4 text-black" />
-                            )}
-                          </div>
-                          <span className="ml-4 text-lg text-white">
-                            {item.text}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              </CardFooter>
-            </div>
-          </Card>
-          <Card
-            className={`bg-white p-3 md:p-8 rounded-xl min-h-[600px] flex-grow ${
-              loading === false && "fade-in-down animate-delay-2"
-            }`}
-          >
-            <div className="space-y-4">
-              <CardHeader>
-                <CardTitle className="text-2xl">Cap Lite</CardTitle>
-                <CardDescription className="text-lg">
-                  For personal and minimal use
-                </CardDescription>
-                <h3 className="text-3xl">$0</h3>
-              </CardHeader>
-              <CardContent>
-                <Button
-                  href="/login"
-                  className="w-full hover:bg-gray-100"
-                  variant="outline"
-                >
-                  Get started for free
-                </Button>
-              </CardContent>
-              <CardFooter>
-                <div>
-                  <h3 className="text-base text-gray-600 mb-3">
-                    What's included:
-                  </h3>
-                  <ul className="list-none p-0 space-y-3">
-                    {freeList.map((item, index) => (
-                      <li
-                        key={index}
-                        className="flex items-center justify-start"
-                      >
-                        <div className="w-6 h-6 bg-black m-0 p-0 flex items-center justify-center rounded-full">
-                          {item.available ? (
-                            <Check className="w-4 h-4 text-white" />
-                          ) : (
-                            <Construction className="w-4 h-4 text-white" />
-                          )}
-                        </div>
-                        <span className="ml-4 text-lg text-gray-700">
-                          {item.text}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </CardFooter>
-            </div>
-          </Card>
+        <div>
+          <img
+            className="w-full mx-auto h-auto"
+            src="/illustrations/comparison.png"
+            alt="Cap vs Competitors Table"
+          />
         </div>
       </div>
     </div>
