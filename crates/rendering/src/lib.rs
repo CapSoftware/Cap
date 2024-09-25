@@ -117,17 +117,17 @@ pub async fn render_video_to_channel(
         let background = Background::from(project.background.source.clone());
 
         loop {
-            if frame_number as f64 > 30 as f64 * duration {
+            if frame_number as f64 > 30_f64 * duration {
                 break;
             };
 
             let time = if let Some(timeline) = project.timeline() {
-                match timeline.get_recording_time(frame_number as f64 / 30 as f64) {
+                match timeline.get_recording_time(frame_number as f64 / 30_f64) {
                     Some(time) => time,
                     None => break,
                 }
             } else {
-                frame_number as f64 / 30 as f64
+                frame_number as f64 / 30_f64
             };
 
             let Some((screen_frame, camera_frame)) =
@@ -304,7 +304,7 @@ impl ProjectUniforms {
                 crop_bounds[2] - crop_bounds[0],
                 crop_bounds[3] - crop_bounds[1],
             ];
-            let cropped_aspect = cropped_size[0] as f32 / cropped_size[1] as f32;
+            let cropped_aspect = cropped_size[0] / cropped_size[1];
 
             let padding = Self::get_padding(options, project);
             let is_height_constrained = cropped_aspect <= output_aspect;

@@ -78,7 +78,7 @@ impl Playback {
 
                 let time = if let Some(timeline) = self.project.timeline() {
                     match timeline.get_recording_time(
-                        start.elapsed().as_secs_f64() + self.start_frame_number as f64 / FPS as f64, /* frame_number as f64 / FPS as f64 */
+                        (frame_number + self.start_frame_number) as f64 / FPS as f64, /* frame_number as f64 / FPS as f64 */
                     ) {
                         Some(time) => time,
                         None => break,
@@ -87,12 +87,13 @@ impl Playback {
                     frame_number as f64 / FPS as f64
                 };
 
+                let debug = Instant::now();
                 tokio::select! {
                     _ = stop_rx.changed() => {
                        break;
                     },
                     Some((screen_frame, camera_frame)) = self.decoders.get_frames((time * FPS as f64) as u32) => {
-                        tokio::time::sleep_until(start + (frame_number - self.start_frame_number) * Duration::from_secs_f32(1.0 / FPS as f32)).await;
+                        // println!("decoded frame in {:?}", debug.elapsed());
 
                         self
                             .renderer
@@ -104,8 +105,9 @@ impl Playback {
                             )
                             .await;
 
-                        event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
+                        tokio::time::sleep_until(start + (frame_number - self.start_frame_number) * Duration::from_secs_f32(1.0 / FPS as f32)).await;
 
+                        event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
 
                         frame_number += 1;
                     }

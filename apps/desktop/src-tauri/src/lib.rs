@@ -1,9 +1,11 @@
 mod audio;
 mod auth;
 mod camera;
+mod capture;
 mod display;
 mod editor;
 mod editor_instance;
+mod encoder;
 mod hotkeys;
 mod macos;
 mod permissions;
@@ -62,6 +64,16 @@ pub struct RecordingOptions {
     capture_target: CaptureTarget,
     camera_label: Option<String>,
     audio_input_name: Option<String>,
+}
+
+impl RecordingOptions {
+    fn camera_label(&self) -> Option<&str> {
+        self.camera_label.as_deref()
+    }
+
+    fn audio_input_name(&self) -> Option<&str> {
+        self.audio_input_name.as_deref()
+    }
 }
 
 #[derive(specta::Type, Serialize)]
@@ -362,14 +374,14 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         return Err("Recording not in progress".to_string());
     };
 
-    current_recording.stop().await;
-
     current_recording.segments.push(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs_f64(),
     );
+
+    current_recording.stop().await;
 
     let window = app
         .get_webview_window(IN_PROGRESS_RECORDINGS_LABEL)

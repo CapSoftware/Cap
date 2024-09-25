@@ -1,4 +1,18 @@
-use std::{fs::File, io::Write, path::PathBuf, sync::atomic::Ordering, time::Instant};
+use ffmpeg_next::{
+    self as ffmpeg, codec as avcodec, encoder as avencoder, format as avformat,
+    frame::{self as avframe, Video},
+    software,
+};
+use std::{
+    fs::File,
+    io::Write,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Instant, SystemTime},
+};
 
 use scap::{
     capturer::{Area, Capturer, Options, Point, Resolution, Size},
@@ -9,7 +23,11 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tokio::sync::{oneshot, watch};
 
-use crate::macos;
+use crate::{
+    capture::CaptureController,
+    encoder::{bgra_frame, H264Encoder},
+    macos,
+};
 use cap_ffmpeg::NamedPipeCapture;
 
 #[derive(Type, Serialize, Deserialize, Debug, Clone)]
@@ -65,11 +83,26 @@ pub fn list_capture_windows() -> Vec<CaptureWindow> {
 
 pub const FPS: u32 = 30;
 
+// ffmpeg
+//     .command
+//     .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
+//     .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+//     .args(["-g", &keyframe_interval_str])
+//     .args(["-keyint_min", &keyframe_interval_str])
+//     .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
+//     // .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
+//     // .args(["-movflags", "frag_keyframe+empty_moov"])
+//     .args([
+//         "-vf",
+//         &format!("fps={},scale=in_range=full:out_range=limited", display::FPS),
+//     ])
+//     .arg(&output_path);
+
 pub async fn start_capturing(
-    pipe_path: PathBuf,
+    output_path: PathBuf,
     capture_target: &CaptureTarget,
     start_writing_rx: watch::Receiver<bool>,
-) -> ((u32, u32), NamedPipeCapture, Instant) {
+) -> CaptureController {
     dbg!(capture_target);
 
     let targets = scap::get_all_targets();
@@ -114,7 +147,7 @@ pub async fn start_capturing(
             fps: FPS,
             show_highlight: true,
             output_type: FrameType::BGRAFrame,
-            output_resolution: Resolution::_2160p,
+            output_resolution: Resolution::_1080p,
             crop_area,
             excluded_targets: Some(excluded_targets),
             ..Default::default()
@@ -125,62 +158,64 @@ pub async fn start_capturing(
 
     let [width, height] = capturer.get_output_frame_size();
 
-    let (capture, is_stopped, is_paused) = NamedPipeCapture::new(&pipe_path);
+    let controller = CaptureController::new(output_path);
 
     let (tx, rx) = oneshot::channel();
 
-    let (frame_tx, mut frame_rx) = watch::channel(vec![]);
+    std::thread::spawn({
+        let controller = controller.clone();
+        move || {
+            let capture_format = avformat::Pixel::BGRA;
+            let output_format = H264Encoder::output_format();
 
-    std::thread::spawn(move || {
-        capturer.start_capture();
+            let mut encoder = H264Encoder::new(&controller.output_path, width, height, FPS as f64);
 
-        let mut start_time = Some(tx);
-        loop {
-            if is_stopped.load(Ordering::Relaxed) {
-                println!("Stopping receiving capture frames");
-                return;
-            }
+            let mut scaler =
+                software::converter((width, height), capture_format, output_format).unwrap();
 
-            let frame = capturer.get_next_frame();
+            capturer.start_capture();
 
-            if is_paused.load(Ordering::Relaxed) {
-                continue;
-            }
+            let mut start_time_tx = Some(tx);
 
-            if let Some(tx) = start_time.take() {
-                tx.send(Instant::now()).ok();
-            }
-
-            if !*start_writing_rx.borrow() {
-                continue;
-            }
-
-            match frame {
-                Ok(Frame::BGRA(frame)) => {
-                    frame_tx.send(frame.data).ok();
+            loop {
+                if controller.is_stopped() {
+                    break;
                 }
-                _ => println!("Failed to get frame"),
+
+                let frame = capturer.get_next_frame();
+
+                if controller.is_paused() {
+                    continue;
+                }
+
+                if let Some(tx) = start_time_tx.take() {
+                    tx.send(Instant::now()).ok();
+                }
+
+                if !*start_writing_rx.borrow() {
+                    continue;
+                }
+
+                match frame {
+                    Ok(Frame::BGRA(frame)) => {
+                        let rgb_frame = bgra_frame(&frame.data, width, height);
+
+                        let mut yuv_frame = Video::empty();
+                        scaler.run(&rgb_frame, &mut yuv_frame).unwrap();
+
+                        encoder.encode_frame(yuv_frame);
+                    }
+                    _ => println!("Failed to get frame"),
+                }
             }
+
+            encoder.close();
         }
     });
 
-    tokio::spawn(async move {
-        frame_rx.borrow_and_update();
+    rx.await.unwrap(); // wait for first frame
 
-        let mut file = File::create(&pipe_path).unwrap();
-
-        loop {
-            if frame_rx.changed().await.is_err() {
-                println!("Closing display pipe writer");
-                return;
-            }
-
-            let frame = frame_rx.borrow();
-            file.write_all(&frame).ok();
-        }
-    });
-
-    ((width, height), capture, rx.await.unwrap())
+    controller
 }
 
 pub fn get_window_bounds(window_number: u32) -> Option<Bounds> {

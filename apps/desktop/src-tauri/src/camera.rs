@@ -1,3 +1,4 @@
+use ffmpeg_next::{self as ffmpeg, format::Pixel};
 use nokhwa::utils::CameraFormat;
 use serde::Serialize;
 use specta::Type;
@@ -7,6 +8,11 @@ use tokio::sync::{oneshot, watch};
 use tauri::{AppHandle, Manager, WebviewUrl};
 
 use cap_ffmpeg::NamedPipeCapture;
+
+use crate::{
+    capture::CaptureController,
+    encoder::{uyvy422_frame, H264Encoder},
+};
 
 pub const WINDOW_LABEL: &str = "camera";
 const CAMERA_ROUTE: &str = "/camera";
@@ -75,73 +81,100 @@ pub struct CameraInfo {
     pub description: String,
 }
 
+// ffmpeg
+//     .command
+//     .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
+//     .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+//     .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
+//     .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
+//     .args(["-movflags", "frag_keyframe+empty_moov"])
+//     .args(["-g", &keyframe_interval_str])
+//     .args(["-keyint_min", &keyframe_interval_str])
+//     .args([
+//         "-vf",
+//         &format!(
+//             "fps={},scale=in_range=full:out_range=limited",
+//             ffmpeg_input.fps
+//         ),
+//     ])
+//     .arg(&output_path);
+
 pub async fn start_capturing(
-    pipe_path: PathBuf,
+    output_path: PathBuf,
     camera_info: nokhwa::utils::CameraInfo,
     mut start_writing_rx: watch::Receiver<bool>,
-) -> (CameraFormat, NamedPipeCapture, Instant) {
-    let (video_info_tx, video_info_rx) = oneshot::channel();
-
-    let (capture, is_stopped, is_paused) = NamedPipeCapture::new(&pipe_path);
+) -> CaptureController {
+    let controller = CaptureController::new(output_path);
 
     let (start_tx, start_rx) = oneshot::channel();
-    let (frame_tx, mut frame_rx) = watch::channel(None);
 
-    std::thread::spawn(move || {
-        use nokhwa::{pixel_format::*, utils::*, *};
+    std::thread::spawn({
+        let controller = controller.clone();
+        move || {
+            use nokhwa::{pixel_format::*, utils::*, *};
 
-        nokhwa::nokhwa_initialize(move |granted| {
-            if granted {
-                println!("Camera access granted");
-            } else {
-                println!("Camera access denied");
+            nokhwa::nokhwa_initialize(move |granted| {
+                if granted {
+                    println!("Camera access granted");
+                } else {
+                    println!("Camera access denied");
+                }
+            });
+
+            let format =
+                RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
+            let mut camera = Camera::new(camera_info.index().clone(), format).unwrap();
+
+            let format = camera.camera_format();
+
+            let capture_format = ffmpeg::format::Pixel::UYVY422;
+            let output_format = H264Encoder::output_format();
+
+            let (width, height) = (format.resolution().width(), format.resolution().height());
+
+            let mut encoder = H264Encoder::new(&controller.output_path, width, height, 30.0);
+
+            let mut scaler =
+                ffmpeg::software::converter((width, height), capture_format, output_format)
+                    .unwrap();
+
+            camera.open_stream().unwrap();
+
+            let mut start_tx = Some(start_tx);
+
+            loop {
+                if controller.is_stopped() {
+                    println!("Stopping receiving camera frames");
+                    break;
+                }
+
+                let frame = camera.frame().unwrap();
+
+                if controller.is_paused() {
+                    continue;
+                }
+
+                if let Some(start_tx) = start_tx.take() {
+                    start_tx.send(Instant::now()).unwrap();
+                }
+
+                if !*start_writing_rx.borrow_and_update() {
+                    continue;
+                }
+
+                let yuyv422_frame = uyvy422_frame(frame.buffer(), width, height);
+
+                let mut yuv_frame = ffmpeg::util::frame::Video::empty();
+                scaler.run(&yuyv422_frame, &mut yuv_frame).unwrap();
+
+                encoder.encode_frame(yuv_frame);
             }
-        });
 
-        let format =
-            RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
-        let mut camera = Camera::new(camera_info.index().clone(), format).unwrap();
-
-        video_info_tx.send(camera.camera_format()).ok();
-
-        camera.open_stream().unwrap();
-
-        let mut start_tx = Some(start_tx);
-
-        loop {
-            if is_stopped.load(Ordering::Relaxed) {
-                println!("Stopping receiving camera frames");
-                return;
-            }
-            let frame = camera.frame().unwrap();
-
-            if let Some(start_tx) = start_tx.take() {
-                start_tx.send(Instant::now()).unwrap();
-            }
-
-            if *start_writing_rx.borrow_and_update() {
-                frame_tx.send(Some(frame)).ok();
-            }
+            encoder.close();
         }
     });
 
-    tokio::spawn(async move {
-        frame_rx.borrow_and_update();
+    start_rx.await.unwrap(); // wait for first frame
 
-        let mut file = File::create(&pipe_path).unwrap();
-
-        loop {
-            frame_rx.changed().await.unwrap();
-
-            if let Some(frame) = &*frame_rx.borrow() {
-                file.write_all(frame.buffer()).ok();
-            }
-        }
-    });
-
-    (
-        video_info_rx.await.unwrap(),
-        capture,
-        start_rx.await.unwrap(),
-    )
+    controller
 }

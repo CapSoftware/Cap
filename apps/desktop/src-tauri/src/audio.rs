@@ -1,18 +1,29 @@
 use cap_ffmpeg::NamedPipeCapture;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, SizedSample, Stream, StreamConfig, SupportedStreamConfig};
+use cpal::{
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+    Device, SampleFormat, SizedSample, Stream, StreamConfig, SupportedStreamConfig,
+};
+use ffmpeg_next as ffmpeg;
 use indexmap::IndexMap;
 use num_traits::ToBytes;
-use std::fs::File;
-use std::io::Write;
-use std::sync::atomic::Ordering;
-use std::time::Instant;
-use std::{path::PathBuf, sync::Arc};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{oneshot, watch};
+use std::{
+    fs::File,
+    io::Write,
+    path::PathBuf,
+    sync::{atomic::Ordering, Arc},
+    time::Instant,
+};
+use tokio::sync::{
+    mpsc::{self, error::TrySendError},
+    oneshot, watch,
+};
 
-type SampleReceiver = mpsc::Receiver<Arc<Vec<u8>>>;
+use crate::{
+    capture::CaptureController,
+    encoder::{H264Encoder, MP3Encoder},
+};
+
+type SampleReceiver = mpsc::Receiver<Arc<Vec<f32>>>;
 
 pub struct AudioCapturer {
     device: Device,
@@ -25,7 +36,7 @@ pub struct AudioCapturer {
 unsafe impl Send for AudioCapturer {}
 unsafe impl Sync for AudioCapturer {}
 
-const MAX_CHANNELS: u16 = 2;
+const MAX_CHANNELS: u16 = 1;
 
 impl AudioCapturer {
     pub fn init(name: &str) -> Option<Self> {
@@ -60,17 +71,24 @@ impl AudioCapturer {
     pub fn start(&mut self, start_time_tx: oneshot::Sender<Instant>) -> Result<(), String> {
         tracing::trace!("Building input stream...");
 
-        let (receiver, stream) = (match self.supported_config.sample_format() {
-            SampleFormat::I8 => self.build_stream::<i8>(start_time_tx),
-            SampleFormat::I16 => self.build_stream::<i16>(start_time_tx),
-            SampleFormat::I32 => self.build_stream::<i32>(start_time_tx),
-            SampleFormat::U8 => self.build_stream::<u8>(start_time_tx),
-            SampleFormat::U16 => self.build_stream::<u16>(start_time_tx),
-            SampleFormat::U32 => self.build_stream::<u32>(start_time_tx),
-            SampleFormat::F32 => self.build_stream::<f32>(start_time_tx),
-            SampleFormat::F64 => self.build_stream::<f64>(start_time_tx),
-            _ => unreachable!(),
-        })?;
+        let (receiver, stream) =
+            (match self.supported_config.sample_format() {
+                SampleFormat::I8 => self
+                    .build_stream::<i8>(start_time_tx, |n| n as f32 / i8::MAX as f32 * 2.0 - 1.0),
+                SampleFormat::I16 => self
+                    .build_stream::<i16>(start_time_tx, |n| n as f32 / i16::MAX as f32 * 2.0 - 1.0),
+                SampleFormat::I32 => self
+                    .build_stream::<i32>(start_time_tx, |n| n as f32 / i32::MAX as f32 * 2.0 - 1.0),
+                SampleFormat::U8 => self
+                    .build_stream::<u8>(start_time_tx, |n| n as f32 / u8::MAX as f32 * 2.0 - 1.0),
+                SampleFormat::U16 => self
+                    .build_stream::<u16>(start_time_tx, |n| n as f32 / u16::MAX as f32 * 2.0 - 1.0),
+                SampleFormat::U32 => self
+                    .build_stream::<u32>(start_time_tx, |n| n as f32 / u32::MAX as f32 * 2.0 - 1.0),
+                SampleFormat::F32 => self.build_stream::<f32>(start_time_tx, |n| n),
+                SampleFormat::F64 => self.build_stream::<f64>(start_time_tx, |n| n as f32),
+                _ => unreachable!(),
+            })?;
 
         stream
             .play()
@@ -147,13 +165,11 @@ impl AudioCapturer {
         }
     }
 
-    fn build_stream<T>(
+    fn build_stream<T: SizedSample + 'static>(
         &self,
         start_time_tx: oneshot::Sender<Instant>,
-    ) -> Result<(SampleReceiver, Stream), String>
-    where
-        T: SizedSample + ToBytes<Bytes: AsRef<[u8]>>,
-    {
+        convert_fn: fn(T) -> f32,
+    ) -> Result<(SampleReceiver, Stream), String> {
         let (sender, receiver) = mpsc::channel(2048);
 
         let mut start_time_tx = Some(start_time_tx);
@@ -162,20 +178,13 @@ impl AudioCapturer {
             .build_input_stream(
                 &self.config.clone(),
                 move |data: &[T], _| {
-                    let sample_size = std::mem::size_of::<T>();
-                    let mut bytes = vec![0; std::mem::size_of_val(data)];
-                    let size = bytes.len();
-                    for (dest, source) in bytes.chunks_exact_mut(sample_size).zip(data.iter()) {
-                        dest.copy_from_slice(source.to_le_bytes().as_ref());
-                    }
-
-                    let sample_data = Arc::new(bytes);
-                    match sender.try_send(sample_data) {
+                    match sender.try_send(Arc::new(
+                        data.iter().map(|sample| convert_fn(*sample)).collect(),
+                    )) {
                         Ok(_) => {
                             if let Some(start_time_option) = start_time_tx.take() {
                                 start_time_option.send(Instant::now()).ok();
 
-                                tracing::info!("Audio sample size: {size}");
                                 tracing::trace!("Audio start time captured");
                             }
                         }
@@ -247,52 +256,95 @@ pub fn get_input_devices() -> IndexMap<String, (Device, SupportedStreamConfig)> 
     device_map
 }
 
+// ffmpeg
+//     .command
+//     .args(["-ac", &capturer.channels().to_string(), "-async", "1"])
+//     .args([
+//         "-af",
+//         "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
+//     ])
+//     .arg(&output_path);
+
 pub async fn start_capturing(
-    capturer: &mut AudioCapturer,
-    pipe_path: PathBuf,
+    mut capturer: AudioCapturer,
+    output_path: PathBuf,
     start_writing_rx: watch::Receiver<bool>,
-) -> (NamedPipeCapture, Instant) {
-    let (capture, is_stopped, is_paused) = NamedPipeCapture::new(&pipe_path);
+) -> CaptureController {
+    let controller = CaptureController::new(output_path);
 
     let (tx, rx) = oneshot::channel();
 
     capturer.start(tx).unwrap();
+    let sample_rate = capturer.sample_rate();
 
-    println!("Starting audio channel senders...");
-    let mut receiver = capturer
-        .sample_receiver
-        .take()
-        .expect("Audio sample collection already started!");
+    tokio::spawn({
+        let controller = controller.clone();
+        async move {
+            let mut receiver = capturer
+                .sample_receiver
+                .take()
+                .expect("Audio sample collection already started!");
 
-    tokio::spawn(async move {
-        println!("Opening audio pipe...");
-        let mut pipe = File::create(&pipe_path).unwrap();
-        println!("Audio pipe opened");
+            let mut encoder = MP3Encoder::new(&controller.output_path, sample_rate);
 
-        while let Some(bytes) = receiver.recv().await {
-            if is_stopped.load(Ordering::Relaxed) {
-                println!("Stopping receiving audio frames");
-                return;
+            let mut frame_buffer = Vec::<f32>::with_capacity(encoder.context.frame_size() as usize);
+
+            while let Some(samples) = receiver.recv().await {
+                if controller.is_stopped() {
+                    println!("Stopping receiving audio frames");
+                    break;
+                }
+
+                if !*start_writing_rx.borrow() {
+                    continue;
+                }
+
+                if controller.is_paused() {
+                    // Skip writing data to pipe while paused
+                    continue;
+                }
+
+                let buffer_len = frame_buffer.len();
+                let buffer_capacity = frame_buffer.capacity();
+
+                let buffer_remaining = frame_buffer.capacity() - frame_buffer.len();
+                let dest_range =
+                    buffer_len..usize::min(buffer_len + samples.len(), buffer_capacity);
+                let src_range = 0..usize::min(samples.len(), buffer_remaining);
+
+                frame_buffer.extend_from_slice(&samples[src_range]);
+
+                if frame_buffer.len() < frame_buffer.capacity() {
+                    continue;
+                }
+
+                let mut frame = ffmpeg::frame::Audio::new(
+                    ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                    frame_buffer.len(),
+                    ffmpeg::ChannelLayout::MONO,
+                );
+
+                frame.data_mut(0).copy_from_slice(
+                    &frame_buffer
+                        .iter()
+                        .flat_map(|float| float.to_ne_bytes())
+                        .collect::<Vec<_>>(),
+                );
+
+                frame_buffer.clear();
+
+                encoder.encode_frame(frame);
             }
 
-            if !*start_writing_rx.borrow() {
-                continue;
-            }
+            capturer.stop().ok();
 
-            if is_paused.load(Ordering::Relaxed) {
-                // Skip writing data to pipe while paused
-                continue;
-            }
-
-            pipe.write_all(&bytes).unwrap();
+            println!("Done receiving audio frames");
         }
-
-        println!("Done receiving audio frames");
-
-        pipe.sync_all().ok();
     });
 
-    (capture, rx.await.unwrap())
+    rx.await.unwrap(); // wait for first frame
+
+    controller
 }
 
 pub fn play_audio<const N: usize>(bytes: &'static [u8; N]) {
