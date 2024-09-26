@@ -38,11 +38,7 @@ use std::fs::File;
 use std::io::{BufReader, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
-    collections::HashMap,
-    marker::PhantomData,
-    path::PathBuf,
-    process::Command,
-    sync::Arc,
+    collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
 };
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
@@ -555,7 +551,6 @@ async fn render_to_file_impl(
                     sample_format: "f64le".to_string(),
                     sample_rate: audio.sample_rate,
                     channels: 1,
-                    wallclock: false,
                 });
 
                 let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f64>>();

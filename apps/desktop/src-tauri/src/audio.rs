@@ -1,3 +1,4 @@
+use cap_utils::create_named_pipe;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, SampleFormat, SizedSample, Stream, StreamConfig, SupportedStreamConfig,
@@ -5,7 +6,7 @@ use cpal::{
 use ffmpeg_next as ffmpeg;
 use indexmap::IndexMap;
 use num_traits::ToBytes;
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::{fs::File, io::Write, path::PathBuf, sync::Arc, time::Instant};
 use tokio::sync::{
     mpsc::{self, error::TrySendError},
     oneshot, watch,
@@ -247,6 +248,62 @@ pub fn get_input_devices() -> IndexMap<String, (Device, SupportedStreamConfig)> 
     device_map
 }
 
+pub async fn start_capturing(
+    mut capturer: AudioCapturer,
+    pipe_path: PathBuf,
+    start_writing_rx: watch::Receiver<bool>,
+) -> (CaptureController, AudioCapturer) {
+    let controller = CaptureController::new(pipe_path.clone());
+
+    let (tx, rx) = oneshot::channel();
+
+    capturer.start(tx).unwrap();
+
+    create_named_pipe(&pipe_path).unwrap();
+
+    println!("Starting audio channel senders...");
+    let mut receiver = capturer
+        .sample_receiver
+        .take()
+        .expect("Audio sample collection already started!");
+
+    tokio::spawn({
+        let controller = controller.clone();
+        async move {
+            println!("Opening audio pipe...");
+            let mut pipe = File::create(&pipe_path).unwrap();
+            println!("Audio pipe opened");
+
+            while let Some(samples) = receiver.recv().await {
+                if controller.is_stopped() {
+                    println!("Stopping receiving camera frames");
+                    break;
+                }
+
+                if !*start_writing_rx.borrow() || controller.is_paused() {
+                    continue;
+                }
+
+                pipe.write_all(
+                    &samples
+                        .iter()
+                        .flat_map(|f| f.to_le_bytes())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            }
+
+            println!("Done receiving audio frames");
+
+            pipe.sync_all().ok();
+        }
+    });
+
+    rx.await.unwrap(); // wait for first frame
+
+    (controller, capturer)
+}
+
 // ffmpeg
 //     .command
 //     .args(["-ac", &capturer.channels().to_string(), "-async", "1"])
@@ -256,88 +313,88 @@ pub fn get_input_devices() -> IndexMap<String, (Device, SupportedStreamConfig)> 
 //     ])
 //     .arg(&output_path);
 
-pub async fn start_capturing(
-    mut capturer: AudioCapturer,
-    output_path: PathBuf,
-    start_writing_rx: watch::Receiver<bool>,
-) -> CaptureController {
-    let controller = CaptureController::new(output_path);
+// pub async fn start_capturing(
+//     mut capturer: AudioCapturer,
+//     output_path: PathBuf,
+//     start_writing_rx: watch::Receiver<bool>,
+// ) -> CaptureController {
+//     let controller = CaptureController::new(output_path);
 
-    let (tx, rx) = oneshot::channel();
+//     let (tx, rx) = oneshot::channel();
 
-    capturer.start(tx).unwrap();
-    let sample_rate = capturer.sample_rate();
+//     capturer.start(tx).unwrap();
+//     let sample_rate = capturer.sample_rate();
 
-    tokio::spawn({
-        let controller = controller.clone();
-        async move {
-            let mut receiver = capturer
-                .sample_receiver
-                .take()
-                .expect("Audio sample collection already started!");
+//     tokio::spawn({
+//         let controller = controller.clone();
+//         async move {
+//             let mut receiver = capturer
+//                 .sample_receiver
+//                 .take()
+//                 .expect("Audio sample collection already started!");
 
-            let mut encoder = MP3Encoder::new(&controller.output_path, sample_rate);
+//             let mut encoder = MP3Encoder::new(&controller.output_path, sample_rate);
 
-            dbg!(encoder.context.frame_size());
-            let mut frame_buffer = Vec::<f32>::with_capacity(encoder.context.frame_size() as usize);
+//             dbg!(encoder.context.frame_size());
+//             let mut frame_buffer = Vec::<f32>::with_capacity(encoder.context.frame_size() as usize);
 
-            while let Some(samples) = receiver.recv().await {
-                if controller.is_stopped() {
-                    println!("Stopping receiving audio frames");
-                    break;
-                }
+//             while let Some(samples) = receiver.recv().await {
+//                 if controller.is_stopped() {
+//                     println!("Stopping receiving audio frames");
+//                     break;
+//                 }
 
-                if !*start_writing_rx.borrow() {
-                    continue;
-                }
+//                 if !*start_writing_rx.borrow() {
+//                     continue;
+//                 }
 
-                if controller.is_paused() {
-                    // Skip writing data to pipe while paused
-                    continue;
-                }
+//                 if controller.is_paused() {
+//                     // Skip writing data to pipe while paused
+//                     continue;
+//                 }
 
-                let mut processed_samples = 0;
-                while processed_samples < samples.len() {
-                    let buffer_remaining = frame_buffer.capacity() - frame_buffer.len();
-                    let src_range = 0..usize::min(samples.len(), buffer_remaining);
+//                 let mut processed_samples = 0;
+//                 while processed_samples < samples.len() {
+//                     let buffer_remaining = frame_buffer.capacity() - frame_buffer.len();
+//                     let src_range = 0..usize::min(samples.len(), buffer_remaining);
 
-                    processed_samples += src_range.len();
+//                     processed_samples += src_range.len();
 
-                    frame_buffer.extend_from_slice(&samples[src_range]);
+//                     frame_buffer.extend_from_slice(&samples[src_range]);
 
-                    if frame_buffer.len() < frame_buffer.capacity() {
-                        continue;
-                    }
+//                     if frame_buffer.len() < frame_buffer.capacity() {
+//                         continue;
+//                     }
 
-                    let mut frame = ffmpeg::frame::Audio::new(
-                        ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-                        frame_buffer.len(),
-                        ffmpeg::ChannelLayout::MONO,
-                    );
+//                     let mut frame = ffmpeg::frame::Audio::new(
+//                         ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+//                         frame_buffer.len(),
+//                         ffmpeg::ChannelLayout::MONO,
+//                     );
 
-                    frame.data_mut(0).copy_from_slice(
-                        &frame_buffer
-                            .iter()
-                            .flat_map(|float| float.to_ne_bytes())
-                            .collect::<Vec<_>>(),
-                    );
+//                     frame.data_mut(0).copy_from_slice(
+//                         &frame_buffer
+//                             .iter()
+//                             .flat_map(|float| float.to_ne_bytes())
+//                             .collect::<Vec<_>>(),
+//                     );
 
-                    frame_buffer.clear();
+//                     frame_buffer.clear();
 
-                    encoder.encode_frame(frame);
-                }
-            }
+//                     encoder.encode_frame(frame);
+//                 }
+//             }
 
-            capturer.stop().ok();
+//             capturer.stop().ok();
 
-            println!("Done receiving audio frames");
-        }
-    });
+//             println!("Done receiving audio frames");
+//         }
+//     });
 
-    rx.await.unwrap(); // wait for first frame
+//     rx.await.unwrap(); // wait for first frame
 
-    controller
-}
+//     controller
+// }
 
 pub fn play_audio<const N: usize>(bytes: &'static [u8; N]) {
     use rodio::{Decoder, OutputStream, Sink};
