@@ -25,33 +25,32 @@ use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
+use png::{ColorType, Encoder};
 use project_recordings::ProjectRecordings;
 use recording::{DisplaySource, InProgressRecording};
+use scap::capturer::Capturer;
+use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::fs::File;
+use std::io::BufWriter;
 use std::io::{BufReader, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::HashMap,
-    marker::PhantomData,
-    path::PathBuf,
-    process::Command,
-    sync::Arc,
-    time::{Duration, Instant},
+    collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
+    time::Duration,
 };
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
-use tempfile::TempDir;
 use tokio::sync::mpsc;
+use tokio::task;
 use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
 };
-use upload::upload_video;
+use upload::{upload_image, upload_video};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -184,6 +183,11 @@ pub struct NewRecordingAdded {
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct NewScreenshotAdded {
+    path: PathBuf,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RecordingStarted;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
@@ -193,6 +197,9 @@ pub struct RecordingStopped {
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestStartRecording;
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestNewScreenshot;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestStopRecording;
@@ -428,6 +435,90 @@ async fn copy_file_to_path(src: String, dst: String) -> Result<(), String> {
             Err(e.to_string())
         }
     }
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(), String> {
+    println!("Copying screenshot to clipboard: {:?}", path);
+
+    let image_data = match tokio::fs::read(&path).await {
+        Ok(data) => data,
+        Err(e) => {
+            println!("Failed to read screenshot file: {}", e);
+            return Err(format!("Failed to read screenshot file: {}", e));
+        }
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::appkit::{NSImage, NSPasteboard};
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::{NSArray, NSData};
+        use objc::rc::autoreleasepool;
+
+        unsafe {
+            autoreleasepool(|| {
+                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
+                NSPasteboard::clearContents(pasteboard);
+
+                let ns_data = NSData::dataWithBytes_length_(
+                    nil,
+                    image_data.as_ptr() as *const std::os::raw::c_void,
+                    image_data.len() as u64,
+                );
+
+                let image = NSImage::initWithData_(NSImage::alloc(nil), ns_data);
+                if image != nil {
+                    NSPasteboard::writeObjects(pasteboard, NSArray::arrayWithObject(nil, image));
+                    Ok(())
+                } else {
+                    Err("Failed to create NSImage from data".to_string())
+                }
+            })
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Clipboard operations are only supported on macOS".to_string())
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn open_file_path(app: AppHandle, path: PathBuf) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        Command::new("open")
+            .arg(&path)
+            .output()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+        Command::new("cmd")
+            .args(&["/C", "start", ""])
+            .arg(&path)
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        Command::new("xdg-open")
+            .arg(&path)
+            .output()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    Ok(())
 }
 
 struct AudioRender {
@@ -1385,6 +1476,256 @@ async fn upload_rendered_video(
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn upload_screenshot(app: AppHandle, screenshot_path: PathBuf) -> Result<(), String> {
+    let Ok(Some(auth)) = AuthStore::get(&app) else {
+        println!("not authenticated!");
+        return Err("Not authenticated".to_string());
+    };
+
+    println!("Uploading screenshot: {:?}", screenshot_path);
+
+    let uploaded_screenshot = upload_image(auth.token, screenshot_path.clone(), true)
+        .await
+        .unwrap();
+
+    let screenshot_dir = screenshot_path.parent().unwrap().to_path_buf();
+    let meta_path = screenshot_dir.join("recording-meta.json");
+
+    let mut meta = RecordingMeta::load_for_project(&meta_path).unwrap();
+
+    meta.sharing = Some(SharingMeta {
+        link: uploaded_screenshot.link.clone(),
+        id: uploaded_screenshot.id.clone(),
+    });
+    meta.save_for_project();
+    RecordingMetaChanged {
+        id: screenshot_path
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string(),
+    }
+    .emit(&app)
+    .ok();
+
+    println!("Copying to clipboard: {:?}", uploaded_screenshot.link);
+
+    #[cfg(target_os = "macos")]
+    {
+        use cocoa::appkit::NSPasteboard;
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::{NSArray, NSString};
+        use objc::rc::autoreleasepool;
+
+        unsafe {
+            autoreleasepool(|| {
+                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
+                NSPasteboard::clearContents(pasteboard);
+
+                let ns_string = NSString::alloc(nil).init_str(&uploaded_screenshot.link);
+
+                let objects: id = NSArray::arrayWithObject(nil, ns_string);
+
+                NSPasteboard::writeObjects(pasteboard, objects);
+            });
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn take_screenshot(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    let id = uuid::Uuid::new_v4().to_string();
+
+    let recording_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap()
+        .join("screenshots")
+        .join(format!("{id}.cap"));
+
+    std::fs::create_dir_all(&recording_dir).map_err(|e| e.to_string())?;
+
+    // Take screenshot using scap with optimized settings
+    let options = scap::capturer::Options {
+        fps: 1,
+        output_type: scap::frame::FrameType::BGRAFrame,
+        show_highlight: false,
+        ..Default::default()
+    };
+
+    if let Some(window) = app.get_webview_window("main") {
+        window.hide().ok();
+    }
+
+    let mut capturer = Capturer::new(options);
+    capturer.start_capture();
+
+    let frame = match capturer.get_next_frame() {
+        Ok(frame) => frame,
+        Err(e) => return Err(format!("Failed to get frame: {}", e)),
+    };
+
+    capturer.stop_capture();
+
+    if let Frame::BGRA(bgra_frame) = frame {
+        let width = bgra_frame.width as u32;
+        let height = bgra_frame.height as u32;
+
+        let now = chrono::Local::now();
+        let screenshot_name = format!(
+            "Cap {} at {}.png",
+            now.format("%Y-%m-%d"),
+            now.format("%H.%M.%S")
+        );
+        let screenshot_path = recording_dir.join(&screenshot_name);
+
+        // Perform image processing and saving asynchronously
+        let app_handle = app.clone();
+        task::spawn_blocking(move || -> Result<(), String> {
+            // Convert BGRA to RGBA
+            let mut rgba_data = vec![0; bgra_frame.data.len()];
+            for (bgra, rgba) in bgra_frame
+                .data
+                .chunks_exact(4)
+                .zip(rgba_data.chunks_exact_mut(4))
+            {
+                rgba[0] = bgra[2];
+                rgba[1] = bgra[1];
+                rgba[2] = bgra[0];
+                rgba[3] = bgra[3];
+            }
+
+            // Create file and PNG encoder
+            let file = File::create(&screenshot_path).map_err(|e| e.to_string())?;
+            let ref mut w = BufWriter::new(file);
+
+            let mut encoder = Encoder::new(w, width, height);
+            encoder.set_color(ColorType::Rgba);
+            encoder.set_compression(png::Compression::Fast);
+            let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+
+            // Write image data
+            writer
+                .write_image_data(&rgba_data)
+                .map_err(|e| e.to_string())?;
+
+            audio::play_audio(include_bytes!("../sounds/screenshot.ogg"));
+
+            if let Some(window) = app.get_webview_window("main") {
+                window.show().ok();
+            }
+
+            let now = chrono::Local::now();
+            let screenshot_name = format!(
+                "Cap {} at {}.png",
+                now.format("%Y-%m-%d"),
+                now.format("%H.%M.%S")
+            );
+
+            use cap_project::*;
+            RecordingMeta {
+                project_path: recording_dir.clone(),
+                sharing: None,
+                pretty_name: screenshot_name,
+                display: Display {
+                    path: screenshot_path.clone(),
+                },
+                camera: None,
+                audio: None,
+            }
+            .save_for_project();
+
+            NewScreenshotAdded {
+                path: screenshot_path,
+            }
+            .emit(&app_handle)
+            .ok();
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+        Ok(())
+    } else {
+        Err("Unexpected frame type".to_string())
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn save_file_dialog(
+    app: AppHandle,
+    file_name: String,
+    file_type: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    open_main_window(app.clone());
+
+    println!(
+        "save_file_dialog called with file_name: {}, file_type: {}",
+        file_name, file_type
+    );
+
+    // Remove the ".cap" suffix if present
+    let file_name = file_name
+        .strip_suffix(".cap")
+        .unwrap_or(&file_name)
+        .to_string();
+    println!("File name after removing .cap suffix: {}", file_name);
+
+    // Determine the file type and extension
+    let (name, extension) = match file_type.as_str() {
+        "recording" => {
+            println!("File type is recording");
+            ("MP4 Video", "mp4")
+        }
+        "screenshot" => {
+            println!("File type is screenshot");
+            ("PNG Image", "png")
+        }
+        _ => {
+            println!("Invalid file type: {}", file_type);
+            return Err("Invalid file type".to_string());
+        }
+    };
+
+    println!(
+        "Showing save dialog with name: {}, extension: {}",
+        name, extension
+    );
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    println!("Created channel for communication");
+
+    app.dialog()
+        .file()
+        .set_title("Save File")
+        .set_file_name(file_name)
+        .add_filter(name, &[extension])
+        .save_file(move |path| {
+            println!("Save file callback triggered");
+            let _ = tx.send(path.map(|p| p.to_string_lossy().to_string()));
+        });
+
+    println!("Waiting for user selection");
+    let result = rx.recv().map_err(|e| {
+        println!("Error receiving result: {}", e);
+        e.to_string()
+    })?;
+
+    println!("Save dialog result: {:?}", result);
+
+    Ok(result)
+}
+
 #[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
 struct RecordingMetaChanged {
     id: String,
@@ -1392,8 +1733,23 @@ struct RecordingMetaChanged {
 
 #[tauri::command(async)]
 #[specta::specta]
-fn get_recording_meta(app: AppHandle, id: String) -> RecordingMeta {
-    RecordingMeta::load_for_project(&recording_path(&app, &id)).unwrap()
+fn get_recording_meta(
+    app: AppHandle,
+    id: String,
+    file_type: String,
+) -> Result<RecordingMeta, String> {
+    println!(
+        "get_recording_meta called with id: {}, file_type: {}",
+        id, file_type
+    );
+    let meta_path = match file_type.as_str() {
+        "recording" => recording_path(&app, &id),
+        "screenshot" => screenshot_path(&app, &id),
+        _ => return Err(format!("Invalid file type: {}", file_type)),
+    };
+
+    RecordingMeta::load_for_project(&meta_path)
+        .map_err(|e| format!("Failed to load recording meta for {}: {}", id, e))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1405,6 +1761,7 @@ pub fn run() {
             create_camera_window,
             start_recording,
             stop_recording,
+            take_screenshot,
             list_cameras,
             list_capture_windows,
             list_audio_devices,
@@ -1418,6 +1775,8 @@ pub fn run() {
             get_rendered_video,
             copy_file_to_path,
             copy_rendered_video_to_clipboard,
+            copy_screenshot_to_clipboard,
+            open_file_path,
             get_video_metadata,
             create_editor_instance,
             start_playback,
@@ -1431,16 +1790,19 @@ pub fn run() {
             permissions::do_permissions_check,
             permissions::request_permission,
             upload_rendered_video,
+            upload_screenshot,
             get_recording_meta,
             open_feedback_window,
             open_settings_window,
             open_changelog_window,
+            save_file_dialog,
             hotkeys::set_hotkey
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
             ShowCapturesPanel,
             NewRecordingAdded,
+            NewScreenshotAdded,
             RenderFrameEvent,
             EditorStateChanged,
             CurrentRecordingChanged,
@@ -1449,6 +1811,7 @@ pub fn run() {
             RecordingStopped,
             RequestStartRecording,
             RequestStopRecording,
+            RequestNewScreenshot,
         ])
         .ty::<ProjectConfiguration>()
         .ty::<AuthStore>()
@@ -1520,6 +1883,15 @@ pub fn run() {
                 });
             });
 
+            let app_handle_clone = app_handle.clone();
+            RequestNewScreenshot::listen_any(app, move |_| {
+                let app_handle = app_handle_clone.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = take_screenshot(app_handle.clone(), app_handle.state()).await {
+                        eprintln!("Failed to take screenshot: {}", e);
+                    }
+                });
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1608,4 +1980,12 @@ fn recordings_path(app: &AppHandle) -> PathBuf {
 
 fn recording_path(app: &AppHandle, recording_id: &str) -> PathBuf {
     recordings_path(app).join(format!("{}.cap", recording_id))
+}
+
+fn screenshots_path(app: &AppHandle) -> PathBuf {
+    app.path().app_data_dir().unwrap().join("screenshots")
+}
+
+fn screenshot_path(app: &AppHandle, screenshot_id: &str) -> PathBuf {
+    screenshots_path(app).join(format!("{}.cap", screenshot_id))
 }

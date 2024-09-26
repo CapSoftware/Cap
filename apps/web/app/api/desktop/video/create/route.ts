@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
   const recordingMode: "hls" | "desktopMP4" | null = params.get(
     "recordingMode"
   ) as any;
-
+  const isScreenshot = params.get("isScreenshot") === "true";
 
   if (!user) {
     console.log("User not authenticated, returning 401");
@@ -86,7 +86,6 @@ export async function GET(req: NextRequest) {
     month: "long",
   })} ${date.getFullYear()}`;
 
-
   await db.insert(videos).values({
     id: id,
     name: `My Cap Recording - ${formattedDate}`,
@@ -99,6 +98,7 @@ export async function GET(req: NextRequest) {
         : recordingMode === "desktopMP4"
         ? { type: "desktopMP4" }
         : undefined,
+    isScreenshot: isScreenshot,
   });
 
   if (

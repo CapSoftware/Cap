@@ -1421,6 +1421,7 @@ dependencies = [
  "core-graphics 0.24.0",
  "cpal",
  "dotenvy_macro",
+ "fast_image_resize",
  "ffmpeg-next",
  "ffmpeg-sidecar 1.1.0 (git+https://github.com/CapSoftware/ffmpeg-sidecar?branch=main)",
  "futures",
@@ -1435,6 +1436,7 @@ dependencies = [
  "num-traits",
  "objc",
  "objc2-app-kit",
+ "png",
  "reqwest",
  "rodio",
  "scap",
@@ -1734,6 +1736,18 @@ dependencies = [
  "rayon-core",
  "smallvec",
  "zune-inflate",
+]
+
+[[package]]
+name = "fast_image_resize"
+version = "4.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ca4b58827213977eabab8ee8d8258db8441338f3a1832a1c0f2de3372175531"
+dependencies = [
+ "cfg-if 1.0.0",
+ "document-features",
+ "num-traits",
+ "thiserror",
 ]
 
 [[package]]

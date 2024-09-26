@@ -1,6 +1,6 @@
 use crate::{
-    NewRecordingAdded, RecordingStarted, RecordingStopped, RequestStartRecording,
-    RequestStopRecording,
+    NewRecordingAdded, NewScreenshotAdded, RecordingStarted, RecordingStopped,
+    RequestNewScreenshot, RequestStartRecording, RequestStopRecording,
 };
 use cap_project::RecordingMeta;
 use std::path::PathBuf;
@@ -34,8 +34,19 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         None::<&str>,
     )?;
 
+    let take_screenshot_i = MenuItem::with_id(
+        app,
+        "take_screenshot",
+        "Take Screenshot",
+        true,
+        None::<&str>,
+    )?;
+
     // Create a submenu for previous recordings
     let prev_recordings_submenu = create_prev_recordings_submenu(app)?;
+
+    // Create a submenu for previous screenshots
+    let prev_screenshots_submenu = create_prev_screenshots_submenu(app)?;
 
     let quit_i = MenuItem::with_id(app, "quit", "Quit Cap", true, None::<&str>)?;
 
@@ -44,7 +55,9 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         &[
             &version_i,
             &new_recording_i,
+            &take_screenshot_i,
             &prev_recordings_submenu,
+            &prev_screenshots_submenu,
             &quit_i,
         ],
     )?;
@@ -91,19 +104,22 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                         // #[cfg(target_os = "macos")]
                         // window.set_traffic_lights_inset(14.0, 22.0).unwrap();
                     }
+                    "take_screenshot" => {
+                        let _ = RequestNewScreenshot.emit(&app_handle);
+                    }
                     "quit" => {
                         app.exit(0);
                     }
                     _ => {
                         // Handle previous recording menu item clicks
-                        if event.id.as_ref().starts_with("Cap ") {
-                            if let Some(path) =
-                                get_recording_path_by_pretty_name(app, event.id.as_ref())
-                            {
-                                NewRecordingAdded { path }.emit(app).unwrap();
-                            } else {
-                                println!("Unknown menu item clicked: {:?}", event);
-                            }
+                        if let Some(path) =
+                            get_recording_path_by_pretty_name(app, event.id.as_ref())
+                        {
+                            NewRecordingAdded { path }.emit(app).unwrap();
+                        } else if let Some(path) =
+                            get_screenshot_path_by_name(app, event.id.as_ref())
+                        {
+                            NewScreenshotAdded { path }.emit(app).unwrap();
                         } else {
                             println!("Unhandled menu item clicked: {:?}", event);
                         }
@@ -189,9 +205,22 @@ fn create_prev_recordings_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Resu
                 let pretty_name = meta.pretty_name.clone();
                 let id = pretty_name.clone();
 
-                let thumbnail_path = path.join("screenshots").join("thumbnail.png");
-                if thumbnail_path.exists() {
-                    match Image::from_path(&thumbnail_path) {
+                let screenshots_dir = path.join("screenshots");
+                let png_files: Vec<_> = std::fs::read_dir(screenshots_dir)
+                    .ok()?
+                    .filter_map(|entry| {
+                        let entry = entry.ok()?;
+                        let path = entry.path();
+                        if path.extension()?.to_str()? == "png" {
+                            Some(path)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if let Some(png_path) = png_files.first() {
+                    match Image::from_path(png_path) {
                         Ok(image) => IconMenuItem::with_id(
                             app,
                             &id,
@@ -221,6 +250,78 @@ fn create_prev_recordings_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Resu
         .collect();
 
     Submenu::with_items(app, "Previous Recordings", true, &items_ref)
+}
+
+fn create_prev_screenshots_submenu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    let screenshots_dir = app
+        .path()
+        .app_data_dir()
+        .map(|dir| dir.join("screenshots"))?;
+
+    let items: Vec<MenuItemKind<R>> = if !screenshots_dir.exists() {
+        vec![MenuItem::with_id(
+            app,
+            "no_screenshots",
+            "No screenshots yet",
+            false,
+            None::<&str>,
+        )
+        .map(MenuItemKind::MenuItem)
+        .unwrap()]
+    } else {
+        std::fs::read_dir(screenshots_dir)
+            .map_err(tauri::Error::Io)?
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                if path.is_dir() {
+                    let png_files: Vec<_> = std::fs::read_dir(&path)
+                        .ok()?
+                        .filter_map(|file_entry| {
+                            let file_entry = file_entry.ok()?;
+                            let file_path = file_entry.path();
+                            if file_path.extension()?.to_str()? == "png" {
+                                Some(file_path)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    if let Some(png_path) = png_files.first() {
+                        let file_name = png_path.file_stem()?.to_str()?.to_string();
+                        let id = file_name.clone();
+                        match Image::from_path(png_path) {
+                            Ok(image) => IconMenuItem::with_id(
+                                app,
+                                &id,
+                                &file_name,
+                                true,
+                                Some(image),
+                                None::<&str>,
+                            )
+                            .map(MenuItemKind::Icon)
+                            .ok(),
+                            Err(_) => MenuItem::with_id(app, &id, &file_name, true, None::<&str>)
+                                .map(MenuItemKind::MenuItem)
+                                .ok(),
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+
+    let items_ref: Vec<&dyn IsMenuItem<R>> = items
+        .iter()
+        .map(|item| item as &dyn IsMenuItem<R>)
+        .collect();
+
+    Submenu::with_items(app, "Previous Screenshots", true, &items_ref)
 }
 
 fn get_prev_recordings<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<PathBuf>, tauri::Error> {
@@ -260,13 +361,23 @@ fn handle_new_recording_added<R: Runtime>(app: &AppHandle<R>, path: PathBuf) -> 
             true,
             None::<&str>,
         )?;
+        let take_screenshot_i = MenuItem::with_id(
+            app,
+            "take_screenshot",
+            "Take Screenshot",
+            true,
+            None::<&str>,
+        )?;
         let prev_recordings_submenu = create_prev_recordings_submenu(app)?;
+        let prev_screenshots_submenu = create_prev_screenshots_submenu(app)?;
         let quit_i = MenuItem::with_id(app, "quit", "Quit Cap", true, None::<&str>)?;
 
         let menu_items: Vec<&dyn IsMenuItem<R>> = vec![
             &version_i,
             &new_recording_i,
+            &take_screenshot_i,
             &prev_recordings_submenu,
+            &prev_screenshots_submenu,
             &quit_i,
         ];
         let menu = Menu::with_items(app, &menu_items)?;
@@ -288,4 +399,30 @@ fn get_recording_path_by_pretty_name<R: Runtime>(
         };
         meta.pretty_name == pretty_name
     })
+}
+
+fn get_screenshot_path_by_name<R: Runtime>(app: &AppHandle<R>, name: &str) -> Option<PathBuf> {
+    let screenshots_dir = app.path().app_data_dir().ok()?.join("screenshots");
+
+    std::fs::read_dir(screenshots_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .find_map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::read_dir(path)
+                    .ok()?
+                    .filter_map(Result::ok)
+                    .find_map(|file_entry| {
+                        let file_path = file_entry.path();
+                        if file_path.file_stem()?.to_str()? == name {
+                            Some(file_path)
+                        } else {
+                            None
+                        }
+                    })
+            } else {
+                None
+            }
+        })
 }
