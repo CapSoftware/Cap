@@ -42,23 +42,8 @@ unsafe impl Sync for InProgressRecording {}
 
 impl InProgressRecording {
     pub async fn stop(&mut self) {
-        self.display.stop();
-        if let Some(camera) = &self.camera {
-            camera.stop();
-        }
-
-        self.ffmpeg_process.stop();
-        if let Err(e) = self.ffmpeg_process.wait() {
-            eprintln!("Failed to wait for ffmpeg process: {:?}", e);
-        }
-        if let Some(mut audio) = self.audio.take() {
-            audio.1.stop();
-        }
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
         use cap_project::*;
-        RecordingMeta {
+        let meta = RecordingMeta {
             project_path: self.recording_dir.clone(),
             sharing: None,
             pretty_name: format!(
@@ -88,8 +73,25 @@ impl InProgressRecording {
                     .unwrap()
                     .to_owned(),
             }),
+        };
+
+        self.display.stop();
+        if let Some(camera) = &self.camera {
+            camera.stop();
         }
-        .save_for_project();
+
+        self.ffmpeg_process.stop();
+        if let Err(e) = self.ffmpeg_process.wait() {
+            eprintln!("Failed to wait for ffmpeg process: {:?}", e);
+        }
+        if let Some(audio) = self.audio.take() {
+            audio.0.capture.stop();
+            drop(audio);
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        meta.save_for_project();
     }
     pub async fn pause(&mut self) -> Result<(), String> {
         self.display.pause();
