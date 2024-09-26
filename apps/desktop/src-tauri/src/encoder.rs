@@ -58,6 +58,9 @@ impl H264Encoder {
 
     pub fn encode_frame(&mut self, mut frame: ffmpeg::util::frame::Video) {
         frame.set_pts(Some(self.frame_number as i64));
+
+        // println!("sending frame - pts: {:?}", frame.pts());
+
         self.context.send_frame(&frame).unwrap();
         self.frame_number += 1;
 
@@ -72,6 +75,13 @@ impl H264Encoder {
                 1.0 / self.fps,
                 self.output.stream(self.stream_index).unwrap().time_base(),
             );
+
+            // println!(
+            //     "writing packet - dts: {:?}, pts: {:?}, flags: {:?}",
+            //     encoded.dts(),
+            //     encoded.pts(),
+            //     encoded.flags()
+            // );
 
             encoded.write_interleaved(&mut self.output).unwrap();
         }
@@ -125,12 +135,12 @@ pub struct MP3Encoder {
     pub context: ffmpeg::encoder::Audio,
     pub stream_index: usize,
     pub sample_rate: u32,
-    // pub bitrate: u32,
     sample_number: i64,
 }
 
 impl MP3Encoder {
     pub fn new(path: &PathBuf, sample_rate: u32) -> Self {
+        dbg!(sample_rate);
         let mut output = ffmpeg::format::output(path).unwrap();
         let output_flags = output.format().flags();
 
@@ -147,8 +157,8 @@ impl MP3Encoder {
 
         stream.set_parameters(&encoder);
         encoder.set_rate(sample_rate as i32);
-        encoder.set_bit_rate(192000);
-        encoder.set_max_bit_rate(192000);
+        encoder.set_bit_rate(128000);
+        encoder.set_max_bit_rate(128000);
         encoder.set_channel_layout(ffmpeg::ChannelLayout::MONO);
         encoder.set_time_base((1, sample_rate as i32));
         encoder.set_format(ffmpeg::format::Sample::F32(
@@ -168,13 +178,14 @@ impl MP3Encoder {
             context: encoder,
             stream_index,
             sample_rate,
-            // bitrate,
             sample_number: 0,
         }
     }
 
-    pub fn encode_frame(&mut self, frame: ffmpeg::frame::Audio) {
+    pub fn encode_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
+        frame.set_pts(Some(self.sample_number as i64));
         self.context.send_frame(&frame).unwrap();
+        self.sample_number += frame.samples() as i64;
 
         self.receive_and_process_packets();
     }
@@ -182,10 +193,8 @@ impl MP3Encoder {
     fn receive_and_process_packets(&mut self) {
         let mut encoded = ffmpeg::Packet::empty();
         while self.context.receive_packet(&mut encoded).is_ok() {
-            encoded.set_pts(Some(self.sample_number));
-            encoded.set_time_base(self.output.stream(self.stream_index).unwrap().time_base());
             encoded.set_stream(self.stream_index);
-            self.sample_number += encoded.duration();
+            encoded.set_time_base(self.output.stream(self.stream_index).unwrap().time_base());
 
             encoded.write(&mut self.output).unwrap();
         }

@@ -156,28 +156,24 @@ impl AsyncVideoDecoder {
                             last_decoded_frame = None;
 
                             packets = input.packets();
-                            // packet_stuff = PacketStuff {
-                            //     packets: input.packets(),
-                            //     skipped_packet: None,
-                            // };
                         }
 
                         last_active_frame = Some(frame_number);
 
                         loop {
+                            if peekable_requests.peek().is_some() {
+                                break;
+                            }
                             let Some((stream, packet)) = packets.next() else {
                                 break;
                             };
 
                             if stream.index() == input_stream_index {
+                                let packet_frame =
+                                    ts_to_frame(packet.pts().unwrap(), time_base, frame_rate);
+                                // println!("sending frame {packet_frame} packet");
+
                                 decoder.send_packet(&packet).ok(); // decode failures are ok, we just fail to return a frame
-
-                                if peekable_requests.peek().is_some() {
-                                    // println!("skipping packet for frame {current_frame} as new request is available");
-                                    // packet_stuff.skipped_packet = Some((stream, packet));
-
-                                    break;
-                                }
 
                                 let mut exit = false;
 
@@ -187,7 +183,7 @@ impl AsyncVideoDecoder {
                                         time_base,
                                         frame_rate,
                                     );
-                                    // println!("decoded frame {current_frame}");
+                                    // println!("processing frame {current_frame}");
                                     last_decoded_frame = Some(current_frame);
 
                                     let exceeds_cache_bounds = current_frame > cache_max;
@@ -234,7 +230,6 @@ impl AsyncVideoDecoder {
 
                                     if current_frame == frame_number {
                                         if let Some(sender) = sender.take() {
-                                            // println!("sending frame {current_frame} to sender");
                                             sender.send(Some(frame.clone())).ok();
                                         }
                                     }
@@ -257,15 +252,12 @@ impl AsyncVideoDecoder {
                                                     }
                                                 };
 
-                                                // println!("removing frame {frame} from cache");
                                                 cache.remove(&frame);
                                             } else {
-                                                // println!("clearing cache");
                                                 cache.clear()
                                             }
                                         }
 
-                                        // println!("caching frame {current_frame}");
                                         cache.insert(current_frame, frame);
                                     }
 
@@ -273,8 +265,6 @@ impl AsyncVideoDecoder {
                                 }
 
                                 if exit {
-                                    // println!("skipping packet for frame {current_frame} as it's out of cache bounds");
-                                    // packet_stuff.skipped_packet = Some((stream, packet));
                                     break;
                                 }
                             }

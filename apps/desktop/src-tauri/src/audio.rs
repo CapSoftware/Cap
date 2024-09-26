@@ -5,20 +5,13 @@ use cpal::{
 use ffmpeg_next as ffmpeg;
 use indexmap::IndexMap;
 use num_traits::ToBytes;
-use std::{
-    path::PathBuf,
-    sync::Arc,
-    time::Instant,
-};
+use std::{path::PathBuf, sync::Arc, time::Instant};
 use tokio::sync::{
     mpsc::{self, error::TrySendError},
     oneshot, watch,
 };
 
-use crate::{
-    capture::CaptureController,
-    encoder::MP3Encoder,
-};
+use crate::{capture::CaptureController, encoder::MP3Encoder};
 
 type SampleReceiver = mpsc::Receiver<Arc<Vec<f32>>>;
 
@@ -60,12 +53,13 @@ impl AudioCapturer {
     }
 
     pub fn log_info(&self) {
-        tracing::info!("Sample rate: {}", self.sample_rate());
-        tracing::info!("Channels: {}", self.channels());
-        tracing::info!("Sample format: {}", self.sample_format());
+        println!("Sample rate: {}", self.sample_rate());
+        println!("Channels: {}", self.channels());
+        println!("Sample format: {}", self.sample_format());
     }
 
     pub fn start(&mut self, start_time_tx: oneshot::Sender<Instant>) -> Result<(), String> {
+        self.log_info();
         tracing::trace!("Building input stream...");
 
         let (receiver, stream) =
@@ -284,6 +278,7 @@ pub async fn start_capturing(
 
             let mut encoder = MP3Encoder::new(&controller.output_path, sample_rate);
 
+            dbg!(encoder.context.frame_size());
             let mut frame_buffer = Vec::<f32>::with_capacity(encoder.context.frame_size() as usize);
 
             while let Some(samples) = receiver.recv().await {
@@ -301,36 +296,36 @@ pub async fn start_capturing(
                     continue;
                 }
 
-                let buffer_len = frame_buffer.len();
-                let buffer_capacity = frame_buffer.capacity();
+                let mut processed_samples = 0;
+                while processed_samples < samples.len() {
+                    let buffer_remaining = frame_buffer.capacity() - frame_buffer.len();
+                    let src_range = 0..usize::min(samples.len(), buffer_remaining);
 
-                let buffer_remaining = frame_buffer.capacity() - frame_buffer.len();
-                let dest_range =
-                    buffer_len..usize::min(buffer_len + samples.len(), buffer_capacity);
-                let src_range = 0..usize::min(samples.len(), buffer_remaining);
+                    processed_samples += src_range.len();
 
-                frame_buffer.extend_from_slice(&samples[src_range]);
+                    frame_buffer.extend_from_slice(&samples[src_range]);
 
-                if frame_buffer.len() < frame_buffer.capacity() {
-                    continue;
+                    if frame_buffer.len() < frame_buffer.capacity() {
+                        continue;
+                    }
+
+                    let mut frame = ffmpeg::frame::Audio::new(
+                        ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                        frame_buffer.len(),
+                        ffmpeg::ChannelLayout::MONO,
+                    );
+
+                    frame.data_mut(0).copy_from_slice(
+                        &frame_buffer
+                            .iter()
+                            .flat_map(|float| float.to_ne_bytes())
+                            .collect::<Vec<_>>(),
+                    );
+
+                    frame_buffer.clear();
+
+                    encoder.encode_frame(frame);
                 }
-
-                let mut frame = ffmpeg::frame::Audio::new(
-                    ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-                    frame_buffer.len(),
-                    ffmpeg::ChannelLayout::MONO,
-                );
-
-                frame.data_mut(0).copy_from_slice(
-                    &frame_buffer
-                        .iter()
-                        .flat_map(|float| float.to_ne_bytes())
-                        .collect::<Vec<_>>(),
-                );
-
-                frame_buffer.clear();
-
-                encoder.encode_frame(frame);
             }
 
             capturer.stop().ok();
