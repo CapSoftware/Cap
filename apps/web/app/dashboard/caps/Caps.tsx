@@ -208,6 +208,10 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
           <div className="grid grid-cols-2 xl:grid-cols-3 gap-6">
             {data.map((cap, index) => {
               const videoAnalytics = analytics[cap.id];
+              const displayCount =
+                videoAnalytics === 0
+                  ? Math.max(cap.totalComments, cap.totalReactions)
+                  : videoAnalytics;
 
               return (
                 <div
@@ -361,11 +365,11 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                       <div
                         className="flex items-center"
                         data-tooltip-id={cap.id + "_analytics"}
-                        data-tooltip-content={`${videoAnalytics} unique views via your shareable Cap.link. Refreshed every 5 minutes.`}
+                        data-tooltip-content={`${displayCount} unique views via your shareable Cap.link.`}
                       >
                         <EyeIcon className="w-4 h-4 mr-1" />
                         <span className="text-gray-600">
-                          {videoAnalytics ?? "-"}
+                          {displayCount ?? "-"}
                         </span>
                         <Tooltip id={cap.id + "_analytics"} />
                       </div>

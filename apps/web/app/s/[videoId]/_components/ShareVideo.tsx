@@ -13,7 +13,6 @@ import {
 import { LogoSpinner } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
-import { is } from "drizzle-orm";
 import toast from "react-hot-toast";
 
 declare global {
