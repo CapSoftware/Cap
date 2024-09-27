@@ -28,6 +28,12 @@ pub struct SharingMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct RecordingSegment {
+    pub start: f64,
+    pub end: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RecordingMeta {
     // this field is just for convenience, it shouldn't be persisted
     #[serde(skip_serializing, default)]
@@ -40,6 +46,8 @@ pub struct RecordingMeta {
     pub camera: Option<CameraMeta>,
     #[serde(default)]
     pub audio: Option<AudioMeta>,
+    #[serde(default)]
+    pub segments: Vec<RecordingSegment>,
 }
 
 impl RecordingMeta {

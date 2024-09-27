@@ -73,6 +73,30 @@ impl InProgressRecording {
                     .unwrap()
                     .to_owned(),
             }),
+            segments: {
+                let relative_segments = self
+                    .segments
+                    .iter()
+                    .map(|s| s - self.segments[0])
+                    .collect::<Vec<_>>();
+
+                let mut segments = vec![];
+
+                let mut diff = 0.0;
+
+                for (i, chunk) in relative_segments.chunks_exact(2).enumerate() {
+                    if i < relative_segments.len() / 2 {
+                        segments.push(RecordingSegment {
+                            start: diff,
+                            end: chunk[1] - chunk[0] + diff,
+                        });
+                    }
+
+                    diff += chunk[1] - chunk[0];
+                }
+
+                segments
+            },
         };
 
         self.display.stop();
@@ -93,6 +117,7 @@ impl InProgressRecording {
 
         meta.save_for_project();
     }
+
     pub async fn pause(&mut self) -> Result<(), String> {
         self.display.pause();
         if let Some(camera) = &mut self.camera {
