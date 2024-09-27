@@ -169,6 +169,7 @@ impl AsyncVideoDecoder {
                             };
 
                             if stream.index() == input_stream_index {
+                                // dbg!(packet.pts(), packet.dts());
                                 let packet_frame =
                                     ts_to_frame(packet.pts().unwrap(), time_base, frame_rate);
                                 // println!("sending frame {packet_frame} packet");

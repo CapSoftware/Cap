@@ -77,9 +77,7 @@ impl Playback {
                 };
 
                 let time = if let Some(timeline) = self.project.timeline() {
-                    match timeline.get_recording_time(
-                        (frame_number + self.start_frame_number) as f64 / FPS as f64, /* frame_number as f64 / FPS as f64 */
-                    ) {
+                    match timeline.get_recording_time(frame_number as f64 / FPS as f64) {
                         Some(time) => time,
                         None => break,
                     }
