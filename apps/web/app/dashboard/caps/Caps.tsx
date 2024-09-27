@@ -181,22 +181,23 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
               alt="Person using microphone"
             />
           </div>
-          <div className="text-center">
+          <div className="text-center pb-[30px]">
             <h1 className="text-2xl font-semibold mb-3">
-              <span className="block text-gray-500">Hey, {user?.name}!</span>
+              <span className="block text-gray-400 text-lg">
+                Hey, {user?.name}!
+              </span>
               <span className="block">Record your first Cap.</span>
             </h1>
             <p className="text-xl max-w-md">
               Craft your narrative with a Cap—get projects done quicker.
             </p>
             <Button
-              href="/record"
-              size="default"
+              href="/download"
+              size="lg"
               className="mt-8 relative"
-              variant="default"
+              variant="primary"
             >
-              <Video className="flex-shrink-0 w-6 h-6" aria-hidden="true" />
-              <span className="ml-2.5 text-white">Record a Cap</span>
+              Download Cap
             </Button>
           </div>
         </div>
