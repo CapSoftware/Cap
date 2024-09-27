@@ -1,11 +1,7 @@
-use ffmpeg_next::{
-    format as avformat,
-    frame::Video,
-    software,
-};
+use ffmpeg_next::{format as avformat, frame::Video, software};
 use std::{
     path::PathBuf,
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 
 use scap::{
@@ -170,12 +166,15 @@ pub async fn start_capturing(
 
             let mut start_time_tx = Some(tx);
 
+            let mut start = Instant::now();
+
             loop {
                 if controller.is_stopped() {
                     break;
                 }
 
                 let frame = capturer.get_next_frame();
+                let timestamp = SystemTime::now();
 
                 if controller.is_paused() {
                     continue;
