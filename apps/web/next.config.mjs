@@ -96,6 +96,7 @@ const millionConfig = {
       "react-scroll-parallax",
       "Record",
       "ActionButton",
+      "ImageViewer",
     ],
   },
 };

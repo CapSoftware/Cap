@@ -5,6 +5,7 @@ import { ShareVideo } from "./_components/ShareVideo";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { userSelectProps } from "@cap/database/auth/session";
 import { Toolbar } from "./_components/Toolbar";
+
 export const Share = ({
   data,
   user,
