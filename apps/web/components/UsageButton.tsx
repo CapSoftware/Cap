@@ -23,7 +23,7 @@ export const UsageButton = () => {
       });
   }, []);
 
-  const progress = (3 / usage.videoLimit) * 100;
+  const progress = (usage.videoCount / usage.videoLimit) * 100;
 
   if (usage.loading === true) {
     return (
@@ -43,7 +43,7 @@ export const UsageButton = () => {
         {usage.subscription === false ? (
           <>
             <div className="mb-1 font-medium text-gray-500 text-[0.875rem]">
-              {3}/{usage.videoLimit} Caps
+              {usage.videoCount}/{usage.videoLimit} Caps
             </div>
             <div className="h-[10px] w-full bg-gray-200 rounded-xl overflow-hidden">
               <div
