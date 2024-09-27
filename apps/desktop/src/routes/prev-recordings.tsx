@@ -99,14 +99,15 @@ export default function () {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
                 console.log(media);
                 const mediaId = media.path.split("/").pop()?.split(".")[0]!;
+                const type = media.type ?? "recording";
                 const fileId =
-                  media.type === "recording"
+                  type === "recording"
                     ? mediaId
                     : media.path
                         .split("screenshots/")[1]
                         .split("/")[0]
                         .replace(".cap", "");
-                const isRecording = media.type !== "screenshot";
+                const isRecording = type !== "screenshot";
 
                 const recordingMeta = createQuery(() => ({
                   queryKey: ["recordingMeta", fileId],
