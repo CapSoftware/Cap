@@ -3,13 +3,11 @@ import { Toaster } from "react-hot-toast";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title:
-    "Cap — Effortless, instant screen sharing. Open source and cross-platform.",
+  title: "Cap — Beautiful, shareable screen recordings.",
   description:
     "Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
   openGraph: {
-    title:
-      "Cap — Effortless, instant screen sharing. Open source and cross-platform.",
+    title: "Cap — Beautiful, shareable screen recordings.",
     description:
       "Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
     type: "website",
