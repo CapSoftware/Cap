@@ -151,7 +151,7 @@ function ExportButton() {
 function ShareButton() {
   const { videoId, presets } = useEditorContext();
   const [meta, metaActions] = createResource(() =>
-    commands.getRecordingMeta(videoId)
+    commands.getRecordingMeta(videoId, "recording")
   );
 
   const uploadVideo = createMutation(() => ({
