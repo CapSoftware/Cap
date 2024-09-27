@@ -403,7 +403,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
             })}
           </div>
           {(data.length > limit || data.length === limit || page !== 1) && (
-            <div>
+            <div className="mt-4">
               <Pagination>
                 <PaginationContent>
                   {page > 1 && (

@@ -63,7 +63,7 @@ export const AdminNavItems = () => {
   ];
 
   const navItemClass =
-    "flex items-center justify-start py-2 px-4 rounded-full outline-none tracking-tight w-full";
+    "flex items-center justify-start py-2 px-3 rounded-full outline-none tracking-tight w-full";
 
   return (
     <Dialog>
