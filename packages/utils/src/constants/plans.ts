@@ -1,6 +1,6 @@
 const planIds = {
   development: {
-    yearly: "price_1Q29oZFJxA1XpeSs3SRuHPrc",
+    yearly: "price_1Q3esrFJxA1XpeSsFwp486RN",
     monthly: "price_1P9C1DFJxA1XpeSsTwwuddnq",
   },
   production: {

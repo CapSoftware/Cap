@@ -1421,7 +1421,6 @@ dependencies = [
  "core-graphics 0.24.0",
  "cpal",
  "device_query",
- "dispatch",
  "dotenvy_macro",
  "fast_image_resize",
  "ffmpeg-next",

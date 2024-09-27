@@ -63,11 +63,11 @@ export const HomePage = () => {
 
   return (
     <ParallaxProvider>
-      <div className="-mt-[80px] custom-bg md:min-h-[calc(100vh+20px)] relative flex items-center">
+      <div className="-mt-[80px] custom-bg min-h-screen md:min-h-[calc(100vh+20px)] relative flex items-center">
         <div className="w-full relative z-10 flex">
           <div className="wrapper wrapper-sm mx-auto">
-            <div className="mb-auto text-center md:px-4 pt-40 pb-52 md:pb-64 -mt-40">
-              <Link
+            <div className="mb-auto text-center px-4 pt-40 pb-52 md:pb-64 -mt-40">
+              {/* <Link
                 href="/updates/cap-public-beta-launch"
                 target="_blank"
                 className="mx-auto mb-4 inline-flex justify-center font-medium transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 bg-blue-400 hover:bg-blue-500 h-9 px-4 py-2 rounded-full space-x-2 items-center"
@@ -87,9 +87,9 @@ export const HomePage = () => {
                     d="M8.783 6.667H.667V5.333h8.116L5.05 1.6 6 .667 11.333 6 6 11.333l-.95-.933 3.733-3.733Z"
                   />
                 </svg>
-              </Link>
+              </Link> */}
 
-              <h1 className="fade-in-down text-[2.5rem] leading-[3rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-white mb-4">
+              <h1 className="fade-in-down text-[2rem] leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-white mb-4">
                 Beautiful, shareable screen recordings.
               </h1>
               <p className="fade-in-down animate-delay-1 text-base sm:text-xl max-w-2xl mx-auto text-white mb-8">
@@ -97,11 +97,21 @@ export const HomePage = () => {
                 powerful, and stunning. Record and share in seconds.
               </p>
               <div className="fade-in-up animate-delay-2">
-                <div className="flex items-center justify-center space-x-2 mb-3">
-                  <Button variant="white" href="/login" size="lg">
+                <div className="flex flex-col sm:flex-row items-center justify-center space-y-2 sm:space-y-0 sm:space-x-2 mb-3">
+                  <Button
+                    variant="white"
+                    href="/pricing"
+                    size="lg"
+                    className="w-full sm:w-auto"
+                  >
                     Get Started
                   </Button>
-                  <Button variant="secondary" href="/download" size="lg">
+                  <Button
+                    variant="secondary"
+                    href="/download"
+                    size="lg"
+                    className="w-full sm:w-auto"
+                  >
                     Download App
                   </Button>
                 </div>

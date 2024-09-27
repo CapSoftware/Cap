@@ -5,6 +5,7 @@ import { useState } from "react";
 
 export const DownloadPage = () => {
   const [loading, setLoading] = useState(false);
+  const [showOtherOptions, setShowOtherOptions] = useState(false);
 
   const releaseFetch = async () => {
     setLoading(true);
@@ -26,18 +27,33 @@ export const DownloadPage = () => {
           The quickest way to share your screen. Pin to your dock and record in
           seconds.
         </p>
-        <div className="fade-in-up animate-delay-2">
+        <div className="flex items-center justify-center space-x-2 fade-in-up animate-delay-2">
           <Button
             spinner={loading}
-            onClick={async () => await releaseFetch()}
-            className="mb-3"
+            size="lg"
+            href="https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64"
+            className=" mx-auto"
           >
-            Download
+            Download for Apple Silicon
           </Button>
-          <p className="text-xs text-gray-500">
-            Supports both Apple Sillicon & Intel based Macs
-          </p>
+          {showOtherOptions && (
+            <Button
+              size="lg"
+              href="https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64"
+              className=" mx-auto"
+            >
+              Download for Intel
+            </Button>
+          )}
         </div>
+        {!showOtherOptions && (
+          <button
+            onClick={() => setShowOtherOptions(true)}
+            className="mt-2 underline text-sm text-gray-400 fade-in-up animate-delay-2"
+          >
+            See other options
+          </button>
+        )}
       </div>
     </div>
   );

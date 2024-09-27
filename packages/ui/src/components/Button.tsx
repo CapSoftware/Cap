@@ -20,6 +20,7 @@ const buttonVariants = cva(
           "bg-red-300 text-gray-50 hover:bg-red-400 disabled:bg-red-200 border-red-300",
         white:
           "bg-white text-gray-500 hover:bg-gray-100 disabled:bg-gray-100 border-black/10",
+        gray: "bg-gray-200 text-gray-500 hover:bg-gray-200 disabled:bg-gray-100 border-transparent",
       },
       size: {
         xs: "font-[400] text-[0.75rem] px-[0.5rem] h-[1.25rem] ",

@@ -145,15 +145,15 @@ h2,
 h3,
 h4,
 h5 {
-  @apply font-normal tracking-tighter text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem] !important;
+  @apply font-normal tracking-tighter text-[1.75rem] leading-[2.5rem] md:text-[2.5rem] md:leading-[3.25rem];
 }
 
 a,
 p,
 span,
 input,
-label {
-  @apply tracking-tight text-gray-400 font-normal text-[1.125rem] leading-[1.75rem];
+label, button {
+  @apply tracking-tight text-gray-400 font-normal text-[1rem] leading-[1.5rem];
 }
 
 a,
@@ -294,7 +294,15 @@ ul {
 }
 
 .dashboard-page {
-  @apply py-8 mx-auto w-11/12 clear-both max-w-screen-xl flex flex-col;
+  @apply flex flex-col py-4 px-2;
+}
+
+.dashboard-page .inner {
+  @apply bg-white rounded-[20px] p-[12px] border-[1px] border-gray-200;
+}
+
+.dashboard-page .inner {
+  box-shadow: 0px 8px 16px rgba(18, 22, 31, 0.04);
 }
 
 .dashboard-header {
@@ -305,8 +313,8 @@ ul {
   @apply pb-4 border-b border-filler;
 }
 
-.dashboard-header h1 {
-  @apply text-3xl;
+.dashboard-page h1, .dashboard-page h2, .dashboard-page h3, .dashboard-page h4, .dashboard-page h5 {
+  @apply text-[1rem] font-medium leading-[1.25rem] text-gray-500 !important;
 }
 
 .dashboard-header p {
@@ -316,6 +324,10 @@ ul {
 /* Stops slot tags from being styled in dashboard, causing weird layout issues */
 slot:not(.dashboard-layout slot) {
   display: block;
+}
+
+.dashboard-layout {
+  @apply bg-gray-100
 }
 
 #scrolling-section slot {
@@ -365,7 +377,7 @@ footer ul {
 }
 
 footer h3 {
-  @apply text-xl font-semibold;
+  @apply text-xl font-semibold !important; 
 }
 
 footer a {

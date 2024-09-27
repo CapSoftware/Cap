@@ -162,10 +162,10 @@ export const PricingPage = () => {
                   <div>
                     <div className="flex items-center space-x-3">
                       <h3 className="text-4xl text-white">
-                        {isAnnual ? "$59" : "$9"}
+                        {isAnnual ? "$6/mo" : "$9/mo"}
                       </h3>
                       <div>
-                        <p className="text-sm text-white/80">
+                        <p className="text-sm font-medium text-white/80">
                           {isAnnual
                             ? "per user, billed annually."
                             : "per user, billed monthly."}

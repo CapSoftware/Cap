@@ -23,11 +23,11 @@ export const UsageButton = () => {
       });
   }, []);
 
-  const progress = (usage.videoCount / usage.videoLimit) * 100;
+  const progress = (3 / usage.videoLimit) * 100;
 
   if (usage.loading === true) {
     return (
-      <div className="w-[130px] h-12 bg-gray-200 rounded-xl py-2 px-4 animate-pulse"></div>
+      <div className="w-full h-12 bg-gray-200 rounded-xl py-2 px-4 animate-pulse"></div>
     );
   }
 
@@ -39,17 +39,26 @@ export const UsageButton = () => {
           : "/dashboard/settings/billing"
       }
     >
-      <div className="w-[130px] flex flex-col items-center justify-center h-12 bg-tertiary-3 rounded-xl py-2 px-4 hover:bg-tertiary transition-all">
+      <div className="w-full flex flex-col items-start justify-center bg-white border border-gray-200 rounded-xl py-2 px-4 hover:border-blue-500 transition-all">
         {usage.subscription === false ? (
           <>
-            <div className="mb-1 text-primary font-medium tracking-tighter">
-              {usage.videoCount}/{usage.videoLimit} caps
+            <div className="mb-1 font-medium text-gray-500 text-[0.875rem]">
+              {3}/{usage.videoLimit} Caps
             </div>
-            <div className="h-[7px] max-w-[100px] w-full bg-white rounded-xl overflow-hidden">
+            <div className="h-[10px] w-full bg-gray-200 rounded-xl overflow-hidden">
               <div
-                className="h-[7px] bg-primary"
+                className="h-[10px] bg-blue-500"
                 style={{ width: `${progress}%` }}
               ></div>
+            </div>
+            <div className="w-full mt-4 pt-2 border-t border-gray-200">
+              <span className="text-sm">
+                Upgrade to{" "}
+                <span className="bg-blue-500 text-sm text-white py-1 px-1.5 rounded-[8px]">
+                  Pro
+                </span>{" "}
+                plan
+              </span>
             </div>
           </>
         ) : (

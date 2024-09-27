@@ -40,7 +40,7 @@ export default function DynamicSharedLayout({
         <AdminDesktopNav />
         <div className="flex-1 overflow-auto focus:outline-none">
           <AdminMobileNav />
-          <div className="py-3 -mb-3 flex items-center justify-end wrapper space-x-3">
+          {/* <div className="py-3 -mb-3 flex items-center justify-end wrapper space-x-3">
             <div>
               <UsageButton />
             </div>
@@ -76,14 +76,14 @@ export default function DynamicSharedLayout({
                         user?.stripeSubscriptionStatus as string,
                     }) ? (
                       <Link
-                        className="w-full text-primary font-medium"
+                        className="w-full text-blue-500 font-medium text-base"
                         href="/dashboard/settings/billing"
                       >
                         Cap Pro
                       </Link>
                     ) : (
                       <Link
-                        className="w-full text-primary font-medium"
+                        className="w-full text-blue-500 font-medium text-base"
                         href="/pricing"
                       >
                         Upgrade to Cap Pro
@@ -92,14 +92,14 @@ export default function DynamicSharedLayout({
                   </div>
                 </DropdownMenuItem>
                 <DropdownMenuItem>
-                  <Link className="w-full" href="/dashboard/settings">
+                  <Link className="w-full text-base" href="/dashboard/settings">
                     Settings
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem>
                   <Link
-                    className="w-full"
+                    className="w-full text-base"
                     href="https://discord.gg/y8gdQ3WRN3"
                     target="_blank"
                   >
@@ -107,24 +107,27 @@ export default function DynamicSharedLayout({
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem>
-                  <Link className="w-full" href="/download">
+                  <Link className="w-full text-base" href="/download">
                     Download Mac App
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem>
-                  <Link className="w-full" href="/record">
+                  <Link className="w-full text-base" href="/record">
                     Record a Video
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem>
-                  <button className="w-full" onClick={() => signOut()}>
+                  <button
+                    className="w-full text-base hover:text-black"
+                    onClick={() => signOut()}
+                  >
                     Sign out
                   </button>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
+          </div> */}
 
           <main className="min-h-screen w-full">{children}</main>
         </div>

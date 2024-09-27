@@ -103,7 +103,7 @@ export const Settings = ({
           </div>
         </CardContent>
         <CardFooter className="border-t px-6 py-4">
-          <Button type="submit" size="default">
+          <Button type="submit" size="md" variant="gray">
             Save
           </Button>
         </CardFooter>

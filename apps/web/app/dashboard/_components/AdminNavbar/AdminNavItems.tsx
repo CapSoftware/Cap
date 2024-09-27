@@ -31,11 +31,10 @@ import {
 import { NewSpace } from "@/components/forms/NewSpace";
 import { signOut } from "next-auth/react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
-import { Button } from "@cap/ui";
+import { UsageButton } from "@/components/UsageButton";
 
 export const AdminNavItems = () => {
   const pathname = usePathname();
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const { spaceData, activeSpace } = useSharedContext();
 
@@ -47,7 +46,7 @@ export const AdminNavItems = () => {
       subNav: [],
     },
     {
-      name: "Download macOS App",
+      name: "Download App",
       href: `/download`,
       icon: Download,
       subNav: [],
@@ -64,28 +63,27 @@ export const AdminNavItems = () => {
   ];
 
   const navItemClass =
-    "flex items-center justify-start p-2 rounded-lg outline-none tracking-tight w-full";
+    "flex items-center justify-start py-2 px-4 rounded-full outline-none tracking-tight w-full";
 
   return (
     <Dialog>
-      <div className="embossed mt-8 mb-4 w-full max-w-full">
+      <div className="w-full py-3 my-4 border-b-2 border-t-2 border-gray-300 border-dotted">
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <div
-              className="flex items-center justify-between py-2 px-4 cursor-pointer"
+              className="flex items-center justify-between cursor-pointer"
               role="combobox"
               aria-expanded={open}
             >
               <div className="flex items-center w-full text-left">
                 <div>
-                  <p className="text-sm">Spaces</p>
-                  <p className="font-medium text-sm">
+                  <p className="text-[0.875rem]">
                     {activeSpace?.name ?? "No space found"}
                   </p>
                 </div>
               </div>
               <div>
-                <ChevronDown className="w-[20px] h-auto" />
+                <ChevronDown className="w-[20px] h-auto text-gray-400" />
               </div>
             </div>
           </PopoverTrigger>
@@ -108,9 +106,9 @@ export const AdminNavItems = () => {
                     </CommandItem>
                   ))}
                 <DialogTrigger className="w-full">
-                  <CommandItem className="bg-filler aria-selected:bg-filler-2 rounded-lg">
+                  <CommandItem className=" bg-filler aria-selected:bg-gray-200 rounded-lg">
                     <Plus className="w-4 h-auto mr-1" />
-                    <span>Add new space</span>
+                    <span className="text-[0.875rem]">Add new space</span>
                   </CommandItem>
                 </DialogTrigger>
               </CommandGroup>
@@ -124,24 +122,26 @@ export const AdminNavItems = () => {
       >
         <div className="space-y-1">
           {manageNavigation.map((item) => (
-            <div>
+            <div key={item.name}>
               <Link
                 passHref
                 prefetch={false}
-                key={item.name + "-main"}
                 href={item.href}
                 className={classNames(
                   pathname.includes(item.href)
-                    ? "bg-gray-200 font-medium"
-                    : "opacity-75 hover:opacity-100",
+                    ? "bg-white text-black border-[1px] border-gray-200"
+                    : "opacity-50 hover:opacity-75",
                   navItemClass
                 )}
               >
                 <item.icon
-                  className="flex-shrink-0 w-6 h-6 stroke-[1.8px]"
+                  className={classNames(
+                    "flex-shrink-0 w-6 h-6 stroke-[1.8px]",
+                    pathname.includes(item.href) ? "text-black" : ""
+                  )}
                   aria-hidden="true"
                 />
-                <span className="text-base ml-2.5">{item.name}</span>
+                <span className="text-base ml-2.5 text-black">{item.name}</span>
               </Link>
               {pathname.includes(item.href) && item.subNav.length > 0 && (
                 <div className="mt-1 space-y-1 flex-grow w-full">
@@ -153,8 +153,8 @@ export const AdminNavItems = () => {
                       href={subItem.href}
                       className={classNames(
                         pathname === subItem.href
-                          ? "font-medium"
-                          : "opacity-75 hover:opacity-100",
+                          ? "bg-white text-black border-[1px] border-gray-200"
+                          : "opacity-50 hover:opacity-75",
                         navItemClass
                       )}
                     >
@@ -168,9 +168,12 @@ export const AdminNavItems = () => {
           ))}
         </div>
         <div className="mt-auto">
+          <div className="w-full mb-3 pb-5 border-b-2 border-gray-200 border-dotted">
+            <UsageButton />
+          </div>
           <button
             onClick={() => signOut()}
-            className={classNames("hover:opacity-75", navItemClass)}
+            className={classNames("opacity-75 hover:opacity-100", navItemClass)}
           >
             <LogOut className="flex-shrink-0 w-6 h-6" aria-hidden="true" />
             <span className="text-base ml-2.5">Sign out</span>
