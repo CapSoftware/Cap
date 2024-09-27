@@ -20,8 +20,6 @@ export async function OPTIONS(req: NextRequest) {
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
 
-  console.log("OPTIONS request received:", { origin, originalOrigin });
-
   return new Response(null, {
     status: 200,
     headers: {
@@ -88,7 +86,7 @@ export async function GET(req: NextRequest) {
 
   await db.insert(videos).values({
     id: id,
-    name: `My Cap Recording - ${formattedDate}`,
+    name: `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
     ownerId: user.id,
     awsRegion: awsRegion,
     awsBucket: awsBucket,

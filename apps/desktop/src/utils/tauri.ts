@@ -192,7 +192,7 @@ async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Prom
     else return { status: "error", error: e  as any };
 }
 },
-async uploadScreenshot(screenshotPath: string) : Promise<Result<null, string>> {
+async uploadScreenshot(screenshotPath: string) : Promise<Result<string, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("upload_screenshot", { screenshotPath }) };
 } catch (e) {
@@ -200,13 +200,8 @@ async uploadScreenshot(screenshotPath: string) : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async getRecordingMeta(id: string, fileType: string) : Promise<Result<RecordingMeta, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("get_recording_meta", { id, fileType }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async getRecordingMeta(id: string, fileType: string) : Promise<RecordingMeta> {
+    return await TAURI_INVOKE("get_recording_meta", { id, fileType });
 },
 async openFeedbackWindow() : Promise<void> {
     await TAURI_INVOKE("open_feedback_window");

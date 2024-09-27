@@ -10,6 +10,7 @@ import {
   Suspense,
   Switch,
   createEffect,
+  createMemo,
   createResource,
   createSignal,
   onCleanup,
@@ -18,7 +19,6 @@ import {
 import Tooltip from "@corvu/tooltip";
 import { Button } from "@cap/ui-solid";
 import { createElementBounds } from "@solid-primitives/bounds";
-import { save } from "@tauri-apps/plugin-dialog";
 import { TransitionGroup } from "solid-transition-group";
 import { createStore, produce } from "solid-js/store";
 import { makePersisted } from "@solid-primitives/storage";
@@ -26,24 +26,28 @@ import { makePersisted } from "@solid-primitives/storage";
 import { commands, events } from "~/utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
-import { basename } from "@tauri-apps/api/path";
 
 type MediaEntry = {
   path: string;
   prettyName: string;
   isNew: boolean;
-  type: "recording" | "screenshot";
+  type?: "recording" | "screenshot";
 };
 
 export default function () {
   const presets = createPresets();
-  const [mediaEntries, setMediaEntries] = makePersisted(
+  const [recordings, setRecordings] = makePersisted(
     createStore<MediaEntry[]>([]),
-    { name: "media-entries-store" }
+    { name: "recordings-store" }
+  );
+  const [screenshots, setScreenshots] = makePersisted(
+    createStore<MediaEntry[]>([]),
+    { name: "screenshots-store" }
   );
 
-  const addMediaEntry = (path: string, type: "recording" | "screenshot") => {
-    setMediaEntries(
+  const addMediaEntry = (path: string, type?: "recording" | "screenshot") => {
+    const setMedia = type === "screenshot" ? setScreenshots : setRecordings;
+    setMedia(
       produce((state) => {
         if (state.some((entry) => entry.path === path)) return;
         const fileName = path.split("/").pop() || "";
@@ -56,7 +60,7 @@ export default function () {
     );
 
     setTimeout(() => {
-      setMediaEntries(
+      setMedia(
         produce((state) => {
           const index = state.findIndex((entry) => entry.path === path);
           if (index !== -1) {
@@ -77,6 +81,8 @@ export default function () {
     addMediaEntry(event.payload.path, "screenshot");
   });
 
+  const allMedia = createMemo(() => [...recordings, ...screenshots]);
+
   return (
     <div class="w-screen h-[100vh] bg-transparent relative">
       <div class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto">
@@ -88,17 +94,27 @@ export default function () {
             exitClass="opacity-100 translate-x-0"
             exitActiveClass="absolute"
           >
-            <For each={mediaEntries}>
-              {(media, i) => {
+            <For each={allMedia()}>
+              {(media) => {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
-
+                console.log(media);
                 const mediaId = media.path.split("/").pop()?.split(".")[0]!;
-
-                const isRecording = media.type === "recording";
+                const fileId =
+                  media.type === "recording"
+                    ? mediaId
+                    : media.path
+                        .split("screenshots/")[1]
+                        .split("/")[0]
+                        .replace(".cap", "");
+                const isRecording = media.type !== "screenshot";
 
                 const recordingMeta = createQuery(() => ({
-                  queryKey: ["recordingMeta", mediaId],
-                  queryFn: () => commands.getRecordingMeta(mediaId, media.type),
+                  queryKey: ["recordingMeta", fileId],
+                  queryFn: () =>
+                    commands.getRecordingMeta(
+                      fileId,
+                      isRecording ? "recording" : "screenshot"
+                    ),
                   enabled: true,
                 }));
 
@@ -119,7 +135,6 @@ export default function () {
                   },
                 }));
 
-                //TODO: Use pretty name for cap recording
                 const saveMedia = createMutation(() => ({
                   mutationFn: async () => {
                     const newFileName = isRecording
@@ -275,13 +290,21 @@ export default function () {
                             class="absolute left-3 top-3 z-20"
                             tooltipText="Close"
                             tooltipPlacement="right"
-                            onClick={() =>
-                              setMediaEntries(
+                            onClick={() => {
+                              const setMedia = isRecording
+                                ? setRecordings
+                                : setScreenshots;
+                              setMedia(
                                 produce((state) => {
-                                  state.splice(i(), 1);
+                                  const index = state.findIndex(
+                                    (entry) => entry.path === media.path
+                                  );
+                                  if (index !== -1) {
+                                    state.splice(index, 1);
+                                  }
                                 })
-                              )
-                            }
+                              );
+                            }}
                           >
                             <IconCapCircleX class="size-[1rem]" />
                           </TooltipIconButton>
@@ -354,7 +377,10 @@ export default function () {
                             tooltipPlacement="left"
                             onClick={() => uploadMedia.mutate()}
                             disabled={
-                              copyMedia.isPending || saveMedia.isPending
+                              copyMedia.isPending ||
+                              saveMedia.isPending ||
+                              recordingMeta.isLoading ||
+                              recordingMeta.isError
                             }
                           >
                             <Switch

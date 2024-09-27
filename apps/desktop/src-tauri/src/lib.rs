@@ -1478,7 +1478,7 @@ async fn upload_rendered_video(
 
 #[tauri::command]
 #[specta::specta]
-async fn upload_screenshot(app: AppHandle, screenshot_path: PathBuf) -> Result<(), String> {
+async fn upload_screenshot(app: AppHandle, screenshot_path: PathBuf) -> Result<String, String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
         println!("not authenticated!");
         return Err("Not authenticated".to_string());
@@ -1486,32 +1486,40 @@ async fn upload_screenshot(app: AppHandle, screenshot_path: PathBuf) -> Result<(
 
     println!("Uploading screenshot: {:?}", screenshot_path);
 
-    let uploaded_screenshot = upload_image(auth.token, screenshot_path.clone(), true)
-        .await
-        .unwrap();
-
     let screenshot_dir = screenshot_path.parent().unwrap().to_path_buf();
-    let meta_path = screenshot_dir.join("recording-meta.json");
+    let mut meta = RecordingMeta::load_for_project(&screenshot_dir).unwrap();
 
-    let mut meta = RecordingMeta::load_for_project(&meta_path).unwrap();
+    let share_link = if let Some(sharing) = meta.sharing.as_ref() {
+        // Screenshot already uploaded, use existing link
+        println!("Screenshot already uploaded, using existing link");
+        sharing.link.clone()
+    } else {
+        // Upload the screenshot
+        let uploaded = upload_image(auth.token, screenshot_path.clone())
+            .await
+            .map_err(|e| e.to_string())?;
 
-    meta.sharing = Some(SharingMeta {
-        link: uploaded_screenshot.link.clone(),
-        id: uploaded_screenshot.id.clone(),
-    });
-    meta.save_for_project();
-    RecordingMetaChanged {
-        id: screenshot_path
-            .file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string(),
-    }
-    .emit(&app)
-    .ok();
+        meta.sharing = Some(SharingMeta {
+            link: uploaded.link.clone(),
+            id: uploaded.id.clone(),
+        });
+        meta.save_for_project();
 
-    println!("Copying to clipboard: {:?}", uploaded_screenshot.link);
+        RecordingMetaChanged {
+            id: screenshot_path
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string(),
+        }
+        .emit(&app)
+        .ok();
+
+        uploaded.link
+    };
+
+    println!("Copying to clipboard: {:?}", share_link);
 
     #[cfg(target_os = "macos")]
     {
@@ -1525,7 +1533,7 @@ async fn upload_screenshot(app: AppHandle, screenshot_path: PathBuf) -> Result<(
                 let pasteboard: id = NSPasteboard::generalPasteboard(nil);
                 NSPasteboard::clearContents(pasteboard);
 
-                let ns_string = NSString::alloc(nil).init_str(&uploaded_screenshot.link);
+                let ns_string = NSString::alloc(nil).init_str(&share_link);
 
                 let objects: id = NSArray::arrayWithObject(nil, ns_string);
 
@@ -1534,7 +1542,7 @@ async fn upload_screenshot(app: AppHandle, screenshot_path: PathBuf) -> Result<(
         }
     }
 
-    Ok(())
+    Ok(share_link)
 }
 
 #[tauri::command]
@@ -1733,23 +1741,14 @@ struct RecordingMetaChanged {
 
 #[tauri::command(async)]
 #[specta::specta]
-fn get_recording_meta(
-    app: AppHandle,
-    id: String,
-    file_type: String,
-) -> Result<RecordingMeta, String> {
-    println!(
-        "get_recording_meta called with id: {}, file_type: {}",
-        id, file_type
-    );
+fn get_recording_meta(app: AppHandle, id: String, file_type: String) -> RecordingMeta {
     let meta_path = match file_type.as_str() {
         "recording" => recording_path(&app, &id),
         "screenshot" => screenshot_path(&app, &id),
-        _ => return Err(format!("Invalid file type: {}", file_type)),
+        _ => panic!("Invalid file type: {}", file_type),
     };
 
-    RecordingMeta::load_for_project(&meta_path)
-        .map_err(|e| format!("Failed to load recording meta for {}: {}", id, e))
+    RecordingMeta::load_for_project(&meta_path).unwrap()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

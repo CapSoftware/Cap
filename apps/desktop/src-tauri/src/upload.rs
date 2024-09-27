@@ -167,11 +167,7 @@ pub async fn upload_video(
     ))
 }
 
-pub async fn upload_image(
-    auth_token: String,
-    file_path: PathBuf,
-    solo_screenshot: bool,
-) -> Result<UploadedImage, String> {
+pub async fn upload_image(auth_token: String, file_path: PathBuf) -> Result<UploadedImage, String> {
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -181,16 +177,9 @@ pub async fn upload_image(
     let client = reqwest::Client::new();
     let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
 
-    let s3_config = get_s3_config(&client, server_url_base, &auth_token, solo_screenshot).await?;
+    let s3_config = get_s3_config(&client, server_url_base, &auth_token, true).await?;
 
-    let file_key: String = if solo_screenshot {
-        format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name)
-    } else {
-        format!(
-            "{}/{}/screenshot/screen-capture.jpg",
-            s3_config.user_id, s3_config.id
-        )
-    };
+    let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
     println!("File key: {file_key}");
 
