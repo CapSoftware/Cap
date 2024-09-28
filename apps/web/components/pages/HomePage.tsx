@@ -319,7 +319,7 @@ export const HomePage = () => {
           </svg>
         </div>
         <div className="text-center max-w-[800px] mx-auto mb-8">
-          <h2 className="mb-3">Crafted for Simplicity</h2>
+          <h2 className="mb-3">Crafted for simplicity</h2>
           <p className="text-[1.125rem] leading-[1.75rem]">
             We believe great tools should make your life easier, not more
             complicated. Cap is crafted to streamline your workflow, so you can
