@@ -394,5 +394,5 @@ footer a {
 }
 
 .prose p {
-  @apply text-lg;
+  @apply text-lg text-gray-400;
 }
