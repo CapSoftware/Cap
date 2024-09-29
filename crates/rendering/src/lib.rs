@@ -228,7 +228,6 @@ pub struct ProjectUniforms {
 }
 
 const CAMERA_PADDING: f32 = 50.0;
-const CAMERA_UV_WIDTH: f32 = 0.3;
 
 const SCREEN_MAX_PADDING: f32 = 0.4;
 
@@ -362,8 +361,8 @@ impl ProjectUniforms {
                 let min_axis = output_size[0].min(output_size[1]);
 
                 let size = [
-                    min_axis * CAMERA_UV_WIDTH + CAMERA_PADDING,
-                    min_axis * CAMERA_UV_WIDTH + CAMERA_PADDING,
+                    min_axis * project.camera.size / 100.0 + CAMERA_PADDING,
+                    min_axis * project.camera.size / 100.0 + CAMERA_PADDING,
                 ];
 
                 let position = {
