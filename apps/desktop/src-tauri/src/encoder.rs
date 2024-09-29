@@ -2,6 +2,19 @@ use std::path::PathBuf;
 
 use ffmpeg_next::{self as ffmpeg, Dictionary};
 
+macro_rules! dict {
+	( $($key:expr => $value:expr),* $(,)*) => ({
+			let mut dict = ffmpeg::Dictionary::new();
+
+			$(
+				dict.set($key, $value);
+			)*
+
+			dict
+		}
+	);
+}
+
 pub struct H264Encoder {
     pub output: ffmpeg::format::context::Output,
     pub context: ffmpeg::encoder::Video,
@@ -35,14 +48,18 @@ impl H264Encoder {
         encoder.set_format(Self::output_format());
         encoder.set_frame_rate(Some(fps));
         encoder.set_time_base(1.0 / fps);
-        encoder.set_max_b_frames(1);
-        encoder.set_gop(10);
+        encoder.set_gop(fps as u32);
 
         if output_flags.contains(ffmpeg::format::Flags::GLOBAL_HEADER) {
             encoder.set_flags(ffmpeg::codec::Flags::GLOBAL_HEADER);
         }
 
-        let encoder = encoder.open_as(codec).unwrap();
+        let encoder = encoder
+            .open_as_with(
+                codec,
+                dict!("preset" => "ultrafast", "tune" => "zerolatency"),
+            )
+            .unwrap();
         stream.set_parameters(&encoder);
         stream.set_time_base(1.0 / fps);
 
