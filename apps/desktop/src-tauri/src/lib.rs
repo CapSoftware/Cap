@@ -6,6 +6,7 @@ mod display;
 mod editor;
 mod editor_instance;
 mod encoder;
+mod flags;
 mod hotkeys;
 mod macos;
 mod permissions;

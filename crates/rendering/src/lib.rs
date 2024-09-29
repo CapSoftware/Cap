@@ -51,7 +51,7 @@ impl From<BackgroundSource> for Background {
                 srgb_to_linear(value[2]),
                 1.0,
             ]),
-            BackgroundSource::Gradient { from, to } => Background::Gradient {
+            BackgroundSource::Gradient { from, to, angle } => Background::Gradient {
                 start: [
                     srgb_to_linear(from[0]),
                     srgb_to_linear(from[1]),
@@ -64,7 +64,7 @@ impl From<BackgroundSource> for Background {
                     srgb_to_linear(to[2]),
                     1.0,
                 ],
-                angle: 0.0,
+                angle: angle as f32,
             },
             _ => unimplemented!(),
         }
