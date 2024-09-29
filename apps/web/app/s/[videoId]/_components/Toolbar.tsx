@@ -19,10 +19,19 @@ export const Toolbar = ({
   const [commentBoxOpen, setCommentBoxOpen] = useState(false);
   const [comment, setComment] = useState("");
   const videoElement = useRef<HTMLVideoElement | null>(null);
+  const [videoPlayerExists, setVideoPlayerExists] = useState(false);
+
   useEffect(() => {
-    videoElement.current = document.getElementById(
+    const element = document.getElementById(
       "video-player"
-    ) as HTMLVideoElement;
+    ) as HTMLVideoElement | null;
+    if (element) {
+      videoElement.current = element;
+      setVideoPlayerExists(true);
+    } else {
+      console.warn("Video player element not found");
+      setVideoPlayerExists(false);
+    }
   }, []);
 
   const [currentEmoji, setCurrentEmoji] = useState<{
@@ -39,8 +48,13 @@ export const Toolbar = ({
     };
   }, []);
 
-  const timestamp =
-    videoElement && videoElement.current ? videoElement.current.currentTime : 0;
+  const getTimestamp = (): number => {
+    if (videoElement.current) {
+      return videoElement.current.currentTime;
+    }
+    console.warn("Video element not available, using default timestamp");
+    return 0;
+  };
 
   const handleEmojiClick = async (emoji: string) => {
     // Clear any existing timeout
@@ -56,11 +70,8 @@ export const Toolbar = ({
       setCurrentEmoji(null);
     }, 3000);
 
-    const videoElement = document.getElementById(
-      "video-player"
-    ) as HTMLVideoElement;
-    console.log("videoElement", videoElement.currentTime);
-    const timestamp = videoElement ? videoElement.currentTime : 0;
+    const timestamp = getTimestamp();
+    console.log("Current timestamp:", timestamp);
 
     const response = await fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/video/comment`,
@@ -95,6 +106,8 @@ export const Toolbar = ({
     if (comment.length === 0) {
       return;
     }
+
+    const timestamp = getTimestamp();
 
     const response = await fetch("/api/video/comment", {
       method: "POST",
@@ -186,7 +199,9 @@ export const Toolbar = ({
                       handleCommentSubmit();
                     }}
                   >
-                    Comment at {timestamp.toFixed(2)}
+                    {videoPlayerExists
+                      ? `Comment at ${getTimestamp().toFixed(2)}`
+                      : "Comment"}
                   </Button>
                   <Button
                     className="min-w-[100px]"
@@ -218,10 +233,9 @@ export const Toolbar = ({
                         push(`/login?next=${window.location.pathname}`);
                         return;
                       }
-                      const videoElement = document.getElementById(
-                        "video-player"
-                      ) as HTMLVideoElement;
-                      videoElement.pause();
+                      if (videoElement.current) {
+                        videoElement.current.pause();
+                      }
                       setCommentBoxOpen(true);
                     }}
                     className="text-sm font-medium bg-transparent py-1 px-2 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"

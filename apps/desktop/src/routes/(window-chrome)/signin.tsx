@@ -62,9 +62,7 @@ export default function Page() {
       <div class="space-y-[0.375rem] flex-1">
         <IconCapLogo class="size-[3rem]" />
         <h1 class="text-[1rem] font-[700]">Sign in to Cap</h1>
-        <p class="text-gray-400">
-          Effortless, instant screen sharing. Open source and cross-platform.
-        </p>
+        <p class="text-gray-400">Beautiful, shareable screen recordings.</p>
       </div>
       {submission.pending ? (
         <Button variant="secondary" onClick={() => submission.clear()}>

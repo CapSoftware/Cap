@@ -6,7 +6,7 @@ import { videos, comments } from "@cap/database/schema";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
-
+import { ImageViewer } from "./_components/ImageViewer";
 type Props = {
   params: { [key: string]: string | string[] | undefined };
 };
@@ -111,6 +111,29 @@ export default async function ShareVideoPage(props: Props) {
     .select()
     .from(comments)
     .where(eq(comments.videoId, videoId));
+
+  let screenshotUrl;
+  if (video.isScreenshot === true) {
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/screenshot?userId=${video.ownerId}&screenshotId=${videoId}`,
+      {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      }
+    );
+    const data = await res.json();
+    screenshotUrl = data.url;
+
+    return (
+      <ImageViewer
+        imageSrc={screenshotUrl}
+        data={video}
+        user={user}
+        comments={commentsQuery}
+      />
+    );
+  }
 
   return <Share data={video} user={user} comments={commentsQuery} />;
 }

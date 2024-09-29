@@ -75,7 +75,7 @@ export function LoginForm() {
           )}
         </div>
         <Button
-          variant="default"
+          variant="primary"
           size="lg"
           className="h-12 text-lg"
           type="submit"
@@ -93,7 +93,7 @@ export function LoginForm() {
           <a
             href="/terms"
             target="_blank"
-            className="text-gray-600 font-semibold"
+            className="text-gray-600 font-semibold text-xs"
           >
             Terms of Service
           </a>{" "}
@@ -101,7 +101,7 @@ export function LoginForm() {
           <a
             href="/privacy"
             target="_blank"
-            className="text-gray-600 font-semibold"
+            className="text-gray-600 font-semibold text-xs"
           >
             Privacy Policy
           </a>

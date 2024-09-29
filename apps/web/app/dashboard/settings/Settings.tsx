@@ -65,7 +65,7 @@ export const Settings = ({
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            <div>
+            <div className="flex flex-col items-center">
               <Label htmlFor="firstName">First name</Label>
               <Input
                 type="text"
@@ -74,7 +74,7 @@ export const Settings = ({
                 name="firstName"
               />
             </div>
-            <div>
+            <div className="flex flex-col items-center">
               <Label htmlFor="lastName">Last name</Label>
               <Input
                 type="text"
@@ -103,7 +103,7 @@ export const Settings = ({
           </div>
         </CardContent>
         <CardFooter className="border-t px-6 py-4">
-          <Button type="submit" size="default">
+          <Button type="submit" size="md" variant="gray">
             Save
           </Button>
         </CardFooter>

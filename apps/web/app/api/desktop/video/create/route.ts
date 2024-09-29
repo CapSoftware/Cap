@@ -20,8 +20,6 @@ export async function OPTIONS(req: NextRequest) {
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
 
-  console.log("OPTIONS request received:", { origin, originalOrigin });
-
   return new Response(null, {
     status: 200,
     headers: {
@@ -60,7 +58,7 @@ export async function GET(req: NextRequest) {
   const recordingMode: "hls" | "desktopMP4" | null = params.get(
     "recordingMode"
   ) as any;
-
+  const isScreenshot = params.get("isScreenshot") === "true";
 
   if (!user) {
     console.log("User not authenticated, returning 401");
@@ -86,10 +84,9 @@ export async function GET(req: NextRequest) {
     month: "long",
   })} ${date.getFullYear()}`;
 
-
   await db.insert(videos).values({
     id: id,
-    name: `My Cap Recording - ${formattedDate}`,
+    name: `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
     ownerId: user.id,
     awsRegion: awsRegion,
     awsBucket: awsBucket,
@@ -99,6 +96,7 @@ export async function GET(req: NextRequest) {
         : recordingMode === "desktopMP4"
         ? { type: "desktopMP4" }
         : undefined,
+    isScreenshot: isScreenshot,
   });
 
   if (

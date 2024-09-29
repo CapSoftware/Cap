@@ -11,16 +11,5 @@ export const DashboardTemplate = ({
   button?: React.ReactNode;
   children?: React.ReactNode;
 }) => {
-  return (
-    <div className="dashboard-page">
-      <div className={`dashboard-header ${title && " has-title"}`}>
-        <div>
-          {title && <h1>{title}</h1>}
-          {description && <p>{description}</p>}
-        </div>
-        {button && <div>{button}</div>}
-      </div>
-      {children && children}
-    </div>
-  );
+  return <div className="dashboard-page">{children && children}</div>;
 };

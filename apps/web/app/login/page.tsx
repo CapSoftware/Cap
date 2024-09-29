@@ -22,16 +22,16 @@ export default async function LoginPage() {
             Sign in to Cap.
           </h1>
           <p className="text-2xl text-gray-500 fade-in-down animate-delay-1">
-            Effortless, instant screen sharing. Open source and cross-platform.
+            Beautiful, shareable screen recordings.
           </p>
         </div>
         <div className="flex flex-col space-y-3">
           <Suspense
             fallback={
               <>
-                <Button disabled={true} variant="default" />
-                <Button disabled={true} variant="default" />
-                <Button disabled={true} variant="default" />
+                <Button disabled={true} variant="primary" />
+                <Button disabled={true} variant="secondary" />
+                <Button disabled={true} variant="destructive" />
                 <div className="mx-auto h-5 w-3/4 rounded-lg bg-gray-100" />
               </>
             }

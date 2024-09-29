@@ -449,14 +449,25 @@ export default function () {
                   </KSelect.Portal>
                 </KSelect>
               </div>
-              <Button
-                disabled={toggleRecording.isPending}
-                variant={isRecording() ? "destructive" : "primary"}
-                size="md"
-                onClick={() => toggleRecording.mutate()}
-              >
-                {isRecording() ? "Stop Recording" : "Start Recording"}
-              </Button>
+              <div class="w-full flex items-center space-x-1">
+                <Button
+                  disabled={toggleRecording.isPending}
+                  variant={isRecording() ? "destructive" : "primary"}
+                  size="md"
+                  onClick={() => toggleRecording.mutate()}
+                  class="flex-grow"
+                >
+                  {isRecording() ? "Stop Recording" : "Start Recording"}
+                </Button>
+                <Button
+                  disabled={isRecording()}
+                  variant="secondary"
+                  size="md"
+                  onClick={() => commands.takeScreenshot()}
+                >
+                  <IconLucideCamera class="w-[1rem] h-[1rem]" />
+                </Button>
+              </div>
               <a
                 href="https://cap.so/dashboard"
                 target="_blank"

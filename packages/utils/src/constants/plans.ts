@@ -1,11 +1,21 @@
-export const getProPlanId = () => {
-  if (process.env.NEXT_PUBLIC_ENVIRONMENT === "development") {
-    return "price_1P9C1DFJxA1XpeSsTwwuddnq";
-  } else if (process.env.NEXT_PUBLIC_ENVIRONMENT === "production") {
-    return "price_1OtBMeFJxA1XpeSsfOu2SKp1";
-  } else {
-    return "";
-  }
+const planIds = {
+  development: {
+    yearly: "price_1Q3esrFJxA1XpeSsFwp486RN",
+    monthly: "price_1P9C1DFJxA1XpeSsTwwuddnq",
+  },
+  production: {
+    yearly: "price_1Q29mcFJxA1XpeSsbti0xJpZ",
+    monthly: "price_1OtBMeFJxA1XpeSsfOu2SKp1",
+  },
+};
+
+export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
+  const environment =
+    process.env.NEXT_PUBLIC_ENVIRONMENT === "production"
+      ? "production"
+      : "development";
+
+  return planIds[environment]?.[billingCycle] || "";
 };
 
 export const isUserOnProPlan = ({

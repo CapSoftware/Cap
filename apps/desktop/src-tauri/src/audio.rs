@@ -396,7 +396,7 @@ pub async fn start_capturing(
 //     controller
 // }
 
-pub fn play_audio<const N: usize>(bytes: &'static [u8; N]) {
+fn play_audio<const N: usize>(bytes: &'static [u8; N]) {
     use rodio::{Decoder, OutputStream, Sink};
     use std::io::Cursor;
 
@@ -406,5 +406,23 @@ pub fn play_audio<const N: usize>(bytes: &'static [u8; N]) {
         let sink = Sink::try_new(&stream).unwrap();
         sink.append(source);
         sink.sleep_until_end();
+    }
+}
+
+pub enum AppSounds {
+    StartRecording,
+    StopRecording,
+    Screenshot,
+}
+
+impl AppSounds {
+    pub fn play(self) {
+        match self {
+            AppSounds::StartRecording => {
+                play_audio(include_bytes!("../sounds/start-recording.ogg"))
+            }
+            AppSounds::StopRecording => play_audio(include_bytes!("../sounds/stop-recording.ogg")),
+            AppSounds::Screenshot => play_audio(include_bytes!("../sounds/screenshot.ogg")),
+        }
     }
 }

@@ -22,6 +22,7 @@ export default function () {
     { name: "Screen Recording", key: "screenRecording" as const },
     { name: "Camera", key: "camera" as const },
     { name: "Microphone", key: "microphone" as const },
+    { name: "Accessibility", key: "accessibility" as const },
   ] as const;
 
   const [currentStepIndex, setCurrentStepIndex] = createSignal(0);
@@ -34,7 +35,7 @@ export default function () {
 
   createEffect(() => {
     if (!initialCheck()) {
-      createTimer(() => checkActions.refetch(), 100, setInterval);
+      createTimer(() => checkActions.refetch(), 250, setInterval);
     }
   });
 

@@ -18,10 +18,13 @@ export const Footer = () => {
 
   return (
     <footer>
-      <div className="wrapper min-h-[500px] bg-white rounded-tr-xl rounded-tl-xl p-8 md:p-12 shadow-xl border-l border-t border-r relative overflow-hidden">
+      <div
+        style={{ boxShadow: "0px 2px 8px rgba(18, 22, 31, 0.02)" }}
+        className="wrapper bg-gray-100 border-[1px] border-gray-200 p-8 md:p-12 rounded-[20px] mb-10 relative overflow-hidden"
+      >
         <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start justify-between z-10 relative">
           <div className="space-y-4 md:col-span-6">
-            <Logo showBeta={true} className="w-24 h-auto" />
+            <Logo showBeta={true} className="w-[104px] h-auto" />
             <p className="text-gray-500 max-w-md">
               Cap is the open source alternative to Loom. Lightweight, powerful,
               and stunning. Record and share in seconds.
@@ -38,7 +41,7 @@ export const Footer = () => {
               </a>
             </div>
           </div>
-          <div className="space-y-4 md:col-span-3">
+          <div className="space-y-4 md:col-span-2">
             <h3 className="text-lg font-semibold">Product</h3>
             <ul className="space-y-2">
               <li>
@@ -62,7 +65,7 @@ export const Footer = () => {
               </li>
             </ul>
           </div>
-          <div className="space-y-4 md:col-span-3">
+          <div className="space-y-4 md:col-span-2">
             <h3 className="text-lg font-semibold">Help</h3>
             <ul className="space-y-2">
               <li>
@@ -83,9 +86,29 @@ export const Footer = () => {
               </li>
             </ul>
           </div>
-        </div>
-        <div className="absolute left-1/2 transform -translate-x-1/2 bottom-0 rotate-45 pointer-events-none">
-          <LogoBadge className="w-[650px] h-auto opacity-10 pointer-events-none" />
+          <div className="space-y-4 md:col-span-2">
+            <h3 className="text-lg font-semibold">Socials</h3>
+            <ul className="space-y-2">
+              <li>
+                <a href="https://x.com/cap" target="_blank">
+                  X (@Cap)
+                </a>
+              </li>
+              <li>
+                <a href="https://discord.gg/y8gdQ3WRN3" target="_blank">
+                  Discord
+                </a>
+              </li>
+              <li>
+                <a
+                  href="https://linkedin.com/company/capsoftware"
+                  target="_blank"
+                >
+                  LinkedIn
+                </a>
+              </li>
+            </ul>
+          </div>
         </div>
       </div>
     </footer>

@@ -1,33 +1,33 @@
 import * as React from "react";
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
-
 import { classNames } from "@cap/utils";
 
 const buttonVariants = cva(
-  "button inline-flex items-center justify-center rounded-full text-base transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 tracking-tight",
+  "flex items-center justify-center rounded-full border-[1px] font-normal",
   {
+    defaultVariants: {
+      variant: "primary",
+      size: "md",
+    },
     variants: {
       variant: {
-        default:
-          "default-button group relative isolate font-medium inline-flex items-center justify-center overflow-hidden text-sm transition duration-300 ease-[cubic-bezier(0.4,0.36,0,1)] before:duration-300 before:ease-[cubic-bezier(0.4,0.36,0,1)] before:transtion-opacity rounded-full ring-1 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-full before:bg-gradient-to-b before:from-white/20 before:opacity-50 hover:before:opacity-100 after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:rounded-full after:bg-gradient-to-b after:from-white/10 after:from-[46%] after:to-[54%] after:mix-blend-overlay bg-primary ring-2 text-white ring-primary",
+        primary:
+          "bg-blue-300 text-gray-50 hover:bg-blue-400 disabled:bg-blue-200 border-blue-300",
+        secondary:
+          "bg-blue-400 text-gray-50 hover:bg-blue-500 disabled:bg-blue-200 disabled:text-gray-400 border-blue-300",
         destructive:
-          "group relative isolate font-medium inline-flex items-center justify-center overflow-hidden text-sm transition duration-300 ease-[cubic-bezier(0.4,0.36,0,1)] before:duration-300 before:ease-[cubic-bezier(0.4,0.36,0,1)] before:transtion-opacity rounded-full ring-1 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-full before:bg-gradient-to-b before:from-white/20 before:opacity-50 hover:before:opacity-100 after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:rounded-full after:bg-gradient-to-b after:from-white/10 after:from-[46%] after:to-[54%] after:mix-blend-overlay bg-red-900 ring-2 text-white ring-900",
-        outline:
-          "default-button group relative isolate font-medium inline-flex items-center justify-center overflow-hidden text-sm transition duration-300 ease-[cubic-bezier(0.4,0.36,0,1)] before:duration-300 before:ease-[cubic-bezier(0.4,0.36,0,1)] before:transtion-opacity rounded-full ring-1 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-full before:bg-gradient-to-b before:from-white/20 before:opacity-50 hover:before:opacity-100 after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:rounded-full after:bg-gradient-to-b after:from-white/10 after:from-[46%] after:to-[54%] after:mix-blend-overlay bg-white ring-2 text-primary ring-primary",
-        white: "bg-white text-primary ring-0",
-        secondary: "bg-secondary text-white hover:bg-secondary-1",
+          "bg-red-300 text-gray-50 hover:bg-red-400 disabled:bg-red-200 border-red-300",
+        white:
+          "bg-white text-gray-500 hover:bg-gray-100 disabled:bg-gray-100 border-black/10",
+        gray: "bg-gray-200 text-gray-500 hover:bg-gray-200 disabled:bg-gray-100 border-transparent",
       },
       size: {
-        default: "h-10 px-5 text-base",
-        sm: "h-8 px-3 text-sm",
-        lg: "h-10 px-5 text-lg",
-        icon: "h-10 w-10",
+        xs: "font-[400] text-[0.75rem] px-[0.5rem] h-[1.25rem] ",
+        sm: "font-[400] text-[0.875rem] px-[0.75rem] h-[1.75rem]",
+        md: "font-[400] text-[0.875rem] px-[1rem] h-[2rem]",
+        lg: "font-[400] text-[1.125rem] px-[1.25em] h-[2.5rem]",
       },
-    },
-    defaultVariants: {
-      variant: "default",
-      size: "default",
     },
   }
 );
@@ -72,12 +72,12 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
               {"@keyframes spinner_AtaB{to{transform:rotate(360deg)}}"}
             </style>
             <path
-              fill="#FFF"
+              fill={variant === "white" ? "#000" : "#FFF"}
               d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8 8 8 0 0 1-8 8Z"
               opacity={0.25}
             />
             <path
-              fill="#FFF"
+              fill={variant === "white" ? "#000" : "#FFF"}
               d="M10.14 1.16a11 11 0 0 0-9 8.92A1.59 1.59 0 0 0 2.46 12a1.52 1.52 0 0 0 1.65-1.3 8 8 0 0 1 6.66-6.61A1.42 1.42 0 0 0 12 2.69a1.57 1.57 0 0 0-1.86-1.53Z"
               style={{
                 transformOrigin: "center",

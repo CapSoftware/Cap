@@ -15,6 +15,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 import { Menu, X } from "lucide-react";
+import { classNames } from "@cap/utils";
 
 export const Navbar = ({ auth }: { auth: boolean }) => {
   const pathname = usePathname();
@@ -37,111 +38,153 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
         className={`${
           isHomePage === true
             ? "bg-transparent border-transparent"
-            : "bg-white border-gray-100"
-        } border-b-2 z-20 p-5 relative transition-all flex justify-between w-full max-w-3xl mx-auto`}
+            : "bg-white border-gray-200"
+        } border-b-[1px] w-full p-4`}
       >
-        <div>
-          <a href="/">
-            <Logo showBeta={true} className="w-20 sm:w-24 h-auto" />
-          </a>
-        </div>
-        <div className="block md:hidden">
-          <button onClick={() => setShowMobileMenu(!showMobileMenu)}>
-            <Menu className="w-[28px] h-[28px]" />
-          </button>
-        </div>
-        <div className="hidden md:block">
-          <NavigationMenu>
-            <NavigationMenuList>
-              <NavigationMenuItem>
-                <NavigationMenuTrigger>Product</NavigationMenuTrigger>
-                <NavigationMenuContent>
-                  <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-2">
-                    <ListItem href="/record" title="Web App Recorder">
-                      Use Cap in your browser, no download required.
-                    </ListItem>
-                    <ListItem href="/download" title="Download macOS App">
-                      Download for macOS. Windows and Linux coming soon.
-                    </ListItem>
-                    <ListItem
-                      href="https://github.com/CapSoftware/Cap"
-                      title="Open source"
-                      target="_blank"
-                    >
-                      Cap is open source and available on GitHub.
-                    </ListItem>
-                    <ListItem
-                      href="https://discord.gg/y8gdQ3WRN3"
-                      title="Join the community"
-                      target="_blank"
-                    >
-                      Join the Cap discord community.
-                    </ListItem>
-                  </ul>
-                </NavigationMenuContent>
-              </NavigationMenuItem>
-              <NavigationMenuItem>
-                <Link href="/pricing" legacyBehavior passHref>
-                  <NavigationMenuLink className={navigationMenuTriggerStyle()}>
-                    Pricing
-                  </NavigationMenuLink>
-                </Link>
-              </NavigationMenuItem>
-              <NavigationMenuItem>
-                <Link href="/updates" legacyBehavior passHref>
-                  <NavigationMenuLink className={navigationMenuTriggerStyle()}>
-                    Updates
-                  </NavigationMenuLink>
-                </Link>
-              </NavigationMenuItem>
-              <NavigationMenuItem>
-                <NavigationMenuTrigger>Help</NavigationMenuTrigger>
-                <NavigationMenuContent>
-                  <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-[.75fr_1fr]">
-                    <ListItem href="/faq" title="FAQs">
-                      Frequently asked questions about Cap.
-                    </ListItem>
-                    <ListItem href="mailto:hello@cap.so" title="Email support">
-                      Support via email
-                    </ListItem>
-                    <ListItem
-                      href="https://discord.gg/y8gdQ3WRN3"
-                      target="_blank"
-                      title="Chat support"
-                    >
-                      Support via Discord chat
-                    </ListItem>
-                  </ul>
-                </NavigationMenuContent>
-              </NavigationMenuItem>
-              <NavigationMenuItem>
-                <Button
-                  className={auth === false ? "min-w-[155px]" : ""}
-                  href={auth === false ? "/login" : "/dashboard"}
-                  size="sm"
-                >
-                  {auth === false ? "Get started for free" : "Dashboard"}
-                </Button>
-              </NavigationMenuItem>
-              <NavigationMenuItem className="pl-3">
-                <Link
-                  href="https://github.com/CapSoftware/Cap"
-                  passHref
-                  target="_blank"
-                  className="flex items-center"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="currentColor"
-                    className="w-7 h-7"
-                    viewBox="0 0 24 24"
+        <div className="relative z-20 flex justify-between max-w-3xl mx-auto transition-all ">
+          <div>
+            <a href="/">
+              <Logo
+                white={isHomePage ? true : false}
+                showBeta={true}
+                className="w-20 sm:w-24 h-auto"
+              />
+            </a>
+          </div>
+          <div className="block md:hidden">
+            <button onClick={() => setShowMobileMenu(!showMobileMenu)}>
+              <Menu
+                className={`w-[28px] h-[28px] ${
+                  isHomePage ? "text-white" : "text-black"
+                }`}
+              />
+            </button>
+          </div>
+          <div className="hidden md:block">
+            <NavigationMenu>
+              <NavigationMenuList>
+                <NavigationMenuItem>
+                  <NavigationMenuTrigger
+                    className={
+                      isHomePage
+                        ? "text-white active:text-white focus:text-white hover:text-white"
+                        : ""
+                    }
                   >
-                    <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path>
-                  </svg>
-                </Link>
-              </NavigationMenuItem>
-            </NavigationMenuList>
-          </NavigationMenu>
+                    Product
+                  </NavigationMenuTrigger>
+                  <NavigationMenuContent>
+                    <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-2">
+                      <ListItem href="/download" title="Download macOS App">
+                        Download for macOS. Windows and Linux coming soon.
+                      </ListItem>
+                      <ListItem
+                        href="https://github.com/CapSoftware/Cap"
+                        title="Open source"
+                        target="_blank"
+                      >
+                        Cap is open source and available on GitHub.
+                      </ListItem>
+                      <ListItem
+                        href="https://discord.gg/y8gdQ3WRN3"
+                        title="Join the community"
+                        target="_blank"
+                      >
+                        Join the Cap discord community.
+                      </ListItem>
+                    </ul>
+                  </NavigationMenuContent>
+                </NavigationMenuItem>
+                <NavigationMenuItem>
+                  <Link href="/pricing" legacyBehavior passHref>
+                    <NavigationMenuLink
+                      className={classNames(
+                        navigationMenuTriggerStyle(),
+                        isHomePage
+                          ? "text-white active:text-white focus:text-white hover:text-white"
+                          : ""
+                      )}
+                    >
+                      Pricing
+                    </NavigationMenuLink>
+                  </Link>
+                </NavigationMenuItem>
+                <NavigationMenuItem>
+                  <Link href="/updates" legacyBehavior passHref>
+                    <NavigationMenuLink
+                      className={classNames(
+                        navigationMenuTriggerStyle(),
+                        isHomePage
+                          ? "text-white active:text-white focus:text-white hover:text-white"
+                          : ""
+                      )}
+                    >
+                      Updates
+                    </NavigationMenuLink>
+                  </Link>
+                </NavigationMenuItem>
+                <NavigationMenuItem>
+                  <NavigationMenuTrigger
+                    className={
+                      isHomePage
+                        ? "text-white active:text-white focus:text-white hover:text-white"
+                        : ""
+                    }
+                  >
+                    Help
+                  </NavigationMenuTrigger>
+                  <NavigationMenuContent>
+                    <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-[.75fr_1fr]">
+                      <ListItem href="/faq" title="FAQs">
+                        Frequently asked questions about Cap.
+                      </ListItem>
+                      <ListItem
+                        href="mailto:hello@cap.so"
+                        title="Email support"
+                      >
+                        Support via email
+                      </ListItem>
+                      <ListItem
+                        href="https://discord.gg/y8gdQ3WRN3"
+                        target="_blank"
+                        title="Chat support"
+                      >
+                        Support via Discord chat
+                      </ListItem>
+                    </ul>
+                  </NavigationMenuContent>
+                </NavigationMenuItem>
+                <NavigationMenuItem>
+                  <Button
+                    href={auth === false ? "/download" : "/dashboard"}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    {auth === false ? "Download App" : "Dashboard"}
+                  </Button>
+                </NavigationMenuItem>
+                <NavigationMenuItem className="pl-3">
+                  <Link
+                    href="https://github.com/CapSoftware/Cap"
+                    passHref
+                    target="_blank"
+                    className="flex items-center"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="currentColor"
+                      className={`w-7 h-7 ${
+                        isHomePage ? "text-white" : "text-black"
+                      }`}
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path>
+                    </svg>
+                  </Link>
+                </NavigationMenuItem>
+              </NavigationMenuList>
+            </NavigationMenu>
+          </div>
         </div>
       </div>
       {showMobileMenu && (
@@ -184,7 +227,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                     onClick={() => {
                       setShowMobileMenu(false);
                     }}
-                    href="/login"
+                    href="/pricing"
                     passHref
                   >
                     Get started
@@ -228,10 +271,10 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                 </li>
                 <li>
                   <Button
-                    href={auth === false ? "/login" : "/dashboard"}
+                    href={auth === false ? "/download" : "/dashboard"}
                     size="lg"
                   >
-                    {auth === false ? "Get started for free" : "Dashboard"}
+                    {auth === false ? "Download App" : "Dashboard"}
                   </Button>
                 </li>
               </ul>

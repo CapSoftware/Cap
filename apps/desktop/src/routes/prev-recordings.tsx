@@ -10,6 +10,7 @@ import {
   Suspense,
   Switch,
   createEffect,
+  createMemo,
   createResource,
   createSignal,
   onCleanup,
@@ -18,7 +19,6 @@ import {
 import Tooltip from "@corvu/tooltip";
 import { Button } from "@cap/ui-solid";
 import { createElementBounds } from "@solid-primitives/bounds";
-import { save } from "@tauri-apps/plugin-dialog";
 import { TransitionGroup } from "solid-transition-group";
 import { createStore, produce } from "solid-js/store";
 import { makePersisted } from "@solid-primitives/storage";
@@ -27,23 +27,27 @@ import { commands, events } from "~/utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
 
-type RecordingEntry = {
+type MediaEntry = {
   path: string;
   prettyName: string;
   isNew: boolean;
+  type?: "recording" | "screenshot";
 };
 
 export default function () {
   const presets = createPresets();
   const [recordings, setRecordings] = makePersisted(
-    createStore<RecordingEntry[]>([]),
+    createStore<MediaEntry[]>([]),
     { name: "recordings-store" }
   );
+  const [screenshots, setScreenshots] = makePersisted(
+    createStore<MediaEntry[]>([]),
+    { name: "screenshots-store" }
+  );
 
-  // Listen for new recordings
-  events.newRecordingAdded.listen((event) => {
-    const path = event.payload.path;
-    setRecordings(
+  const addMediaEntry = (path: string, type?: "recording" | "screenshot") => {
+    const setMedia = type === "screenshot" ? setScreenshots : setRecordings;
+    setMedia(
       produce((state) => {
         if (state.some((entry) => entry.path === path)) return;
         const fileName = path.split("/").pop() || "";
@@ -51,12 +55,12 @@ export default function () {
           /Cap (\d{4}-\d{2}-\d{2} at \d{2}\.\d{2}\.\d{2})/
         );
         const prettyName = match ? match[1].replace(/\./g, ":") : fileName;
-        state.push({ path, prettyName, isNew: true });
+        state.unshift({ path, prettyName, isNew: true, type });
       })
     );
 
     setTimeout(() => {
-      setRecordings(
+      setMedia(
         produce((state) => {
           const index = state.findIndex((entry) => entry.path === path);
           if (index !== -1) {
@@ -65,7 +69,19 @@ export default function () {
         })
       );
     }, 3000);
+  };
+
+  // Listen for new recordings
+  events.newRecordingAdded.listen((event) => {
+    addMediaEntry(event.payload.path, "recording");
   });
+
+  // Listen for new screenshots
+  events.newScreenshotAdded.listen((event) => {
+    addMediaEntry(event.payload.path, "screenshot");
+  });
+
+  const allMedia = createMemo(() => [...recordings, ...screenshots]);
 
   return (
     <div class="w-screen h-[100vh] bg-transparent relative">
@@ -78,266 +94,350 @@ export default function () {
             exitClass="opacity-100 translate-x-0"
             exitActiveClass="absolute"
           >
-            <For each={recordings}>
-              {(recording, i) => {
+            <For each={allMedia()}>
+              {(media) => {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
-
-                const videoId = recording.path.split("/").pop()?.split(".")[0]!;
+                console.log(media);
+                const mediaId = media.path.split("/").pop()?.split(".")[0]!;
+                const type = media.type ?? "recording";
+                const fileId =
+                  type === "recording"
+                    ? mediaId
+                    : media.path
+                        .split("screenshots/")[1]
+                        .split("/")[0]
+                        .replace(".cap", "");
+                const isRecording = type !== "screenshot";
 
                 const recordingMeta = createQuery(() => ({
-                  queryKey: ["recordingMeta", videoId],
-                  queryFn: () => commands.getRecordingMeta(videoId),
+                  queryKey: ["recordingMeta", fileId],
+                  queryFn: () =>
+                    commands.getRecordingMeta(
+                      fileId,
+                      isRecording ? "recording" : "screenshot"
+                    ),
+                  enabled: true,
                 }));
-                // createQueryInvalidate(record)
 
-                const copyVideo = createMutation(() => ({
+                const copyMedia = createMutation(() => ({
                   mutationFn: async () => {
-                    const res = await commands.copyRenderedVideoToClipboard(
-                      videoId,
-                      presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                    );
-                    if (res.status !== "ok") throw new Error(res.error);
+                    if (isRecording) {
+                      const res = await commands.copyRenderedVideoToClipboard(
+                        mediaId,
+                        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                      );
+                      if (res.status !== "ok") throw new Error(res.error);
+                    } else {
+                      const res = await commands.copyScreenshotToClipboard(
+                        media.path
+                      );
+                      if (res.status !== "ok") throw new Error(res.error);
+                    }
                   },
                 }));
 
-                const saveVideo = createMutation(() => ({
+                const saveMedia = createMutation(() => ({
                   mutationFn: async () => {
-                    const renderedPath = await commands.getRenderedVideo(
-                      videoId,
-                      presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                    const newFileName = isRecording
+                      ? "Cap Recording"
+                      : media.path.split(".cap/")[1];
+                    const fileType = isRecording ? "recording" : "screenshot";
+
+                    const savePathResult = await commands.saveFileDialog(
+                      newFileName,
+                      fileType
                     );
 
-                    if (renderedPath.status !== "ok")
-                      throw new Error("Failed to get rendered video path");
+                    if (
+                      savePathResult.status !== "ok" ||
+                      !savePathResult.data
+                    ) {
+                      return false;
+                    }
 
-                    const savePath = await save({
-                      filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
-                    });
+                    const savePath = savePathResult.data;
 
-                    if (!savePath) return false;
+                    if (isRecording) {
+                      const renderedPath = await commands.getRenderedVideo(
+                        mediaId,
+                        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                      );
 
-                    await commands.copyFileToPath(renderedPath.data, savePath);
+                      if (renderedPath.status !== "ok" || !renderedPath.data) {
+                        throw new Error("Failed to get rendered video path");
+                      }
+
+                      const copyResult = await commands.copyFileToPath(
+                        renderedPath.data,
+                        savePath
+                      );
+                      if (copyResult.status !== "ok") {
+                        throw new Error(
+                          `Failed to copy file: ${copyResult.error}`
+                        );
+                      }
+                    } else {
+                      const copyResult = await commands.copyFileToPath(
+                        media.path,
+                        savePath
+                      );
+                      if (copyResult.status !== "ok") {
+                        throw new Error(
+                          `Failed to copy file: ${copyResult.error}`
+                        );
+                      }
+                    }
 
                     return true;
                   },
                 }));
 
-                const uploadVideo = createMutation(() => ({
+                const uploadMedia = createMutation(() => ({
                   mutationFn: async () => {
-                    const res = await commands.uploadRenderedVideo(
-                      videoId,
-                      presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                    );
-                    if (res.status !== "ok") throw new Error(res.error);
+                    if (isRecording) {
+                      const res = await commands.uploadRenderedVideo(
+                        mediaId,
+                        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                      );
+                      if (res.status !== "ok") throw new Error(res.error);
+                    } else {
+                      const res = await commands.uploadScreenshot(media.path);
+                      if (res.status !== "ok") throw new Error(res.error);
+                    }
                   },
                   onSuccess: () =>
                     startTransition(() => recordingMeta.refetch()),
                 }));
 
                 const [metadata] = createResource(async () => {
-                  const result = await commands.getVideoMetadata(
-                    recording.path,
-                    null
-                  );
+                  if (isRecording) {
+                    const result = await commands.getVideoMetadata(
+                      media.path,
+                      null
+                    );
 
-                  if (result.status !== "ok") {
-                    console.error(`Failed to get metadata: ${result.status}`);
-                    return;
+                    if (result.status !== "ok") {
+                      console.error(`Failed to get metadata: ${result.status}`);
+                      return;
+                    }
+
+                    const [duration, size] = result.data;
+                    console.log(
+                      `Metadata for ${media.path}: duration=${duration}, size=${size}`
+                    );
+
+                    return { duration, size };
                   }
-
-                  const [duration, size] = result.data;
-                  console.log(
-                    `Metadata for ${recording.path}: duration=${duration}, size=${size}`
-                  );
-
-                  return { duration, size };
+                  return null;
                 });
 
                 const [imageExists, setImageExists] = createSignal(true);
 
                 const isLoading = () =>
-                  copyVideo.isPending ||
-                  saveVideo.isPending ||
-                  uploadVideo.isPending;
+                  copyMedia.isPending ||
+                  saveMedia.isPending ||
+                  uploadMedia.isPending;
 
-                createFakeWindowBounds(ref, () => recording.path);
+                createFakeWindowBounds(ref, () => media.path);
 
                 return (
                   <Suspense>
-                    <Show when={metadata()}>
-                      {(metadata) => (
+                    <div
+                      ref={setRef}
+                      style={{ "border-color": "rgba(255, 255, 255, 0.2)" }}
+                      class={cx(
+                        "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/50 rounded-[12px] overflow-hidden shadow border-[1px] group relative",
+                        "transition-all duration-300",
+                        media.isNew && "ring-2 ring-blue-500 ring-opacity-75"
+                      )}
+                    >
+                      <div
+                        class={cx(
+                          "w-full h-full flex relative bg-transparent rounded-[8px] border-[1px] overflow-hidden z-10",
+                          "transition-all",
+                          isLoading() && "backdrop-blur bg-gray-500/80"
+                        )}
+                        style={{
+                          "border-color": "rgba(255, 255, 255, 0.2)",
+                        }}
+                      >
+                        <Show
+                          when={imageExists()}
+                          fallback={
+                            <div class="pointer-events-none w-[105%] h-[105%] absolute inset-0 -z-10 bg-gray-400" />
+                          }
+                        >
+                          <img
+                            class="pointer-events-none w-[105%] h-[105%] object-cover absolute inset-0 -z-10"
+                            alt="media preview"
+                            src={`${convertFileSrc(
+                              isRecording
+                                ? `${media.path}/screenshots/display.jpg`
+                                : `${media.path}`
+                            )}?t=${Date.now()}`}
+                            onError={() => setImageExists(false)}
+                          />
+                        </Show>
                         <div
-                          ref={setRef}
-                          style={{ "border-color": "rgba(255, 255, 255, 0.2)" }}
                           class={cx(
-                            "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/50 rounded-[12px] overflow-hidden shadow border-[1px] group relative",
-                            "transition-all duration-300",
-                            recording.isNew &&
-                              "ring-2 ring-blue-500 ring-opacity-75"
+                            "w-full h-full absolute inset-0 transition-all",
+                            isLoading()
+                              ? "opacity-100"
+                              : "opacity-0 group-hover:opacity-100",
+                            "backdrop-blur bg-gray-500/80 text-white p-2"
                           )}
                         >
-                          <div
-                            class={cx(
-                              "w-full h-full flex relative bg-transparent rounded-[8px] border-[1px] overflow-hidden z-10",
-                              "transition-all",
-                              isLoading() && "backdrop-blur bg-gray-500/80"
-                            )}
-                            style={{
-                              "border-color": "rgba(255, 255, 255, 0.2)",
+                          <TooltipIconButton
+                            class="absolute left-3 top-3 z-20"
+                            tooltipText="Close"
+                            tooltipPlacement="right"
+                            onClick={() => {
+                              const setMedia = isRecording
+                                ? setRecordings
+                                : setScreenshots;
+                              setMedia(
+                                produce((state) => {
+                                  const index = state.findIndex(
+                                    (entry) => entry.path === media.path
+                                  );
+                                  if (index !== -1) {
+                                    state.splice(index, 1);
+                                  }
+                                })
+                              );
                             }}
                           >
-                            <Show
-                              when={imageExists()}
-                              fallback={
-                                <div class="pointer-events-none w-[105%] h-[105%] absolute inset-0 -z-10 bg-gray-400" />
+                            <IconCapCircleX class="size-[1rem]" />
+                          </TooltipIconButton>
+                          {isRecording ? (
+                            <TooltipIconButton
+                              class="absolute left-3 bottom-3 z-20"
+                              tooltipText="Edit"
+                              tooltipPlacement="right"
+                              onClick={() => {
+                                commands.openEditor(mediaId);
+                              }}
+                            >
+                              <IconCapEditor class="size-[1rem]" />
+                            </TooltipIconButton>
+                          ) : (
+                            <TooltipIconButton
+                              class="absolute left-3 bottom-3 z-20"
+                              tooltipText="View"
+                              tooltipPlacement="right"
+                              onClick={() => {
+                                commands.openFilePath(media.path);
+                              }}
+                            >
+                              <IconLucideEye class="size-[1rem]" />
+                            </TooltipIconButton>
+                          )}
+                          <TooltipIconButton
+                            class="absolute right-3 top-3 z-20"
+                            tooltipText={
+                              copyMedia.isPending
+                                ? "Copying to Clipboard"
+                                : "Copy to Clipboard"
+                            }
+                            forceOpen={copyMedia.isPending}
+                            tooltipPlacement="left"
+                            onClick={() => copyMedia.mutate()}
+                            disabled={
+                              saveMedia.isPending || uploadMedia.isPending
+                            }
+                          >
+                            <Switch
+                              fallback={<IconCapCopy class="size-[1rem]" />}
+                            >
+                              <Match when={copyMedia.isPending}>
+                                <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+                              </Match>
+                              <Match when={copyMedia.isSuccess}>
+                                {(_) => {
+                                  setTimeout(() => {
+                                    if (!copyMedia.isPending) copyMedia.reset();
+                                  }, 2000);
+
+                                  return (
+                                    <IconLucideCheck class="size-[1rem]" />
+                                  );
+                                }}
+                              </Match>
+                            </Switch>
+                          </TooltipIconButton>
+                          <TooltipIconButton
+                            class="absolute right-3 bottom-3 z-20"
+                            tooltipText={
+                              recordingMeta.data?.sharing
+                                ? "Copy Shareable Link"
+                                : uploadMedia.isPending
+                                ? "Uploading Cap"
+                                : "Create Shareable Link"
+                            }
+                            forceOpen={uploadMedia.isPending}
+                            tooltipPlacement="left"
+                            onClick={() => uploadMedia.mutate()}
+                            disabled={
+                              copyMedia.isPending ||
+                              saveMedia.isPending ||
+                              recordingMeta.isLoading ||
+                              recordingMeta.isError
+                            }
+                          >
+                            <Switch
+                              fallback={<IconCapUpload class="size-[1rem]" />}
+                            >
+                              <Match when={uploadMedia.isPending}>
+                                <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+                              </Match>
+                              <Match when={uploadMedia.isSuccess}>
+                                {(_) => {
+                                  setTimeout(() => {
+                                    if (!uploadMedia.isPending)
+                                      uploadMedia.reset();
+                                  }, 2000);
+
+                                  return (
+                                    <IconLucideCheck class="size-[1rem]" />
+                                  );
+                                }}
+                              </Match>
+                            </Switch>
+                          </TooltipIconButton>
+                          <div class="absolute inset-0 flex items-center justify-center">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => saveMedia.mutate()}
+                              disabled={
+                                copyMedia.isPending || uploadMedia.isPending
                               }
                             >
-                              <img
-                                class="pointer-events-none w-[105%] h-[105%] object-cover absolute inset-0 -z-10"
-                                alt="screenshot"
-                                src={`${convertFileSrc(
-                                  `${recording.path}/screenshots/display.jpg`
-                                )}?t=${Date.now()}`}
-                                onError={() => setImageExists(false)}
-                              />
-                            </Show>
-                            <div
-                              class={cx(
-                                "w-full h-full absolute inset-0 transition-all",
-                                isLoading()
-                                  ? "opacity-100"
-                                  : "opacity-0 group-hover:opacity-100",
-                                "backdrop-blur bg-gray-500/80 text-white p-2"
-                              )}
-                            >
-                              <TooltipIconButton
-                                class="absolute left-3 top-3 z-20"
-                                tooltipText="Close"
-                                tooltipPlacement="right"
-                                onClick={() =>
-                                  setRecordings(
-                                    produce((state) => {
-                                      state.splice(i(), 1);
-                                    })
-                                  )
-                                }
-                              >
-                                <IconCapCircleX class="size-[1rem]" />
-                              </TooltipIconButton>
-                              <TooltipIconButton
-                                class="absolute left-3 bottom-3 z-20"
-                                tooltipText="Edit"
-                                tooltipPlacement="right"
-                                onClick={() => {
-                                  commands.openEditor(videoId);
-                                }}
-                              >
-                                <IconCapEditor class="size-[1rem]" />
-                              </TooltipIconButton>
-                              <TooltipIconButton
-                                class="absolute right-3 top-3 z-20"
-                                tooltipText={
-                                  copyVideo.isPending
-                                    ? "Copying to Clipboard"
-                                    : "Copy to Clipboard"
-                                }
-                                forceOpen={copyVideo.isPending}
-                                tooltipPlacement="left"
-                                onClick={() => copyVideo.mutate()}
-                                disabled={
-                                  saveVideo.isPending || uploadVideo.isPending
-                                }
-                              >
-                                <Switch
-                                  fallback={<IconCapCopy class="size-[1rem]" />}
-                                >
-                                  <Match when={copyVideo.isPending}>
-                                    <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
-                                  </Match>
-                                  <Match when={copyVideo.isSuccess}>
-                                    {(_) => {
-                                      setTimeout(() => {
-                                        if (!copyVideo.isPending)
-                                          copyVideo.reset();
-                                      }, 2000);
-
-                                      return (
-                                        <IconLucideCheck class="size-[1rem]" />
-                                      );
-                                    }}
-                                  </Match>
-                                </Switch>
-                              </TooltipIconButton>
-                              <TooltipIconButton
-                                class="absolute right-3 bottom-3 z-20"
-                                tooltipText={
-                                  recordingMeta.data?.sharing
-                                    ? "Copy Shareable Link"
-                                    : uploadVideo.isPending
-                                    ? "Uploading Cap"
-                                    : "Create Shareable Link"
-                                }
-                                forceOpen={uploadVideo.isPending}
-                                tooltipPlacement="left"
-                                onClick={() => uploadVideo.mutate()}
-                                disabled={
-                                  copyVideo.isPending || saveVideo.isPending
-                                }
-                              >
-                                <Switch
-                                  fallback={
-                                    <IconCapUpload class="size-[1rem]" />
+                              <Switch fallback="Save">
+                                <Match when={saveMedia.isPending}>
+                                  Saving...
+                                </Match>
+                                <Match
+                                  when={
+                                    saveMedia.isSuccess &&
+                                    saveMedia.data === true
                                   }
                                 >
-                                  <Match when={uploadVideo.isPending}>
-                                    <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
-                                  </Match>
-                                  <Match when={uploadVideo.isSuccess}>
-                                    {(_) => {
-                                      setTimeout(() => {
-                                        if (!uploadVideo.isPending)
-                                          uploadVideo.reset();
-                                      }, 2000);
+                                  {(_) => {
+                                    setTimeout(() => {
+                                      if (!saveMedia.isPending)
+                                        saveMedia.reset();
+                                    }, 2000);
 
-                                      return (
-                                        <IconLucideCheck class="size-[1rem]" />
-                                      );
-                                    }}
-                                  </Match>
-                                </Switch>
-                              </TooltipIconButton>
-                              <div class="absolute inset-0 flex items-center justify-center">
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  onClick={() => saveVideo.mutate()}
-                                  disabled={
-                                    copyVideo.isPending || uploadVideo.isPending
-                                  }
-                                >
-                                  <Switch fallback="Save">
-                                    <Match when={saveVideo.isPending}>
-                                      Saving...
-                                    </Match>
-                                    <Match
-                                      when={
-                                        saveVideo.isSuccess &&
-                                        saveVideo.data === true
-                                      }
-                                    >
-                                      {(_) => {
-                                        setTimeout(() => {
-                                          if (!saveVideo.isPending)
-                                            saveVideo.reset();
-                                        }, 2000);
-
-                                        return "Saved!";
-                                      }}
-                                    </Match>
-                                  </Switch>
-                                </Button>
-                              </div>
-                            </div>
+                                    return "Saved!";
+                                  }}
+                                </Match>
+                              </Switch>
+                            </Button>
+                          </div>
+                        </div>
+                        <Show when={isRecording && metadata()}>
+                          {(metadata) => (
                             <div
                               style={{ color: "white", "font-size": "14px" }}
                               class={cx(
@@ -356,10 +456,10 @@ export default function () {
                               </p>
                               <p>{metadata().size.toFixed(2)} MB</p>
                             </div>
-                          </div>
-                        </div>
-                      )}
-                    </Show>
+                          )}
+                        </Show>
+                      </div>
+                    </div>
                   </Suspense>
                 );
               }}

@@ -173,7 +173,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
   return (
     <div>
       {data.length === 0 ? (
-        <div className="min-h-full h-full flex flex-col items-center justify-center">
+        <div className="inner min-h-full h-full flex flex-col items-center justify-center">
           <div className="w-full max-w-md mx-auto">
             <img
               className="w-full h-auto"
@@ -181,38 +181,44 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
               alt="Person using microphone"
             />
           </div>
-          <div className="text-center">
+          <div className="text-center pb-[30px]">
             <h1 className="text-2xl font-semibold mb-3">
-              <span className="block text-gray-500">Hey, {user?.name}!</span>
+              <span className="block text-gray-400 text-lg">
+                Hey, {user?.name}!
+              </span>
               <span className="block">Record your first Cap.</span>
             </h1>
             <p className="text-xl max-w-md">
               Craft your narrative with a Cap—get projects done quicker.
             </p>
             <Button
-              href="/record"
-              size="default"
+              href="/download"
+              size="lg"
               className="mt-8 relative"
-              variant="default"
+              variant="primary"
             >
-              <Video className="flex-shrink-0 w-6 h-6" aria-hidden="true" />
-              <span className="ml-2.5 text-white">Record a Cap</span>
+              Download Cap
             </Button>
           </div>
         </div>
       ) : (
-        <div className="space-y-8">
-          <div>
-            <h1 className="text-3xl font-semibold mb-1">My Caps</h1>
+        <div>
+          <div className="mb-3">
+            <h1 className="text-3xl font-medium">My Caps</h1>
           </div>
-          <div className="grid grid-cols-2 xl:grid-cols-3 gap-6">
+          <div className="inner grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
             {data.map((cap, index) => {
               const videoAnalytics = analytics[cap.id];
+              const displayCount =
+                videoAnalytics === 0
+                  ? Math.max(cap.totalComments, cap.totalReactions)
+                  : videoAnalytics;
 
               return (
                 <div
                   key={index}
-                  className="rounded-xl border border-filler relative"
+                  className="rounded-xl border-[1px] border-gray-200 relative"
+                  style={{ boxShadow: "0px 8px 16px rgba(18, 22, 31, 0.04)" }}
                 >
                   <div className="absolute top-2 right-2 space-y-2 z-20">
                     <button
@@ -239,7 +245,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                       <LinkIcon className="w-4 h-4" />
                       <Tooltip id={cap.id + "_copy"} />
                     </button>
-                    <button
+                    {/* <button
                       type="button"
                       className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-200 w-8 h-8 m-0 p-0 rounded-full flex items-center justify-center transition-all"
                       onClick={async () => {
@@ -283,7 +289,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                           <Tooltip id={cap.id + "_download"} />
                         </>
                       )}
-                    </button>
+                    </button> */}
                     <button
                       type="button"
                       className="cursor-pointer border border-gray-300 relative bg-white hover:bg-gray-200 w-8 h-8 m-0 p-0 rounded-full flex items-center justify-center transition-all"
@@ -330,11 +336,11 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                           handleTitleKeyDown({ key: e.key, id: cap.id });
                         }}
                         autoFocus
-                        className="font-medium box-border"
+                        className="text-[0.875rem] leading-[1.25rem] text-gray-500 font-medium box-border"
                       />
                     ) : (
                       <p
-                        className="font-medium"
+                        className="text-[0.875rem] leading-[1.25rem] text-gray-500 font-medium"
                         onClick={() => {
                           if (
                             user !== null &&
@@ -349,7 +355,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                     )}
                     <p>
                       <span
-                        className="text-sm text-gray-400"
+                        className="text-[0.875rem] leading-[1.25rem] text-gray-400"
                         data-tooltip-id={cap.id + "_createdAt"}
                         data-tooltip-content={`Cap created at ${cap.createdAt}`}
                       >
@@ -361,11 +367,11 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                       <div
                         className="flex items-center"
                         data-tooltip-id={cap.id + "_analytics"}
-                        data-tooltip-content={`${videoAnalytics} unique views via your shareable Cap.link. Refreshed every 5 minutes.`}
+                        data-tooltip-content={`${displayCount} unique views via your shareable Cap.link.`}
                       >
-                        <EyeIcon className="w-4 h-4 mr-1" />
-                        <span className="text-gray-600">
-                          {videoAnalytics ?? "-"}
+                        <EyeIcon className="w-4 h-4 mr-1 text-gray-400" />
+                        <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
+                          {displayCount ?? "-"}
                         </span>
                         <Tooltip id={cap.id + "_analytics"} />
                       </div>
@@ -374,8 +380,8 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                         data-tooltip-id={cap.id + "_comments"}
                         data-tooltip-content={`${cap.totalComments} comments`}
                       >
-                        <MessageSquareIcon className="w-4 h-4 mr-1" />
-                        <span className="text-gray-600">
+                        <MessageSquareIcon className="w-4 h-4 mr-1 text-gray-400" />
+                        <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
                           {cap.totalComments}
                         </span>
                         <Tooltip id={cap.id + "_comments"} />
@@ -385,8 +391,8 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
                         data-tooltip-id={cap.id + "_reactions"}
                         data-tooltip-content={`${cap.totalReactions} reactions`}
                       >
-                        <SmileIcon className="w-4 h-4 mr-1" />
-                        <span className="text-gray-600">
+                        <SmileIcon className="w-4 h-4 mr-1 text-gray-400" />
+                        <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
                           {cap.totalReactions}
                         </span>
                         <Tooltip id={cap.id + "_reactions"} />
@@ -398,7 +404,7 @@ export const Caps = ({ data, count }: { data: videoData; count: number }) => {
             })}
           </div>
           {(data.length > limit || data.length === limit || page !== 1) && (
-            <div>
+            <div className="mt-4">
               <Pagination>
                 <PaginationContent>
                   {page > 1 && (

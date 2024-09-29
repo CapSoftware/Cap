@@ -56,6 +56,14 @@ async resumeRecording() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async takeScreenshot() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("take_screenshot") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async listCameras() : Promise<string[]> {
     return await TAURI_INVOKE("list_cameras");
 },
@@ -130,6 +138,22 @@ async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguratio
     else return { status: "error", error: e  as any };
 }
 },
+async copyScreenshotToClipboard(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("copy_screenshot_to_clipboard", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async openFilePath(path: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_file_path", { path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<Result<[number, number], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_video_metadata", { videoId, videoType }) };
@@ -184,8 +208,16 @@ async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Prom
     else return { status: "error", error: e  as any };
 }
 },
-async getRecordingMeta(id: string) : Promise<RecordingMeta> {
-    return await TAURI_INVOKE("get_recording_meta", { id });
+async uploadScreenshot(screenshotPath: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("upload_screenshot", { screenshotPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getRecordingMeta(id: string, fileType: string) : Promise<RecordingMeta> {
+    return await TAURI_INVOKE("get_recording_meta", { id, fileType });
 },
 async openFeedbackWindow() : Promise<void> {
     await TAURI_INVOKE("open_feedback_window");
@@ -195,6 +227,14 @@ async openSettingsWindow() : Promise<void> {
 },
 async openChangelogWindow() : Promise<void> {
     await TAURI_INVOKE("open_changelog_window");
+},
+async saveFileDialog(fileName: string, fileType: string) : Promise<Result<string | null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_file_dialog", { fileName, fileType }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 },
 async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<Result<null, null>> {
     try {
@@ -213,11 +253,13 @@ export const events = __makeEvents__<{
 currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
 newRecordingAdded: NewRecordingAdded,
+newScreenshotAdded: NewScreenshotAdded,
 recordingMetaChanged: RecordingMetaChanged,
 recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
+requestNewScreenshot: RequestNewScreenshot,
 requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
 showCapturesPanel: ShowCapturesPanel
@@ -225,11 +267,13 @@ showCapturesPanel: ShowCapturesPanel
 currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
 newRecordingAdded: "new-recording-added",
+newScreenshotAdded: "new-screenshot-added",
 recordingMetaChanged: "recording-meta-changed",
 recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
+requestNewScreenshot: "request-new-screenshot",
 requestStartRecording: "request-start-recording",
 requestStopRecording: "request-stop-recording",
 showCapturesPanel: "show-captures-panel"
@@ -270,9 +314,10 @@ export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource; segments: number[] }
 export type JsonValue<T> = [T]
 export type NewRecordingAdded = { path: string }
-export type OSPermission = "screenRecording" | "camera" | "microphone"
+export type NewScreenshotAdded = { path: string }
+export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
-export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus }
+export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
 export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[] }
@@ -284,6 +329,7 @@ export type RecordingStarted = null
 export type RecordingStopped = { path: string }
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
+export type RequestNewScreenshot = null
 export type RequestStartRecording = null
 export type RequestStopRecording = null
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null; recordings: ProjectRecordings; path: string }
