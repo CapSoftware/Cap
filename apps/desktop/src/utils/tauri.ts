@@ -254,12 +254,14 @@ currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
 newRecordingAdded: NewRecordingAdded,
 newScreenshotAdded: NewScreenshotAdded,
+recordingDeleted: RecordingDeleted,
 recordingMetaChanged: RecordingMetaChanged,
 recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
 requestNewScreenshot: RequestNewScreenshot,
+requestRestartRecording: RequestRestartRecording,
 requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
 showCapturesPanel: ShowCapturesPanel
@@ -268,12 +270,14 @@ currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
 newRecordingAdded: "new-recording-added",
 newScreenshotAdded: "new-screenshot-added",
+recordingDeleted: "recording-deleted",
 recordingMetaChanged: "recording-meta-changed",
 recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
 requestNewScreenshot: "request-new-screenshot",
+requestRestartRecording: "request-restart-recording",
 requestStartRecording: "request-start-recording",
 requestStopRecording: "request-stop-recording",
 showCapturesPanel: "show-captures-panel"
@@ -308,7 +312,7 @@ export type Display = { path: string }
 export type DisplaySource = { variant: "screen" } | { variant: "window"; bounds: Bounds }
 export type EditorStateChanged = { playhead_position: number }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
-export type HotkeyAction = "startRecording" | "stopRecording"
+export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource; segments: number[] }
@@ -320,6 +324,7 @@ export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
+export type RecordingDeleted = { path: string }
 export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[] }
 export type RecordingMetaChanged = { id: string }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
@@ -330,6 +335,7 @@ export type RecordingStopped = { path: string }
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type RequestNewScreenshot = null
+export type RequestRestartRecording = null
 export type RequestStartRecording = null
 export type RequestStopRecording = null
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null; recordings: ProjectRecordings; path: string }

@@ -23,6 +23,8 @@ import {
 const ACTION_TEXT: Record<HotkeyAction, string> = {
   startRecording: "Start Recording",
   stopRecording: "Stop Recording",
+  restartRecording: "Restart Recording",
+  takeScreenshot: "Take Screenshot",
 };
 
 export default function () {
@@ -85,7 +87,14 @@ function Inner(props: { store: HotkeysStore | null }) {
     <div class="flex flex-col w-full h-full divide-y divide-gray-200">
       <ul class="flex-1 p-[0.625rem] flex flex-col gap-[0.5rem] w-full">
         <Index
-          each={["startRecording", "stopRecording"] as Array<HotkeyAction>}
+          each={
+            [
+              "startRecording",
+              "stopRecording",
+              "restartRecording",
+              "takeScreenshot",
+            ] as Array<HotkeyAction>
+          }
         >
           {(item) => {
             createEventListener(window, "click", () => {

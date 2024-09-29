@@ -1,4 +1,6 @@
-use crate::{RequestStartRecording, RequestStopRecording};
+use crate::{
+    RequestNewScreenshot, RequestRestartRecording, RequestStartRecording, RequestStopRecording,
+};
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -45,6 +47,8 @@ impl Hotkey {
 pub enum HotkeyAction {
     StartRecording,
     StopRecording,
+    RestartRecording,
+    TakeScreenshot,
 }
 
 #[derive(Serialize, Deserialize, Type, Default)]
@@ -88,6 +92,12 @@ pub fn init(app: &AppHandle) {
                             }
                             HotkeyAction::StopRecording => {
                                 let _ = RequestStopRecording.emit(app);
+                            }
+                            HotkeyAction::RestartRecording => {
+                                let _ = RequestRestartRecording.emit(app);
+                            }
+                            HotkeyAction::TakeScreenshot => {
+                                let _ = RequestNewScreenshot.emit(app);
                             }
                         }
                     }

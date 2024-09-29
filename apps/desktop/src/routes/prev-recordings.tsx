@@ -71,12 +71,10 @@ export default function () {
     }, 3000);
   };
 
-  // Listen for new recordings
   events.newRecordingAdded.listen((event) => {
     addMediaEntry(event.payload.path, "recording");
   });
 
-  // Listen for new screenshots
   events.newScreenshotAdded.listen((event) => {
     addMediaEntry(event.payload.path, "screenshot");
   });

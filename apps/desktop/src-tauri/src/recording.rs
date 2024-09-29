@@ -162,6 +162,31 @@ impl InProgressRecording {
         meta.save_for_project();
     }
 
+    pub fn stop_and_discard(&mut self) {
+        // Signal the mouse event tracking to stop
+        *self.stop_signal.lock().unwrap() = true;
+
+        // Stop all recording processes
+        self.display.stop();
+        if let Some(camera) = &self.camera {
+            camera.stop();
+        }
+
+        self.ffmpeg_process.stop();
+        if let Err(e) = self.ffmpeg_process.wait() {
+            eprintln!("Failed to wait for ffmpeg process: {:?}", e);
+        }
+        if let Some(audio) = self.audio.take() {
+            audio.0.capture.stop();
+            drop(audio);
+        }
+
+        // Delete all recorded files
+        if let Err(e) = std::fs::remove_dir_all(&self.recording_dir) {
+            eprintln!("Failed to delete recording directory: {:?}", e);
+        }
+    }
+
     pub async fn pause(&mut self) -> Result<(), String> {
         self.display.pause();
         if let Some(camera) = &mut self.camera {

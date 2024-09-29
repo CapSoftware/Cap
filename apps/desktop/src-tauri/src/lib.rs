@@ -216,6 +216,9 @@ pub struct RecordingStopped {
 pub struct RequestStartRecording;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestRestartRecording;
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestNewScreenshot;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
@@ -1897,6 +1900,7 @@ pub fn run() {
             RecordingStarted,
             RecordingStopped,
             RequestStartRecording,
+            RequestRestartRecording,
             RequestStopRecording,
             RequestNewScreenshot,
         ])
@@ -1904,7 +1908,7 @@ pub fn run() {
         .ty::<AuthStore>()
         .ty::<hotkeys::HotkeysStore>();
 
-    #[cfg(debug_assertions)] // <- Only export on non-release builds
+    #[cfg(debug_assertions)]
     specta_builder
         .export(
             specta_typescript::Typescript::default(),
@@ -1954,8 +1958,23 @@ pub fn run() {
             RequestStartRecording::listen_any(app, move |_| {
                 let app_handle = app_handle_clone.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = start_recording(app_handle.clone(), app_handle.state()).await {
-                        eprintln!("Failed to start recording: {}", e);
+                    let state = app_handle.state::<Arc<RwLock<App>>>();
+                    let is_recording = {
+                        let app_state = state.read().await;
+                        app_state.current_recording.is_some()
+                    };
+
+                    if is_recording {
+                        if let Err(e) = stop_recording(app_handle.clone(), app_handle.state()).await
+                        {
+                            eprintln!("Failed to stop recording: {}", e);
+                        }
+                    } else {
+                        if let Err(e) =
+                            start_recording(app_handle.clone(), app_handle.state()).await
+                        {
+                            eprintln!("Failed to start recording: {}", e);
+                        }
                     }
                 });
             });
@@ -1971,6 +1990,32 @@ pub fn run() {
             });
 
             let app_handle_clone = app_handle.clone();
+            RequestRestartRecording::listen_any(app, move |_| {
+                let app_handle = app_handle_clone.clone();
+                println!("RequestRestartRecording received");
+                tauri::async_runtime::spawn(async move {
+                    let state = app_handle.state::<Arc<RwLock<App>>>();
+
+                    // Stop and discard the current recording
+                    {
+                        let mut app_state = state.write().await;
+                        if let Some(mut recording) = app_state.clear_current_recording() {
+                            println!("Stopping and discarding current recording");
+                            recording.stop_and_discard();
+                        }
+                    }
+
+                    // Start a new recording immediately
+                    println!("Starting new recording");
+                    if let Err(e) = start_recording(app_handle.clone(), state).await {
+                        eprintln!("Failed to start new recording: {}", e);
+                    } else {
+                        println!("New recording started successfully");
+                    }
+                });
+            });
+
+            let app_handle_clone = app_handle.clone();
             RequestNewScreenshot::listen_any(app, move |_| {
                 let app_handle = app_handle_clone.clone();
                 tauri::async_runtime::spawn(async move {
@@ -1979,6 +2024,7 @@ pub fn run() {
                     }
                 });
             });
+
             Ok(())
         })
         .on_window_event(|window, event| {

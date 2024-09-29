@@ -135,6 +135,7 @@ pub async fn start_capturing(
         let options = Options {
             fps: FPS,
             show_highlight: true,
+            show_cursor: true,
             output_type: FrameType::BGRAFrame,
             output_resolution: Resolution::_1080p,
             crop_area,
