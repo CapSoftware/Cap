@@ -3,6 +3,7 @@ import { createEffect, createSignal, type ComponentProps } from "solid-js";
 import { commands } from "~/utils/tauri";
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
+import { flags } from "~/flags";
 
 export default function () {
   const start = Date.now();
@@ -59,12 +60,14 @@ export default function () {
             {formatTime((time() - start) / 1000)}
           </span>
         </button>
-        <ActionButton
-          disabled={togglePause.isPending}
-          onClick={() => togglePause.mutate()}
-        >
-          {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
-        </ActionButton>
+        {flags.pauseResume && (
+          <ActionButton
+            disabled={togglePause.isPending}
+            onClick={() => togglePause.mutate()}
+          >
+            {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
+          </ActionButton>
+        )}
       </div>
       <div
         class="bg-white-transparent-5 cursor-move flex items-center justify-center p-[0.25rem] border-l border-white-transparent-5"
