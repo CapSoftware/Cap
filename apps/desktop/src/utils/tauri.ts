@@ -254,7 +254,6 @@ currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
 newRecordingAdded: NewRecordingAdded,
 newScreenshotAdded: NewScreenshotAdded,
-recordingDeleted: RecordingDeleted,
 recordingMetaChanged: RecordingMetaChanged,
 recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
@@ -270,7 +269,6 @@ currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
 newRecordingAdded: "new-recording-added",
 newScreenshotAdded: "new-screenshot-added",
-recordingDeleted: "recording-deleted",
 recordingMetaChanged: "recording-meta-changed",
 recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
@@ -324,7 +322,6 @@ export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
-export type RecordingDeleted = { path: string }
 export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[] }
 export type RecordingMetaChanged = { id: string }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
