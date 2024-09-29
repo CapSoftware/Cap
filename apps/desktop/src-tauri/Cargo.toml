@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.0-alpha.26"
+version = "0.3.0-alpha.27"
 description = "Beautiful, shareable screen recordings."
 authors = ["you"]
 edition = "2021"
