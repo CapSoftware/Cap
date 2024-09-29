@@ -1,25 +1,28 @@
-use device_query::{DeviceQuery, DeviceState, MouseState};
-use nokhwa::utils::CameraFormat;
-use serde::{Deserialize, Serialize};
+use crate::audio::AudioCapturer;
+use crate::capture::CaptureController;
+use cap_ffmpeg::{FFmpeg, FFmpegInput, FFmpegProcess, FFmpegRawAudioInput};
+use device_query::{DeviceQuery, DeviceState};
+use futures::future::OptionFuture;
+use serde::Deserialize;
+use serde::Serialize;
 use specta::Type;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use std::{fs::File, io::Write, path::PathBuf, time::Duration};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    fs::File,
+    sync::{Arc, Mutex},
+};
+use std::{path::PathBuf, time::Duration};
 use tokio::sync::watch;
 
 use objc::rc::autoreleasepool;
 use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
 use objc::*;
-use tauri_nspanel::objc_foundation::{INSString, NSString};
 
 use crate::{
-    audio::{self, AudioCapturer},
-    camera,
+    audio, camera,
     display::{self, get_window_bounds, CaptureTarget},
     Bounds, RecordingOptions,
 };
-
-use cap_ffmpeg::*;
 
 #[derive(Clone, Type, Serialize)]
 #[serde(rename_all = "camelCase", tag = "variant")]
@@ -46,12 +49,13 @@ pub struct InProgressRecording {
     #[serde(skip)]
     pub ffmpeg_process: FFmpegProcess,
     #[serde(skip)]
-    pub display: FFmpegCaptureOutput<FFmpegRawVideoInput>,
+    pub display: CaptureController,
     pub display_source: DisplaySource,
     #[serde(skip)]
-    pub camera: Option<FFmpegCaptureOutput<FFmpegRawVideoInput>>,
+    pub camera: Option<CaptureController>,
     #[serde(skip)]
     pub audio: Option<(FFmpegCaptureOutput<FFmpegRawAudioInput>, AudioCapturer)>,
+    pub segments: Vec<f64>,
     #[serde(skip)]
     pub mouse_moves: Arc<Mutex<Vec<MouseEvent>>>,
     #[serde(skip)]
@@ -64,39 +68,9 @@ unsafe impl Send for InProgressRecording {}
 unsafe impl Sync for InProgressRecording {}
 
 impl InProgressRecording {
-    pub async fn stop(&mut self) {
-        // Signal the mouse event tracking to stop
-        *self.stop_signal.lock().unwrap() = true;
-
-        self.ffmpeg_process.stop();
-
-        if let Err(e) = self.ffmpeg_process.wait() {
-            eprintln!("Failed to wait for ffmpeg process: {:?}", e);
-        }
-
-        self.display.capture.stop();
-        if let Some(camera) = &self.camera {
-            camera.capture.stop();
-        }
-        if let Some(audio) = &mut self.audio {
-            audio.1.stop().ok();
-        }
-
-        // Save mouse events to files
-        let mouse_moves_path = self.recording_dir.join("mousemoves.json");
-        let mouse_clicks_path = self.recording_dir.join("mouseclicks.json");
-
-        let mouse_moves = self.mouse_moves.lock().unwrap();
-        let mouse_clicks = self.mouse_clicks.lock().unwrap();
-
-        let mut mouse_moves_file = File::create(mouse_moves_path).unwrap();
-        let mut mouse_clicks_file = File::create(mouse_clicks_path).unwrap();
-
-        serde_json::to_writer(&mut mouse_moves_file, &*mouse_moves).unwrap();
-        serde_json::to_writer(&mut mouse_clicks_file, &*mouse_clicks).unwrap();
-
+    pub fn stop(&mut self) {
         use cap_project::*;
-        RecordingMeta {
+        let meta = RecordingMeta {
             project_path: self.recording_dir.clone(),
             sharing: None,
             pretty_name: format!(
@@ -118,23 +92,103 @@ impl InProgressRecording {
                     .unwrap()
                     .to_owned(),
             }),
-            audio: self.audio.as_ref().map(|(audio, _)| AudioMeta {
+            audio: self.audio.as_ref().map(|audio| AudioMeta {
                 path: audio
+                    .0
                     .output_path
                     .strip_prefix(&self.recording_dir)
                     .unwrap()
                     .to_owned(),
             }),
+            segments: {
+                let relative_segments = self
+                    .segments
+                    .iter()
+                    .map(|s| s - self.segments[0])
+                    .collect::<Vec<_>>();
+
+                let mut segments = vec![];
+
+                let mut diff = 0.0;
+
+                for (i, chunk) in relative_segments.chunks_exact(2).enumerate() {
+                    if i < relative_segments.len() / 2 {
+                        segments.push(RecordingSegment {
+                            start: diff,
+                            end: chunk[1] - chunk[0] + diff,
+                        });
+                    }
+
+                    diff += chunk[1] - chunk[0];
+                }
+
+                segments
+            },
+        };
+
+        // Signal the mouse event tracking to stop
+        *self.stop_signal.lock().unwrap() = true;
+
+        self.display.stop();
+        if let Some(camera) = &self.camera {
+            camera.stop();
         }
-        .save_for_project();
+
+        self.ffmpeg_process.stop();
+        if let Err(e) = self.ffmpeg_process.wait() {
+            eprintln!("Failed to wait for ffmpeg process: {:?}", e);
+        }
+        if let Some(audio) = self.audio.take() {
+            audio.0.capture.stop();
+            drop(audio);
+        }
+
+        // Save mouse events to files
+        let mouse_moves_path = self.recording_dir.join("mousemoves.json");
+        let mouse_clicks_path = self.recording_dir.join("mouseclicks.json");
+
+        let mouse_moves = self.mouse_moves.lock().unwrap();
+        let mouse_clicks = self.mouse_clicks.lock().unwrap();
+
+        let mut mouse_moves_file = File::create(mouse_moves_path).unwrap();
+        let mut mouse_clicks_file = File::create(mouse_clicks_path).unwrap();
+
+        serde_json::to_writer(&mut mouse_moves_file, &*mouse_moves).unwrap();
+        serde_json::to_writer(&mut mouse_clicks_file, &*mouse_clicks).unwrap();
+
+        meta.save_for_project();
+    }
+
+    pub async fn pause(&mut self) -> Result<(), String> {
+        self.display.pause();
+        if let Some(camera) = &mut self.camera {
+            camera.pause();
+        }
+        if let Some(audio) = &mut self.audio {
+            audio.0.capture.pause();
+        }
+        println!("Sent pause command to FFmpeg");
+        Ok(())
+    }
+
+    pub async fn resume(&mut self) -> Result<(), String> {
+        self.display.resume();
+        if let Some(camera) = &mut self.camera {
+            camera.resume();
+        }
+        if let Some(audio) = &mut self.audio {
+            audio.0.capture.resume();
+        }
+
+        println!("Sent resume command to FFmpeg");
+        Ok(())
     }
 }
 
 pub struct FFmpegCaptureOutput<T> {
     pub input: FFmpegInput<T>,
-    pub capture: NamedPipeCapture,
+    pub capture: CaptureController,
     pub output_path: PathBuf,
-    pub start_time: Instant,
 }
 
 pub async fn start(
@@ -149,120 +203,52 @@ pub async fn start(
 
     let (start_writing_tx, start_writing_rx) = watch::channel(false);
 
+    let audio_pipe_path = content_dir.join("audio-input.pipe");
+
     let (display, camera, audio) = tokio::join!(
-        start_display_recording(&content_dir, recording_options, start_writing_rx.clone()),
-        start_camera_recording(&content_dir, recording_options, start_writing_rx.clone()),
-        start_audio_recording(&content_dir, recording_options, start_writing_rx.clone())
+        display::start_capturing(
+            content_dir.join("display.mp4"),
+            &recording_options.capture_target,
+            start_writing_rx.clone(),
+        ),
+        OptionFuture::from(
+            recording_options
+                .camera_label()
+                .and_then(camera::find_camera_by_label)
+                .map(|camera_info| {
+                    camera::start_capturing(
+                        content_dir.join("camera.mp4"),
+                        camera_info,
+                        start_writing_rx.clone(),
+                    )
+                }),
+        ),
+        OptionFuture::from(
+            recording_options
+                .audio_input_name()
+                .and_then(audio::AudioCapturer::init)
+                .map(|capturer| {
+                    audio::start_capturing(capturer, audio_pipe_path.clone(), start_writing_rx)
+                }),
+        )
     );
 
-    let display = {
-        let ((width, height), capture, start_time) = display;
-
-        let output_path = content_dir.join("display.mp4");
-
-        let ffmpeg_input = ffmpeg.add_input(FFmpegRawVideoInput {
-            input: capture.path().clone().into_os_string(),
-            width,
-            height,
-            fps: 0,
-            pix_fmt: "bgra",
-            ..Default::default()
-        });
-
-        let keyframe_interval_secs = 2;
-        let keyframe_interval = keyframe_interval_secs * display::FPS;
-        let keyframe_interval_str = keyframe_interval.to_string();
-
-        ffmpeg
-            .command
-            .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
-            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
-            .args(["-g", &keyframe_interval_str])
-            .args(["-keyint_min", &keyframe_interval_str])
-            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-            .args([
-                "-vf",
-                &format!("fps={},scale=in_range=full:out_range=limited", display::FPS),
-            ])
-            .arg(&output_path);
-
-        FFmpegCaptureOutput {
-            input: ffmpeg_input,
-            capture,
-            output_path,
-            start_time,
-        }
-    };
-
-    let camera = if let Some((format, capture, start_time)) = camera {
-        use nokhwa::utils::FrameFormat;
-
-        let output_path = content_dir.join("camera.mp4");
-
-        let fps = 30;
-
-        let ffmpeg_input = ffmpeg.add_input(FFmpegRawVideoInput {
-            input: capture.path().clone().into_os_string(),
-            width: format.resolution().width(),
-            height: format.resolution().height(),
-            fps,
-            pix_fmt: match format.format() {
-                FrameFormat::YUYV => "uyvy422",
-                FrameFormat::RAWRGB => "rgb24",
-                FrameFormat::NV12 => "nv12",
-                _ => panic!("unimplemented"),
-            },
-        });
-
-        let keyframe_interval_secs = 2;
-        let keyframe_interval = keyframe_interval_secs * fps;
-        let keyframe_interval_str = keyframe_interval.to_string();
-
-        ffmpeg
-            .command
-            .args(["-f", "mp4", "-map", &format!("{}:v", ffmpeg_input.index)])
-            .args(["-codec:v", "libx264", "-preset", "ultrafast"])
-            .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-            .args(["-vsync", "1", "-force_key_frames", "expr:gte(t,n_forced*3)"])
-            .args(["-movflags", "frag_keyframe+empty_moov"])
-            .args(["-g", &keyframe_interval_str])
-            .args(["-keyint_min", &keyframe_interval_str])
-            .args([
-                "-vf",
-                &format!(
-                    "fps={},scale=in_range=full:out_range=limited",
-                    ffmpeg_input.fps
-                ),
-            ])
-            .arg(&output_path);
-
-        Some(FFmpegCaptureOutput {
-            input: ffmpeg_input,
-            capture,
-            output_path,
-            start_time,
-        })
-    } else {
-        None
-    };
-
-    let audio = if let Some((capture, start_time, capturer)) = audio {
+    let audio = if let Some((controller, capturer)) = audio {
         let output_path = content_dir.join("audio-input.mp3");
 
         dbg!(&capturer.config);
 
         let ffmpeg_input = ffmpeg.add_input(FFmpegRawAudioInput {
-            input: capture.path().clone().into_os_string(),
+            input: audio_pipe_path.into_os_string(),
             sample_format: capturer.sample_format().to_string(),
             sample_rate: capturer.sample_rate(),
             channels: capturer.channels(),
-            wallclock: true,
         });
 
         ffmpeg
             .command
             .args(["-f", "mp3", "-map", &format!("{}:a", ffmpeg_input.index)])
-            .args(["-b:a", "192k"])
+            .args(["-b:a", "128k"])
             .args(["-ar", &capturer.sample_rate().to_string()])
             .args(["-ac", &capturer.channels().to_string(), "-async", "1"])
             .args([
@@ -274,9 +260,8 @@ pub async fn start(
         Some((
             FFmpegCaptureOutput {
                 input: ffmpeg_input,
-                capture,
+                capture: controller,
                 output_path,
-                start_time,
             },
             capturer,
         ))
@@ -286,7 +271,7 @@ pub async fn start(
 
     let ffmpeg_process = ffmpeg.start();
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     println!("Starting writing to named pipes");
 
@@ -343,6 +328,10 @@ pub async fn start(
     });
 
     InProgressRecording {
+        segments: vec![SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()],
         recording_dir,
         ffmpeg_process,
         display,
@@ -413,57 +402,4 @@ fn get_cursor_id() -> String {
             "Unknown".to_string()
         }
     })
-}
-
-async fn start_camera_recording(
-    content_path: &PathBuf,
-    recording_options: &RecordingOptions,
-    start_writing_rx: watch::Receiver<bool>,
-) -> Option<(CameraFormat, NamedPipeCapture, Instant)> {
-    let Some(camera_info) = recording_options
-        .camera_label
-        .as_ref()
-        .and_then(|camera_label| camera::find_camera_by_label(camera_label))
-    else {
-        return None;
-    };
-
-    let pipe_path = content_path.join("camera.pipe");
-
-    Some(camera::start_capturing(pipe_path.clone(), camera_info, start_writing_rx).await)
-}
-
-async fn start_display_recording(
-    content_path: &PathBuf,
-    recording_options: &RecordingOptions,
-    start_writing_rx: watch::Receiver<bool>,
-) -> ((u32, u32), NamedPipeCapture, Instant) {
-    let pipe_path = content_path.join("display.pipe");
-    display::start_capturing(
-        pipe_path.clone(),
-        &recording_options.capture_target,
-        start_writing_rx,
-    )
-    .await
-}
-
-async fn start_audio_recording(
-    content_path: &PathBuf,
-    recording_options: &RecordingOptions,
-    start_writing_rx: watch::Receiver<bool>,
-) -> Option<(NamedPipeCapture, Instant, AudioCapturer)> {
-    let Some(mut capturer) = recording_options
-        .audio_input_name
-        .as_ref()
-        .and_then(|name| audio::AudioCapturer::init(name))
-    else {
-        return None;
-    };
-
-    let pipe_path = content_path.join("audio-input.pipe");
-
-    let (capture, start_time) =
-        audio::start_capturing(&mut capturer, pipe_path.clone(), start_writing_rx).await;
-
-    Some((capture, start_time, capturer))
 }

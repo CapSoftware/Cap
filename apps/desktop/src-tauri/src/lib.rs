@@ -1,9 +1,11 @@
 mod audio;
 mod auth;
 mod camera;
+mod capture;
 mod display;
 mod editor;
 mod editor_instance;
+mod encoder;
 mod hotkeys;
 mod macos;
 mod permissions;
@@ -13,10 +15,13 @@ mod recording;
 mod tray;
 mod upload;
 
+use audio::AppSounds;
 use auth::AuthStore;
 use camera::{create_camera_window, list_cameras};
 use cap_ffmpeg::FFmpeg;
-use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta};
+use cap_project::{
+    ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
+};
 use cap_rendering::ProjectUniforms;
 use cap_utils::create_named_pipe;
 use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
@@ -36,6 +41,7 @@ use specta::Type;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
@@ -58,6 +64,16 @@ pub struct RecordingOptions {
     capture_target: CaptureTarget,
     camera_label: Option<String>,
     audio_input_name: Option<String>,
+}
+
+impl RecordingOptions {
+    fn camera_label(&self) -> Option<&str> {
+        self.camera_label.as_deref()
+    }
+
+    fn audio_input_name(&self) -> Option<&str> {
+        self.audio_input_name.as_deref()
+    }
 }
 
 #[derive(specta::Type, Serialize)]
@@ -284,10 +300,44 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
     window.eval("window.location.reload()").unwrap();
     window.show().unwrap();
 
-    audio::play_audio(include_bytes!("../sounds/start-recording.ogg"));
+    AppSounds::StartRecording.play();
 
     RecordingStarted.emit(&app).ok();
 
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let mut state = state.write().await;
+
+    if let Some(recording) = &mut state.current_recording {
+        recording.pause().await?;
+        recording.segments.push(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64(),
+        );
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
+    let mut state = state.write().await;
+
+    if let Some(recording) = &mut state.current_recording {
+        recording.resume().await?;
+        recording.segments.push(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64(),
+        );
+    }
     Ok(())
 }
 
@@ -332,7 +382,14 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         return Err("Recording not in progress".to_string());
     };
 
-    current_recording.stop().await;
+    current_recording.segments.push(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64(),
+    );
+
+    current_recording.stop();
 
     let window = app
         .get_webview_window(IN_PROGRESS_RECORDINGS_LABEL)
@@ -388,7 +445,36 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     .emit(&app)
     .ok();
 
-    audio::play_audio(include_bytes!("../sounds/stop-recording.ogg"));
+    let config = {
+        let mut segments = vec![];
+
+        let mut passed_duration = 0.0;
+
+        for i in (0..current_recording.segments.len()).step_by(2) {
+            let start = passed_duration;
+
+            passed_duration += current_recording.segments[i + 1] - current_recording.segments[i];
+
+            segments.push(TimelineSegment {
+                start,
+                end: passed_duration,
+                timescale: 1.0,
+            });
+        }
+
+        ProjectConfiguration {
+            timeline: Some(TimelineConfiguration { segments }),
+            ..Default::default()
+        }
+    };
+
+    std::fs::write(
+        current_recording.recording_dir.join("project-config.json"),
+        serde_json::to_string_pretty(&json!(&config)).unwrap(),
+    )
+    .unwrap();
+
+    AppSounds::StopRecording.play();
 
     Ok(())
 }
@@ -563,7 +649,6 @@ async fn render_to_file_impl(
                     sample_format: "f64le".to_string(),
                     sample_rate: audio.sample_rate,
                     channels: 1,
-                    wallclock: false,
                 });
 
                 let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f64>>();
@@ -1623,7 +1708,7 @@ async fn take_screenshot(app: AppHandle, state: MutableState<'_, App>) -> Result
                 .write_image_data(&rgba_data)
                 .map_err(|e| e.to_string())?;
 
-            audio::play_audio(include_bytes!("../sounds/screenshot.ogg"));
+            AppSounds::Screenshot.play();
 
             if let Some(window) = app.get_webview_window("main") {
                 window.show().ok();
@@ -1646,6 +1731,7 @@ async fn take_screenshot(app: AppHandle, state: MutableState<'_, App>) -> Result
                 },
                 camera: None,
                 audio: None,
+                segments: vec![],
             }
             .save_for_project();
 
@@ -1760,6 +1846,8 @@ pub fn run() {
             create_camera_window,
             start_recording,
             stop_recording,
+            pause_recording,
+            resume_recording,
             take_screenshot,
             list_cameras,
             list_capture_windows,

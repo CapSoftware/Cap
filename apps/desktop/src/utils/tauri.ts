@@ -40,6 +40,22 @@ async stopRecording() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async pauseRecording() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("pause_recording") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async resumeRecording() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("resume_recording") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async takeScreenshot() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("take_screenshot") };
@@ -295,7 +311,7 @@ export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean;
 export type HotkeyAction = "startRecording" | "stopRecording"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
-export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource }
+export type InProgressRecording = { recordingDir: string; displaySource: DisplaySource; segments: number[] }
 export type JsonValue<T> = [T]
 export type NewRecordingAdded = { path: string }
 export type NewScreenshotAdded = { path: string }
@@ -304,10 +320,11 @@ export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
-export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null }
+export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[] }
 export type RecordingMetaChanged = { id: string }
 export type RecordingOptions = { captureTarget: CaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
+export type RecordingSegment = { start: number; end: number }
 export type RecordingStarted = null
 export type RecordingStopped = { path: string }
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }

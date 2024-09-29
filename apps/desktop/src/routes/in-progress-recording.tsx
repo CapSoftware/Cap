@@ -7,11 +7,12 @@ import { createMutation } from "@tanstack/solid-query";
 export default function () {
   const start = Date.now();
   const [time, setTime] = createSignal(Date.now());
-  let stopped = false;
+  const [isPaused, setIsPaused] = createSignal(false);
+  const [stopped, setStopped] = createSignal(false);
 
   createTimer(
     () => {
-      if (stopped) return;
+      if (stopped() || isPaused()) return;
       setTime(Date.now());
     },
     100,
@@ -19,14 +20,25 @@ export default function () {
   );
 
   createEffect(() => {
-    stopped = false;
     setTime(Date.now());
   });
 
   const stopRecording = createMutation(() => ({
     mutationFn: async () => {
-      stopped = true;
+      setStopped(true);
       await commands.stopRecording();
+    },
+  }));
+
+  const togglePause = createMutation(() => ({
+    mutationFn: async () => {
+      if (isPaused()) {
+        await commands.resumeRecording();
+        setIsPaused(false);
+      } else {
+        await commands.pauseRecording();
+        setIsPaused(true);
+      }
     },
   }));
 
@@ -47,18 +59,15 @@ export default function () {
             {formatTime((time() - start) / 1000)}
           </span>
         </button>
-        {/* <ActionButton disabled>
-          <IconCapPauseCircle />
+        <ActionButton
+          disabled={togglePause.isPending}
+          onClick={() => togglePause.mutate()}
+        >
+          {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
         </ActionButton>
-        <ActionButton disabled>
-          <IconCapRestart />
-        </ActionButton>
-        <ActionButton disabled>
-          <IconCapTrash />
-        </ActionButton> */}
       </div>
       <div
-        class="bg-white-transparent-5 cursor-move flex items-center justify-center  p-[0.25rem] border-l border-white-transparent-5"
+        class="bg-white-transparent-5 cursor-move flex items-center justify-center p-[0.25rem] border-l border-white-transparent-5"
         data-tauri-drag-region
       >
         <IconCapMoreVertical data-tauri-drag-region />

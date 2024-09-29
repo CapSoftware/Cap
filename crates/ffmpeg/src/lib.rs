@@ -1,14 +1,9 @@
-use cap_utils::create_named_pipe;
 use std::{
     ffi::OsString,
     io::{Read, Write},
     ops::Deref,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
 };
 use tauri::utils::platform;
 
@@ -39,6 +34,7 @@ impl FFmpegProcess {
 
     pub fn stop(&mut self) {
         self.ffmpeg_stdin.write_all(b"q").ok();
+        self.ffmpeg_stdin.flush().ok();
         println!("Sent stop command to FFmpeg");
     }
 
@@ -105,34 +101,27 @@ impl FFmpegProcess {
         self.ffmpeg_stdin.flush()?;
         Ok(())
     }
-}
 
-pub struct NamedPipeCapture {
-    path: PathBuf,
-    is_stopped: Arc<AtomicBool>,
-}
-
-impl NamedPipeCapture {
-    pub fn new(path: &PathBuf) -> (Self, Arc<AtomicBool>) {
-        create_named_pipe(path).unwrap();
-
-        let stop = Arc::new(AtomicBool::new(false));
-
-        (
-            Self {
-                path: path.clone(),
-                is_stopped: stop.clone(),
-            },
-            stop.clone(),
-        )
+    pub fn pause(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
+            kill(Pid::from_raw(self.cmd.id() as i32), Signal::SIGSTOP)?;
+            println!("Sent SIGSTOP to FFmpeg");
+        }
+        Ok(())
     }
 
-    pub fn path(&self) -> &PathBuf {
-        &self.path
-    }
-
-    pub fn stop(&self) {
-        self.is_stopped.store(true, Ordering::Relaxed);
+    pub fn resume(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use nix::sys::signal::{kill, Signal};
+            use nix::unistd::Pid;
+            kill(Pid::from_raw(self.cmd.id() as i32), Signal::SIGCONT)?;
+            println!("Sent SIGCONT to FFmpeg");
+        }
+        Ok(())
     }
 }
 
@@ -210,7 +199,6 @@ pub struct FFmpegRawAudioInput {
     pub sample_rate: u32,
     pub channels: u16,
     pub input: OsString,
-    pub wallclock: bool, // pub offset: f64,
 }
 
 impl ApplyFFmpegArgs for FFmpegRawAudioInput {
@@ -220,10 +208,6 @@ impl ApplyFFmpegArgs for FFmpegRawAudioInput {
             .args(["-f", &self.sample_format])
             .args(["-ar", &self.sample_rate.to_string()])
             .args(["-ac", &self.channels.to_string()]);
-
-        if self.wallclock {
-            command.args(["-use_wallclock_as_timestamps", "1"]);
-        }
 
         // if self.offset != 0.0 {
         //     command.args(["-itsoffset", &self.offset.to_string()]);

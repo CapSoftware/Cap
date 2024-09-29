@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use cap_project::{BackgroundSource, ProjectConfiguration};
 use cap_rendering::{decoder::DecodedFrame, produce_frame, ProjectUniforms, RenderVideoConstants};
@@ -160,6 +160,7 @@ impl Renderer {
                         let frame_tx = self.frame_tx.clone();
 
                         frame_task = Some(tokio::spawn(async move {
+                            let time = Instant::now();
                             let frame = produce_frame(
                                 &render_constants,
                                 &screen_frame,
@@ -169,6 +170,7 @@ impl Renderer {
                             )
                             .await
                             .unwrap();
+                            // println!("produced frame in {:?}", time.elapsed());
 
                             frame_tx
                                 .send(SocketMessage::Frame {
