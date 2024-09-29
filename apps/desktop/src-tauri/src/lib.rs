@@ -377,9 +377,8 @@ fn create_in_progress_recording_window(app: &AppHandle) {
 #[tauri::command]
 #[specta::specta]
 async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
-    let mut state = state.write().await;
-
-    let Some(mut current_recording) = state.clear_current_recording() else {
+    // dropping the mutex lock is important to ensure that the getCurrentRecording query isn't blocked
+    let Some(mut current_recording) = state.write().await.clear_current_recording() else {
         return Err("Recording not in progress".to_string());
     };
 
