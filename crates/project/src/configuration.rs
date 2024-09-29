@@ -101,7 +101,7 @@ pub struct CameraPosition {
     pub y: CameraYPosition,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CameraConfiguration {
     pub hide: bool,
@@ -109,14 +109,29 @@ pub struct CameraConfiguration {
     pub position: CameraPosition,
     pub rounding: f32,
     pub shadow: u32,
-    // min 20 max 80
-    #[serde(default = "CameraConfiguration::default_size")]
     pub size: f32,
+}
+
+impl Default for CameraConfiguration {
+    fn default() -> Self {
+        Self {
+            hide: false,
+            mirror: false,
+            position: CameraPosition::default(),
+            rounding: Self::default_rounding(),
+            shadow: 0,
+            size: Self::default_size(),
+        }
+    }
 }
 
 impl CameraConfiguration {
     fn default_size() -> f32 {
         30.0
+    }
+
+    fn default_rounding() -> f32 {
+        100.0
     }
 }
 
@@ -224,13 +239,7 @@ impl Default for ProjectConfiguration {
                 source: BackgroundSource::default(),
                 ..Default::default()
             },
-            camera: CameraConfiguration {
-                position: CameraPosition {
-                    x: CameraXPosition::Right,
-                    y: CameraYPosition::Bottom,
-                },
-                ..Default::default()
-            },
+            camera: CameraConfiguration::default(),
             audio: AudioConfiguration::default(),
             cursor: CursorConfiguration::default(),
             hotkeys: HotkeysConfiguration::default(),

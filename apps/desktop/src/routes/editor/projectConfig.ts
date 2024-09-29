@@ -25,6 +25,7 @@ export const DEFAULT_PROJECT_CONFIG: ProjectConfiguration = {
     position: { x: "right", y: "bottom" },
     rounding: 100,
     shadow: 50,
+    size: 30,
   },
   audio: { mute: false, improve: false },
   cursor: { hideWhenIdle: false, size: 0, type: "pointer" },
