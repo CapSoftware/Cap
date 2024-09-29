@@ -260,6 +260,8 @@ export function ConfigSidebar() {
 
                     const { history } = useEditorContext();
 
+                    const angle = () => source().angle ?? 90;
+
                     return (
                       <>
                         <RgbInput
@@ -284,9 +286,9 @@ export function ConfigSidebar() {
                         />
                         <div
                           class="rounded-full size-12 bg-gray-50 border border-gray-200 relative p-1 flex flex-col items-center cursor-ns-resize"
-                          style={{ transform: `rotate(${source().angle}deg)` }}
+                          style={{ transform: `rotate(${angle()}deg)` }}
                           onMouseDown={(downEvent) => {
-                            const start = source().angle ?? 90;
+                            const start = angle();
                             const resumeHistory = history.pause();
 
                             createRoot((dispose) =>

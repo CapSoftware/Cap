@@ -12,7 +12,7 @@ fn fs_main(@location(0) tex_coords: vec2<f32>) -> @location(0) vec4<f32> {
 }
 
 fn gradient(uv: vec2<f32>) -> vec4<f32> {
-		let angle_rad = radians(u.angle + 90.0);
+		let angle_rad = radians(u.angle + 270.0);
 
 		let dir = vec2<f32>(cos(angle_rad), sin(angle_rad));
 
