@@ -42,7 +42,15 @@ async function getPagePaths(dir: string): Promise<{ path: string; lastModified: 
       };
     });
   
-    const routes = [...pagePaths, ...blogRoutes].map((route) => ({
+    // Combine routes and ensure '/' is first
+    const allRoutes = [...pagePaths, ...blogRoutes];
+    const homeRoute = allRoutes.find(route => route.path === '/');
+    const otherRoutes = allRoutes.filter(route => route.path !== '/');
+    
+    const routes = [
+      ...(homeRoute ? [homeRoute] : []),
+      ...otherRoutes
+    ].map((route) => ({
       url: `https://cap.so${route.path}`,
       lastModified: route.lastModified,
     }));
