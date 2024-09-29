@@ -109,6 +109,15 @@ pub struct CameraConfiguration {
     pub position: CameraPosition,
     pub rounding: f32,
     pub shadow: u32,
+    // min 20 max 80
+    #[serde(default = "CameraConfiguration::default_size")]
+    pub size: f32,
+}
+
+impl CameraConfiguration {
+    fn default_size() -> f32 {
+        30.0
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
