@@ -17,10 +17,25 @@ pub type Color = [u16; 3];
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum BackgroundSource {
-    Wallpaper { id: u16 },
-    Image { path: Option<String> },
-    Color { value: Color },
-    Gradient { from: Color, to: Color },
+    Wallpaper {
+        id: u16,
+    },
+    Image {
+        path: Option<String>,
+    },
+    Color {
+        value: Color,
+    },
+    Gradient {
+        from: Color,
+        to: Color,
+        #[serde(default = "default_gradient_angle")]
+        angle: u16,
+    },
+}
+
+fn default_gradient_angle() -> u16 {
+    90
 }
 
 impl Default for BackgroundSource {

@@ -12,19 +12,15 @@ fn fs_main(@location(0) tex_coords: vec2<f32>) -> @location(0) vec4<f32> {
 }
 
 fn gradient(uv: vec2<f32>) -> vec4<f32> {
-	  let angle_rad = u.angle * 3.14159 / 180.0;
-	  let rotated_uv = vec2<f32>(
-	      cos(angle_rad) * uv.x - sin(angle_rad) * uv.y,
-	      sin(angle_rad) * uv.x + cos(angle_rad) * uv.y
-	  );
+		let angle_rad = radians(u.angle + 90.0);
 
-	  let gradient_color = mix(
-	   		vec4<f32>(u.start.rgb, 1.0),
-				vec4<f32>(u.end.rgb, 1.0),
-	   		rotated_uv.x
-	  );
+		let dir = vec2<f32>(cos(angle_rad), sin(angle_rad));
 
-	  return vec4<f32>(gradient_color.rgb, gradient_color.a);
+		let proj = dot(uv - 0.5, dir) + 0.5;
+
+		let t = clamp(proj, 0.0, 1.0);
+
+		return mix(vec4<f32>(u.start.rgb, 1.0), vec4<f32>(u.end.rgb, 1.0), t);
 }
 
 struct VertexOutput {

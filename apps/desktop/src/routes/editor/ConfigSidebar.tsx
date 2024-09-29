@@ -3,9 +3,15 @@ import {
   RadioGroup,
 } from "@kobalte/core/radio-group";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
-import { Tooltip as KTooltip } from "@kobalte/core/tooltip";
 import { cx } from "cva";
-import { type Component, For, ParentProps, Show } from "solid-js";
+import {
+  type Component,
+  createRoot,
+  createSignal,
+  For,
+  ParentProps,
+  Show,
+} from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 
@@ -13,6 +19,7 @@ import type { BackgroundSource, CursorType } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { ComingSoonTooltip, Field, Slider, Subfield, Toggle } from "./ui";
 import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -248,30 +255,71 @@ export function ConfigSidebar() {
                     project.background.source
                   }
                 >
-                  {(source) => (
-                    <>
-                      <RgbInput
-                        value={source().from}
-                        onChange={(from) => {
-                          backgrounds.gradient.from = from;
-                          setProject("background", "source", {
-                            type: "gradient",
-                            from,
-                          });
-                        }}
-                      />
-                      <RgbInput
-                        value={source().to}
-                        onChange={(to) => {
-                          backgrounds.gradient.to = to;
-                          setProject("background", "source", {
-                            type: "gradient",
-                            to,
-                          });
-                        }}
-                      />
-                    </>
-                  )}
+                  {(source) => {
+                    const max = 360;
+
+                    const { history } = useEditorContext();
+
+                    return (
+                      <>
+                        <RgbInput
+                          value={source().from}
+                          onChange={(from) => {
+                            backgrounds.gradient.from = from;
+                            setProject("background", "source", {
+                              type: "gradient",
+                              from,
+                            });
+                          }}
+                        />
+                        <RgbInput
+                          value={source().to}
+                          onChange={(to) => {
+                            backgrounds.gradient.to = to;
+                            setProject("background", "source", {
+                              type: "gradient",
+                              to,
+                            });
+                          }}
+                        />
+                        <div
+                          class="rounded-full size-12 bg-gray-50 border border-gray-200 relative p-1 flex flex-col items-center cursor-ns-resize"
+                          style={{ transform: `rotate(${source().angle}deg)` }}
+                          onMouseDown={(downEvent) => {
+                            const start = source().angle ?? 90;
+                            const resumeHistory = history.pause();
+
+                            createRoot((dispose) =>
+                              createEventListenerMap(window, {
+                                mouseup: () => {
+                                  resumeHistory();
+                                  dispose();
+                                },
+                                mousemove: (moveEvent) => {
+                                  const rawNewAngle =
+                                    Math.round(
+                                      start +
+                                        (downEvent.clientY - moveEvent.clientY)
+                                    ) % max;
+                                  const newAngle = moveEvent.shiftKey
+                                    ? rawNewAngle
+                                    : Math.round(rawNewAngle / 45) * 45;
+
+                                  setProject("background", "source", {
+                                    type: "gradient",
+                                    angle:
+                                      newAngle < 0 ? newAngle + max : newAngle,
+                                  });
+                                },
+                              })
+                            );
+                          }}
+                        >
+                          <div class="bg-blue-300 size-2 rounded-full" />
+                        </div>
+                      </>
+                    );
+                  }}
                 </Show>
               </KTabs.Content>
             </KTabs>

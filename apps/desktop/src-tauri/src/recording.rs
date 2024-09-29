@@ -1,5 +1,6 @@
 use crate::audio::AudioCapturer;
 use crate::capture::CaptureController;
+use crate::flags;
 use cap_ffmpeg::{FFmpeg, FFmpegInput, FFmpegProcess, FFmpegRawAudioInput};
 use device_query::{DeviceQuery, DeviceState};
 use futures::future::OptionFuture;
@@ -143,18 +144,20 @@ impl InProgressRecording {
             drop(audio);
         }
 
-        // Save mouse events to files
-        let mouse_moves_path = self.recording_dir.join("mousemoves.json");
-        let mouse_clicks_path = self.recording_dir.join("mouseclicks.json");
+        if flags::RECORD_MOUSE {
+            // Save mouse events to files
+            let mouse_moves_path = self.recording_dir.join("mousemoves.json");
+            let mouse_clicks_path = self.recording_dir.join("mouseclicks.json");
 
-        let mouse_moves = self.mouse_moves.lock().unwrap();
-        let mouse_clicks = self.mouse_clicks.lock().unwrap();
+            let mouse_moves = self.mouse_moves.lock().unwrap();
+            let mouse_clicks = self.mouse_clicks.lock().unwrap();
 
-        let mut mouse_moves_file = File::create(mouse_moves_path).unwrap();
-        let mut mouse_clicks_file = File::create(mouse_clicks_path).unwrap();
+            let mut mouse_moves_file = File::create(mouse_moves_path).unwrap();
+            let mut mouse_clicks_file = File::create(mouse_clicks_path).unwrap();
 
-        serde_json::to_writer(&mut mouse_moves_file, &*mouse_moves).unwrap();
-        serde_json::to_writer(&mut mouse_clicks_file, &*mouse_clicks).unwrap();
+            serde_json::to_writer(&mut mouse_moves_file, &*mouse_moves).unwrap();
+            serde_json::to_writer(&mut mouse_clicks_file, &*mouse_clicks).unwrap();
+        }
 
         meta.save_for_project();
     }
