@@ -38,7 +38,7 @@ We use a combination of Rust, React (Next.js), TypeScript, Tauri, Drizzle (ORM),
 
 ### Apps:
 
-- `desktop`: A [Tauri](https://tauri.app) (Rust) app, using [Next.js](https://nextjs.org) on the frontend.
+- `desktop`: A [Tauri](https://tauri.app) (Rust) app, using [SolidStart](https://start.solidjs.com) on the frontend.
 - `web`: A [Next.js](https://nextjs.org) web app.
 
 ### Packages:
