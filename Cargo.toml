@@ -9,5 +9,5 @@ members = [
 ]
 
 [workspace.dependencies]
-ffmpeg-next = "7.1"
+ffmpeg-next = { git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "11f8d264bbc0" }
 tauri = { version = "2.0.0-rc" }
