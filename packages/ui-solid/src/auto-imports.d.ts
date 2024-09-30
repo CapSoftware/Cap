@@ -39,6 +39,7 @@ declare global {
   const IconCapPlayCircle: typeof import('~icons/cap/play-circle.jsx')['default']
   const IconCapPresets: typeof import('~icons/cap/presets.jsx')['default']
   const IconCapRedo: typeof import('~icons/cap/redo.jsx')['default']
+  const IconCapRestart: typeof import('~icons/cap/restart.jsx')['default']
   const IconCapScissors: typeof import('~icons/cap/scissors.jsx')['default']
   const IconCapSettings: typeof import('~icons/cap/settings.jsx')['default']
   const IconCapShadow: typeof import('~icons/cap/shadow.jsx')['default']
@@ -50,6 +51,10 @@ declare global {
   const IconLucideCamera: typeof import('~icons/lucide/camera.jsx')['default']
   const IconLucideCheck: typeof import('~icons/lucide/check.jsx')['default']
   const IconLucideEye: typeof import('~icons/lucide/eye.jsx')['default']
+  const IconLucideFolder: typeof import('~icons/lucide/folder.jsx')['default']
+  const IconLucideFoler: typeof import('~icons/lucide/foler.jsx')['default']
   const IconLucideLoaderCircle: typeof import('~icons/lucide/loader-circle.jsx')['default']
+  const IconLucideRewind: typeof import('~icons/lucide/rewind.jsx')['default']
   const IconLucideSmile: typeof import('~icons/lucide/smile.jsx')['default']
+  const IconLucideVideo: typeof import('~icons/lucide/video.jsx')['default']
 }

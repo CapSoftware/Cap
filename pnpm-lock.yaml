@@ -139,6 +139,9 @@ importers:
       solid-markdown:
         specifier: ^2.0.13
         version: 2.0.13(solid-js@1.9.1)
+      solid-particles:
+        specifier: ^2.9.3
+        version: 2.9.3(solid-js@1.9.1)
       solid-presence:
         specifier: ^0.1.8
         version: 0.1.8(solid-js@1.9.1)
@@ -220,7 +223,7 @@ importers:
         version: 2.30.1
       next:
         specifier: 14.2.9
-        version: 14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        version: 14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       next-auth:
         specifier: ^4.24.5
         version: 4.24.8(next@14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@6.9.15)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -687,7 +690,7 @@ importers:
         version: 5.0.7
       next:
         specifier: 14.2.9
-        version: 14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        version: 14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       next-auth:
         specifier: ^4.24.5
         version: 4.24.8(next@14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@6.9.15)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -9180,6 +9183,12 @@ packages:
     peerDependencies:
       solid-js: ^1.6.0
 
+  solid-particles@2.9.3:
+    resolution: {integrity: sha512-YkzpYppHSJZjx0AJsKziGMgGXZXzMh4MrH2gGO9GY6vELVkLBd80rJxYXmPc6pvlp9aNLKHrNOCppgbC8xWx/Q==}
+    deprecated: '@tsparticles/solid is the new package compatible with v3, please use that'
+    peerDependencies:
+      solid-js: '>=1.0.0'
+
   solid-presence@0.1.8:
     resolution: {integrity: sha512-pWGtXUFWYYUZNbg5YpG5vkQJyOtzn2KXhxYaMx/4I+lylTLYkITOLevaCwMRN+liCVk0pqB6EayLWojNqBFECA==}
     peerDependencies:
@@ -9688,6 +9697,10 @@ packages:
 
   tslib@2.7.0:
     resolution: {integrity: sha512-gLXCKdN1/j47AiHiOkJN69hJmcbGTHI0ImLmbYLHykhgeN0jVGola9yVjFgzCUklsZQMW55o+dW7IXv3RCXDzA==}
+
+  tsparticles-engine@2.12.0:
+    resolution: {integrity: sha512-ZjDIYex6jBJ4iMc9+z0uPe7SgBnmb6l+EJm83MPIsOny9lPpetMsnw/8YJ3xdxn8hV+S3myTpTN1CkOVmFv0QQ==}
+    deprecated: starting from tsparticles v3 the packages are now moved to @tsparticles/package-name instead of tsparticles-package-name
 
   tsutils@3.21.0:
     resolution: {integrity: sha512-mHKK3iUXL+3UF6xL5k0PEhKRUBKPBCv/+RkEOpjRWxxx27KKRBmmA60A9pgOUvMi8GKhRMPEmjBRPzs2W7O1OA==}
@@ -16479,7 +16492,7 @@ snapshots:
       doctrine: 2.1.0
       eslint: 8.57.1
       eslint-import-resolver-node: 0.3.9
-      eslint-module-utils: 2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1))(eslint@8.57.1)
+      eslint-module-utils: 2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0)(eslint@8.57.1))(eslint@8.57.1)
       hasown: 2.0.2
       is-core-module: 2.15.1
       is-glob: 4.0.3
@@ -19130,7 +19143,7 @@ snapshots:
       '@panva/hkdf': 1.2.1
       cookie: 0.5.0
       jose: 4.15.9
-      next: 14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      next: 14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       oauth: 0.9.15
       openid-client: 5.7.0
       preact: 10.24.1
@@ -19179,7 +19192,7 @@ snapshots:
       - '@babel/core'
       - babel-plugin-macros
 
-  next@14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+  next@14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
       '@next/env': 14.2.9
       '@swc/helpers': 0.5.5
@@ -20530,6 +20543,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  solid-particles@2.9.3(solid-js@1.9.1):
+    dependencies:
+      fast-deep-equal: 3.1.3
+      solid-js: 1.9.1
+      tsparticles-engine: 2.12.0
+
   solid-presence@0.1.8(solid-js@1.9.1):
     dependencies:
       '@corvu/utils': 0.4.2(solid-js@1.9.1)
@@ -21082,6 +21101,8 @@ snapshots:
   tslib@2.6.2: {}
 
   tslib@2.7.0: {}
+
+  tsparticles-engine@2.12.0: {}
 
   tsutils@3.21.0(typescript@5.6.2):
     dependencies:

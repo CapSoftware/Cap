@@ -92,7 +92,7 @@ export const HomePage = () => {
             <div className="mb-auto text-center px-4 pt-40 pb-52 md:pb-64 -mt-40">
               <Link
                 href="/updates/cap-v03-launch"
-                className="mx-auto mb-4 inline-flex justify-center font-medium transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 bg-blue-400 hover:bg-blue-500 h-9 px-4 py-2 rounded-full space-x-2 items-center"
+                className="mx-auto mb-4 inline-flex justify-center font-medium transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 bg-blue-400 hover:bg-blue-500 h-9 px-4 py-2 rounded-full space-x-2 items-center animate-pulse"
               >
                 <span className="text-sm text-white">
                   NEW: Cap v0.3 is here!
@@ -144,22 +144,35 @@ export const HomePage = () => {
             </div>
           </div>
         </div>
-        <div id="cloud-1" className="absolute top-0 -right-20 opacity-70">
+        <div
+          id="cloud-1"
+          className="absolute top-0 -right-20 opacity-70 md:opacity-70 opacity-90"
+        >
           <img
-            className="max-w-[40vw] h-auto"
+            className="max-w-[60vw] md:max-w-[40vw] h-auto"
             src="/illustrations/cloud-1.png"
             alt="Homepage Cloud One"
           />
         </div>
-        <div id="cloud-2" className="absolute top-0 left-0 opacity-70">
+        <div
+          id="cloud-2"
+          className="absolute top-0 left-0 opacity-70 md:opacity-70 opacity-90"
+        >
           <img
-            className="max-w-[40vw] h-auto"
+            className="max-w-[60vw] md:max-w-[40vw] h-auto"
             src="/illustrations/cloud-2.png"
             alt="Homepage Cloud Two"
           />
         </div>
-        <div id="cloud-3" className="absolute -bottom-10 -left-20 opacity-70">
-          <img src="/illustrations/cloud-3.png" alt="Homepage Cloud Three" />
+        <div
+          id="cloud-3"
+          className="absolute -bottom-20 left-0 transform opacity-70 md:opacity-70 opacity-90"
+        >
+          <img
+            className="max-w-[60vw] md:max-w-[100vw] h-auto"
+            src="/illustrations/cloud-3.png"
+            alt="Homepage Cloud Three"
+          />
         </div>
       </div>
       <div

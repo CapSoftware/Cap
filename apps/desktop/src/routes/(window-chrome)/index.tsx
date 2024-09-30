@@ -35,7 +35,6 @@ import {
 
 const getAuth = cache(async () => {
   const value = await authStore.get();
-  console.log({ value });
   if (!value) return redirect("/signin");
   return value;
 }, "getAuth");
@@ -189,7 +188,10 @@ export default function () {
       </div>
       <div class="flex items-center justify-between pb-[0.25rem]">
         <IconCapLogoFull class="w-[90px] h-auto" />
-        <button type="button" onClick={() => commands.openSettingsWindow()}>
+        <button
+          type="button"
+          onClick={() => commands.openSettingsWindow("hotkeys")}
+        >
           <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
         </button>
       </div>

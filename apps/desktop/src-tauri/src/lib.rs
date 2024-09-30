@@ -50,6 +50,7 @@ use std::{
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
+use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
@@ -93,6 +94,14 @@ pub struct App {
 pub enum VideoType {
     Screen,
     Output,
+}
+
+#[derive(Serialize, Deserialize, specta::Type)]
+enum UploadResult {
+    Success(String),
+    NotAuthenticated,
+    PlanCheckFailed,
+    UpgradeRequired,
 }
 
 const WINDOW_CAPTURE_OCCLUDER_LABEL: &str = "window-capture-occluder";
@@ -221,6 +230,11 @@ pub struct RequestNewScreenshot;
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestStopRecording;
 
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestOpenSettings {
+    page: String,
+}
+
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
 #[tauri::command]
@@ -345,7 +359,7 @@ async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
 fn create_in_progress_recording_window(app: &AppHandle) {
     let monitor = app.primary_monitor().unwrap().unwrap();
 
-    let width = 120.0;
+    let width = 160.0;
     let height = 40.0;
 
     WebviewWindow::builder(
@@ -377,7 +391,6 @@ fn create_in_progress_recording_window(app: &AppHandle) {
 #[tauri::command]
 #[specta::specta]
 async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
-    // dropping the mutex lock is important to ensure that the getCurrentRecording query isn't blocked
     let Some(mut current_recording) = state.write().await.clear_current_recording() else {
         return Err("Recording not in progress".to_string());
     };
@@ -390,6 +403,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     );
 
     current_recording.stop();
+    println!("Recording stopped");
 
     let window = app
         .get_webview_window(IN_PROGRESS_RECORDINGS_LABEL)
@@ -401,7 +415,6 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     }
 
     std::fs::create_dir_all(current_recording.recording_dir.join("screenshots")).ok();
-    dbg!(&current_recording.display.output_path);
 
     FFmpeg::new()
         .command
@@ -447,14 +460,11 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
 
     let config = {
         let mut segments = vec![];
-
         let mut passed_duration = 0.0;
 
         for i in (0..current_recording.segments.len()).step_by(2) {
             let start = passed_duration;
-
             passed_duration += current_recording.segments[i + 1] - current_recording.segments[i];
-
             segments.push(TimelineSegment {
                 start,
                 end: passed_duration,
@@ -578,34 +588,36 @@ async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(
 #[tauri::command]
 #[specta::specta]
 async fn open_file_path(app: AppHandle, path: PathBuf) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        Command::new("open")
-            .arg(&path)
-            .output()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
-    }
+    let path_str = path.to_str().ok_or("Invalid path")?;
 
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        use std::process::Command;
-        Command::new("cmd")
-            .args(&["/C", "start", ""])
-            .arg(&path)
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
+        Command::new("explorer")
+            .args(["/select,", path_str])
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-R")
+            .arg(path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
 
     #[cfg(target_os = "linux")]
     {
-        use std::process::Command;
         Command::new("xdg-open")
-            .arg(&path)
-            .output()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
+            .arg(
+                path.parent()
+                    .ok_or("Invalid path")?
+                    .to_str()
+                    .ok_or("Invalid path")?,
+            )
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {}", e))?;
     }
 
     Ok(())
@@ -1448,6 +1460,32 @@ async fn open_feedback_window(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
+async fn open_upgrade_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("upgrade") {
+        window.set_focus().ok();
+        return;
+    }
+
+    let window = WebviewWindow::builder(&app, "upgrade", tauri::WebviewUrl::App("/upgrade".into()))
+        .title("Cap Upgrade")
+        .inner_size(800.0, 850.0)
+        .resizable(false)
+        .maximized(false)
+        .shadow(true)
+        .accept_first_mouse(true)
+        .transparent(true)
+        .hidden_title(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .build()
+        .unwrap();
+
+    window.create_overlay_titlebar().unwrap();
+    #[cfg(target_os = "macos")]
+    window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn open_changelog_window(app: AppHandle) {
     let window = WebviewWindow::builder(
         &app,
@@ -1473,20 +1511,23 @@ async fn open_changelog_window(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
-async fn open_settings_window(app: AppHandle) {
-    let window =
-        WebviewWindow::builder(&app, "settings", tauri::WebviewUrl::App("/settings".into()))
-            .title("Cap Settings")
-            .inner_size(600.0, 450.0)
-            .resizable(true)
-            .maximized(false)
-            .shadow(true)
-            .accept_first_mouse(true)
-            .transparent(true)
-            .hidden_title(true)
-            .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .build()
-            .unwrap();
+async fn open_settings_window(app: AppHandle, page: String) {
+    let window = WebviewWindow::builder(
+        &app,
+        "settings",
+        tauri::WebviewUrl::App(format!("/settings?page={page}").into()),
+    )
+    .title("Cap Settings")
+    .inner_size(600.0, 450.0)
+    .resizable(true)
+    .maximized(false)
+    .shadow(true)
+    .accept_first_mouse(true)
+    .transparent(true)
+    .hidden_title(true)
+    .title_bar_style(tauri::TitleBarStyle::Overlay)
+    .build()
+    .unwrap();
 
     window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]
@@ -1499,11 +1540,32 @@ async fn upload_rendered_video(
     app: AppHandle,
     video_id: String,
     project: ProjectConfiguration,
-) -> Result<(), String> {
-    let Ok(Some(auth)) = AuthStore::get(&app) else {
+) -> Result<UploadResult, String> {
+    let Ok(Some(mut auth)) = AuthStore::get(&app) else {
         println!("not authenticated!");
-        return Err("Not authenticated".to_string());
+        return Ok(UploadResult::NotAuthenticated);
     };
+
+    // Check if user has an upgraded plan
+    if !auth.plan.upgraded {
+        // Fetch and update plan information
+        if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
+            println!("Failed to update plan information: {}", e);
+            return Ok(UploadResult::PlanCheckFailed);
+        }
+
+        // Refresh auth information after update
+        auth = AuthStore::get(&app).unwrap().unwrap();
+
+        // Re-check upgraded status after refresh
+        if !auth.plan.upgraded {
+            // Open upgrade window instead of returning an error
+            open_upgrade_window(app).await;
+            return Ok(UploadResult::UpgradeRequired);
+        }
+    }
+
+    println!("Uploading rendered video: {:?}", video_id);
 
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
 
@@ -1560,16 +1622,55 @@ async fn upload_rendered_video(
         }
     }
 
-    Ok(())
+    Ok(UploadResult::Success(share_link))
 }
 
 #[tauri::command]
 #[specta::specta]
-async fn upload_screenshot(app: AppHandle, screenshot_path: PathBuf) -> Result<String, String> {
-    let Ok(Some(auth)) = AuthStore::get(&app) else {
+async fn upload_screenshot(
+    app: AppHandle,
+    screenshot_path: PathBuf,
+) -> Result<UploadResult, String> {
+    let Ok(Some(mut auth)) = AuthStore::get(&app) else {
         println!("not authenticated!");
-        return Err("Not authenticated".to_string());
+        return Ok(UploadResult::NotAuthenticated);
     };
+
+    if !auth.plan.upgraded {
+        println!("User plan not upgraded. Fetching and updating plan information.");
+        // Fetch and update plan information
+        if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
+            println!("Failed to update plan information: {}", e);
+            return Ok(UploadResult::PlanCheckFailed);
+        }
+
+        println!("Plan information updated. Refreshing auth information.");
+        // Refresh auth information after update
+        auth = match AuthStore::get(&app) {
+            Ok(Some(updated_auth)) => {
+                println!("Auth information refreshed successfully.");
+                updated_auth
+            }
+            Ok(None) => {
+                println!("Error: No auth information found after refresh.");
+                return Err("Authentication information not found".to_string());
+            }
+            Err(e) => {
+                println!("Error refreshing auth information: {}", e);
+                return Err("Failed to refresh authentication information".to_string());
+            }
+        };
+
+        // Re-check upgraded status after refresh
+        if !auth.plan.upgraded {
+            println!("User plan still not upgraded after refresh.");
+            open_upgrade_window(app).await;
+            return Ok(UploadResult::UpgradeRequired);
+        }
+        println!("User plan is now upgraded.");
+    } else {
+        println!("User plan is already upgraded.");
+    }
 
     println!("Uploading screenshot: {:?}", screenshot_path);
 
@@ -1629,7 +1730,7 @@ async fn upload_screenshot(app: AppHandle, screenshot_path: PathBuf) -> Result<S
         }
     }
 
-    Ok(share_link)
+    Ok(UploadResult::Success(share_link))
 }
 
 #[tauri::command]
@@ -1839,6 +1940,81 @@ fn get_recording_meta(app: AppHandle, id: String, file_type: String) -> Recordin
     RecordingMeta::load_for_project(&meta_path).unwrap()
 }
 
+#[tauri::command]
+#[specta::specta]
+fn list_recordings(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta)>, String> {
+    let recordings_dir = recordings_path(&app);
+
+    let result = std::fs::read_dir(&recordings_dir)
+        .map_err(|e| format!("Failed to read recordings directory: {}", e))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
+                let id = path.file_stem()?.to_str()?.to_string();
+                let meta = get_recording_meta(app.clone(), id.clone(), "recording".to_string());
+                Some((id, path, meta))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(result)
+}
+
+#[tauri::command]
+#[specta::specta]
+fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta)>, String> {
+    let screenshots_dir = screenshots_path(&app);
+
+    let result = std::fs::read_dir(&screenshots_dir)
+        .map_err(|e| format!("Failed to read screenshots directory: {}", e))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
+                let id = path.file_stem()?.to_str()?.to_string();
+                let meta = get_recording_meta(app.clone(), id.clone(), "screenshot".to_string());
+
+                // Find the nearest .png file inside the .cap folder
+                let png_path = std::fs::read_dir(&path)
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .find(|e| e.path().extension().and_then(|s| s.to_str()) == Some("png"))
+                    .map(|e| e.path())?;
+
+                Some((id, png_path, meta))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(result)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
+    if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
+        return Err(format!("Failed to update plan information: {}", e));
+    }
+
+    let auth = AuthStore::get(&app).map_err(|e| e.to_string())?;
+
+    Ok(auth.map_or(false, |a| a.plan.upgraded))
+}
+
+#[tauri::command]
+#[specta::specta]
+fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    app.shell()
+        .open(&url, None)
+        .map_err(|e| format!("Failed to open URL: {}", e))?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -1884,7 +2060,12 @@ pub fn run() {
             open_feedback_window,
             open_settings_window,
             open_changelog_window,
+            open_upgrade_window,
             save_file_dialog,
+            list_recordings,
+            list_screenshots,
+            check_upgraded_and_update,
+            open_external_link,
             hotkeys::set_hotkey
         ])
         .events(tauri_specta::collect_events![
@@ -1902,6 +2083,7 @@ pub fn run() {
             RequestRestartRecording,
             RequestStopRecording,
             RequestNewScreenshot,
+            RequestOpenSettings,
         ])
         .ty::<ProjectConfiguration>()
         .ty::<AuthStore>()
@@ -1991,7 +2173,6 @@ pub fn run() {
             let app_handle_clone = app_handle.clone();
             RequestRestartRecording::listen_any(app, move |_| {
                 let app_handle = app_handle_clone.clone();
-                println!("RequestRestartRecording received");
                 tauri::async_runtime::spawn(async move {
                     let state = app_handle.state::<Arc<RwLock<App>>>();
 
@@ -2003,13 +2184,10 @@ pub fn run() {
                                 .emit(&app_handle)
                                 .ok();
 
-                            println!("Stopping and discarding current recording");
                             recording.stop_and_discard();
                         }
                     }
 
-                    // Start a new recording immediately
-                    println!("Starting new recording");
                     if let Err(e) = start_recording(app_handle.clone(), state).await {
                         eprintln!("Failed to start new recording: {}", e);
                     } else {
@@ -2025,6 +2203,14 @@ pub fn run() {
                     if let Err(e) = take_screenshot(app_handle.clone(), app_handle.state()).await {
                         eprintln!("Failed to take screenshot: {}", e);
                     }
+                });
+            });
+
+            let app_handle_clone = app_handle.clone();
+            RequestOpenSettings::listen_any(app, move |e| {
+                let app_handle = app_handle_clone.clone();
+                tauri::async_runtime::spawn(async move {
+                    open_settings_window(app_handle, e.payload.page).await;
                 });
             });
 

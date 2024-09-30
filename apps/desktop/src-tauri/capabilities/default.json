@@ -21,6 +21,7 @@
     "core:app:allow-version",
     "shell:default",
     "fs:default",
+    "fs:read-files",
     "dialog:default",
     "store:default",
     "process:default",

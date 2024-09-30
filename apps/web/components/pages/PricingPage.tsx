@@ -62,7 +62,7 @@ export const PricingPage = () => {
 
   const proList = [
     {
-      text: "Unlimited cloud storage",
+      text: "Unlimited cloud storage & Shareable links",
       available: true,
     },
     {

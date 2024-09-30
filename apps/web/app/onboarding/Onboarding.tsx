@@ -63,7 +63,7 @@ export const Onboarding = ({
       <Card noStyle>
         <CardContent>
           <div className="space-y-3">
-            <div>
+            <div className="flex flex-col space-y-1 items-center">
               <Label htmlFor="firstName">First name *</Label>
               <Input
                 type="text"
@@ -74,7 +74,7 @@ export const Onboarding = ({
                 onChange={(e) => setFirstNameInput(e.target.value)}
               />
             </div>
-            <div>
+            <div className="flex flex-col space-y-1 items-center">
               <Label htmlFor="lastName">Last name</Label>
               <Input type="text" id="lastName" name="lastName" />
             </div>

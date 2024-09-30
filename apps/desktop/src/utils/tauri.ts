@@ -200,7 +200,7 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
 async requestPermission(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("request_permission", { permission });
 },
-async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<Result<null, string>> {
+async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<Result<UploadResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("upload_rendered_video", { videoId, project }) };
 } catch (e) {
@@ -208,7 +208,7 @@ async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Prom
     else return { status: "error", error: e  as any };
 }
 },
-async uploadScreenshot(screenshotPath: string) : Promise<Result<string, string>> {
+async uploadScreenshot(screenshotPath: string) : Promise<Result<UploadResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("upload_screenshot", { screenshotPath }) };
 } catch (e) {
@@ -222,15 +222,50 @@ async getRecordingMeta(id: string, fileType: string) : Promise<RecordingMeta> {
 async openFeedbackWindow() : Promise<void> {
     await TAURI_INVOKE("open_feedback_window");
 },
-async openSettingsWindow() : Promise<void> {
-    await TAURI_INVOKE("open_settings_window");
+async openSettingsWindow(page: string) : Promise<void> {
+    await TAURI_INVOKE("open_settings_window", { page });
 },
 async openChangelogWindow() : Promise<void> {
     await TAURI_INVOKE("open_changelog_window");
 },
+async openUpgradeWindow() : Promise<void> {
+    await TAURI_INVOKE("open_upgrade_window");
+},
 async saveFileDialog(fileName: string, fileType: string) : Promise<Result<string | null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("save_file_dialog", { fileName, fileType }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async listRecordings() : Promise<Result<([string, string, RecordingMeta])[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_recordings") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async listScreenshots() : Promise<Result<([string, string, RecordingMeta])[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_screenshots") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async checkUpgradedAndUpdate() : Promise<Result<boolean, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("check_upgraded_and_update") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async openExternalLink(url: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_external_link", { url }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -260,6 +295,7 @@ recordingStarted: RecordingStarted,
 recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
 requestNewScreenshot: RequestNewScreenshot,
+requestOpenSettings: RequestOpenSettings,
 requestRestartRecording: RequestRestartRecording,
 requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
@@ -275,6 +311,7 @@ recordingStarted: "recording-started",
 recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
 requestNewScreenshot: "request-new-screenshot",
+requestOpenSettings: "request-open-settings",
 requestRestartRecording: "request-restart-recording",
 requestStartRecording: "request-start-recording",
 requestStopRecording: "request-stop-recording",
@@ -291,7 +328,7 @@ export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
 export type AudioMeta = { path: string }
-export type AuthStore = { token: string; expires: number }
+export type AuthStore = { token: string; expires: number; plan: Plan }
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
 export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -320,6 +357,7 @@ export type NewScreenshotAdded = { path: string }
 export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
+export type Plan = { upgraded: boolean; last_checked: number }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
 export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[] }
@@ -332,6 +370,7 @@ export type RecordingStopped = { path: string }
 export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type RequestNewScreenshot = null
+export type RequestOpenSettings = { page: string }
 export type RequestRestartRecording = null
 export type RequestStartRecording = null
 export type RequestStopRecording = null
@@ -340,6 +379,7 @@ export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
 export type TimelineConfiguration = { segments: TimelineSegment[] }
 export type TimelineSegment = { timescale: number; start: number; end: number }
+export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
 export type Video = { duration: number; width: number; height: number; fps: number }
 export type VideoType = "screen" | "output"
 export type XY<T> = { x: T; y: T }

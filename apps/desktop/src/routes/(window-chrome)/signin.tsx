@@ -12,45 +12,52 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 const signInAction = action(async () => {
   let res: (url: URL) => void;
 
-  const stopListening = await listen(
-    "oauth://url",
-    (data: { payload: string }) => {
-      if (!data.payload.includes("token")) {
-        return;
+  try {
+    const stopListening = await listen(
+      "oauth://url",
+      (data: { payload: string }) => {
+        if (!data.payload.includes("token")) {
+          return;
+        }
+
+        const urlObject = new URL(data.payload);
+        res(urlObject);
       }
+    );
 
-      const urlObject = new URL(data.payload);
+    const port: string = await invoke("plugin:oauth|start", {
+      config: { response: callbackTemplate },
+    });
 
-      res(urlObject);
+    await shell.open(
+      `${clientEnv.VITE_SERVER_URL}/api/desktop/session/request?port=${port}`
+    );
+
+    const url = await new Promise<URL>((r) => {
+      res = r;
+    });
+    stopListening();
+
+    const token = url.searchParams.get("token");
+    const expires = Number(url.searchParams.get("expires"));
+    if (!token || !expires) {
+      throw new Error("Invalid token or expires");
     }
-  );
 
-  const port: string = await invoke("plugin:oauth|start", {
-    config: { response: callbackTemplate },
-  });
+    await authStore.set({
+      token,
+      expires,
+      plan: { upgraded: false, last_checked: 0 },
+    });
 
-  await shell.open(
-    `${clientEnv.VITE_SERVER_URL}/api/desktop/session/request?port=${port}`
-  );
+    getCurrentWindow()
+      .setFocus()
+      .catch(() => {});
 
-  const url = await new Promise<URL>((r) => {
-    res = r;
-  });
-  stopListening();
-
-  const token = url.searchParams.get("token");
-  const expires = Number(url.searchParams.get("expires"));
-  if (!token || !expires) {
-    throw new Error("Invalid token or expires");
+    return redirect("/");
+  } catch (error) {
+    throw error;
   }
-
-  await authStore.set({ token, expires });
-
-  getCurrentWindow()
-    .setFocus()
-    .catch(() => {});
-
-  return redirect("/");
 });
 
 export default function Page() {

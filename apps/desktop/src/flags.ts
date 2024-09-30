@@ -1,4 +1,4 @@
 export const flags = {
-  split: true,
+  split: import.meta.env.DEV,
   pauseResume: import.meta.env.DEV,
 };

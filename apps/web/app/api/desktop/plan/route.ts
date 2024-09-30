@@ -1,10 +1,12 @@
 import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { users, videos } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { cookies } from "next/headers";
 import { isUserOnProPlan } from "@cap/utils";
+import { stripe } from "@cap/utils";
+import { eq } from "drizzle-orm";
 
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
@@ -61,9 +63,32 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const isSubscribed = isUserOnProPlan({
+  let isSubscribed = isUserOnProPlan({
     subscriptionStatus: user.stripeSubscriptionStatus as string,
   });
+  if (!isSubscribed && !user.stripeSubscriptionId && user.stripeCustomerId) {
+    try {
+      const subscriptions = await stripe.subscriptions.list({
+        customer: user.stripeCustomerId,
+      });
+      const activeSubscription = subscriptions.data.find(
+        (sub) => sub.status === 'active'
+      );
+      if (activeSubscription) {
+        isSubscribed = true;
+        // Update the user's subscription status in the database
+        await db
+          .update(users)
+          .set({
+            stripeSubscriptionStatus: activeSubscription.status,
+            stripeSubscriptionId: activeSubscription.id,
+          })
+          .where(eq(users.id, user.id));
+      }
+    } catch (error) {
+      console.error('Error fetching subscription from Stripe:', error);
+    }
+  }
 
   return new Response(
     JSON.stringify({

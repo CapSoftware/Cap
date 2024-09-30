@@ -23,7 +23,7 @@ import { TransitionGroup } from "solid-transition-group";
 import { createStore, produce } from "solid-js/store";
 import { makePersisted } from "@solid-primitives/storage";
 
-import { commands, events } from "~/utils/tauri";
+import { commands, events, Result, UploadResult } from "~/utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
 
@@ -189,18 +189,32 @@ export default function () {
                     return true;
                   },
                 }));
-
                 const uploadMedia = createMutation(() => ({
                   mutationFn: async () => {
+                    let res: Result<UploadResult, string>;
                     if (isRecording) {
-                      const res = await commands.uploadRenderedVideo(
+                      res = await commands.uploadRenderedVideo(
                         mediaId,
                         presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
                       );
-                      if (res.status !== "ok") throw new Error(res.error);
                     } else {
-                      const res = await commands.uploadScreenshot(media.path);
-                      if (res.status !== "ok") throw new Error(res.error);
+                      res = await commands.uploadScreenshot(media.path);
+                    }
+
+                    if (res.status === "error") {
+                      throw new Error(res.error);
+                    }
+
+                    switch (res.data) {
+                      case "NotAuthenticated":
+                        throw new Error("Not authenticated");
+                      case "PlanCheckFailed":
+                        throw new Error("Plan check failed");
+                      case "UpgradeRequired":
+                        throw new Error("Upgrade required");
+                      default:
+                        // Success case, do nothing
+                        break;
                     }
                   },
                   onSuccess: () =>
@@ -230,6 +244,8 @@ export default function () {
                 });
 
                 const [imageExists, setImageExists] = createSignal(true);
+                const [showUpgradeTooltip, setShowUpgradeTooltip] =
+                  createSignal(false);
 
                 const isLoading = () =>
                   copyMedia.isPending ||
@@ -279,7 +295,7 @@ export default function () {
                         <div
                           class={cx(
                             "w-full h-full absolute inset-0 transition-all",
-                            isLoading()
+                            isLoading() || showUpgradeTooltip()
                               ? "opacity-100"
                               : "opacity-0 group-hover:opacity-100",
                             "backdrop-blur bg-gray-500/80 text-white p-2"
@@ -370,11 +386,27 @@ export default function () {
                                 ? "Copy Shareable Link"
                                 : uploadMedia.isPending
                                 ? "Uploading Cap"
+                                : showUpgradeTooltip()
+                                ? "Upgrade Required"
                                 : "Create Shareable Link"
                             }
-                            forceOpen={uploadMedia.isPending}
+                            forceOpen={
+                              uploadMedia.isPending || showUpgradeTooltip()
+                            }
                             tooltipPlacement="left"
-                            onClick={() => uploadMedia.mutate()}
+                            onClick={() => {
+                              uploadMedia.mutate(undefined, {
+                                onError: (error) => {
+                                  if (error.message === "Upgrade required") {
+                                    setShowUpgradeTooltip(true);
+                                    setTimeout(
+                                      () => setShowUpgradeTooltip(false),
+                                      10000
+                                    );
+                                  }
+                                },
+                              });
+                            }}
                             disabled={
                               copyMedia.isPending ||
                               saveMedia.isPending ||
@@ -440,7 +472,7 @@ export default function () {
                               style={{ color: "white", "font-size": "14px" }}
                               class={cx(
                                 "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all",
-                                isLoading()
+                                isLoading() || showUpgradeTooltip()
                                   ? "opacity-0"
                                   : "group-hover:opacity-0"
                               )}
