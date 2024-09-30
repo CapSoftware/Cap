@@ -202,7 +202,7 @@ export default function () {
                 </button>
               </div>
               <KSelect<CaptureWindow | null>
-                options={windows.data ?? []}
+                options={windows.status === "success" ? windows.data : []}
                 optionValue="id"
                 optionTextValue="name"
                 placeholder="Window"
@@ -377,7 +377,12 @@ export default function () {
               <div class="flex flex-col gap-[0.25rem] items-stretch">
                 <label class="text-gray-400">Microphone</label>
                 <KSelect<{ name: string }>
-                  options={[{ name: "No Audio" }, ...(audioDevices.data ?? [])]}
+                  options={[
+                    { name: "No Audio" },
+                    ...(audioDevices.status === "success"
+                      ? audioDevices.data ?? []
+                      : []),
+                  ]}
                   optionValue="name"
                   optionTextValue="name"
                   placeholder="No Audio"
@@ -510,4 +515,9 @@ function createUpdateCheck() {
     if (!shouldUpdate) return;
     navigate("/update");
   });
+}
+
+function dbg<T>(v: T) {
+  console.log(v);
+  return v;
 }
