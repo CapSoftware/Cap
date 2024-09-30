@@ -11,7 +11,7 @@
     "./types": "./src/types.d.ts"
   },
   "dependencies": {
-    "@kobalte/core": "^0.13.4",
+    "@kobalte/core": "^0.13.6",
     "cva": "npm:class-variance-authority@^0.7.0",
     "solid-js": "^1.8.18",
     "tailwindcss": "^3.4.10"

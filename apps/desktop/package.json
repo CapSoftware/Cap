@@ -13,7 +13,7 @@
     "@cap/ui-solid": "workspace:*",
     "@cap/utils": "workspace:*",
     "@corvu/tooltip": "^0.2.1",
-    "@kobalte/core": "^0.13.4",
+    "@kobalte/core": "^0.13.6",
     "@solid-primitives/bounds": "^0.0.122",
     "@solid-primitives/context": "^0.2.3",
     "@solid-primitives/date": "^2.0.23",

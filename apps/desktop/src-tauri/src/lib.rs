@@ -1130,7 +1130,6 @@ async fn remove_fake_window(
 
 const PREV_RECORDINGS_WINDOW: &str = "prev-recordings";
 
-// must not be async bc of panel
 #[tauri::command(async)]
 #[specta::specta]
 fn show_previous_recordings_window(app: AppHandle) {

@@ -45,7 +45,7 @@ importers:
         specifier: ^0.2.1
         version: 0.2.1(solid-js@1.9.1)
       '@kobalte/core':
-        specifier: ^0.13.4
+        specifier: ^0.13.6
         version: 0.13.6(solid-js@1.9.1)
       '@solid-primitives/bounds':
         specifier: ^0.0.122
@@ -844,7 +844,7 @@ importers:
   packages/ui-solid:
     dependencies:
       '@kobalte/core':
-        specifier: ^0.13.4
+        specifier: ^0.13.6
         version: 0.13.6(solid-js@1.9.1)
       cva:
         specifier: npm:class-variance-authority@^0.7.0
@@ -3800,8 +3800,8 @@ packages:
     peerDependencies:
       solid-js: ^1.6.12
 
-  '@solid-primitives/map@0.4.12':
-    resolution: {integrity: sha512-+vuajM82NN/bFwu4394k5rGUaBm+HYE7qcRnyPBtI1YGNXqSSuhrXDXZXSnlNgH+Sa8yguwXY9/BoZMsr/Ue8A==}
+  '@solid-primitives/map@0.4.13':
+    resolution: {integrity: sha512-B1zyFbsiTQvqPr+cuPCXO72sRuczG9Swncqk5P74NCGw1VE8qa/Ry9GlfI1e/VdeQYHjan+XkbE3rO2GW/qKew==}
     peerDependencies:
       solid-js: ^1.6.12
 
@@ -3867,8 +3867,8 @@ packages:
     peerDependencies:
       solid-js: ^1.6.12
 
-  '@solid-primitives/trigger@1.0.11':
-    resolution: {integrity: sha512-4oc8grBzBit7ByXgE1aZ0QXfhdlhXaiFjDKYsOhRyUJa8fN4hdr2IgsYqjmHwxyjK+Dm2OUwkCI1bGkaLgtgXg==}
+  '@solid-primitives/trigger@1.1.0':
+    resolution: {integrity: sha512-00BbAiXV66WwjHuKZc3wr0+GLb9C24mMUmi3JdTpNFgHBbrQGrIHubmZDg36c5/7wH+E0GQtOOanwQS063PO+A==}
     peerDependencies:
       solid-js: ^1.6.12
 
@@ -3966,11 +3966,11 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@8.4.0-alpha.1':
-    resolution: {integrity: sha512-CcE8hyqZfjXlBbtrLAuTQELmCEvkR+o2ea+xECUluOwVTJnNye5Vh/Qzlkw+d3yEYtgO3Go2wCuEiN/3+BWo3w==}
+  '@storybook/builder-vite@8.4.0-alpha.2':
+    resolution: {integrity: sha512-JT19lBZ34CoG9ofFpwctYiRBjpI68AznNz+EtQzawWx95TqwAjgB9zX9t2m2cWYXPT+CoVPC9UtI6/hlfmEjOw==}
     peerDependencies:
       '@preact/preset-vite': '*'
-      storybook: ^8.4.0-alpha.1
+      storybook: ^8.4.0-alpha.2
       typescript: '>= 4.3.x'
       vite: ^4.0.0 || ^5.0.0
       vite-plugin-glimmerx: '*'
@@ -3990,10 +3990,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@8.4.0-alpha.1':
-    resolution: {integrity: sha512-NbNMpAyKAFKcRJk+Zv/7NtHUurNXsKwJmK8qfKXSgNenE8J4G8L35vehPRZh0sb6xxO+hYm7JDtKR/VmCY9aYw==}
+  '@storybook/csf-plugin@8.4.0-alpha.2':
+    resolution: {integrity: sha512-vm4G8/OqqWnUjSrsFX1GBlDFt3y6GMJm8thd8xvVDp25yhH0NwrhqSeb4eXJtAo2t8gu89KPC8PctOixFvbXRA==}
     peerDependencies:
-      storybook: ^8.4.0-alpha.1
+      storybook: ^8.4.0-alpha.2
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -12111,7 +12111,7 @@ snapshots:
     dependencies:
       '@solid-primitives/event-listener': 2.3.3(solid-js@1.9.1)
       '@solid-primitives/keyed': 1.2.2(solid-js@1.9.1)
-      '@solid-primitives/map': 0.4.12(solid-js@1.9.1)
+      '@solid-primitives/map': 0.4.13(solid-js@1.9.1)
       '@solid-primitives/media': 2.2.9(solid-js@1.9.1)
       '@solid-primitives/props': 3.1.11(solid-js@1.9.1)
       '@solid-primitives/refs': 1.0.8(solid-js@1.9.1)
@@ -13602,9 +13602,9 @@ snapshots:
     dependencies:
       solid-js: 1.9.1
 
-  '@solid-primitives/map@0.4.12(solid-js@1.9.1)':
+  '@solid-primitives/map@0.4.13(solid-js@1.9.1)':
     dependencies:
-      '@solid-primitives/trigger': 1.0.11(solid-js@1.9.1)
+      '@solid-primitives/trigger': 1.1.0(solid-js@1.9.1)
       solid-js: 1.9.1
 
   '@solid-primitives/media@2.2.9(solid-js@1.9.1)':
@@ -13668,7 +13668,7 @@ snapshots:
     dependencies:
       solid-js: 1.9.1
 
-  '@solid-primitives/trigger@1.0.11(solid-js@1.9.1)':
+  '@solid-primitives/trigger@1.1.0(solid-js@1.9.1)':
     dependencies:
       '@solid-primitives/utils': 6.2.3(solid-js@1.9.1)
       solid-js: 1.9.1
@@ -13834,9 +13834,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@8.4.0-alpha.1(storybook@8.3.3)(typescript@5.6.2)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))':
+  '@storybook/builder-vite@8.4.0-alpha.2(storybook@8.3.3)(typescript@5.6.2)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 8.4.0-alpha.1(storybook@8.3.3)
+      '@storybook/csf-plugin': 8.4.0-alpha.2(storybook@8.3.3)
       '@types/find-cache-dir': 3.2.1
       browser-assert: 1.2.1
       es-module-lexer: 1.5.4
@@ -13879,7 +13879,7 @@ snapshots:
     transitivePeerDependencies:
       - webpack-sources
 
-  '@storybook/csf-plugin@8.4.0-alpha.1(storybook@8.3.3)':
+  '@storybook/csf-plugin@8.4.0-alpha.2(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.14.1
@@ -20602,7 +20602,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(typescript@5.6.2)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 8.4.0-alpha.1(storybook@8.3.3)(typescript@5.6.2)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))
+      '@storybook/builder-vite': 8.4.0-alpha.2(storybook@8.3.3)(typescript@5.6.2)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))
     transitivePeerDependencies:
       - '@preact/preset-vite'
       - storybook
