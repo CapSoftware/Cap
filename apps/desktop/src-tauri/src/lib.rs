@@ -156,10 +156,6 @@ impl App {
     pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
         self.close_occluder_window();
 
-        CurrentRecordingChanged(JsonValue::new(&None))
-            .emit(&self.handle)
-            .ok();
-
         self.current_recording.take()
     }
 
@@ -478,6 +474,10 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     .unwrap();
 
     AppSounds::StopRecording.play();
+
+    CurrentRecordingChanged(JsonValue::new(&None))
+        .emit(&app)
+        .ok();
 
     Ok(())
 }
@@ -2000,6 +2000,10 @@ pub fn run() {
                     {
                         let mut app_state = state.write().await;
                         if let Some(mut recording) = app_state.clear_current_recording() {
+                            CurrentRecordingChanged(JsonValue::new(&None))
+                                .emit(&app_handle)
+                                .ok();
+
                             println!("Stopping and discarding current recording");
                             recording.stop_and_discard();
                         }

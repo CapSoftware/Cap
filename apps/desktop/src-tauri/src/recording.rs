@@ -13,6 +13,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use std::{path::PathBuf, time::Duration};
+use tauri::AppHandle;
 use tokio::sync::watch;
 
 use objc::rc::autoreleasepool;
