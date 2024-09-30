@@ -207,7 +207,8 @@ impl ApplyFFmpegArgs for FFmpegRawAudioInput {
         command
             .args(["-f", &self.sample_format])
             .args(["-ar", &self.sample_rate.to_string()])
-            .args(["-ac", &self.channels.to_string()]);
+            .args(["-ac", &self.channels.to_string()])
+            .args(["-probesize", "32"]);
 
         // if self.offset != 0.0 {
         //     command.args(["-itsoffset", &self.offset.to_string()]);

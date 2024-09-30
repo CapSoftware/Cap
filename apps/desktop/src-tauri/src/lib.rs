@@ -51,6 +51,7 @@ use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_specta::Event;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::task;
 use tokio::{
@@ -612,7 +613,7 @@ async fn open_file_path(app: AppHandle, path: PathBuf) -> Result<(), String> {
 
 struct AudioRender {
     data: AudioData,
-    pipe_tx: mpsc::UnboundedSender<Vec<f64>>,
+    pipe_tx: tokio::sync::mpsc::Sender<Vec<f64>>,
 }
 
 async fn render_to_file_impl(
@@ -631,20 +632,50 @@ async fn render_to_file_impl(
     let output_folder = output_path.parent().unwrap();
     std::fs::create_dir_all(output_folder)
         .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
-    let output_path_clone = output_path.clone();
-    let recording_dir_clone = recording_dir.clone();
 
     let output_size = ProjectUniforms::get_output_size(&options, &project);
 
     let ffmpeg_handle = tokio::spawn({
         let project = project.clone();
+        let output_path = output_path.clone();
+        let recording_dir = recording_dir.clone();
         async move {
             println!("Starting FFmpeg output process...");
             let mut ffmpeg = cap_ffmpeg::FFmpeg::new();
 
-            let dir = tempfile::tempdir().unwrap();
+            let audio_dir = tempfile::tempdir().unwrap();
+            let video_dir = tempfile::tempdir().unwrap();
+
+            let video_tx = {
+                let pipe_path = video_dir.path().join("video.pipe");
+                create_named_pipe(&pipe_path).unwrap();
+
+                ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
+                    width: output_size.0,
+                    height: output_size.1,
+                    fps: 30,
+                    pix_fmt: "rgba",
+                    input: pipe_path.clone().into_os_string(),
+                });
+
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
+
+                tokio::spawn(async move {
+                    let mut file = std::fs::File::create(&pipe_path).unwrap();
+                    println!("video pipe opened");
+
+                    while let Some(bytes) = rx.recv().await {
+                        file.write_all(&bytes).unwrap();
+                    }
+
+                    println!("done writing to video pipe");
+                });
+
+                tx
+            };
+
             let audio = if let Some(audio) = audio {
-                let pipe_path = dir.path().join("audio.pipe");
+                let pipe_path = audio_dir.path().join("audio.pipe");
                 create_named_pipe(&pipe_path).unwrap();
 
                 ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
@@ -654,24 +685,21 @@ async fn render_to_file_impl(
                     channels: 1,
                 });
 
-                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f64>>();
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<f64>>(30);
 
                 tokio::spawn(async move {
                     let mut file = std::fs::File::create(&pipe_path).unwrap();
                     println!("audio pipe opened");
 
                     while let Some(bytes) = rx.recv().await {
-                        println!("writing {} audio bytes", bytes.len() * 8);
-                        file.write_all(
-                            bytes
-                                .iter()
-                                .flat_map(|f| f.to_le_bytes())
-                                .collect::<Vec<_>>()
-                                .as_slice(),
-                        )
-                        .unwrap();
-                        println!("done writing to audio pipe");
+                        let bytes = bytes
+                            .iter()
+                            .flat_map(|f| f.to_le_bytes())
+                            .collect::<Vec<_>>();
+                        file.write_all(&bytes).unwrap();
                     }
+
+                    println!("done writing to audio pipe");
                 });
 
                 Some(AudioRender {
@@ -682,39 +710,14 @@ async fn render_to_file_impl(
                 None
             };
 
-            let video_pipe_path = dir.path().join("video.pipe");
-            create_named_pipe(&video_pipe_path).unwrap();
-
-            ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
-                width: output_size.0,
-                height: output_size.1,
-                fps: 30,
-                pix_fmt: "rgba",
-                input: video_pipe_path.clone().into_os_string(),
-            });
-
-            let (video_tx, mut video_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-
-            tokio::spawn(async move {
-                let mut file = std::fs::File::create(&video_pipe_path).unwrap();
-                println!("video pipe opened");
-
-                while let Some(bytes) = video_rx.recv().await {
-                    println!("writing {} video bytes", bytes.len());
-                    file.write_all(&bytes).unwrap();
-                }
-                println!("done writing to video pipe");
-            });
-
             ffmpeg
                 .command
-                .args([
-                    "-f", "mp4", /*, "-map", &format!("{}:v", ffmpeg_input.index) */
-                ])
-                .args(["-codec:v", "libx264", "-preset", "ultrafast"])
+                .args(["-f", "mp4", "-map", "0:v", "-map", "1:a"])
+                .args(["-codec:v", "libx264", "-codec:a", "aac"])
+                .args(["-preset", "ultrafast"])
                 .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
                 .arg("-y")
-                .arg(&output_path_clone);
+                .arg(&output_path);
 
             let mut ffmpeg_process = ffmpeg.start();
 
@@ -724,7 +727,6 @@ async fn render_to_file_impl(
             loop {
                 match rx_image_data.recv().await {
                     Some(frame) => {
-                        // println!("Sending image data to FFmpeg");
                         on_progress(frame_count);
 
                         if frame_count == 0 {
@@ -734,33 +736,31 @@ async fn render_to_file_impl(
                         if let Some(audio) = &audio {
                             let samples_per_frame = audio.data.sample_rate as f64 / FPS as f64;
 
-                            if let Some(timeline) = project.timeline() {
-                                if let Some(recording_time) =
-                                    timeline.get_recording_time(frame_count as f64 / FPS as f64)
-                                {
-                                    let start = recording_time * audio.data.sample_rate as f64;
-                                    let end = start + samples_per_frame;
+                            let start_samples = match project.timeline() {
+                                Some(timeline) => timeline
+                                    .get_recording_time(frame_count as f64 / FPS as f64)
+                                    .map(|recording_time| {
+                                        recording_time * audio.data.sample_rate as f64
+                                    }),
+                                None => Some(frame_count as f64 * samples_per_frame),
+                            };
 
-                                    let samples = &audio.data.buffer[start as usize..end as usize];
-                                    let mut samples_iter = samples.iter().copied();
+                            if let Some(start) = start_samples {
+                                let end = start + samples_per_frame;
 
-                                    let mut frame_samples = Vec::new();
-                                    for _ in 0..samples_per_frame as usize {
-                                        frame_samples.push(samples_iter.next().unwrap_or(0.0));
-                                    }
+                                let samples = &audio.data.buffer[start as usize..end as usize];
+                                let mut samples_iter = samples.iter().copied();
 
-                                    println!("sending audio");
-                                    audio.pipe_tx.send(frame_samples).unwrap();
+                                let mut frame_samples = Vec::new();
+                                for _ in 0..samples_per_frame as usize {
+                                    frame_samples.push(samples_iter.next().unwrap_or(0.0));
                                 }
+
+                                audio.pipe_tx.send(frame_samples).await.unwrap();
                             }
                         }
 
-                        video_tx.send(frame).unwrap();
-                        println!("sending video");
-                        // if let Err(e) = ffmpeg_process.write_video_frame(&frame) {
-                        //     eprintln!("Error writing video frame: {:?}", e);
-                        //     break;
-                        // }
+                        video_tx.send(frame).await.unwrap();
 
                         frame_count += 1;
                     }
@@ -788,7 +788,7 @@ async fn render_to_file_impl(
                         image::Rgb([rgba[0], rgba[1], rgba[2]])
                     });
 
-                let screenshots_dir = recording_dir_clone.join("screenshots");
+                let screenshots_dir = recording_dir.join("screenshots");
                 std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
                     eprintln!("Failed to create screenshots directory: {:?}", e);
                 });
