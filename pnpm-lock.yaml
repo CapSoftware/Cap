@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@kobalte/core@0.13.6':
+    hash: vzpkmmroj2yro75ebs5pnjs3u4
+    path: patches/@kobalte__core@0.13.6.patch
+
 importers:
 
   .:
@@ -46,7 +51,7 @@ importers:
         version: 0.2.1(solid-js@1.9.1)
       '@kobalte/core':
         specifier: ^0.13.6
-        version: 0.13.6(solid-js@1.9.1)
+        version: 0.13.6(patch_hash=vzpkmmroj2yro75ebs5pnjs3u4)(solid-js@1.9.1)
       '@solid-primitives/bounds':
         specifier: ^0.0.122
         version: 0.0.122(solid-js@1.9.1)
@@ -215,7 +220,7 @@ importers:
         version: 2.30.1
       next:
         specifier: 14.2.9
-        version: 14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        version: 14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       next-auth:
         specifier: ^4.24.5
         version: 4.24.8(next@14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@6.9.15)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -450,6 +455,9 @@ importers:
       '@hookform/resolvers':
         specifier: ^3.3.2
         version: 3.9.0(react-hook-form@7.53.0(react@18.3.1))
+      '@intercom/messenger-js-sdk':
+        specifier: ^0.0.14
+        version: 0.0.14
       '@mux/mux-node':
         specifier: ^8.5.1
         version: 8.8.0
@@ -679,7 +687,7 @@ importers:
         version: 5.0.7
       next:
         specifier: 14.2.9
-        version: 14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        version: 14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       next-auth:
         specifier: ^4.24.5
         version: 4.24.8(next@14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@6.9.15)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -845,7 +853,7 @@ importers:
     dependencies:
       '@kobalte/core':
         specifier: ^0.13.6
-        version: 0.13.6(solid-js@1.9.1)
+        version: 0.13.6(patch_hash=vzpkmmroj2yro75ebs5pnjs3u4)(solid-js@1.9.1)
       cva:
         specifier: npm:class-variance-authority@^0.7.0
         version: class-variance-authority@0.7.0
@@ -2298,6 +2306,9 @@ packages:
 
   '@iconify/utils@2.1.33':
     resolution: {integrity: sha512-jP9h6v/g0BIZx0p7XGJJVtkVnydtbgTgt9mVNcGDYwaa7UhdHdI9dvoq+gKj9sijMSJKxUPEG2JyjsgXjxL7Kw==}
+
+  '@intercom/messenger-js-sdk@0.0.14':
+    resolution: {integrity: sha512-2dH4BDAh9EI90K7hUkAdZ76W79LM45Sd1OBX7t6Vzy8twpNiQ5X+7sH9G5hlJlkSGnf+vFWlFcy9TOYAyEs1hA==}
 
   '@internationalized/date@3.5.5':
     resolution: {integrity: sha512-H+CfYvOZ0LTJeeLOqm19E3uj/4YjrmOFtBufDHPfvtI80hFAMqtrp7oCACpe4Cil5l8S0Qu/9dYfZc/5lY8WQQ==}
@@ -11873,6 +11884,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@intercom/messenger-js-sdk@0.0.14': {}
+
   '@internationalized/date@3.5.5':
     dependencies:
       '@swc/helpers': 0.5.13
@@ -12091,7 +12104,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.0
 
-  '@kobalte/core@0.13.6(solid-js@1.9.1)':
+  '@kobalte/core@0.13.6(patch_hash=vzpkmmroj2yro75ebs5pnjs3u4)(solid-js@1.9.1)':
     dependencies:
       '@floating-ui/dom': 1.6.11
       '@internationalized/date': 3.5.5
@@ -19117,7 +19130,7 @@ snapshots:
       '@panva/hkdf': 1.2.1
       cookie: 0.5.0
       jose: 4.15.9
-      next: 14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      next: 14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       oauth: 0.9.15
       openid-client: 5.7.0
       preact: 10.24.1
@@ -19166,7 +19179,7 @@ snapshots:
       - '@babel/core'
       - babel-plugin-macros
 
-  next@14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+  next@14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
       '@next/env': 14.2.9
       '@swc/helpers': 0.5.5

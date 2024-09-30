@@ -22,6 +22,7 @@
     "@ffmpeg/util": "^0.12.1",
     "@headlessui/react": "^1.7.17",
     "@hookform/resolvers": "^3.3.2",
+    "@intercom/messenger-js-sdk": "^0.0.14",
     "@mux/mux-node": "^8.5.1",
     "@octokit/rest": "^20.0.2",
     "@react-email/components": "^0.0.13",

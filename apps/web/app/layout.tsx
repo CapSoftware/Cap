@@ -6,6 +6,7 @@ import type { Metadata } from "next";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { BentoScript } from "@/components/BentoScript";
 import { CSPostHogProvider } from "./providers";
+import Intercom from "@intercom/messenger-js-sdk";
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful, shareable screen recordings.",
@@ -27,6 +28,13 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const user = await getCurrentUser();
+
+  Intercom({
+    app_id: "efxq71cv",
+    user_id: user?.id ?? "",
+    name: user?.name ?? "",
+    email: user?.email ?? "",
+  });
 
   return (
     <html lang="en">
