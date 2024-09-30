@@ -34,6 +34,9 @@ export default async function RootLayout({
     user_id: user?.id ?? "",
     name: user?.name ?? "",
     email: user?.email ?? "",
+    created_at: user?.created_at
+      ? new Date(user.created_at).getTime() / 1000
+      : 0,
   });
 
   return (
