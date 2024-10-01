@@ -10,10 +10,9 @@ const planIds = {
 };
 
 export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
-  const environment =
-    process.env.NEXT_PUBLIC_ENVIRONMENT === "development"
-      ? "development"
-      : "production";
+  const value =
+    import.meta.env.VITE_ENVIRONMENT ?? process.env.NEXT_PUBLIC_ENVIRONMENT;
+  const environment = value === "development" ? "development" : "production";
 
   return planIds[environment]?.[billingCycle] || "";
 };
@@ -30,7 +29,7 @@ export const isUserOnProPlan = ({
     subscriptionStatus === "paid"
   ) {
     return true;
-  } else {
-    return false;
   }
+
+  return false;
 };
