@@ -1,5 +1,5 @@
 import { createSignal, onCleanup, onMount } from "solid-js";
-import { getProPlanId } from "@cap/utils";
+import { getProPlanId } from "~/utils/plans";
 import { commands } from "~/utils/tauri";
 import { clientEnv } from "~/utils/env";
 import { authStore } from "../../store";
