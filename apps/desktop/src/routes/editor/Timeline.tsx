@@ -53,14 +53,16 @@ export function Timeline() {
         commands.setPlayheadPosition(
           videoId,
           Math.round(
-            30 * editorInstance.recordingDuration * ((e.clientX - left) / width)
+            30 *
+              editorInstance.recordingDuration *
+              ((e.clientX - left!) / width!)
           )
         );
       }}
       onMouseMove={(e) => {
         const { left, width } = timelineBounds;
         setPreviewTime(
-          editorInstance.recordingDuration * ((e.clientX - left) / width)
+          editorInstance.recordingDuration * ((e.clientX - left!) / width!)
         );
       }}
       onMouseLeave={() => {
@@ -224,7 +226,7 @@ export function Timeline() {
 
                       const newEnd =
                         end +
-                        ((event.clientX - downEvent.clientX) / width) *
+                        ((event.clientX - downEvent.clientX) / width!) *
                           duration();
 
                       setProject(

@@ -9,8 +9,9 @@ use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVid
 use std::ops::Deref;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
+use tracing::instrument::WithSubscriber;
 
-type PreviewFrameInstruction = (u32, ProjectConfiguration);
+type PreviewFrameInstruction = u32;
 
 pub struct EditorState {
     pub playhead_position: u32,
@@ -30,6 +31,10 @@ pub struct EditorInstance {
     pub state: Mutex<EditorState>,
     on_state_change: Box<dyn Fn(&EditorState) + Send + Sync + 'static>,
     pub preview_tx: watch::Sender<Option<PreviewFrameInstruction>>,
+    pub project_config: (
+        watch::Sender<ProjectConfiguration>,
+        watch::Receiver<ProjectConfiguration>,
+    ),
 }
 
 impl EditorInstance {
@@ -112,6 +117,11 @@ impl EditorInstance {
 
         let (preview_tx, preview_rx) = watch::channel(None);
 
+        let project_config = std::fs::read_to_string(project_path.join("project-config.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+
         let this = Arc::new(Self {
             id: video_id,
             project_path,
@@ -128,6 +138,7 @@ impl EditorInstance {
             }),
             on_state_change: Box::new(on_state_change),
             preview_tx,
+            project_config: watch::channel(project_config),
         });
 
         this.state.lock().await.preview_task =
@@ -159,7 +170,7 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
-    pub async fn start_playback(self: Arc<Self>, project: ProjectConfiguration) {
+    pub async fn start_playback(self: Arc<Self>) {
         let (mut handle, prev) = {
             let Ok(mut state) = self.state.try_lock() else {
                 return;
@@ -174,7 +185,7 @@ impl EditorInstance {
                 decoders: self.decoders.clone(),
                 recordings: self.recordings,
                 start_frame_number,
-                project,
+                project: self.project_config.0.subscribe(),
             }
             .start()
             .await;
@@ -210,18 +221,23 @@ impl EditorInstance {
 
     fn spawn_preview_renderer(
         self: Arc<Self>,
-        mut preview_rx: watch::Receiver<Option<PreviewFrameInstruction>>,
+        mut preview_rx: watch::Receiver<Option<u32>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 preview_rx.changed().await.unwrap();
-                let Some((frame_number, project)) = preview_rx.borrow().deref().clone() else {
+                let Some(frame_number) = preview_rx.borrow().deref().clone() else {
                     continue;
                 };
 
-                let Some(time) = project.timeline.as_ref().map(|timeline| {
-                    timeline.get_recording_time(frame_number as f64 / FPS as f64)
-                }).unwrap_or(Some(frame_number as f64 / FPS as f64)) else {
+                let project = self.project_config.1.borrow().clone();
+
+                let Some(time) = project
+                    .timeline
+                    .as_ref()
+                    .map(|timeline| timeline.get_recording_time(frame_number as f64 / FPS as f64))
+                    .unwrap_or(Some(frame_number as f64 / FPS as f64))
+                else {
                     continue;
                 };
 

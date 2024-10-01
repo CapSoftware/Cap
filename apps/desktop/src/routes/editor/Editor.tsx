@@ -89,7 +89,6 @@ function Inner() {
   const renderFrame = throttle((time: number) => {
     events.renderFrameEvent.emit({
       frame_number: Math.max(Math.floor(time * 30), 0),
-      project: project,
     });
   }, 1000 / 60);
 
@@ -123,7 +122,7 @@ function Inner() {
         await commands.stopPlayback(videoId);
         setPlaying(false);
       } else {
-        await commands.startPlayback(videoId, project);
+        await commands.startPlayback(videoId);
         setPlaying(true);
       }
     } catch (error) {

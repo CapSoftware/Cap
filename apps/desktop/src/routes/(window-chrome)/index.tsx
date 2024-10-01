@@ -408,7 +408,7 @@ export default function () {
                 e.preventDefault();
 
                 commands.setRecordingOptions({
-                  ...data.options,
+                  ...options.data,
                   audioInputName: null,
                 });
               }}

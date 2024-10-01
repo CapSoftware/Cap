@@ -16,7 +16,7 @@ pub struct Playback {
     pub render_constants: Arc<RenderVideoConstants>,
     pub decoders: RecordingDecoders,
     pub start_frame_number: u32,
-    pub project: ProjectConfiguration,
+    pub project: watch::Receiver<ProjectConfiguration>,
     pub recordings: ProjectRecordings,
 }
 
@@ -52,10 +52,10 @@ impl Playback {
             let start = Instant::now();
 
             let mut frame_number = self.start_frame_number + 1;
-            let uniforms = ProjectUniforms::new(&self.render_constants, &self.project);
 
             let duration = self
                 .project
+                .borrow()
                 .timeline()
                 .map(|t| t.duration())
                 .unwrap_or(f64::MAX);
@@ -76,7 +76,9 @@ impl Playback {
                     break;
                 };
 
-                let time = if let Some(timeline) = self.project.timeline() {
+                let project = self.project.borrow().clone();
+
+                let time = if let Some(timeline) = project.timeline() {
                     match timeline.get_recording_time(frame_number as f64 / FPS as f64) {
                         Some(time) => time,
                         None => break,
@@ -85,20 +87,20 @@ impl Playback {
                     frame_number as f64 / FPS as f64
                 };
 
-                let debug = Instant::now();
                 tokio::select! {
                     _ = stop_rx.changed() => {
                        break;
                     },
                     Some((screen_frame, camera_frame)) = self.decoders.get_frames((time * FPS as f64) as u32) => {
                         // println!("decoded frame in {:?}", debug.elapsed());
+                        let uniforms = ProjectUniforms::new(&self.render_constants, &project);
 
                         self
                             .renderer
                             .render_frame(
                                 screen_frame,
                                 camera_frame,
-                                self.project.background.source.clone(),
+                                project.background.source.clone(),
                                 uniforms.clone()
                             )
                             .await;
@@ -141,7 +143,7 @@ struct AudioPlayback {
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
     duration: f64,
-    project: ProjectConfiguration,
+    project: watch::Receiver<ProjectConfiguration>,
 }
 
 impl AudioPlayback {
@@ -172,7 +174,7 @@ impl AudioPlayback {
 
             let next_sample = move || {
                 time += time_inc;
-                let time = self.project.timeline()?.get_recording_time(time)?;
+                let time = self.project.borrow().timeline()?.get_recording_time(time)?;
 
                 let index = time / duration * data.len() as f64;
 

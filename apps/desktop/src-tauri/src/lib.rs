@@ -882,7 +882,6 @@ async fn render_to_file_impl(
 #[derive(Deserialize, specta::Type, tauri_specta::Event, Debug, Clone)]
 struct RenderFrameEvent {
     frame_number: u32,
-    project: ProjectConfiguration,
 }
 
 #[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
@@ -907,10 +906,10 @@ pub struct AudioData {
 
 #[tauri::command]
 #[specta::specta]
-async fn start_playback(app: AppHandle, video_id: String, project: ProjectConfiguration) {
+async fn start_playback(app: AppHandle, video_id: String) {
     upsert_editor_instance(&app, video_id)
         .await
-        .start_playback(project)
+        .start_playback()
         .await
 }
 
@@ -931,7 +930,7 @@ async fn stop_playback(app: AppHandle, video_id: String) {
 struct SerializedEditorInstance {
     frames_socket_url: String,
     recording_duration: f64,
-    saved_project_config: Option<ProjectConfiguration>,
+    saved_project_config: ProjectConfiguration,
     recordings: ProjectRecordings,
     path: PathBuf,
 }
@@ -947,11 +946,10 @@ async fn create_editor_instance(
     Ok(SerializedEditorInstance {
         frames_socket_url: format!("ws://localhost:{}{FRAMES_WS_PATH}", editor_instance.ws_port),
         recording_duration: editor_instance.recordings.duration(),
-        saved_project_config: std::fs::read_to_string(
-            editor_instance.project_path.join("project-config.json"),
-        )
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok()),
+        saved_project_config: {
+            let project_config = editor_instance.project_config.1.borrow();
+            project_config.clone()
+        },
         recordings: editor_instance.recordings,
         path: editor_instance.project_path.clone(),
     })
@@ -1367,7 +1365,7 @@ async fn set_playhead_position(app: AppHandle, video_id: String, frame_number: u
 
 #[tauri::command]
 #[specta::specta]
-async fn save_project_config(app: AppHandle, video_id: String, config: ProjectConfiguration) {
+async fn set_project_config(app: AppHandle, video_id: String, config: ProjectConfiguration) {
     let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     std::fs::write(
@@ -1375,6 +1373,8 @@ async fn save_project_config(app: AppHandle, video_id: String, config: ProjectCo
         serde_json::to_string_pretty(&json!(config)).unwrap(),
     )
     .unwrap();
+
+    editor_instance.project_config.0.send(config).ok();
 }
 
 #[tauri::command(async)]
@@ -2048,7 +2048,7 @@ pub fn run() {
             stop_playback,
             set_playhead_position,
             open_in_finder,
-            save_project_config,
+            set_project_config,
             open_editor,
             open_main_window,
             permissions::open_permission_settings,
@@ -2234,10 +2234,7 @@ pub fn run() {
         .expect("error while running tauri application")
         .run(|handle, event| match event {
             #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen {
-                has_visible_windows,
-                ..
-            } => open_main_window(handle.clone()),
+            tauri::RunEvent::Reopen { .. } => open_main_window(handle.clone()),
             _ => {}
         });
 }
@@ -2293,10 +2290,7 @@ async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<E
     RenderFrameEvent::listen_any(app, {
         let instance = instance.clone();
         move |e| {
-            instance
-                .preview_tx
-                .send(Some((e.payload.frame_number, e.payload.project)))
-                .ok();
+            instance.preview_tx.send(Some(e.payload.frame_number)).ok();
         }
     });
 

@@ -181,9 +181,7 @@ export function Player() {
             <button
               type="button"
               onClick={() =>
-                commands
-                  .startPlayback(videoId, project)
-                  .then(() => setPlaying(true))
+                commands.startPlayback(videoId).then(() => setPlaying(true))
               }
             >
               <IconCapPlayCircle class="size-[1.5rem]" />

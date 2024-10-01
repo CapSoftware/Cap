@@ -170,8 +170,8 @@ async createEditorInstance(videoId: string) : Promise<Result<SerializedEditorIns
     else return { status: "error", error: e  as any };
 }
 },
-async startPlayback(videoId: string, project: ProjectConfiguration) : Promise<void> {
-    await TAURI_INVOKE("start_playback", { videoId, project });
+async startPlayback(videoId: string) : Promise<void> {
+    await TAURI_INVOKE("start_playback", { videoId });
 },
 async stopPlayback(videoId: string) : Promise<void> {
     await TAURI_INVOKE("stop_playback", { videoId });
@@ -182,8 +182,8 @@ async setPlayheadPosition(videoId: string, frameNumber: number) : Promise<void> 
 async openInFinder(path: string) : Promise<void> {
     await TAURI_INVOKE("open_in_finder", { path });
 },
-async saveProjectConfig(videoId: string, config: ProjectConfiguration) : Promise<void> {
-    await TAURI_INVOKE("save_project_config", { videoId, config });
+async setProjectConfig(videoId: string, config: ProjectConfiguration) : Promise<void> {
+    await TAURI_INVOKE("set_project_config", { videoId, config });
 },
 async openEditor(id: string) : Promise<void> {
     await TAURI_INVOKE("open_editor", { id });
@@ -367,14 +367,14 @@ export type RecordingOptionsChanged = null
 export type RecordingSegment = { start: number; end: number }
 export type RecordingStarted = null
 export type RecordingStopped = { path: string }
-export type RenderFrameEvent = { frame_number: number; project: ProjectConfiguration }
+export type RenderFrameEvent = { frame_number: number }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }
 export type RequestRestartRecording = null
 export type RequestStartRecording = null
 export type RequestStopRecording = null
-export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration | null; recordings: ProjectRecordings; path: string }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
 export type TimelineConfiguration = { segments: TimelineSegment[] }

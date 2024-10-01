@@ -107,22 +107,24 @@ function RecordingItem(props: {
       </div>
       <div class="flex items-center">
         <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation();
             props.onOpenFolder();
           }}
           class="p-2 hover:bg-gray-200 rounded-full mr-2"
         >
-          <IconLucideFolder size={20} />
+          <IconLucideFolder class="size-5" />
         </button>
         <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation();
             props.onClick();
           }}
           class="p-2 hover:bg-gray-200 rounded-full"
         >
-          <IconLucideEye size={20} />
+          <IconLucideEye class="size-5" />
         </button>
       </div>
     </li>

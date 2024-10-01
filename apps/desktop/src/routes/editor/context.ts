@@ -42,7 +42,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
           trackStore(project);
         },
         debounce(() => {
-          commands.saveProjectConfig(editorInstanceContext.videoId, project);
+          commands.setProjectConfig(editorInstanceContext.videoId, project);
         }),
         { defer: true }
       )

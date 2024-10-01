@@ -31,7 +31,6 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
       ws.onopen = () => {
         events.renderFrameEvent.emit({
           frame_number: Math.floor(0),
-          project: instance.data.savedProjectConfig ?? DEFAULT_PROJECT_CONFIG,
         });
       };
       ws.binaryType = "arraybuffer";
