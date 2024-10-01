@@ -724,7 +724,7 @@ async fn render_to_file_impl(
 
             ffmpeg
                 .command
-                .args(["-f", "mp4", "-map", "0:v", "-map", "1:a"])
+                .args(["-f", "mp4"])
                 .args(["-codec:v", "libx264", "-codec:a", "aac"])
                 .args(["-preset", "ultrafast"])
                 .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
