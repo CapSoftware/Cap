@@ -2230,8 +2230,16 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|handle, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => open_main_window(handle.clone()),
+            _ => {}
+        });
 }
 
 type EditorInstancesState = Arc<Mutex<HashMap<String, Arc<EditorInstance>>>>;
