@@ -11,7 +11,9 @@ const planIds = {
 
 export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
   const value =
-    import.meta.env.VITE_ENVIRONMENT ?? process.env.NEXT_PUBLIC_ENVIRONMENT;
+    typeof import.meta !== 'undefined' && typeof import.meta.env !== 'undefined'
+      ? import.meta.env.VITE_ENVIRONMENT
+      : process.env.NEXT_PUBLIC_ENVIRONMENT;
   const environment = value === "development" ? "development" : "production";
 
   return planIds[environment]?.[billingCycle] || "";
