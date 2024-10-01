@@ -7,7 +7,7 @@ use tauri_plugin_store::{with_store, StoreCollection};
 pub struct AuthStore {
     pub token: String,
     pub expires: i32,
-    pub plan: Plan,
+    pub plan: Option<Plan>,
 }
 
 #[derive(Serialize, Deserialize, Type)]
@@ -22,35 +22,11 @@ impl AuthStore {
             .try_state::<StoreCollection<Wry>>()
             .ok_or("Store not found")?;
         with_store(app.clone(), stores, "store", |store| {
-            let Some(store_value) = store.get("auth").cloned() else {
+            let Some(store) = store.get("auth").cloned() else {
                 return Ok(None);
             };
 
-            // Try to deserialize into the new structure
-            match serde_json::from_value::<Self>(store_value.clone()) {
-                Ok(auth_store) => Ok(Some(auth_store)),
-                Err(_) => {
-                    // If deserialization fails, it might be due to the old structure
-                    // Try to deserialize into a temporary struct without the plan field
-                    #[derive(Deserialize)]
-                    struct OldAuthStore {
-                        token: String,
-                        expires: i32,
-                    }
-
-                    let old_auth: OldAuthStore = serde_json::from_value(store_value)?;
-
-                    // Create a new AuthStore with default Plan values
-                    Ok(Some(Self {
-                        token: old_auth.token,
-                        expires: old_auth.expires,
-                        plan: Plan {
-                            upgraded: false,
-                            last_checked: 0,
-                        },
-                    }))
-                }
-            }
+            Ok(serde_json::from_value(store)?)
         })
         .map_err(|e| e.to_string())
     }
@@ -77,14 +53,25 @@ impl AuthStore {
             return Err(error_msg);
         }
 
-        let plan_response: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+        #[derive(Deserialize)]
+        struct Response {
+            upgraded: bool,
+        }
 
-        auth.plan.upgraded = plan_response["upgraded"].as_bool().unwrap_or(false);
-        auth.plan.last_checked = chrono::Utc::now().timestamp() as i32;
+        let plan_response: Response = response.json().await.map_err(|e| e.to_string())?;
+
+        auth.plan = Some(Plan {
+            upgraded: plan_response.upgraded,
+            last_checked: chrono::Utc::now().timestamp() as i32,
+        });
 
         let _ = Self::set(app, Some(auth))?;
 
         Ok(())
+    }
+
+    pub fn is_upgraded(&self) -> bool {
+        self.plan.as_ref().map_or(false, |plan| plan.upgraded)
     }
 
     pub fn set(app: &AppHandle, value: Option<Self>) -> Result<(), String> {

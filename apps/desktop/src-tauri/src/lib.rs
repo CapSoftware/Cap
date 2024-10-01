@@ -1547,7 +1547,7 @@ async fn upload_rendered_video(
     };
 
     // Check if user has an upgraded plan
-    if !auth.plan.upgraded {
+    if !auth.is_upgraded() {
         // Fetch and update plan information
         if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
             println!("Failed to update plan information: {}", e);
@@ -1558,7 +1558,7 @@ async fn upload_rendered_video(
         auth = AuthStore::get(&app).unwrap().unwrap();
 
         // Re-check upgraded status after refresh
-        if !auth.plan.upgraded {
+        if !auth.is_upgraded() {
             // Open upgrade window instead of returning an error
             open_upgrade_window(app).await;
             return Ok(UploadResult::UpgradeRequired);
@@ -1636,7 +1636,7 @@ async fn upload_screenshot(
         return Ok(UploadResult::NotAuthenticated);
     };
 
-    if !auth.plan.upgraded {
+    if !auth.is_upgraded() {
         println!("User plan not upgraded. Fetching and updating plan information.");
         // Fetch and update plan information
         if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
@@ -1662,7 +1662,7 @@ async fn upload_screenshot(
         };
 
         // Re-check upgraded status after refresh
-        if !auth.plan.upgraded {
+        if !auth.is_upgraded() {
             println!("User plan still not upgraded after refresh.");
             open_upgrade_window(app).await;
             return Ok(UploadResult::UpgradeRequired);
@@ -2003,7 +2003,7 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
 
     let auth = AuthStore::get(&app).map_err(|e| e.to_string())?;
 
-    Ok(auth.map_or(false, |a| a.plan.upgraded))
+    Ok(auth.map_or(false, |a| a.is_upgraded()))
 }
 
 #[tauri::command]
