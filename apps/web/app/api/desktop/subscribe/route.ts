@@ -4,6 +4,7 @@ import { users } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { isUserOnProPlan, stripe } from "@cap/utils";
+import { eq } from "drizzle-orm";
 
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
@@ -29,7 +30,8 @@ export async function OPTIONS(req: NextRequest) {
           : "null",
       "Access-Control-Allow-Credentials": "true",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Authorization, Content-Type, sentry-trace, baggage",
+      "Access-Control-Allow-Headers":
+        "Authorization, Content-Type, sentry-trace, baggage",
     },
   });
 }
