@@ -53,7 +53,22 @@ pub struct RecordingMeta {
 impl RecordingMeta {
     pub fn load_for_project(project_path: &PathBuf) -> Result<Self, String> {
         let meta_path = project_path.join("recording-meta.json");
-        let meta = std::fs::read_to_string(meta_path).map_err(|e| e.to_string())?;
+        let meta = match std::fs::read_to_string(&meta_path) {
+            Ok(content) => content,
+            Err(_) => {
+                return Ok(Self {
+                    project_path: project_path.clone(),
+                    pretty_name: String::new(),
+                    sharing: None,
+                    display: Display {
+                        path: PathBuf::new(),
+                    },
+                    camera: None,
+                    audio: None,
+                    segments: Vec::new(),
+                });
+            }
+        };
         let mut meta: Self = serde_json::from_str(&meta).map_err(|e| e.to_string())?;
         meta.project_path = project_path.clone();
         Ok(meta)
