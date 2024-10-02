@@ -52,7 +52,7 @@ export async function GET(request: NextRequest) {
     .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
     .where(eq(videos.id, videoId));
 
-  if (query.length === 0) {
+  if (!query[0]) {
     return new Response(
       JSON.stringify({ error: true, message: "Video does not exist" }),
       {

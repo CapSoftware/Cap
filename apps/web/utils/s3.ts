@@ -1,24 +1,28 @@
-import { S3Client, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { S3Client } from "@aws-sdk/client-s3";
 import type { s3Buckets } from "@cap/database/schema";
-import { InferModel, type InferSelectModel } from "drizzle-orm";
+import type { InferSelectModel } from "drizzle-orm";
 
-export function createS3Client(
-  opts: {
-    endpoint?: string | null;
-    region?: string;
-    accessKeyId?: string;
-    secretAccessKey?: string;
-  } | null
-) {
-  return new S3Client({
-    endpoint: opts?.endpoint ?? process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
-    region: opts?.region ?? process.env.NEXT_PUBLIC_CAP_AWS_REGION,
+type S3Config = {
+  endpoint?: string | null;
+  region?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+} | null;
+
+export function createS3Client(config?: S3Config) {
+  return new S3Client(getS3Config(config));
+}
+
+export function getS3Config(config?: S3Config) {
+  return {
+    endpoint: config?.endpoint ?? process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
+    region: config?.region ?? process.env.NEXT_PUBLIC_CAP_AWS_REGION,
     credentials: {
-      accessKeyId: opts?.accessKeyId ?? process.env.CAP_AWS_ACCESS_KEY ?? "",
+      accessKeyId: config?.accessKeyId ?? process.env.CAP_AWS_ACCESS_KEY ?? "",
       secretAccessKey:
-        opts?.secretAccessKey ?? process.env.CAP_AWS_SECRET_KEY ?? "",
+        config?.secretAccessKey ?? process.env.CAP_AWS_SECRET_KEY ?? "",
     },
-  });
+  };
 }
 
 export function getS3Bucket(

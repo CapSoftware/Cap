@@ -1,33 +1,20 @@
-import { S3Client } from "@aws-sdk/client-s3";
+import { createS3Client, getS3Bucket } from "@/utils/s3";
 import {
   createPresignedPost,
   type PresignedPost,
 } from "@aws-sdk/s3-presigned-post";
+import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
+import { s3Buckets } from "@cap/database/schema";
+import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
-
-const s3Client = new S3Client({
-  region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
-  credentials: {
-    accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-    secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
-  },
-});
 
 export async function POST(request: NextRequest) {
   try {
-    const {
-      userId,
-      fileKey,
-      duration,
-      bandwidth,
-      resolution,
-      videoCodec,
-      audioCodec,
-      awsBucket,
-      awsRegion,
-    } = await request.json();
+    const { fileKey, duration, bandwidth, resolution, videoCodec, audioCodec } =
+      await request.json();
 
-    if (!userId || !fileKey || !awsBucket || !awsRegion) {
+    if (!fileKey) {
       console.error("Missing required fields in /api/upload/signed/route.ts");
 
       return new Response(
@@ -40,6 +27,32 @@ export async function POST(request: NextRequest) {
         }
       );
     }
+
+    const user = await getCurrentUser();
+
+    if (!user) {
+      return new Response(JSON.stringify({ error: true }), {
+        status: 401,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
+    const [bucket] = await db
+      .select()
+      .from(s3Buckets)
+      .where(eq(s3Buckets.ownerId, user.id));
+    if (!bucket) {
+      return new Response(JSON.stringify({ error: true }), {
+        status: 401,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
+    const s3Client = createS3Client(bucket);
 
     const contentType = fileKey.endsWith(".aac")
       ? "audio/aac"
@@ -55,7 +68,7 @@ export async function POST(request: NextRequest) {
 
     const Fields = {
       "Content-Type": contentType,
-      "x-amz-meta-userid": userId,
+      "x-amz-meta-userid": user.id,
       "x-amz-meta-duration": duration ?? "",
       "x-amz-meta-bandwidth": bandwidth ?? "",
       "x-amz-meta-resolution": resolution ?? "",
@@ -65,7 +78,7 @@ export async function POST(request: NextRequest) {
 
     const presignedPostData: PresignedPost = await createPresignedPost(
       s3Client,
-      { Bucket: awsBucket, Key: fileKey, Fields, Expires: 1800 }
+      { Bucket: getS3Bucket(bucket), Key: fileKey, Fields, Expires: 1800 }
     );
 
     console.log("Presigned URL created successfully");

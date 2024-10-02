@@ -4,8 +4,6 @@ import { uploadToS3 } from "@/utils/video/upload/helpers";
 
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser();
-  const awsRegion = process.env.NEXT_PUBLIC_CAP_AWS_REGION;
-  const awsBucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET;
   const formData = await request.formData();
   const filename = formData.get("filename");
   const videoId = formData.get("videoId");
@@ -14,6 +12,9 @@ export async function POST(request: NextRequest) {
   const resolution = formData.get("resolution");
   const videoCodec = formData.get("videoCodec");
   const audioCodec = formData.get("audioCodec");
+
+  const awsRegion = process.env.NEXT_PUBLIC_CAP_AWS_REGION;
+  const awsBucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET;
 
   if (!user || !awsRegion || !awsBucket || !filename || !blobData) {
     console.error("Missing required data in /api/upload/new/route.ts");

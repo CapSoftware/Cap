@@ -21,6 +21,12 @@ const nanoId = customType<{ data: string; notNull: true }>({
   },
 });
 
+const nanoIdNullable = customType<{ data: string; notNull: false }>({
+  dataType() {
+    return `varchar(${nanoIdLength})`;
+  },
+});
+
 export const users = mysqlTable(
   "users",
   {
@@ -44,6 +50,7 @@ export const users = mysqlTable(
     created_at: timestamp("created_at").notNull().defaultNow(),
     updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
     onboarding_completed_at: timestamp("onboarding_completed_at"),
+    customBucket: nanoId("customBucket"),
   },
   (table) => ({
     emailIndex: uniqueIndex("email_idx").on(table.email),
@@ -144,7 +151,7 @@ export const videos = mysqlTable(
     name: varchar("name", { length: 255 }).notNull().default("My Video"),
     awsRegion: varchar("awsRegion", { length: 255 }),
     awsBucket: varchar("awsBucket", { length: 255 }),
-    bucket: nanoId("bucket"),
+    bucket: nanoIdNullable("bucket"),
     metadata: json("metadata"),
     public: boolean("public").notNull().default(true),
     videoStartTime: varchar("videoStartTime", { length: 255 }),
@@ -241,12 +248,13 @@ export const commentsRelations = relations(comments, ({ one }) => ({
 }));
 
 // Define Relationships
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ many, one }) => ({
   accounts: many(accounts),
   sessions: many(sessions),
   spaceMembers: many(spaceMembers),
   videos: many(videos),
   sharedVideos: many(sharedVideos),
+  customBucket: one(s3Buckets),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
