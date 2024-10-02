@@ -1,6 +1,9 @@
 import { S3Client } from "@aws-sdk/client-s3";
-import { createPresignedPost, PresignedPost } from "@aws-sdk/s3-presigned-post";
-import { NextRequest } from "next/server";
+import {
+  createPresignedPost,
+  type PresignedPost,
+} from "@aws-sdk/s3-presigned-post";
+import type { NextRequest } from "next/server";
 
 const s3Client = new S3Client({
   region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
@@ -62,12 +65,7 @@ export async function POST(request: NextRequest) {
 
     const presignedPostData: PresignedPost = await createPresignedPost(
       s3Client,
-      {
-        Bucket: awsBucket,
-        Key: fileKey,
-        Fields,
-        Expires: 1800,
-      }
+      { Bucket: awsBucket, Key: fileKey, Fields, Expires: 1800 }
     );
 
     console.log("Presigned URL created successfully");

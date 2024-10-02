@@ -11,7 +11,6 @@ import {
   uniqueIndex,
   varchar,
   float,
-  mysqlEnum,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
 import { nanoIdLength } from "./helpers";
@@ -145,6 +144,7 @@ export const videos = mysqlTable(
     name: varchar("name", { length: 255 }).notNull().default("My Video"),
     awsRegion: varchar("awsRegion", { length: 255 }),
     awsBucket: varchar("awsBucket", { length: 255 }),
+    bucket: nanoId("bucket"),
     metadata: json("metadata"),
     public: boolean("public").notNull().default(true),
     videoStartTime: varchar("videoStartTime", { length: 255 }),
@@ -158,11 +158,11 @@ export const videos = mysqlTable(
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     source: json("source")
-    .$type<
-      { type: "MediaConvert" } | { type: "local" } | { type: "desktopMP4" }
-    >()
-    .notNull()
-    .default({ type: "MediaConvert" }),
+      .$type<
+        { type: "MediaConvert" } | { type: "local" } | { type: "desktopMP4" }
+      >()
+      .notNull()
+      .default({ type: "MediaConvert" }),
   },
   (table) => ({
     idIndex: index("id_idx").on(table.id),
@@ -214,6 +214,16 @@ export const comments = mysqlTable(
     ),
   })
 );
+
+export const s3Buckets = mysqlTable("s3_buckets", {
+  id: nanoId("id").notNull().primaryKey().unique(),
+  ownerId: nanoId("ownerId").notNull(),
+  region: varchar("region", { length: 255 }).notNull(),
+  endpoint: text("endpoint"),
+  bucketName: varchar("bucketName", { length: 255 }).notNull(),
+  accessKeyId: varchar("accessKeyId", { length: 255 }).notNull(),
+  secretAccessKey: varchar("secretAccessKey", { length: 255 }).notNull(),
+});
 
 export const commentsRelations = relations(comments, ({ one }) => ({
   author: one(users, {

@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import {
   S3Client,
   ListObjectsV2Command,
@@ -10,8 +10,9 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createClient } from "@deepgram/sdk";
 import { getHeaders } from "@/utils/helpers";
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
+import { createS3Client, getS3Bucket } from "@/utils/s3";
 
 export const maxDuration = 120;
 
@@ -62,7 +63,14 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db
+    .select({
+      video: videos,
+      bucket: s3Buckets,
+    })
+    .from(videos)
+    .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+    .where(eq(videos.id, videoId));
 
   if (query.length === 0) {
     return new Response(
@@ -74,7 +82,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const video = query[0];
+  const { video, bucket } = query[0];
 
   if (
     video.transcriptionStatus === "COMPLETE" ||
@@ -84,10 +92,7 @@ export async function GET(request: NextRequest) {
       JSON.stringify({
         message: "Transcription already completed or in progress",
       }),
-      {
-        status: 200,
-        headers: getHeaders(origin),
-      }
+      { status: 200, headers: getHeaders(origin) }
     );
   }
 
@@ -96,20 +101,14 @@ export async function GET(request: NextRequest) {
     .set({ transcriptionStatus: "PROCESSING" })
     .where(eq(videos.id, videoId));
 
-  const bucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET || "";
+  const Bucket = getS3Bucket(bucket);
   const filePrefix = `${userId}/${videoId}/combined-source/`;
 
-  const s3Client = new S3Client({
-    region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
-    credentials: {
-      accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-      secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
-    },
-  });
+  const s3Client = createS3Client(bucket);
 
   try {
     const audioSegmentCommand = new ListObjectsV2Command({
-      Bucket: bucket,
+      Bucket,
       Prefix: filePrefix,
     });
 
@@ -120,7 +119,7 @@ export async function GET(request: NextRequest) {
         const presignedUrl = await getSignedUrl(
           s3Client,
           new GetObjectCommand({
-            Bucket: bucket,
+            Bucket,
             Key: object.Key,
           })
         );
@@ -132,7 +131,7 @@ export async function GET(request: NextRequest) {
     const uploadUrl = await getSignedUrl(
       s3Client,
       new PutObjectCommand({
-        Bucket: bucket,
+        Bucket,
         Key: `${userId}/${videoId}/generated/all-audio.mp3`,
       })
     );
@@ -159,7 +158,7 @@ export async function GET(request: NextRequest) {
     const uploadedFileUrl = await getSignedUrl(
       s3Client,
       new GetObjectCommand({
-        Bucket: bucket,
+        Bucket,
         Key: `${userId}/${videoId}/generated/all-audio.mp3`,
       })
     );
@@ -171,7 +170,7 @@ export async function GET(request: NextRequest) {
     }
 
     const uploadCommand = new PutObjectCommand({
-      Bucket: bucket,
+      Bucket,
       Key: `${userId}/${videoId}/transcription.vtt`,
       Body: transcription,
       ContentType: "text/vtt",
@@ -215,13 +214,13 @@ function formatToWebVTT(result: any): string {
   let captionIndex = 1;
 
   result.results.utterances.forEach((utterance: any) => {
-    let words = utterance.words;
+    const words = utterance.words;
     let group = [];
     let start = formatTimestamp(words[0].start);
     let wordCount = 0;
 
     for (let i = 0; i < words.length; i++) {
-      let word = words[i];
+      const word = words[i];
       group.push(word.word);
       wordCount++;
 
@@ -231,8 +230,8 @@ function formatToWebVTT(result: any): string {
         (words[i + 1] && words[i + 1].start - word.end > 0.5) ||
         wordCount === 8
       ) {
-        let end = formatTimestamp(word.end);
-        let groupText = group.join(" ");
+        const end = formatTimestamp(word.end);
+        const groupText = group.join(" ");
 
         output += `${captionIndex}\n${start} --> ${end}\n${groupText}\n\n`;
         captionIndex++;
