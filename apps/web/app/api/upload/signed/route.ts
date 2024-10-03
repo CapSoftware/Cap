@@ -7,6 +7,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
+import { cookies } from "next/headers";
 import type { NextRequest } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -26,6 +27,18 @@ export async function POST(request: NextRequest) {
           },
         }
       );
+    }
+
+    const token = request.headers.get("authorization")?.split(" ")[1];
+    if (token) {
+      cookies().set({
+        name: "next-auth.session-token",
+        value: token,
+        path: "/",
+        sameSite: "none",
+        secure: true,
+        httpOnly: true,
+      });
     }
 
     const user = await getCurrentUser();
