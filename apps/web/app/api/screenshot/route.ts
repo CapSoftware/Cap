@@ -1,13 +1,11 @@
 import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import {
-  S3Client,
-  ListObjectsV2Command,
-} from "@aws-sdk/client-s3";
+import { S3Client, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { getHeaders } from "@/utils/helpers";
+import { createS3Client, getS3Bucket } from "@/utils/s3";
 
 export const revalidate = 3599;
 
@@ -32,26 +30,24 @@ export async function GET(request: NextRequest) {
         error: true,
         message: "userId or videoId not supplied",
       }),
-      {
-        status: 401,
-        headers: getHeaders(origin),
-      }
+      { status: 401, headers: getHeaders(origin) }
     );
   }
 
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db
+    .select({ video: videos, bucket: s3Buckets })
+    .from(videos)
+    .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+    .where(eq(videos.id, videoId));
 
   if (query.length === 0) {
     return new Response(
       JSON.stringify({ error: true, message: "Video does not exist" }),
-      {
-        status: 401,
-        headers: getHeaders(origin),
-      }
+      { status: 401, headers: getHeaders(origin) }
     );
   }
 
-  const video = query[0];
+  const { video, bucket } = query[0];
 
   if (video.public === false) {
     const user = await getCurrentUser();
@@ -59,28 +55,19 @@ export async function GET(request: NextRequest) {
     if (!user || user.id !== video.ownerId) {
       return new Response(
         JSON.stringify({ error: true, message: "Video is not public" }),
-        {
-          status: 401,
-          headers: getHeaders(origin),
-        }
+        { status: 401, headers: getHeaders(origin) }
       );
     }
   }
 
-  const bucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET || "";
+  const Bucket = getS3Bucket(bucket);
   const screenshotPrefix = `${userId}/${videoId}/`;
 
   try {
-    const s3Client = new S3Client({
-      region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
-      credentials: {
-        accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-        secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
-      },
-    });
+    const s3Client = createS3Client(bucket);
 
     const objectsCommand = new ListObjectsV2Command({
-      Bucket: bucket,
+      Bucket,
       Prefix: screenshotPrefix,
       MaxKeys: 1,
     });
@@ -94,30 +81,24 @@ export async function GET(request: NextRequest) {
     if (!screenshot) {
       return new Response(
         JSON.stringify({ error: true, message: "Screenshot not found" }),
-        {
-          status: 404,
-          headers: getHeaders(origin),
-        }
+        { status: 404, headers: getHeaders(origin) }
       );
     }
 
     const screenshotUrl = `https://v.cap.so/${screenshot.Key}`;
 
-    return new Response(
-      JSON.stringify({ url: screenshotUrl }),
-      {
-        status: 200,
-        headers: getHeaders(origin),
-      }
-    );
+    return new Response(JSON.stringify({ url: screenshotUrl }), {
+      status: 200,
+      headers: getHeaders(origin),
+    });
   } catch (error) {
     console.error("Error generating screenshot URL", error);
     return new Response(
-      JSON.stringify({ error: error, message: "Error generating screenshot URL" }),
-      {
-        status: 500,
-        headers: getHeaders(origin),
-      }
+      JSON.stringify({
+        error: error,
+        message: "Error generating screenshot URL",
+      }),
+      { status: 500, headers: getHeaders(origin) }
     );
   }
 }

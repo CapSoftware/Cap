@@ -11,12 +11,17 @@ import {
   uniqueIndex,
   varchar,
   float,
-  mysqlEnum,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
 import { nanoIdLength } from "./helpers";
 
 const nanoId = customType<{ data: string; notNull: true }>({
+  dataType() {
+    return `varchar(${nanoIdLength})`;
+  },
+});
+
+const nanoIdNullable = customType<{ data: string; notNull: false }>({
   dataType() {
     return `varchar(${nanoIdLength})`;
   },
@@ -45,6 +50,7 @@ export const users = mysqlTable(
     created_at: timestamp("created_at").notNull().defaultNow(),
     updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
     onboarding_completed_at: timestamp("onboarding_completed_at"),
+    customBucket: nanoId("customBucket"),
   },
   (table) => ({
     emailIndex: uniqueIndex("email_idx").on(table.email),
@@ -145,6 +151,7 @@ export const videos = mysqlTable(
     name: varchar("name", { length: 255 }).notNull().default("My Video"),
     awsRegion: varchar("awsRegion", { length: 255 }),
     awsBucket: varchar("awsBucket", { length: 255 }),
+    bucket: nanoIdNullable("bucket"),
     metadata: json("metadata"),
     public: boolean("public").notNull().default(true),
     videoStartTime: varchar("videoStartTime", { length: 255 }),
@@ -158,11 +165,11 @@ export const videos = mysqlTable(
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     source: json("source")
-    .$type<
-      { type: "MediaConvert" } | { type: "local" } | { type: "desktopMP4" }
-    >()
-    .notNull()
-    .default({ type: "MediaConvert" }),
+      .$type<
+        { type: "MediaConvert" } | { type: "local" } | { type: "desktopMP4" }
+      >()
+      .notNull()
+      .default({ type: "MediaConvert" }),
   },
   (table) => ({
     idIndex: index("id_idx").on(table.id),
@@ -215,6 +222,16 @@ export const comments = mysqlTable(
   })
 );
 
+export const s3Buckets = mysqlTable("s3_buckets", {
+  id: nanoId("id").notNull().primaryKey().unique(),
+  ownerId: nanoId("ownerId").notNull(),
+  region: varchar("region", { length: 255 }).notNull(),
+  endpoint: text("endpoint"),
+  bucketName: varchar("bucketName", { length: 255 }).notNull(),
+  accessKeyId: varchar("accessKeyId", { length: 255 }).notNull(),
+  secretAccessKey: varchar("secretAccessKey", { length: 255 }).notNull(),
+});
+
 export const commentsRelations = relations(comments, ({ one }) => ({
   author: one(users, {
     fields: [comments.authorId],
@@ -231,12 +248,13 @@ export const commentsRelations = relations(comments, ({ one }) => ({
 }));
 
 // Define Relationships
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ many, one }) => ({
   accounts: many(accounts),
   sessions: many(sessions),
   spaceMembers: many(spaceMembers),
   videos: many(videos),
   sharedVideos: many(sharedVideos),
+  customBucket: one(s3Buckets),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({

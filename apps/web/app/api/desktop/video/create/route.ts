@@ -1,10 +1,12 @@
-import { type NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { cookies } from "next/headers";
 import { dub } from "@/utils/dub";
+import { eq } from "drizzle-orm";
+import { getS3Bucket, getS3Config } from "@/utils/s3";
 
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
@@ -49,16 +51,11 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const user = await getCurrentUser();
-  const awsRegion = process.env.NEXT_PUBLIC_CAP_AWS_REGION;
-  const awsBucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET;
   const params = req.nextUrl.searchParams;
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
-  const recordingMode: "hls" | "desktopMP4" | null = params.get(
-    "recordingMode"
-  ) as any;
-  const isScreenshot = params.get("isScreenshot") === "true";
+
+  const user = await getCurrentUser();
 
   if (!user) {
     console.log("User not authenticated, returning 401");
@@ -78,6 +75,19 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  const recordingMode: "hls" | "desktopMP4" | null = params.get(
+    "recordingMode"
+  ) as any;
+  const isScreenshot = params.get("isScreenshot") === "true";
+
+  const [bucket] = await db
+    .select()
+    .from(s3Buckets)
+    .where(eq(s3Buckets.ownerId, user.id));
+
+  const s3Config = getS3Config(bucket);
+  const bucketName = getS3Bucket(bucket);
+
   const id = nanoId();
   const date = new Date();
   const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
@@ -88,8 +98,8 @@ export async function GET(req: NextRequest) {
     id: id,
     name: `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
     ownerId: user.id,
-    awsRegion: awsRegion,
-    awsBucket: awsBucket,
+    awsRegion: s3Config.region,
+    awsBucket: bucketName,
     source:
       recordingMode === "hls"
         ? { type: "local" }
@@ -97,6 +107,7 @@ export async function GET(req: NextRequest) {
         ? { type: "desktopMP4" }
         : undefined,
     isScreenshot: isScreenshot,
+    bucket: bucket?.id,
   });
 
   if (
@@ -104,7 +115,7 @@ export async function GET(req: NextRequest) {
     process.env.NEXT_PUBLIC_ENVIRONMENT === "production"
   ) {
     await dub.links.create({
-      url: process.env.NEXT_PUBLIC_URL + "/s/" + id,
+      url: `${process.env.NEXT_PUBLIC_URL}/s/${id}`,
       domain: "cap.link",
       key: id,
     });
@@ -114,8 +125,8 @@ export async function GET(req: NextRequest) {
     JSON.stringify({
       id: id,
       user_id: user.id,
-      aws_region: awsRegion,
-      aws_bucket: awsBucket,
+      aws_region: s3Config.region,
+      aws_bucket: bucketName,
     }),
     {
       status: 200,

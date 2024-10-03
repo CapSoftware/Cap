@@ -12,16 +12,17 @@
     "build": "tsc"
   },
   "devDependencies": {
-    "tsconfig": "workspace:*",
-    "typescript": "^5.3.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.18.0"
+    "react-router-dom": "^6.18.0",
+    "tsconfig": "workspace:*",
+    "typescript": "^5.3.2"
   },
   "dependencies": {
-    "tailwind-merge": "^2.1.0",
+    "@aws-sdk/client-s3": "^3.485.0",
     "clsx": "^2.0.0",
-    "stripe": "^14.24.0"
+    "stripe": "^14.24.0",
+    "tailwind-merge": "^2.1.0"
   },
   "engines": {
     "node": "20"

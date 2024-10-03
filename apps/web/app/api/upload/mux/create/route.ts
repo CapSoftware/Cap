@@ -1,12 +1,13 @@
 import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { S3Client, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import {
   MediaConvertClient,
   CreateJobCommand,
 } from "@aws-sdk/client-mediaconvert";
+import { createS3Client, getS3Bucket } from "@/utils/s3";
 const allowedOrigins = [
   process.env.NEXT_PUBLIC_URL,
   "http://localhost:3001",
@@ -63,7 +64,14 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db
+    .select({
+      video: videos,
+      bucket: s3Buckets,
+    })
+    .from(videos)
+    .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+    .where(eq(videos.id, videoId));
 
   if (query.length === 0) {
     return new Response(
@@ -81,7 +89,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const video = query[0];
+  const { video, bucket } = query[0];
 
   if (video.jobId !== null || video.ownerId !== userId) {
     return new Response(JSON.stringify({ assetId: video.jobId }), {
@@ -96,26 +104,20 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const bucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET || "";
+  const Bucket = getS3Bucket(bucket);
   const videoPrefix = `${userId}/${videoId}/video/`;
   const audioPrefix = `${userId}/${videoId}/audio/`;
 
   try {
-    const s3Client = new S3Client({
-      region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
-      credentials: {
-        accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-        secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
-      },
-    });
+    const s3Client = createS3Client(bucket);
 
     const videoSegmentCommand = new ListObjectsV2Command({
-      Bucket: bucket,
+      Bucket,
       Prefix: videoPrefix,
     });
 
     const audioSegmentCommand = new ListObjectsV2Command({
-      Bucket: bucket,
+      Bucket,
       Prefix: audioPrefix,
     });
 

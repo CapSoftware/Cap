@@ -1,16 +1,24 @@
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { ImageResponse } from "next/og";
 import { NextRequest } from "next/server";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createS3Client, getS3Bucket } from "@/utils/s3";
 
 export const runtime = "edge";
 
 export async function GET(req: NextRequest) {
   const videoId = req.nextUrl.searchParams.get("videoId") as string;
-  const query = await db.select().from(videos).where(eq(videos.id, videoId));
+  const query = await db
+    .select({
+      video: videos,
+      bucket: s3Buckets,
+    })
+    .from(videos)
+    .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+    .where(eq(videos.id, videoId));
 
   type FileKey = {
     type: "screen";
@@ -21,7 +29,7 @@ export async function GET(req: NextRequest) {
     screen: string | null;
   };
 
-  if (query.length === 0 || query?.[0]?.public === false) {
+  if (query.length === 0 || query?.[0]?.video.public === false) {
     return new ImageResponse(
       (
         <div
@@ -45,17 +53,11 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const video = query[0];
+  const { video, bucket } = query[0];
 
-  const s3Client = new S3Client({
-    region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "",
-    credentials: {
-      accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
-      secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
-    },
-  });
+  const s3Client = createS3Client(bucket);
 
-  const bucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET;
+  const Bucket = getS3Bucket(bucket);
   const fileKeys: FileKey[] = [
     {
       type: "screen",
@@ -72,7 +74,7 @@ export async function GET(req: NextRequest) {
       try {
         const url = await getSignedUrl(
           s3Client,
-          new GetObjectCommand({ Bucket: bucket, Key: key }),
+          new GetObjectCommand({ Bucket, Key: key }),
           { expiresIn: 3600 }
         );
         responseObject[type] = url;
