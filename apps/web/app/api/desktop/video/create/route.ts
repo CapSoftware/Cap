@@ -56,6 +56,7 @@ export async function GET(req: NextRequest) {
   const originalOrigin = req.nextUrl.origin;
 
   const user = await getCurrentUser();
+  console.log("/api/desktop/video/create user", user);
 
   if (!user) {
     console.log("User not authenticated, returning 401");

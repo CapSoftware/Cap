@@ -42,6 +42,7 @@ export async function POST(request: NextRequest) {
     }
 
     const user = await getCurrentUser();
+    console.log("/api/upload/signed user", user);
 
     if (!user) {
       return new Response(JSON.stringify({ error: true }), {
