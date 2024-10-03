@@ -57,14 +57,6 @@ export async function POST(request: NextRequest) {
       .select()
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
-    if (!bucket) {
-      return new Response(JSON.stringify({ error: true }), {
-        status: 401,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
-    }
 
     const s3Client = createS3Client(bucket);
 
