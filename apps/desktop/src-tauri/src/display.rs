@@ -137,7 +137,7 @@ pub async fn start_capturing(
             show_highlight: true,
             show_cursor: true,
             output_type: FrameType::BGRAFrame,
-            output_resolution: Resolution::_1080p,
+            output_resolution: Resolution::_2160p,
             crop_area,
             excluded_targets: Some(excluded_targets),
             ..Default::default()
