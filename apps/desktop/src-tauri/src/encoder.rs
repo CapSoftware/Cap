@@ -42,9 +42,11 @@ impl H264Encoder {
             .video()
             .unwrap();
 
+        let (new_width, new_height) = Self::calculate_dimensions(width, height, 1080);
+
         stream.set_parameters(&encoder);
-        encoder.set_width(width);
-        encoder.set_height(height);
+        encoder.set_width(new_width);
+        encoder.set_height(new_height);
         encoder.set_format(Self::output_format());
         encoder.set_frame_rate(Some(fps));
         encoder.set_time_base(1.0 / fps);
@@ -76,12 +78,43 @@ impl H264Encoder {
         }
     }
 
-    pub fn encode_frame(&mut self, mut frame: ffmpeg::util::frame::Video) {
-        frame.set_pts(Some(self.frame_number as i64));
+    fn calculate_dimensions(width: u32, height: u32, max_width: u32) -> (u32, u32) {
+        if width <= max_width {
+            return (width, height);
+        }
 
-        // println!("sending frame - pts: {:?}", frame.pts());
+        let aspect_ratio = width as f32 / height as f32;
+        let new_width = max_width;
+        let new_height = (new_width as f32 / aspect_ratio).round() as u32;
 
-        self.context.send_frame(&frame).unwrap();
+        // Ensure dimensions are divisible by 2
+        (new_width & !1, new_height & !1)
+    }
+
+    pub fn encode_frame(&mut self, frame: ffmpeg::util::frame::Video) {
+        // Scale the frame if necessary
+        let mut scaled_frame =
+            if frame.width() != self.context.width() || frame.height() != self.context.height() {
+                let mut scaled = ffmpeg::frame::Video::empty();
+                let mut scaler = ffmpeg::software::scaling::Context::get(
+                    frame.format(),
+                    frame.width(),
+                    frame.height(),
+                    self.context.format(),
+                    self.context.width(),
+                    self.context.height(),
+                    ffmpeg::software::scaling::Flags::BILINEAR,
+                )
+                .unwrap();
+                scaler.run(&frame, &mut scaled).unwrap();
+                scaled
+            } else {
+                frame
+            };
+
+        scaled_frame.set_pts(Some(self.frame_number as i64));
+
+        self.context.send_frame(&scaled_frame).unwrap();
         self.frame_number += 1;
 
         self.receive_and_process_packets();
