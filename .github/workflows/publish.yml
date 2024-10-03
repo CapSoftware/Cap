@@ -1,6 +1,5 @@
 name: "publish"
 
-# change this when ready to release if you want CI/CD
 on: workflow_dispatch
 
 env:
@@ -66,11 +65,17 @@ jobs:
 
             main();
 
-      - name: create draft release
-        uses: crabnebula-dev/cloud-release@v0
+      - name: Create GitHub Release
+        id: create_release
+        if: ${{ steps.create_tag.outputs.tag_existed != 'true' }}
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
-          api-key: ${{ secrets.CN_API_KEY }}
+          tag_name: cap-v${{ steps.read_version.outputs.value }}
+          release_name: Cap v${{ steps.read_version.outputs.value }}
+          draft: true
+          prerelease: false
 
   build:
     needs: draft
@@ -161,8 +166,28 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: upload assets
-        uses: crabnebula-dev/cloud-release@v0
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          command: release upload ${{ env.CN_APPLICATION }} "${{ needs.draft.outputs.version }}" --framework tauri
-          api-key: ${{ secrets.CN_API_KEY }}
+          upload_url: ${{ needs.draft.outputs.upload_url }}
+          asset_path: ./apps/desktop/src-tauri/target/${{ matrix.settings.target }}/release/bundle/dmg/Cap_${{ needs.draft.outputs.version }}_${{ matrix.settings.target }}.dmg
+          asset_name: Cap_${{ needs.draft.outputs.version }}_${{ matrix.settings.target }}.dmg
+          asset_content_type: application/octet-stream
+
+  publish:
+    needs: [draft, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish Release
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: ${{ needs.draft.outputs.release_id }},
+              draft: false
+            })
