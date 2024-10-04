@@ -260,10 +260,9 @@ impl ProjectUniforms {
 
         let aspect = match &project.aspect_ratio {
             None => {
-                return (
-                    (crop.size.x as f32 + padding) as u32,
-                    (crop.size.y as f32 + padding) as u32,
-                );
+                let width = ((crop.size.x as f32 + padding) as u32 + 1) & !1;
+                let height = ((crop.size.y as f32 + padding) as u32 + 1) & !1;
+                return (width, height);
             }
             Some(AspectRatio::Square) => 1.0,
             Some(AspectRatio::Wide) => 16.0 / 9.0,
@@ -272,13 +271,16 @@ impl ProjectUniforms {
             Some(AspectRatio::Tall) => 3.0 / 4.0,
         };
 
-        if crop_aspect > aspect {
+        let (width, height) = if crop_aspect > aspect {
             (crop.size.x, (crop.size.x as f32 / aspect) as u32)
         } else if crop_aspect < aspect {
             ((crop.size.y as f32 * aspect) as u32, crop.size.y)
         } else {
             (crop.size.x, crop.size.y)
-        }
+        };
+
+        // Ensure width and height are divisible by 2
+        ((width + 1) & !1, (height + 1) & !1)
     }
 
     pub fn new(constants: &RenderVideoConstants, project: &ProjectConfiguration) -> Self {

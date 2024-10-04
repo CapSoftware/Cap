@@ -149,7 +149,7 @@ function ExportButton() {
 }
 
 function ShareButton() {
-  const { videoId, presets } = useEditorContext();
+  const { videoId, project, presets } = useEditorContext();
   const [meta, metaActions] = createResource(() =>
     commands.getRecordingMeta(videoId, "recording")
   );
@@ -158,7 +158,7 @@ function ShareButton() {
     mutationFn: async () => {
       const res = await commands.uploadRenderedVideo(
         videoId,
-        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+        project ? project : presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
       );
       if (res.status !== "ok") throw new Error(res.error);
     },
