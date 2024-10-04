@@ -146,8 +146,6 @@ pub async fn start_capturing(
         Capturer::new(dbg!(options))
     };
 
-    let [width, height] = capturer.get_output_frame_size();
-
     let controller = CaptureController::new(output_path);
 
     let (tx, rx) = oneshot::channel();
@@ -158,16 +156,31 @@ pub async fn start_capturing(
             let capture_format = avformat::Pixel::BGRA;
             let output_format = H264Encoder::output_format();
 
-            let mut encoder = H264Encoder::new(&controller.output_path, width, height, FPS as f64);
+            let capture_size = capturer.get_output_frame_size();
+            let frame_size = scale_dimensions(capture_size[0], capture_size[1], 1920);
 
-            let mut scaler =
-                software::converter((width, height), capture_format, output_format).unwrap();
+            let mut encoder = H264Encoder::new(
+                &controller.output_path,
+                frame_size.0,
+                frame_size.1,
+                FPS as f64,
+            );
+
+            // 1080p scaling via scap causes artifacts on external monitors so ffmpeg it is
+            let mut scaler = software::scaling::Context::get(
+                capture_format,
+                capture_size[0],
+                capture_size[1],
+                output_format,
+                frame_size.0,
+                frame_size.1,
+                software::scaling::Flags::FAST_BILINEAR,
+            )
+            .unwrap();
 
             capturer.start_capture();
 
             let mut start_time_tx = Some(tx);
-
-            let mut start = Instant::now();
 
             loop {
                 if controller.is_stopped() {
@@ -175,14 +188,13 @@ pub async fn start_capturing(
                 }
 
                 let frame = capturer.get_next_frame();
-                let timestamp = SystemTime::now();
 
                 if controller.is_paused() {
                     continue;
                 }
 
                 if let Some(tx) = start_time_tx.take() {
-                    tx.send(Instant::now()).ok();
+                    tx.send(()).ok();
                 }
 
                 if !*start_writing_rx.borrow() {
@@ -191,7 +203,7 @@ pub async fn start_capturing(
 
                 match frame {
                     Ok(Frame::BGRA(frame)) => {
-                        let rgb_frame = bgra_frame(&frame.data, width, height);
+                        let rgb_frame = bgra_frame(&frame.data, frame_size.0, frame_size.1);
 
                         let mut yuv_frame = Video::empty();
                         scaler.run(&rgb_frame, &mut yuv_frame).unwrap();
@@ -224,4 +236,17 @@ pub fn get_window_bounds(window_number: u32) -> Option<Bounds> {
         x: window.bounds.x as f64,
         y: window.bounds.y as f64,
     })
+}
+
+fn scale_dimensions(width: u32, height: u32, max_width: u32) -> (u32, u32) {
+    if width <= max_width {
+        return (width, height);
+    }
+
+    let aspect_ratio = width as f32 / height as f32;
+    let new_width = max_width;
+    let new_height = (new_width as f32 / aspect_ratio).round() as u32;
+
+    // Ensure dimensions are divisible by 2
+    (new_width & !1, new_height & !1)
 }
