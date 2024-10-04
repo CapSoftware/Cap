@@ -136,7 +136,7 @@ export const Toolbar = ({
   const Emoji = ({ label, emoji }: { label: string; emoji: string }) => (
     <div className="relative w-fit">
       <button
-        className="font-emoji text-2xl leading-6 bg-transparent p-1 relative transition-bg-color duration-600 inline-flex justify-center items-center align-middle rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
+        className="font-emoji text-xl sm:text-2xl leading-6 bg-transparent p-1 relative transition-bg-color duration-600 inline-flex justify-center items-center align-middle rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
         role="img"
         aria-label={label ? label : ""}
         aria-hidden={label ? "false" : "true"}
@@ -238,10 +238,10 @@ export const Toolbar = ({
                       }
                       setCommentBoxOpen(true);
                     }}
-                    className="text-sm font-medium bg-transparent py-1 px-2 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
+                    className="font-medium bg-transparent py-1 px-2 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
                   >
-                    <MessageSquare className="w-[22px] h-auto" />
-                    <span className="ml-1">Comment</span>
+                    <MessageSquare className="w-[16px] sm:w-[22px] h-auto" />
+                    <span className="text-sm ml-1">Comment</span>
                   </button>
                 </div>
               </div>

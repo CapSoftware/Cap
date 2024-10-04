@@ -3,12 +3,11 @@
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
 use reqwest::{multipart::Form, Client, StatusCode};
-use std::io::Cursor;
 use std::path::PathBuf;
 use tokio::task;
 
-#[derive(serde::Deserialize)]
-struct S3UploadMeta {
+#[derive(serde::Deserialize, Clone)]
+pub struct S3UploadMeta {
     id: String,
     user_id: String,
     aws_region: String,
@@ -43,9 +42,20 @@ struct S3ImageUploadBody {
     base: S3UploadBody,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct S3AudioUploadBody {
+    #[serde(flatten)]
+    base: S3UploadBody,
+    duration: String,
+    audio_codec: String,
+    is_mp3: bool,
+}
+
 pub struct UploadedVideo {
     pub link: String,
     pub id: String,
+    pub config: S3UploadMeta,
 }
 
 pub struct UploadedImage {
@@ -53,10 +63,17 @@ pub struct UploadedImage {
     pub id: String,
 }
 
+pub struct UploadedAudio {
+    pub link: String,
+    pub id: String,
+    pub config: S3UploadMeta,
+}
+
 pub async fn upload_video(
     video_id: String,
     auth_token: String,
     file_path: PathBuf,
+    is_individual: bool,
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
@@ -70,9 +87,14 @@ pub async fn upload_video(
     let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
     let s3_config = get_s3_config(&client, server_url_base, &auth_token, false).await?;
 
-    let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
-
-    println!("File key: {file_key}");
+    let file_key = if is_individual {
+        format!(
+            "{}/{}/individual/{}",
+            s3_config.user_id, s3_config.id, file_name
+        )
+    } else {
+        format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name)
+    };
 
     let body = build_video_upload_body(
         &file_path,
@@ -147,7 +169,8 @@ pub async fn upload_video(
 
         return Ok(UploadedVideo {
             link: format!("{server_url_base}/s/{}", &s3_config.id),
-            id: s3_config.id,
+            id: s3_config.id.clone(),
+            config: s3_config,
         });
     }
 
@@ -232,6 +255,83 @@ pub async fn upload_image(auth_token: String, file_path: PathBuf) -> Result<Uplo
     );
     Err(format!(
         "Failed to upload file. Status: {}. Body: {}",
+        status, error_body
+    ))
+}
+
+pub async fn upload_audio(auth_token: String, file_path: PathBuf) -> Result<UploadedAudio, String> {
+    let file_name = file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("Invalid file path")?
+        .to_string();
+
+    let client = reqwest::Client::new();
+    let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
+
+    let s3_config = get_s3_config(&client, server_url_base, &auth_token, false).await?;
+
+    let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
+
+    println!("File key: {file_key}");
+
+    let body = build_audio_upload_body(
+        &file_path,
+        S3UploadBody {
+            user_id: s3_config.user_id.clone(),
+            file_key: file_key.clone(),
+            aws_bucket: s3_config.aws_bucket.clone(),
+            aws_region: s3_config.aws_region.clone(),
+        },
+    )?;
+
+    let (upload_url, mut form) =
+        presigned_s3_url_audio(&client, server_url_base, body, &auth_token).await?;
+
+    let file_content = tokio::fs::read(&file_path)
+        .await
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let mime_type = if file_name.ends_with(".mp3") {
+        "audio/mpeg"
+    } else {
+        "audio/wav"
+    };
+
+    let file_part = reqwest::multipart::Part::bytes(file_content)
+        .file_name(file_name.clone())
+        .mime_str(mime_type)
+        .map_err(|e| format!("Error setting MIME type: {}", e))?;
+    form = form.part("file", file_part);
+
+    let response = client
+        .post(upload_url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send upload file request: {}", e))?;
+
+    if response.status().is_success() {
+        println!("Audio file uploaded successfully");
+        return Ok(UploadedAudio {
+            link: format!("{server_url_base}/s/{}", &s3_config.id),
+            id: s3_config.id.clone(),
+            config: s3_config,
+        });
+    }
+
+    let status = response.status();
+    let error_body = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "<no response body>".to_string());
+    tracing::error!(
+        "Failed to upload audio file. Status: {}. Body: {}",
+        status,
+        error_body
+    );
+    Err(format!(
+        "Failed to upload audio file. Status: {}. Body: {}",
         status, error_body
     ))
 }
@@ -370,6 +470,51 @@ async fn presigned_s3_url_image(
     Ok((post_url, form))
 }
 
+async fn presigned_s3_url_audio(
+    client: &Client,
+    server_url_base: &str,
+    body: S3AudioUploadBody,
+    auth_token: &str,
+) -> Result<(String, Form), String> {
+    let presigned_upload_url = format!("{}/api/upload/signed", server_url_base);
+
+    let response = client
+        .post(presigned_upload_url)
+        .json(&serde_json::json!(body))
+        .header("Authorization", format!("Bearer {auth_token}"))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
+
+    if response.status() == StatusCode::UNAUTHORIZED {
+        return Err("Failed to authenticate request; please log in again".into());
+    }
+
+    let presigned_post_data = response
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Failed to deserialize server response: {}", e))?;
+
+    let fields = presigned_post_data["presignedPostData"]["fields"]
+        .as_object()
+        .ok_or("Fields object is missing or not an object")?;
+    let post_url = presigned_post_data["presignedPostData"]["url"]
+        .as_str()
+        .ok_or("URL is missing or not a string")?
+        .to_string();
+
+    let mut form = Form::new();
+
+    for (key, value) in fields.iter() {
+        let value_str = value
+            .as_str()
+            .ok_or(format!("Value for key '{}' is not a string", key))?;
+        form = form.text(key.to_string(), value_str.to_owned());
+    }
+
+    Ok((post_url, form))
+}
+
 fn build_video_upload_body(
     path: &PathBuf,
     base: S3UploadBody,
@@ -403,6 +548,98 @@ fn build_video_upload_body(
         bandwidth: bit_rate.to_string(),
         video_codec: format!("{codec_name:?}").replace("Id::", "").to_lowercase(),
     })
+}
+
+fn build_audio_upload_body(
+    path: &PathBuf,
+    base: S3UploadBody,
+) -> Result<S3AudioUploadBody, String> {
+    let input =
+        ffmpeg_next::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
+    let stream = input
+        .streams()
+        .best(ffmpeg_next::media::Type::Audio)
+        .ok_or_else(|| "Failed to find appropriate audio stream in file".to_string())?;
+
+    let duration_millis = input.duration() as f64 / 1000.;
+
+    let codec = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())
+        .map_err(|e| format!("Unable to read audio codec information: {e}"))?;
+    let codec_name = codec.id();
+
+    let is_mp3 = path.extension().map_or(false, |ext| ext == "mp3");
+
+    Ok(S3AudioUploadBody {
+        base,
+        duration: duration_millis.to_string(),
+        audio_codec: format!("{codec_name:?}").replace("Id::", "").to_lowercase(),
+        is_mp3,
+    })
+}
+
+pub async fn upload_individual_file(
+    auth_token: String,
+    file_path: PathBuf,
+    s3_config: S3UploadMeta,
+    file_name: &str,
+    is_audio: bool,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
+
+    let file_key = format!(
+        "{}/{}/individual/{}",
+        s3_config.user_id, s3_config.id, file_name
+    );
+
+    let base_upload_body = S3UploadBody {
+        user_id: s3_config.user_id.clone(),
+        file_key: file_key.clone(),
+        aws_bucket: s3_config.aws_bucket.clone(),
+        aws_region: s3_config.aws_region.clone(),
+    };
+
+    let (upload_url, mut form) = if is_audio {
+        let audio_body = build_audio_upload_body(&file_path, base_upload_body)?;
+        presigned_s3_url_audio(&client, server_url_base, audio_body, &auth_token).await?
+    } else {
+        let video_body = build_video_upload_body(&file_path, base_upload_body)?;
+        presigned_s3_url(&client, server_url_base, video_body, &auth_token).await?
+    };
+
+    let file_content = tokio::fs::read(&file_path)
+        .await
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let mime_type = if is_audio { "audio/mpeg" } else { "video/mp4" };
+
+    let file_part = reqwest::multipart::Part::bytes(file_content)
+        .file_name(file_name.to_string())
+        .mime_str(mime_type)
+        .map_err(|e| format!("Error setting MIME type: {}", e))?;
+    form = form.part("file", file_part);
+
+    let response = client
+        .post(upload_url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send upload file request: {}", e))?;
+
+    if response.status().is_success() {
+        println!("Individual file uploaded successfully");
+        Ok(())
+    } else {
+        let status = response.status();
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        Err(format!(
+            "Failed to upload individual file. Status: {}. Body: {}",
+            status, error_body
+        ))
+    }
 }
 
 async fn prepare_screenshot_upload(

@@ -10,6 +10,7 @@ export default function (props: RouteSectionProps) {
       <ul class="min-w-[12rem] h-full p-[0.625rem] space-y-2">
         <For
           each={[
+            { href: "general", name: "General", icon: IconCapSettings },
             { href: "hotkeys", name: "Shortcuts", icon: IconCapHotkeys },
             {
               href: "recordings",

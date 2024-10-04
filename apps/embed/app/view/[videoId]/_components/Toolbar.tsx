@@ -224,7 +224,7 @@ export const Toolbar = ({
                       videoElement.pause();
                       setCommentBoxOpen(true);
                     }}
-                    className="text-sm font-medium bg-transparent py-1 px-2 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
+                    className="text-xs sm:text-sm font-medium bg-transparent py-1 px-2 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
                   >
                     <MessageSquare className="w-[22px] h-auto" />
                     <span className="ml-1">Comment</span>

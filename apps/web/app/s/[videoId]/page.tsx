@@ -135,5 +135,33 @@ export default async function ShareVideoPage(props: Props) {
     );
   }
 
-  return <Share data={video} user={user} comments={commentsQuery} />;
+  let individualFiles: {
+    fileName: string;
+    url: string;
+  }[] = [];
+
+  if (video?.source.type === "desktopMP4") {
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_URL}/api/video/individual?videoId=${videoId}&userId=${video.ownerId}`,
+      {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      }
+    );
+
+    const data = await res.json();
+    individualFiles = data.files;
+  }
+
+  console.log("individualFiles:", individualFiles);
+
+  return (
+    <Share
+      data={video}
+      user={user}
+      comments={commentsQuery}
+      individualFiles={individualFiles}
+    />
+  );
 }

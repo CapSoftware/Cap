@@ -4,6 +4,7 @@ import type {
   AuthStore,
   ProjectConfiguration,
   HotkeysStore,
+  GeneralSettingsStore,
 } from "~/utils/tauri";
 
 const store = new Store("store");
@@ -40,6 +41,14 @@ export const hotkeysStore = {
   get: () => store.get<HotkeysStore>("hotkeys"),
   set: async (value: HotkeysStore) => {
     await store.set("hotkeys", value);
+    await store.save();
+  },
+};
+
+export const generalSettingsStore = {
+  get: () => store.get<GeneralSettingsStore>("general_settings"),
+  set: async (value: GeneralSettingsStore) => {
+    await store.set("general_settings", value);
     await store.save();
   },
 };

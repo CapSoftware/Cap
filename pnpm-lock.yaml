@@ -220,7 +220,7 @@ importers:
         version: 2.30.1
       next:
         specifier: 14.2.9
-        version: 14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        version: 14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       next-auth:
         specifier: ^4.24.5
         version: 4.24.8(next@14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@6.9.15)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -503,9 +503,15 @@ importers:
       dub:
         specifier: ^0.33.1
         version: 0.33.1(zod@3.23.8)
+      file-saver:
+        specifier: ^2.0.5
+        version: 2.0.5
       hls.js:
         specifier: ^1.5.3
         version: 1.5.15
+      jszip:
+        specifier: ^3.10.1
+        version: 3.10.1
       lodash:
         specifier: ^4.17.21
         version: 4.17.21
@@ -582,6 +588,9 @@ importers:
         specifier: ^3.22.4
         version: 3.23.8
     devDependencies:
+      '@types/file-saver':
+        specifier: ^2.0.7
+        version: 2.0.7
       '@types/lodash':
         specifier: ^4.17.5
         version: 4.17.9
@@ -687,7 +696,7 @@ importers:
         version: 5.0.7
       next:
         specifier: 14.2.9
-        version: 14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        version: 14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       next-auth:
         specifier: ^4.24.5
         version: 4.24.8(next@14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(nodemailer@6.9.15)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -3980,11 +3989,11 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@8.4.0-alpha.2':
-    resolution: {integrity: sha512-JT19lBZ34CoG9ofFpwctYiRBjpI68AznNz+EtQzawWx95TqwAjgB9zX9t2m2cWYXPT+CoVPC9UtI6/hlfmEjOw==}
+  '@storybook/builder-vite@8.4.0-alpha.4':
+    resolution: {integrity: sha512-NehLywjKaeUNU4soxeegLj0BODcHP0FZrdDmHU4+QWkrwdKymCxRMLc17n68FtoyGHnu9zKiQK3vwJrqZkRppg==}
     peerDependencies:
       '@preact/preset-vite': '*'
-      storybook: ^8.4.0-alpha.2
+      storybook: ^8.4.0-alpha.4
       typescript: '>= 4.3.x'
       vite: ^4.0.0 || ^5.0.0
       vite-plugin-glimmerx: '*'
@@ -4004,10 +4013,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@8.4.0-alpha.2':
-    resolution: {integrity: sha512-vm4G8/OqqWnUjSrsFX1GBlDFt3y6GMJm8thd8xvVDp25yhH0NwrhqSeb4eXJtAo2t8gu89KPC8PctOixFvbXRA==}
+  '@storybook/csf-plugin@8.4.0-alpha.4':
+    resolution: {integrity: sha512-1jgRLUm8u/FYR+q1NjN+FASW6eaL0EF8DVVn7ygYEr7lkC6G0FLJ+YOP91t8RhzZw/3yxwjB7Ztxu/GgQs3C1A==}
     peerDependencies:
-      storybook: ^8.4.0-alpha.2
+      storybook: ^8.4.0-alpha.4
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -4349,6 +4358,9 @@ packages:
 
   '@types/express@4.17.21':
     resolution: {integrity: sha512-ejlPM315qwLpaQlQDTjPdsUFSc6ZsP4AN6AlWnogPjQ7CVi7PYF3YVz+CY3jE2pwYf7E/7HlDAN0rV2GxTG0HQ==}
+
+  '@types/file-saver@2.0.7':
+    resolution: {integrity: sha512-dNKVfHd/jk0SkR/exKGj2ggkB45MAkzvWCaqLUUgkyjITkGNzH8H+yUwr+BLJUBjZOe9w8X3wgmXhZDRg1ED6A==}
 
   '@types/find-cache-dir@3.2.1':
     resolution: {integrity: sha512-frsJrz2t/CeGifcu/6uRo4b+SzAwT4NYCVPu1GN8IB9XTzrpPkGuV0tmh9mN+/L0PklAlsC3u5Fxt0ju00LXIw==}
@@ -6383,6 +6395,9 @@ packages:
     resolution: {integrity: sha512-7Gps/XWymbLk2QLYK4NzpMOrYjMhdIxXuIvy2QBsLE6ljuodKvdkWs/cpyJJ3CVIVpH0Oi1Hvg1ovbMzLdFBBg==}
     engines: {node: ^10.12.0 || >=12.0.0}
 
+  file-saver@2.0.5:
+    resolution: {integrity: sha512-P9bmyZ3h/PRG+Nzga+rbdI4OEpNDzAVyy74uVO9ATgzLK6VtAsYybF/+TOCvrc0MO793d6+42lLyZTw7/ArVzA==}
+
   file-uri-to-path@1.0.0:
     resolution: {integrity: sha512-0Zt+s3L7Vf1biwWZ29aARiVYLx7iMGnEUl9x33fbB/j3jR81u/O2LbqK+Bm1CDSNDKVtJ/YjwY7TUd5SkeLQLw==}
 
@@ -6843,6 +6858,9 @@ packages:
   ignore@5.3.2:
     resolution: {integrity: sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==}
     engines: {node: '>= 4'}
+
+  immediate@3.0.6:
+    resolution: {integrity: sha512-XXOFtyqDjNDAQxVfYxuF7g9Il/IbWmmlQg2MYKOH8ExIT1qg6xc4zyS3HaEEATgs1btfzxq15ciUiY7gjSXRGQ==}
 
   import-fresh@3.3.0:
     resolution: {integrity: sha512-veYYhQa+D1QBKznvhUHxb8faxlrwUnxseDAbAp457E0wLNio2bOSKnjYDhMj+YiAq61xrMGhQk9iXVk5FzgQMw==}
@@ -7437,6 +7455,9 @@ packages:
     resolution: {integrity: sha512-ZZow9HBI5O6EPgSJLUb8n2NKgmVWTwCvHGwFuJlMjvLFqlGG6pjirPhtdsseaLZjSibD8eegzmYpUZwoIlj2cQ==}
     engines: {node: '>=4.0'}
 
+  jszip@3.10.1:
+    resolution: {integrity: sha512-xXDvecyTpGLrqFrvkrUSoxxfJI5AH7U8zxxtVclpsUtMCq4JQ290LY8AW5c7Ggnr/Y/oK+bQMbqK2qmtk3pN4g==}
+
   keyv@4.5.4:
     resolution: {integrity: sha512-oxVHkHR/EJf2CNXnWxRLW6mg7JyCCUcG0DtEGmL2ctUo1PNTin1PUil+r/+4r5MpVgC/fn1kjsx7mjSujKqIpw==}
 
@@ -7487,6 +7508,9 @@ packages:
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
     engines: {node: '>= 0.8.0'}
+
+  lie@3.3.0:
+    resolution: {integrity: sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==}
 
   lilconfig@2.1.0:
     resolution: {integrity: sha512-utWOt/GHzuUxnLKxB6dk81RoOeoNeHgbrXiuGk4yyF5qlRz+iIVWu56E2fqGHFrXz0QNUhLB/8nKqvRH66JKGQ==}
@@ -8332,6 +8356,9 @@ packages:
   package-manager-detector@0.2.0:
     resolution: {integrity: sha512-E385OSk9qDcXhcM9LNSe4sdhx8a9mAPrZ4sMLW+tmxl5ZuGtPUcdFu+MPP2jbgiWAZ6Pfe5soGFMd+0Db5Vrog==}
 
+  pako@1.0.11:
+    resolution: {integrity: sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==}
+
   parallax-controller@1.7.1:
     resolution: {integrity: sha512-facVMEBnUynzMN7hCSqyNpF6uyCpVIl4XAUyTR9D8q2JlhgyPY6bZtj/OkFk3+Cpka1TnYCppQb8BzDWHtSaZg==}
     engines: {node: '>=12'}
@@ -9096,6 +9123,9 @@ packages:
   set-function-name@2.0.2:
     resolution: {integrity: sha512-7PGFlmtwsEADb0WYyvCMa1t+yke6daIG4Wirafur5kcf+MhUnPms1UeR0CKQdTZD81yESwMHbtn+TR+dMviakQ==}
     engines: {node: '>= 0.4'}
+
+  setimmediate@1.0.5:
+    resolution: {integrity: sha512-MATJdZp8sLqDl/68LfQmbP8zKPLQNV6BIZoIgrscFDQ+RsvK/BxeDQOgyxKKoh0y/8h3BqVFnCqQ/gd+reiIXA==}
 
   setprototypeof@1.2.0:
     resolution: {integrity: sha512-E5LDX7Wrp85Kil5bhZv46j8jOeboKq5JMmYM3gVGdGH8xFpPWXUMsNrlODCrkoxMEeNi/XZIwuRvY4XNwYMJpw==}
@@ -13850,9 +13880,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@8.4.0-alpha.2(storybook@8.3.3)(typescript@5.6.2)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))':
+  '@storybook/builder-vite@8.4.0-alpha.4(storybook@8.3.3)(typescript@5.6.2)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 8.4.0-alpha.2(storybook@8.3.3)
+      '@storybook/csf-plugin': 8.4.0-alpha.4(storybook@8.3.3)
       '@types/find-cache-dir': 3.2.1
       browser-assert: 1.2.1
       es-module-lexer: 1.5.4
@@ -13895,7 +13925,7 @@ snapshots:
     transitivePeerDependencies:
       - webpack-sources
 
-  '@storybook/csf-plugin@8.4.0-alpha.2(storybook@8.3.3)':
+  '@storybook/csf-plugin@8.4.0-alpha.4(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.14.1
@@ -14273,6 +14303,8 @@ snapshots:
       '@types/express-serve-static-core': 4.19.6
       '@types/qs': 6.9.16
       '@types/serve-static': 1.15.7
+
+  '@types/file-saver@2.0.7': {}
 
   '@types/find-cache-dir@3.2.1': {}
 
@@ -16482,7 +16514,7 @@ snapshots:
       doctrine: 2.1.0
       eslint: 8.57.1
       eslint-import-resolver-node: 0.3.9
-      eslint-module-utils: 2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0)(eslint@8.57.1))(eslint@8.57.1)
+      eslint-module-utils: 2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1))(eslint@8.57.1)
       hasown: 2.0.2
       is-core-module: 2.15.1
       is-glob: 4.0.3
@@ -16927,6 +16959,8 @@ snapshots:
   file-entry-cache@6.0.1:
     dependencies:
       flat-cache: 3.2.0
+
+  file-saver@2.0.5: {}
 
   file-uri-to-path@1.0.0: {}
 
@@ -17498,6 +17532,8 @@ snapshots:
   ignore@4.0.6: {}
 
   ignore@5.3.2: {}
+
+  immediate@3.0.6: {}
 
   import-fresh@3.3.0:
     dependencies:
@@ -18282,6 +18318,13 @@ snapshots:
       object.assign: 4.1.5
       object.values: 1.2.0
 
+  jszip@3.10.1:
+    dependencies:
+      lie: 3.3.0
+      pako: 1.0.11
+      readable-stream: 2.3.8
+      setimmediate: 1.0.5
+
   keyv@4.5.4:
     dependencies:
       json-buffer: 3.0.1
@@ -18320,6 +18363,10 @@ snapshots:
     dependencies:
       prelude-ls: 1.2.1
       type-check: 0.4.0
+
+  lie@3.3.0:
+    dependencies:
+      immediate: 3.0.6
 
   lilconfig@2.1.0: {}
 
@@ -19133,7 +19180,7 @@ snapshots:
       '@panva/hkdf': 1.2.1
       cookie: 0.5.0
       jose: 4.15.9
-      next: 14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      next: 14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       oauth: 0.9.15
       openid-client: 5.7.0
       preact: 10.24.1
@@ -19182,7 +19229,7 @@ snapshots:
       - '@babel/core'
       - babel-plugin-macros
 
-  next@14.2.9(@babel/core@7.25.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+  next@14.2.9(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
     dependencies:
       '@next/env': 14.2.9
       '@swc/helpers': 0.5.5
@@ -19580,6 +19627,8 @@ snapshots:
   package-json-from-dist@1.0.1: {}
 
   package-manager-detector@0.2.0: {}
+
+  pako@1.0.11: {}
 
   parallax-controller@1.7.1:
     dependencies:
@@ -20438,6 +20487,8 @@ snapshots:
       functions-have-names: 1.2.3
       has-property-descriptors: 1.0.2
 
+  setimmediate@1.0.5: {}
+
   setprototypeof@1.2.0: {}
 
   shebang-command@2.0.0:
@@ -20618,7 +20669,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(typescript@5.6.2)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 8.4.0-alpha.2(storybook@8.3.3)(typescript@5.6.2)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))
+      '@storybook/builder-vite': 8.4.0-alpha.4(storybook@8.3.3)(typescript@5.6.2)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))
     transitivePeerDependencies:
       - '@preact/preset-vite'
       - storybook

@@ -7,6 +7,7 @@ mod editor;
 mod editor_instance;
 mod encoder;
 mod flags;
+mod general_settings;
 mod hotkeys;
 mod macos;
 mod permissions;
@@ -27,6 +28,7 @@ use cap_rendering::ProjectUniforms;
 use cap_utils::create_named_pipe;
 use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
+use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
@@ -59,7 +61,9 @@ use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
 };
-use upload::{upload_image, upload_video};
+use upload::{
+    upload_audio, upload_image, upload_individual_file, upload_video, UploadedAudio, UploadedVideo,
+};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -1537,11 +1541,11 @@ async fn open_settings_window(app: AppHandle, page: String) {
 #[tauri::command]
 #[specta::specta]
 async fn upload_rendered_video(
-    app: AppHandle,
+    _app: AppHandle,
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<UploadResult, String> {
-    let Ok(Some(mut auth)) = AuthStore::get(&app) else {
+    let Ok(Some(mut auth)) = AuthStore::get(&_app) else {
         println!("not authenticated!");
         return Ok(UploadResult::NotAuthenticated);
     };
@@ -1549,25 +1553,23 @@ async fn upload_rendered_video(
     // Check if user has an upgraded plan
     if !auth.is_upgraded() {
         // Fetch and update plan information
-        if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
+        if let Err(e) = AuthStore::fetch_and_update_plan(&_app).await {
             println!("Failed to update plan information: {}", e);
             return Ok(UploadResult::PlanCheckFailed);
         }
 
         // Refresh auth information after update
-        auth = AuthStore::get(&app).unwrap().unwrap();
+        auth = AuthStore::get(&_app).unwrap().unwrap();
 
         // Re-check upgraded status after refresh
         if !auth.is_upgraded() {
             // Open upgrade window instead of returning an error
-            open_upgrade_window(app).await;
+            open_upgrade_window(_app).await;
             return Ok(UploadResult::UpgradeRequired);
         }
     }
 
-    println!("Uploading rendered video: {:?}", video_id);
-
-    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let editor_instance = upsert_editor_instance(&_app, video_id.clone()).await;
 
     let mut meta = editor_instance.meta();
 
@@ -1585,16 +1587,65 @@ async fn upload_rendered_video(
             }
         };
 
-        let uploaded_video = upload_video(video_id.clone(), auth.token, output_path)
-            .await
-            .unwrap();
+        let uploaded_video =
+            upload_video(video_id.clone(), auth.token.clone(), output_path, false).await?;
+
+        let general_settings = GeneralSettingsStore::get(&_app)?;
+        if let Some(settings) = general_settings {
+            if settings.upload_individual_files {
+                let video_dir = _app
+                    .path()
+                    .app_data_dir()
+                    .unwrap()
+                    .join("recordings")
+                    .join(format!("{}.cap", video_id));
+
+                let files_to_upload = vec![
+                    (video_dir.join("content/audio-input.mp3"), true),
+                    (video_dir.join("content/camera.mp4"), false),
+                    (video_dir.join("content/display.mp4"), false),
+                ];
+
+                for (file_path, is_audio) in files_to_upload {
+                    if file_path.exists() {
+                        let file_name = file_path.file_name().unwrap().to_str().unwrap();
+                        let result = if is_audio {
+                            upload_individual_file(
+                                auth.token.clone(),
+                                file_path.clone(),
+                                uploaded_video.config.clone(),
+                                file_name,
+                                true,
+                            )
+                            .await
+                        } else {
+                            upload_individual_file(
+                                auth.token.clone(),
+                                file_path.clone(),
+                                uploaded_video.config.clone(),
+                                file_name,
+                                false,
+                            )
+                            .await
+                        };
+
+                        match result {
+                            Ok(()) => println!("Successfully uploaded {}", file_name),
+                            Err(e) => println!("Failed to upload {}: {}", file_name, e),
+                        }
+                    }
+                }
+            }
+        } else {
+            println!("General settings not found");
+        }
 
         meta.sharing = Some(SharingMeta {
             link: uploaded_video.link.clone(),
             id: uploaded_video.id.clone(),
         });
         meta.save_for_project();
-        RecordingMetaChanged { id: video_id }.emit(&app).ok();
+        RecordingMetaChanged { id: video_id }.emit(&_app).ok();
 
         uploaded_video.link
     };
@@ -2015,6 +2066,15 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn set_general_settings(
+    app: AppHandle,
+    settings: GeneralSettingsStore,
+) -> Result<(), String> {
+    GeneralSettingsStore::set(&app, settings)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -2066,7 +2126,8 @@ pub fn run() {
             list_screenshots,
             check_upgraded_and_update,
             open_external_link,
-            hotkeys::set_hotkey
+            hotkeys::set_hotkey,
+            set_general_settings
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2087,7 +2148,8 @@ pub fn run() {
         ])
         .ty::<ProjectConfiguration>()
         .ty::<AuthStore>()
-        .ty::<hotkeys::HotkeysStore>();
+        .ty::<hotkeys::HotkeysStore>()
+        .ty::<general_settings::GeneralSettingsStore>();
 
     #[cfg(debug_assertions)]
     specta_builder
@@ -2110,7 +2172,7 @@ pub fn run() {
         .setup(move |app| {
             specta_builder.mount_events(app);
             hotkeys::init(app.handle());
-
+            general_settings::init(app.handle());
             let app_handle = app.handle().clone();
 
             if permissions::do_permissions_check(true).necessary_granted() {
