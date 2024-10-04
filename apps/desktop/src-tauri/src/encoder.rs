@@ -49,6 +49,7 @@ impl H264Encoder {
         encoder.set_frame_rate(Some(fps));
         encoder.set_time_base(1.0 / fps);
         encoder.set_gop(fps as u32);
+        encoder.set_max_bit_rate(8000);
 
         if output_flags.contains(ffmpeg::format::Flags::GLOBAL_HEADER) {
             encoder.set_flags(ffmpeg::codec::Flags::GLOBAL_HEADER);
