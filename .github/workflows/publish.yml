@@ -172,13 +172,19 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      - name: upload assets
+        uses: crabnebula-dev/cloud-release@v0
+        with:
+          command: release upload ${{ env.CN_APPLICATION }} "${{ needs.draft.outputs.version }}" --framework tauri
+          api-key: ${{ secrets.CN_API_KEY }}
+
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.draft.outputs.upload_url }}
-          asset_path: ./apps/desktop/src-tauri/target/${{ matrix.settings.target }}/release/bundle/dmg/Cap_${{ needs.draft.outputs.version }}_${{ matrix.settings.target }}.dmg
+          asset_path: ./apps/desktop/src-tauri/target/${{ matrix.settings.target }}/release/bundle/dmg/Cap_${{ needs.draft.outputs.version }}.dmg
           asset_name: Cap_${{ needs.draft.outputs.version }}_${{ matrix.settings.target }}.dmg
           asset_content_type: application/octet-stream
 
