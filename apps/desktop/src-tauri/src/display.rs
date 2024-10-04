@@ -203,7 +203,7 @@ pub async fn start_capturing(
 
                 match frame {
                     Ok(Frame::BGRA(frame)) => {
-                        let rgb_frame = bgra_frame(&frame.data, frame_size.0, frame_size.1);
+                        let rgb_frame = bgra_frame(&frame.data, capture_size[0], capture_size[1]);
 
                         let mut yuv_frame = Video::empty();
                         scaler.run(&rgb_frame, &mut yuv_frame).unwrap();
