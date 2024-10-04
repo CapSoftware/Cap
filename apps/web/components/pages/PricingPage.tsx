@@ -15,7 +15,7 @@ import { Check, Construction } from "lucide-react";
 import { useState, useEffect } from "react";
 import { getProPlanId } from "@cap/utils";
 import toast from "react-hot-toast";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { SimplePlans } from "../text/SimplePlans";
 
 export const PricingPage = () => {
@@ -23,17 +23,23 @@ export const PricingPage = () => {
   const [isAnnual, setIsAnnual] = useState(true);
   const [initialRender, setInitialRender] = useState(true);
   const { push } = useRouter();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
     setInitialRender(false);
+    const planFromUrl = searchParams.get("plan");
+    if (planFromUrl) {
+      planCheckout(planFromUrl);
+    }
   }, []);
 
-  const planCheckout = async () => {
+  const planCheckout = async (planId?: string) => {
     setLoading(true);
 
-    const planId = getProPlanId(isAnnual ? "yearly" : "monthly");
+    if (!planId) {
+      planId = getProPlanId(isAnnual ? "yearly" : "monthly");
+    }
 
-    setLoading(true);
     const response = await fetch(`/api/settings/billing/subscribe`, {
       method: "POST",
       headers: {
@@ -43,10 +49,8 @@ export const PricingPage = () => {
     });
     const data = await response.json();
 
-    console.log(data);
-
     if (data.auth === false) {
-      push("/login");
+      push(`/login?next=/pricing?plan=${planId}`);
     }
 
     if (data.subscription === true) {
