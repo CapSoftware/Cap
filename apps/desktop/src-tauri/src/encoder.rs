@@ -21,7 +21,7 @@ pub struct H264Encoder {
     pub stream_index: usize,
     pub fps: f64,
     pub start_time: Option<u64>,
-    last_pts: Option<i64>,
+    last_frame: Option<ffmpeg::util::frame::Video>,
 }
 
 impl H264Encoder {
@@ -75,34 +75,43 @@ impl H264Encoder {
             stream_index,
             start_time: None,
             fps,
-            last_pts: None,
+            last_frame: None,
         }
     }
 
     pub fn encode_frame(&mut self, mut frame: ffmpeg::util::frame::Video, timestamp: u64) {
-        let pts = {
-            let delta_time = if let Some(start_time) = self.start_time {
-                (timestamp - start_time) as i64
-            } else {
-                self.start_time = Some(timestamp);
+        if let Some(last_frame) = &mut self.last_frame {
+            let pts = {
+                let delta_time = if let Some(start_time) = self.start_time {
+                    (timestamp - start_time) as i64
+                } else {
+                    self.start_time = Some(timestamp);
 
-                0
+                    0
+                };
+
+                (delta_time as f64 / (1000.0 / self.fps)).round() as i64
             };
 
-            (delta_time as f64 / (1000.0 / self.fps)).round() as i64
-        };
+            // we should probably do something better than just dropping frames lol
+            if Some(pts) <= last_frame.pts() {
+                return;
+            }
 
-        // we should probably do something better than just dropping frames lol
-        if Some(pts) <= self.last_pts {
-            return;
+            // duplicate previous frame if this frame is >1 frame in the future
+            while Some(pts - 1) > last_frame.pts() {
+                let pts = Some(last_frame.pts().unwrap() + 1);
+                last_frame.set_pts(pts);
+                self.context.send_frame(&last_frame).unwrap();
+            }
+
+            frame.set_pts(Some(pts));
+        } else {
+            frame.set_pts(Some(0));
         }
 
-        dbg!(pts);
-
-        frame.set_pts(Some(pts));
-        self.last_pts = Some(pts);
-
         self.context.send_frame(&frame).unwrap();
+        self.last_frame = Some(frame);
 
         self.receive_and_process_packets();
     }
