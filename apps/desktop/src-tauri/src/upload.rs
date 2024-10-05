@@ -6,6 +6,8 @@ use reqwest::{multipart::Form, Client, StatusCode};
 use std::path::PathBuf;
 use tokio::task;
 
+use crate::{auth::AuthStore, web_api};
+
 #[derive(serde::Deserialize, Clone)]
 pub struct S3UploadMeta {
     id: String,
@@ -71,7 +73,7 @@ pub struct UploadedAudio {
 
 pub async fn upload_video(
     video_id: String,
-    auth_token: String,
+    auth: &AuthStore,
     file_path: PathBuf,
     is_individual: bool,
 ) -> Result<UploadedVideo, String> {
@@ -84,8 +86,7 @@ pub async fn upload_video(
         .to_string();
 
     let client = reqwest::Client::new();
-    let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
-    let s3_config = get_s3_config(&client, server_url_base, &auth_token, false).await?;
+    let s3_config = get_s3_config(&client, &auth, false).await?;
 
     let file_key = if is_individual {
         format!(
@@ -106,8 +107,7 @@ pub async fn upload_video(
         },
     )?;
 
-    let (upload_url, mut form) =
-        presigned_s3_url(&client, server_url_base, body, &auth_token).await?;
+    let (upload_url, mut form) = presigned_s3_url(body, &auth).await?;
 
     let file_bytes = tokio::fs::read(&file_path)
         .await
@@ -128,7 +128,7 @@ pub async fn upload_video(
         .join("display.jpg");
 
     let screenshot_upload = if screenshot_path.exists() {
-        Some(prepare_screenshot_upload(&client, &s3_config, &auth_token, screenshot_path).await?)
+        Some(prepare_screenshot_upload(&s3_config, &auth, screenshot_path).await?)
     } else {
         None
     };
@@ -168,7 +168,7 @@ pub async fn upload_video(
         }
 
         return Ok(UploadedVideo {
-            link: format!("{server_url_base}/s/{}", &s3_config.id),
+            link: web_api::make_url(format!("/s/{}", &s3_config.id)),
             id: s3_config.id.clone(),
             config: s3_config,
         });
@@ -190,7 +190,7 @@ pub async fn upload_video(
     ))
 }
 
-pub async fn upload_image(auth_token: String, file_path: PathBuf) -> Result<UploadedImage, String> {
+pub async fn upload_image(auth: &AuthStore, file_path: PathBuf) -> Result<UploadedImage, String> {
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -198,9 +198,8 @@ pub async fn upload_image(auth_token: String, file_path: PathBuf) -> Result<Uplo
         .to_string();
 
     let client = reqwest::Client::new();
-    let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
 
-    let s3_config = get_s3_config(&client, server_url_base, &auth_token, true).await?;
+    let s3_config = get_s3_config(&client, &auth, true).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -215,8 +214,7 @@ pub async fn upload_image(auth_token: String, file_path: PathBuf) -> Result<Uplo
         },
     };
 
-    let (upload_url, mut form) =
-        presigned_s3_url_image(&client, server_url_base, body, &auth_token).await?;
+    let (upload_url, mut form) = presigned_s3_url_image(body, &auth).await?;
 
     let file_content = tokio::fs::read(&file_path)
         .await
@@ -238,7 +236,7 @@ pub async fn upload_image(auth_token: String, file_path: PathBuf) -> Result<Uplo
     if response.status().is_success() {
         println!("File uploaded successfully");
         return Ok(UploadedImage {
-            link: format!("{server_url_base}/s/{}", &s3_config.id),
+            link: web_api::make_url(format!("/s/{}", &s3_config.id)),
             id: s3_config.id,
         });
     }
@@ -259,7 +257,7 @@ pub async fn upload_image(auth_token: String, file_path: PathBuf) -> Result<Uplo
     ))
 }
 
-pub async fn upload_audio(auth_token: String, file_path: PathBuf) -> Result<UploadedAudio, String> {
+pub async fn upload_audio(auth: &AuthStore, file_path: PathBuf) -> Result<UploadedAudio, String> {
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -267,9 +265,8 @@ pub async fn upload_audio(auth_token: String, file_path: PathBuf) -> Result<Uplo
         .to_string();
 
     let client = reqwest::Client::new();
-    let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
 
-    let s3_config = get_s3_config(&client, server_url_base, &auth_token, false).await?;
+    let s3_config = get_s3_config(&client, &auth, false).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -285,8 +282,7 @@ pub async fn upload_audio(auth_token: String, file_path: PathBuf) -> Result<Uplo
         },
     )?;
 
-    let (upload_url, mut form) =
-        presigned_s3_url_audio(&client, server_url_base, body, &auth_token).await?;
+    let (upload_url, mut form) = presigned_s3_url_audio(body, &auth).await?;
 
     let file_content = tokio::fs::read(&file_path)
         .await
@@ -314,7 +310,7 @@ pub async fn upload_audio(auth_token: String, file_path: PathBuf) -> Result<Uplo
     if response.status().is_success() {
         println!("Audio file uploaded successfully");
         return Ok(UploadedAudio {
-            link: format!("{server_url_base}/s/{}", &s3_config.id),
+            link: web_api::make_url(format!("/s/{}", &s3_config.id)),
             id: s3_config.id.clone(),
             config: s3_config,
         });
@@ -338,26 +334,23 @@ pub async fn upload_audio(auth_token: String, file_path: PathBuf) -> Result<Uplo
 
 async fn get_s3_config(
     client: &Client,
-    server_url_base: &str,
-    auth_token: &str,
+    auth: &AuthStore,
     is_screenshot: bool,
 ) -> Result<S3UploadMeta, String> {
-    let config_url = if is_screenshot {
+    let origin = "http://tauri.localhost";
+    let config_url = web_api::make_url(if is_screenshot {
         format!(
-            "{}/api/desktop/video/create?origin={}&recordingMode=desktopMP4&isScreenshot=true",
-            server_url_base, server_url_base
+            "/api/desktop/video/create?origin={}&recordingMode=desktopMP4&isScreenshot=true",
+            origin
         )
     } else {
         format!(
-            "{}/api/desktop/video/create?origin={}&recordingMode=desktopMP4",
-            server_url_base, server_url_base
+            "/api/desktop/video/create?origin={}&recordingMode=desktopMP4",
+            origin
         )
-    };
+    });
 
-    let response = client
-        .get(config_url)
-        .header("Authorization", format!("Bearer {auth_token}"))
-        .send()
+    let response = web_api::do_authed_request(auth, |client| client.get(config_url))
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
 
@@ -381,20 +374,16 @@ async fn get_s3_config(
 }
 
 async fn presigned_s3_url(
-    client: &Client,
-    server_url_base: &str,
     body: S3VideoUploadBody,
-    auth_token: &str,
+    auth: &AuthStore,
 ) -> Result<(String, Form), String> {
-    let presigned_upload_url = format!("{}/api/upload/signed", server_url_base);
-
-    let response = client
-        .post(presigned_upload_url)
-        .json(&serde_json::json!(body))
-        .header("Authorization", format!("Bearer {auth_token}"))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
+    let response = web_api::do_authed_request(auth, |client| {
+        client
+            .post(web_api::make_url("/api/upload/signed"))
+            .json(&serde_json::json!(body))
+    })
+    .await
+    .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err("Failed to authenticate request; please log in again".into());
@@ -426,20 +415,16 @@ async fn presigned_s3_url(
 }
 
 async fn presigned_s3_url_image(
-    client: &Client,
-    server_url_base: &str,
     body: S3ImageUploadBody,
-    auth_token: &str,
+    auth: &AuthStore,
 ) -> Result<(String, Form), String> {
-    let presigned_upload_url = format!("{}/api/upload/signed", server_url_base);
-
-    let response = client
-        .post(presigned_upload_url)
-        .json(&serde_json::json!(body))
-        .header("Authorization", format!("Bearer {auth_token}"))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
+    let response = web_api::do_authed_request(auth, |client| {
+        client
+            .post(web_api::make_url("/api/upload/signed"))
+            .json(&serde_json::json!(body))
+    })
+    .await
+    .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err("Failed to authenticate request; please log in again".into());
@@ -471,20 +456,16 @@ async fn presigned_s3_url_image(
 }
 
 async fn presigned_s3_url_audio(
-    client: &Client,
-    server_url_base: &str,
     body: S3AudioUploadBody,
-    auth_token: &str,
+    auth: &AuthStore,
 ) -> Result<(String, Form), String> {
-    let presigned_upload_url = format!("{}/api/upload/signed", server_url_base);
-
-    let response = client
-        .post(presigned_upload_url)
-        .json(&serde_json::json!(body))
-        .header("Authorization", format!("Bearer {auth_token}"))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
+    let response = web_api::do_authed_request(auth, |client| {
+        client
+            .post(web_api::make_url("/api/upload/signed"))
+            .json(&serde_json::json!(body))
+    })
+    .await
+    .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err("Failed to authenticate request; please log in again".into());
@@ -578,14 +559,13 @@ fn build_audio_upload_body(
 }
 
 pub async fn upload_individual_file(
-    auth_token: String,
+    auth: &AuthStore,
     file_path: PathBuf,
     s3_config: S3UploadMeta,
     file_name: &str,
     is_audio: bool,
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
-    let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
 
     let file_key = format!(
         "{}/{}/individual/{}",
@@ -601,10 +581,10 @@ pub async fn upload_individual_file(
 
     let (upload_url, mut form) = if is_audio {
         let audio_body = build_audio_upload_body(&file_path, base_upload_body)?;
-        presigned_s3_url_audio(&client, server_url_base, audio_body, &auth_token).await?
+        presigned_s3_url_audio(audio_body, &auth).await?
     } else {
         let video_body = build_video_upload_body(&file_path, base_upload_body)?;
-        presigned_s3_url(&client, server_url_base, video_body, &auth_token).await?
+        presigned_s3_url(video_body, &auth).await?
     };
 
     let file_content = tokio::fs::read(&file_path)
@@ -643,12 +623,10 @@ pub async fn upload_individual_file(
 }
 
 async fn prepare_screenshot_upload(
-    client: &Client,
     s3_config: &S3UploadMeta,
-    auth_token: &str,
+    auth: &AuthStore,
     screenshot_path: PathBuf,
 ) -> Result<(String, Form), String> {
-    let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
     let file_name = screenshot_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -668,8 +646,7 @@ async fn prepare_screenshot_upload(
         },
     };
 
-    let (upload_url, mut form) =
-        presigned_s3_url_image(client, server_url_base, body, auth_token).await?;
+    let (upload_url, mut form) = presigned_s3_url_image(body, auth).await?;
 
     let compressed_image = compress_image(screenshot_path).await?;
 

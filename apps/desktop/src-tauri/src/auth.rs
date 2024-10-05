@@ -3,6 +3,8 @@ use specta::Type;
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::{with_store, StoreCollection};
 
+use crate::web_api;
+
 #[derive(Serialize, Deserialize, Type)]
 pub struct AuthStore {
     pub token: String,
@@ -37,16 +39,11 @@ impl AuthStore {
             return Err("User not authenticated".to_string());
         };
 
-        let client = reqwest::Client::new();
-        let server_url_base: &'static str = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");
-        let url = format!("{}/api/desktop/plan", server_url_base);
-
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", auth.token))
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let response = web_api::do_authed_request(&auth, |client| {
+            client.get(web_api::make_url("/api/desktop/plan"))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
 
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             println!("Authentication expired. Please log in again.");

@@ -17,6 +17,7 @@ mod project_recordings;
 mod recording;
 mod tray;
 mod upload;
+mod web_api;
 
 use audio::AppSounds;
 use auth::AuthStore;
@@ -1603,8 +1604,7 @@ async fn upload_rendered_video(
             }
         };
 
-        let uploaded_video =
-            upload_video(video_id.clone(), auth.token.clone(), output_path, false).await?;
+        let uploaded_video = upload_video(video_id.clone(), &auth, output_path, false).await?;
 
         let general_settings = GeneralSettingsStore::get(&_app)?;
         if let Some(settings) = general_settings {
@@ -1627,7 +1627,7 @@ async fn upload_rendered_video(
                         let file_name = file_path.file_name().unwrap().to_str().unwrap();
                         let result = if is_audio {
                             upload_individual_file(
-                                auth.token.clone(),
+                                &auth,
                                 file_path.clone(),
                                 uploaded_video.config.clone(),
                                 file_name,
@@ -1636,7 +1636,7 @@ async fn upload_rendered_video(
                             .await
                         } else {
                             upload_individual_file(
-                                auth.token.clone(),
+                                &auth,
                                 file_path.clone(),
                                 uploaded_video.config.clone(),
                                 file_name,
@@ -1750,7 +1750,7 @@ async fn upload_screenshot(
         sharing.link.clone()
     } else {
         // Upload the screenshot
-        let uploaded = upload_image(auth.token, screenshot_path.clone())
+        let uploaded = upload_image(&auth, screenshot_path.clone())
             .await
             .map_err(|e| e.to_string())?;
 
