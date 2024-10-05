@@ -1,7 +1,10 @@
 use ffmpeg_next as ffmpeg;
 use serde::Serialize;
 use specta::Type;
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::PathBuf,
+    time::{Instant, SystemTime},
+};
 use tokio::sync::{oneshot, watch};
 
 use tauri::{AppHandle, Manager, WebviewUrl};
@@ -146,6 +149,7 @@ pub async fn start_capturing(
                 }
 
                 let frame = camera.frame().unwrap();
+                let timestamp = SystemTime::now();
 
                 if controller.is_paused() {
                     continue;
@@ -164,7 +168,13 @@ pub async fn start_capturing(
                 let mut yuv_frame = ffmpeg::util::frame::Video::empty();
                 scaler.run(&yuyv422_frame, &mut yuv_frame).unwrap();
 
-                encoder.encode_frame(yuv_frame);
+                encoder.encode_frame(
+                    yuv_frame,
+                    timestamp
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64,
+                );
             }
 
             encoder.close();

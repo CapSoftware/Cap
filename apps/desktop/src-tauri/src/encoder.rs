@@ -19,8 +19,9 @@ pub struct H264Encoder {
     pub output: ffmpeg::format::context::Output,
     pub context: ffmpeg::encoder::Video,
     pub stream_index: usize,
-    frame_number: usize,
     pub fps: f64,
+    pub start_time: Option<u64>,
+    last_pts: Option<i64>,
 }
 
 impl H264Encoder {
@@ -72,16 +73,36 @@ impl H264Encoder {
             output,
             context: encoder,
             stream_index,
-            frame_number: 0,
+            start_time: None,
             fps,
+            last_pts: None,
         }
     }
 
-    pub fn encode_frame(&mut self, mut frame: ffmpeg::util::frame::Video) {
-        frame.set_pts(Some(self.frame_number as i64));
+    pub fn encode_frame(&mut self, mut frame: ffmpeg::util::frame::Video, timestamp: u64) {
+        let pts = {
+            let delta_time = if let Some(start_time) = self.start_time {
+                (timestamp - start_time) as i64
+            } else {
+                self.start_time = Some(timestamp);
+
+                0
+            };
+
+            (delta_time as f64 / (1000.0 / self.fps)).round() as i64
+        };
+
+        // we should probably do something better than just dropping frames lol
+        if Some(pts) <= self.last_pts {
+            return;
+        }
+
+        dbg!(pts);
+
+        frame.set_pts(Some(pts));
+        self.last_pts = Some(pts);
 
         self.context.send_frame(&frame).unwrap();
-        self.frame_number += 1;
 
         self.receive_and_process_packets();
     }

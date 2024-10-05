@@ -208,7 +208,7 @@ pub async fn start_capturing(
                         let mut yuv_frame = Video::empty();
                         scaler.run(&rgb_frame, &mut yuv_frame).unwrap();
 
-                        encoder.encode_frame(yuv_frame);
+                        encoder.encode_frame(yuv_frame, frame.display_time / 1_000_000);
                     }
                     _ => println!("Failed to get frame"),
                 }
