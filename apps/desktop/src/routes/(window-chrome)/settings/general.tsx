@@ -1,7 +1,17 @@
-import { createResource, Show } from "solid-js";
+import { createResource, Show, For } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import { commands, type GeneralSettingsStore } from "~/utils/tauri";
+
+const settingsList = [
+  {
+    key: "upload_individual_files",
+    label: "Upload individual recording files when creating shareable link",
+    description:
+      "Warning: this will cause shareable link uploads to become significantly slower, since multiple files will be uploaded.",
+  },
+  // Add more settings here as needed
+];
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -24,51 +34,70 @@ function Inner(props: { store: GeneralSettingsStore | null }) {
     props.store ?? { upload_individual_files: false }
   );
 
-  const handleChange = async (uploadIndividualFiles: boolean) => {
-    setSettings("upload_individual_files", uploadIndividualFiles);
+  const handleChange = async (key: string, value: boolean) => {
+    setSettings(key as keyof GeneralSettingsStore, value);
     await commands.setGeneralSettings({
-      upload_individual_files: uploadIndividualFiles,
+      ...settings,
+      [key]: value,
     });
   };
 
   return (
     <div class="flex flex-col w-full h-full divide-y divide-gray-200 pt-1 pb-12">
-      <div class="flex-1 p-4 space-y-2">
-        <div class="flex items-center justify-between">
-          <p>Upload individual recording files when creating shareable link</p>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={settings.upload_individual_files}
-            data-state={
-              settings.upload_individual_files ? "checked" : "unchecked"
-            }
-            value={settings.upload_individual_files ? "on" : "off"}
-            class={`peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
-              settings.upload_individual_files
-                ? "bg-blue-400 border-blue-400"
-                : "bg-gray-300 border-gray-300"
-            }`}
-            onClick={() => handleChange(!settings.upload_individual_files)}
-          >
-            <span
-              data-state={
-                settings.upload_individual_files ? "checked" : "unchecked"
-              }
-              class={`pointer-events-none block h-4 w-4 rounded-full bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 border-2 ${
-                settings.upload_individual_files
-                  ? "border-blue-400"
-                  : "border-gray-300"
-              }`}
-            />
-          </button>
-        </div>
-        <div>
-          <p class="text-xs text-gray-400">
-            Warning: this will cause shareable link uploads to become
-            significantly slower, since multiple files will be uploaded.
-          </p>
-        </div>
+      <div class="flex-1 p-4 space-y-4">
+        <For each={settingsList}>
+          {(setting) => (
+            <div class="space-y-2">
+              <div class="flex items-center justify-between">
+                <p>{setting.label}</p>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={
+                    settings[setting.key as keyof GeneralSettingsStore]
+                  }
+                  data-state={
+                    settings[setting.key as keyof GeneralSettingsStore]
+                      ? "checked"
+                      : "unchecked"
+                  }
+                  value={
+                    settings[setting.key as keyof GeneralSettingsStore]
+                      ? "on"
+                      : "off"
+                  }
+                  class={`peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
+                    settings[setting.key as keyof GeneralSettingsStore]
+                      ? "bg-blue-400 border-blue-400"
+                      : "bg-gray-300 border-gray-300"
+                  }`}
+                  onClick={() =>
+                    handleChange(
+                      setting.key,
+                      !settings[setting.key as keyof GeneralSettingsStore]
+                    )
+                  }
+                >
+                  <span
+                    data-state={
+                      settings[setting.key as keyof GeneralSettingsStore]
+                        ? "checked"
+                        : "unchecked"
+                    }
+                    class={`pointer-events-none block h-4 w-4 rounded-full bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 border-2 ${
+                      settings[setting.key as keyof GeneralSettingsStore]
+                        ? "border-blue-400"
+                        : "border-gray-300"
+                    }`}
+                  />
+                </button>
+              </div>
+              {setting.description && (
+                <p class="text-xs text-gray-400">{setting.description}</p>
+              )}
+            </div>
+          )}
+        </For>
       </div>
     </div>
   );

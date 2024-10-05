@@ -10,6 +10,7 @@ mod flags;
 mod general_settings;
 mod hotkeys;
 mod macos;
+mod notifications;
 mod permissions;
 mod playback;
 mod project_recordings;
@@ -52,6 +53,7 @@ use std::{
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
 use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
+use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::io::AsyncWriteExt;
@@ -1413,11 +1415,14 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
 #[tauri::command(async)]
 #[specta::specta]
 fn open_main_window(app: AppHandle) {
+    println!("Attempting to open main window");
     if let Some(window) = app.get_webview_window("main") {
+        println!("Main window already exists, setting focus");
         window.set_focus().ok();
         return;
     }
 
+    println!("Creating new main window");
     let Some(window) = WebviewWindow::builder(&app, "main", tauri::WebviewUrl::App("/".into()))
         .title("Cap")
         .inner_size(300.0, 375.0)
@@ -1432,12 +1437,21 @@ fn open_main_window(app: AppHandle) {
         .build()
         .ok()
     else {
+        println!("Failed to create main window");
         return;
     };
 
+    println!("Creating overlay titlebar");
     window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]
-    window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+    {
+        println!("Setting traffic lights inset for macOS");
+        window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+    }
+
+    println!("Showing main window");
+    window.show().unwrap();
+    println!("Main window opened successfully");
 }
 
 #[tauri::command]
@@ -1549,6 +1563,8 @@ async fn upload_rendered_video(
         println!("not authenticated!");
         return Ok(UploadResult::NotAuthenticated);
     };
+
+    notifications::send_notification(&_app, notifications::NotificationType::ShareableLinkCopied);
 
     // Check if user has an upgraded plan
     if !auth.is_upgraded() {
@@ -2075,6 +2091,32 @@ async fn set_general_settings(
     GeneralSettingsStore::set(&app, settings)
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
+    AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+
+    if let Some(window) = app.get_webview_window("settings") {
+        window.close().ok();
+    }
+
+    if let Some(window) = app.get_webview_window("camera") {
+        window.close().ok();
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        window.close().ok();
+    }
+
+    while app.get_webview_window("main").is_some() {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    open_main_window(app.clone());
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -2127,7 +2169,8 @@ pub fn run() {
             check_upgraded_and_update,
             open_external_link,
             hotkeys::set_hotkey,
-            set_general_settings
+            set_general_settings,
+            delete_auth_open_signin
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2168,12 +2211,26 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
             hotkeys::init(app.handle());
             general_settings::init(app.handle());
+
             let app_handle = app.handle().clone();
+
+            #[cfg(target_os = "macos")]
+            {
+                use tauri_plugin_notification::NotificationExt;
+
+                let notification_permission = app.notification().permission_state().unwrap();
+                if notification_permission != PermissionState::Granted {
+                    app.notification()
+                        .request_permission()
+                        .expect("failed to request notification permission");
+                }
+            }
 
             if permissions::do_permissions_check(true).necessary_granted() {
                 open_main_window(app_handle.clone());

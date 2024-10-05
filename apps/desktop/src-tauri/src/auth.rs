@@ -48,6 +48,12 @@ impl AuthStore {
             .await
             .map_err(|e| e.to_string())?;
 
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            println!("Authentication expired. Please log in again.");
+            Self::set(app, None)?;
+            return Err("Authentication expired. Please log in again.".to_string());
+        }
+
         if !response.status().is_success() {
             let error_msg = format!("Failed to fetch plan: {}", response.status());
             return Err(error_msg);

@@ -286,6 +286,14 @@ async setGeneralSettings(settings: GeneralSettingsStore) : Promise<Result<null, 
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async deleteAuthOpenSignin() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_auth_open_signin") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
