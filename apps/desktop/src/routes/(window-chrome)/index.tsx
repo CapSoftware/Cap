@@ -66,12 +66,8 @@ export default function () {
 
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
-      try {
-        if (!isRecording()) await commands.startRecording();
-        else await commands.stopRecording();
-      } catch (error) {
-        console.error("Error toggling recording:", error);
-      }
+      if (!isRecording()) await commands.startRecording();
+      else await commands.stopRecording();
     },
   }));
 
