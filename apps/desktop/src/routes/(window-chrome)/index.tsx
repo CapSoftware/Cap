@@ -43,7 +43,7 @@ export const route = {
   load: () => getAuth(),
 };
 
-export default function () {
+export default function() {
   const cameras = createCameras();
   const options = createOptionsQuery();
   const windows = createWindowsQuery();
@@ -51,6 +51,15 @@ export default function () {
   const currentRecording = createCurrentRecordingQuery();
 
   const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
+  const [check, checkActions] = createResource(() =>
+    commands.doPermissionsCheck(true)
+  );
+
+  createEffect(() => {
+    // Periodically check permissions in case the user changes them in system settings
+    createTimer(() => checkActions.refetch(), 500, setInterval);
+  },);
+
 
   events.showCapturesPanel.listen(() => {
     commands.showPreviousRecordingsWindow();
@@ -399,6 +408,7 @@ export default function () {
                 e.preventDefault();
               }}
               onClick={(e) => {
+                if (check?.latest?.microphone !== 'granted') { commands.openPermissionSettings('microphone') };
                 if (!options.data?.audioInputName) return;
                 e.stopPropagation();
                 e.preventDefault();
@@ -409,7 +419,7 @@ export default function () {
                 });
               }}
             >
-              {options.data?.audioInputName ? "On" : "Off"}
+              {check?.latest?.microphone !== 'granted' ? "Request Permission" : options.data?.audioInputName ? "On" : "Off"}
             </button>
           </KSelect.Trigger>
           <KSelect.Portal>
@@ -458,6 +468,7 @@ export default function () {
 
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";
+import { createTimer } from "@solid-primitives/timer";
 
 let hasChecked = false;
 function createUpdateCheck() {
