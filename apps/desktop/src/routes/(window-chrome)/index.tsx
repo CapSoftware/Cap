@@ -52,7 +52,7 @@ export default function() {
 
   const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
   const [check, checkActions] = createResource(() =>
-    commands.doPermissionsCheck(true)
+    commands.doPermissionsCheck(true),
   );
 
   createEffect(() => {
@@ -301,12 +301,21 @@ export default function() {
           placeholder="No Camera"
           value={camera() ?? { deviceId: "", label: "No Camera" }}
           disabled={isRecording()}
-          onChange={(d) => {
-            if (!d || !options.data) return;
-            commands.setRecordingOptions({
-              ...options.data,
-              cameraLabel: d.deviceId ? d.label : null,
-            });
+          onChange={(device: MediaDeviceInfo | null) => {
+            if (options.data?.captureTarget) {
+              if (device) {
+                commands.setRecordingOptions({
+                  ...options.data,
+                  cameraLabel: device && device?.deviceId ? device?.label : null,
+                });
+              } else {
+                commands.setRecordingOptions({
+                  captureTarget: options.data.captureTarget,
+                  cameraLabel: null,
+                  audioInputName: options.data.audioInputName
+                })
+              }
+            }
           }}
           itemComponent={(props) => (
             <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
@@ -337,14 +346,16 @@ export default function() {
                 e.preventDefault();
               }}
               onClick={(e) => {
-                if (!camera()?.deviceId || !options.data) return;
                 e.stopPropagation();
                 e.preventDefault();
-
-                commands.setRecordingOptions({
-                  ...options.data,
-                  cameraLabel: null,
-                });
+                const device = camera()
+                if (options.data && device?.deviceId) {
+                  commands.setRecordingOptions({
+                    captureTarget: options.data.captureTarget,
+                    audioInputName: options.data.audioInputName,
+                    cameraLabel: null,
+                  });
+                }
               }}
             >
               {camera()?.deviceId ? "On" : "Off"}
