@@ -20,7 +20,6 @@ function isPermitted(status?: OSPermissionStatus): boolean {
 export default function() {
   const steps = [
     { name: "Screen Recording", key: "screenRecording" as const },
-    { name: "Camera", key: "camera" as const },
     { name: "Accessibility", key: "accessibility" as const },
   ] as const;
 

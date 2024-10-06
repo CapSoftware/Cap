@@ -346,6 +346,7 @@ export default function() {
                 e.preventDefault();
               }}
               onClick={(e) => {
+                if (check?.latest?.camera !== 'granted') { commands.openPermissionSettings('camera') };
                 e.stopPropagation();
                 e.preventDefault();
                 const device = camera()
@@ -358,7 +359,7 @@ export default function() {
                 }
               }}
             >
-              {camera()?.deviceId ? "On" : "Off"}
+              {check?.latest?.camera !== 'granted' ? "Request Permission" : camera()?.deviceId ? "On" : "Off"}
             </button>
           </KSelect.Trigger>
           <KSelect.Portal>
