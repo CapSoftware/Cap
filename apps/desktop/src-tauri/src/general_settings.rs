@@ -8,6 +8,7 @@ use tauri_plugin_store::{with_store, StoreCollection};
 #[derive(Serialize, Deserialize, Type, Default)]
 pub struct GeneralSettingsStore {
     pub upload_individual_files: bool,
+    pub open_editor_after_recording: bool,
 }
 
 impl GeneralSettingsStore {

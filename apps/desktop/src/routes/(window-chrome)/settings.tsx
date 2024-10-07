@@ -12,8 +12,8 @@ export default function (props: RouteSectionProps) {
   };
 
   return (
-    <div class="h-full flex flex-row divide-x divide-gray-200 text-[0.875rem] leading-[1.25rem]">
-      <div class="flex flex-col">
+    <div class="h-[calc(100vh-3rem)] flex flex-row divide-x divide-gray-200 text-[0.875rem] leading-[1.25rem]">
+      <div class="h-full flex flex-col">
         <ul class="min-w-[12rem] h-full p-[0.625rem] space-y-2">
           <For
             each={[
