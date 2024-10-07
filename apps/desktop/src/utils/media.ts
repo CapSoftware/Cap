@@ -11,7 +11,7 @@ import { commands } from "./tauri";
 export function createDevices() {
   const [devices, { refetch }] = createResource(async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ video: true });
+      await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       return await navigator.mediaDevices.enumerateDevices();
     } catch (error) {
       console.error("Error accessing media devices:", error);

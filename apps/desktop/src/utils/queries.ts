@@ -70,7 +70,7 @@ export function createVideoDevicesQuery() {
   const options = () => queryOptions({
     queryKey: ["videoDevices"] as const,
     queryFn: async () => {
-      await navigator.mediaDevices.getUserMedia({ video: true });
+      await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       const browserDevices = await navigator.mediaDevices.enumerateDevices();
       const rustCameras = await commands.listCameras();
       return browserDevices.filter(device => device.kind === "videoinput"

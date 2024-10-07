@@ -1,8 +1,9 @@
 import { A, type RouteSectionProps, useLocation } from "@solidjs/router";
 import { cx } from "cva";
-import { For } from "solid-js";
+import { createResource, For } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { commands } from "~/utils/tauri";
+import { getVersion } from "@tauri-apps/api/app";
 
 export default function (props: RouteSectionProps) {
   const location = useLocation();
@@ -10,6 +11,9 @@ export default function (props: RouteSectionProps) {
   const handleSignOut = async () => {
     await commands.deleteAuthOpenSignin();
   };
+
+  const [version] = createResource(async () => getVersion());
+  const versionString = () => version() ?? "0";
 
   return (
     <div class="h-[calc(100vh-3rem)] flex flex-row divide-x divide-gray-200 text-[0.875rem] leading-[1.25rem]">
@@ -53,6 +57,9 @@ export default function (props: RouteSectionProps) {
           </For>
         </ul>
         <div class="p-[0.625rem]">
+          {versionString() !== "0" && (
+            <p class="text-xs text-gray-400 mb-1">v{versionString()}</p>
+          )}
           <Button onClick={handleSignOut} variant="secondary" class="w-full">
             Sign Out
           </Button>

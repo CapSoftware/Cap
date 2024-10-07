@@ -203,10 +203,13 @@ pub fn get_input_devices() -> IndexMap<String, (Device, SupportedStreamConfig)> 
     let host = cpal::default_host();
     let mut device_map = IndexMap::new();
 
-    let get_usable_device = |device: Device| {
+    let get_usable_microphone = |device: Device| {
+        if !device.default_input_config().is_ok() {
+            return None;
+        }
+
         device
             .supported_input_configs()
-            // .map_err(utils::log_debug_error)
             .ok()
             .and_then(|mut configs| {
                 configs.find(|c| match c.sample_format() {
@@ -225,17 +228,20 @@ pub fn get_input_devices() -> IndexMap<String, (Device, SupportedStreamConfig)> 
                 device
                     .name()
                     .ok()
+                    .filter(|name| !name.to_lowercase().contains("speaker"))
                     .map(|name| (name, device, config.with_max_sample_rate()))
             })
     };
 
-    if let Some((name, device, config)) = host.default_input_device().and_then(get_usable_device) {
+    if let Some((name, device, config)) =
+        host.default_input_device().and_then(get_usable_microphone)
+    {
         device_map.insert(name, (device, config));
     }
 
     match host.input_devices() {
         Ok(devices) => {
-            for (name, device, config) in devices.filter_map(get_usable_device) {
+            for (name, device, config) in devices.filter_map(get_usable_microphone) {
                 device_map.entry(name).or_insert((device, config));
             }
         }
