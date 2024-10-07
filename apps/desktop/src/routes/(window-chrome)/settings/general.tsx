@@ -8,9 +8,14 @@ const settingsList = [
     key: "upload_individual_files",
     label: "Upload individual recording files when creating shareable link",
     description:
-      "Warning: this will cause shareable link uploads to become significantly slower, since multiple files will be uploaded.",
+      'Warning: this will cause shareable link uploads to become significantly slower, since all individual recording files will be uploaded. Shows "Download Assets" button in Share page.',
   },
-  // Add more settings here as needed
+  {
+    key: "open_editor_after_recording",
+    label: "Open editor automatically after recording stops",
+    description:
+      "The editor will be shown immediately after you finish recording.",
+  },
 ];
 
 export default function GeneralSettings() {
@@ -31,7 +36,10 @@ export default function GeneralSettings() {
 
 function Inner(props: { store: GeneralSettingsStore | null }) {
   const [settings, setSettings] = createStore<GeneralSettingsStore>(
-    props.store ?? { upload_individual_files: false }
+    props.store ?? {
+      upload_individual_files: false,
+      open_editor_after_recording: false,
+    }
   );
 
   const handleChange = async (key: string, value: boolean) => {
@@ -43,11 +51,11 @@ function Inner(props: { store: GeneralSettingsStore | null }) {
   };
 
   return (
-    <div class="flex flex-col w-full h-full divide-y divide-gray-200 pt-1 pb-12">
-      <div class="flex-1 p-4 space-y-4">
+    <div class="flex flex-col w-full h-full divide-y divide-gray-200 pb-12">
+      <div class="flex-1 p-4 space-y-2 divide-y divide-gray-200">
         <For each={settingsList}>
           {(setting) => (
-            <div class="space-y-2">
+            <div class="space-y-2 py-3">
               <div class="flex items-center justify-between">
                 <p>{setting.label}</p>
                 <button

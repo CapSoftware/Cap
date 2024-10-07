@@ -53,7 +53,7 @@ futures-intrusive = "0.5.0"
 anyhow = "1.0.86"
 mp4 = "0.14.0"
 futures = "0.3.30"
-nokhwa = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1", features = [
+nokhwa = { git = "https://github.com/CapSoftware/nokhwa", branch = "brendonovich-fork", features = [
 	"input-avfoundation",
 	"serialize",
 ] }

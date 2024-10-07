@@ -490,8 +490,20 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         serde_json::to_string_pretty(&json!(&config)).unwrap(),
     )
     .unwrap();
-
     AppSounds::StopRecording.play();
+    if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
+        if settings.open_editor_after_recording {
+            let recording_id = current_recording
+                .recording_dir
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+                .trim_end_matches(".cap")
+                .to_string();
+            open_editor(app.clone(), recording_id);
+        }
+    }
 
     CurrentRecordingChanged(JsonValue::new(&None))
         .emit(&app)
@@ -1261,6 +1273,7 @@ fn show_previous_recordings_window(app: AppHandle) {
 #[tauri::command(async)]
 #[specta::specta]
 fn open_editor(app: AppHandle, id: String) {
+    println!("Opening editor for recording: {}", id);
     let window = WebviewWindow::builder(
         &app,
         format!("editor-{id}"),
@@ -2006,13 +2019,12 @@ fn get_recording_meta(app: AppHandle, id: String, file_type: String) -> Recordin
 
     RecordingMeta::load_for_project(&meta_path).unwrap()
 }
-
 #[tauri::command]
 #[specta::specta]
 fn list_recordings(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta)>, String> {
     let recordings_dir = recordings_path(&app);
 
-    let result = std::fs::read_dir(&recordings_dir)
+    let mut result = std::fs::read_dir(&recordings_dir)
         .map_err(|e| format!("Failed to read recordings directory: {}", e))?
         .filter_map(|entry| {
             let entry = entry.ok()?;
@@ -2020,22 +2032,33 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta
             if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
                 let id = path.file_stem()?.to_str()?.to_string();
                 let meta = get_recording_meta(app.clone(), id.clone(), "recording".to_string());
-                Some((id, path, meta))
+                Some((id, path.clone(), meta))
             } else {
                 None
             }
         })
         .collect::<Vec<_>>();
 
+    // Sort the result by creation date of the actual file, newest first
+    result.sort_by(|a, b| {
+        b.1.metadata()
+            .and_then(|m| m.created())
+            .unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH)
+            .cmp(
+                &a.1.metadata()
+                    .and_then(|m| m.created())
+                    .unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH),
+            )
+    });
+
     Ok(result)
 }
-
 #[tauri::command]
 #[specta::specta]
 fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta)>, String> {
     let screenshots_dir = screenshots_path(&app);
 
-    let result = std::fs::read_dir(&screenshots_dir)
+    let mut result = std::fs::read_dir(&screenshots_dir)
         .map_err(|e| format!("Failed to read screenshots directory: {}", e))?
         .filter_map(|entry| {
             let entry = entry.ok()?;
@@ -2057,6 +2080,18 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
             }
         })
         .collect::<Vec<_>>();
+
+    // Sort the result by creation date of the actual file, newest first
+    result.sort_by(|a, b| {
+        b.1.metadata()
+            .and_then(|m| m.created())
+            .unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH)
+            .cmp(
+                &a.1.metadata()
+                    .and_then(|m| m.created())
+                    .unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH),
+            )
+    });
 
     Ok(result)
 }

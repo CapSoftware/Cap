@@ -102,7 +102,7 @@ function ScreenshotItem(props: {
             onError={() => setImageExists(false)}
           />
         </Show>
-        <span>{props.screenshot.prettyName}</span>
+        <span>{props.screenshot.prettyName.replace(".png", "")}</span>
       </div>
       <div class="flex items-center">
         <button
@@ -113,7 +113,7 @@ function ScreenshotItem(props: {
           }}
           class="p-2 hover:bg-gray-200 rounded-full mr-2"
         >
-          <IconLucideFolder class="size-6" />
+          <IconLucideFolder class="size-5" />
         </button>
         <button
           type="button"
@@ -123,7 +123,7 @@ function ScreenshotItem(props: {
           }}
           class="p-2 hover:bg-gray-200 rounded-full"
         >
-          <IconLucideEye class="size-6" />
+          <IconLucideEye class="size-5" />
         </button>
       </div>
     </li>

@@ -13,6 +13,7 @@ import {
   createResource,
   createSignal,
   on,
+  onCleanup,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
@@ -37,7 +38,9 @@ export default function () {
 
   const camera = createCameraForLabel(() => options.data?.cameraLabel ?? "");
 
-  const [cameraPreviewRef] = createCameraPreview(() => camera()?.deviceId);
+  const [cameraPreviewRef, setCameraStream] = createCameraPreview(
+    () => camera()?.deviceId
+  );
 
   const [state, setState] = makePersisted(
     createStore<CameraWindow.State>({
@@ -49,31 +52,44 @@ export default function () {
 
   createEffect(on(() => state.size, resizeWindow));
 
+  const [isLoading, setIsLoading] = createSignal(true);
+
+  createEffect(() => {
+    if (setCameraStream()) {
+      setIsLoading(false);
+    }
+  });
+
   return (
-    <Suspense fallback={<div class="w-screen h-screen bg-red-400" />}>
+    <Suspense fallback={<CameraLoadingState shape={state.shape} />}>
       <Show when={options.data}>
         {(options) => (
           <div
             data-tauri-drag-region
-            class="cursor-move group w-screen h-screen relative flex flex-col"
+            class="cursor-move group w-screen h-screen relative flex flex-col bg-black"
             style={{ "border-radius": cameraBorderRadius(state) }}
           >
             <div class="h-16" data-tauri-drag-region />
             <div class="flex flex-col flex-1 relative" data-tauri-drag-region>
-              <video
-                data-tauri-drag-region
-                autoplay
-                playsinline
-                muted
-                class={cx(
-                  "w-full h-full object-cover pointer-events-none border-none shadow-lg",
-                  state.shape === "round" ? "rounded-full" : "rounded-3xl"
-                )}
-                style={{
-                  transform: state.mirrored ? "scaleX(1)" : "scaleX(-1)",
-                }}
-                ref={cameraPreviewRef}
-              />
+              <Show
+                when={!isLoading()}
+                fallback={<CameraLoadingState shape={state.shape} />}
+              >
+                <video
+                  data-tauri-drag-region
+                  autoplay
+                  playsinline
+                  muted
+                  class={cx(
+                    "w-full h-full object-cover pointer-events-none border-none shadow-lg",
+                    state.shape === "round" ? "rounded-full" : "rounded-3xl"
+                  )}
+                  style={{
+                    transform: state.mirrored ? "scaleX(1)" : "scaleX(-1)",
+                  }}
+                  ref={cameraPreviewRef}
+                />
+              </Show>
               <div class="flex flex-row items-center justify-center absolute -top-14 inset-x-0">
                 <div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-500 border border-white-transparent-20 text-gray-400">
                   <ControlButton
@@ -120,6 +136,19 @@ export default function () {
   );
 }
 
+function CameraLoadingState({ shape }: { shape: CameraWindow.Shape }) {
+  return (
+    <div
+      class={cx(
+        "w-full h-full bg-[#000000] flex items-center justify-center",
+        shape === "round" ? "rounded-full" : "rounded-3xl"
+      )}
+    >
+      <IconLucideLoaderCircle class="size-[4rem] animate-spin text-gray-300" />
+    </div>
+  );
+}
+
 function cameraBorderRadius(state: CameraWindow.State) {
   if (state.shape === "round") return "9999px";
   if (state.size === "sm") return "3rem";
@@ -145,13 +174,31 @@ async function resizeWindow(size: CameraWindow.Size) {
 }
 
 function createCameraPreview(deviceId: () => string | undefined) {
-  const [cameraStream] = createResource(
+  const [cameraStream, { refetch }] = createResource(
     deviceId,
+    async (cameraInputId) => {
+      if (!cameraInputId) return null;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            deviceId: cameraInputId,
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30 },
+          },
+        });
 
-    (cameraInputId) =>
-      navigator.mediaDevices.getUserMedia({
-        video: { deviceId: cameraInputId },
-      })
+        // Get the actual settings of the stream
+        const videoTrack = stream.getVideoTracks()[0];
+        const settings = videoTrack.getSettings();
+        console.log("Camera settings:", settings);
+
+        return stream;
+      } catch (error) {
+        console.error("Error accessing camera:", error);
+        return null;
+      }
+    }
   );
 
   const [cameraRef, setCameraRef] = createSignal<HTMLVideoElement>();
@@ -161,13 +208,22 @@ function createCameraPreview(deviceId: () => string | undefined) {
     const ref = cameraRef();
 
     if (ref && stream) {
-      if (ref.srcObject === stream) return;
-      ref.srcObject = stream;
-      ref.play();
+      if (ref.srcObject !== stream) {
+        ref.srcObject = stream;
+        ref.play().catch(console.error);
+      }
     }
   });
 
-  return [setCameraRef] as const;
+  // Cleanup effect
+  onCleanup(() => {
+    const stream = cameraStream();
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+  });
+
+  return [setCameraRef, () => cameraStream()] as const;
 }
 
 // {
