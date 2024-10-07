@@ -490,7 +490,9 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         serde_json::to_string_pretty(&json!(&config)).unwrap(),
     )
     .unwrap();
+
     AppSounds::StopRecording.play();
+
     if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
         if settings.open_editor_after_recording {
             let recording_id = current_recording
@@ -1429,10 +1431,14 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
 #[tauri::command(async)]
 #[specta::specta]
 fn open_main_window(app: AppHandle) {
-    println!("Attempting to open main window");
     if let Some(window) = app.get_webview_window("main") {
         println!("Main window already exists, setting focus");
         window.set_focus().ok();
+        return;
+    }
+
+    let permissions = permissions::do_permissions_check(false);
+    if !permissions.screen_recording.permitted() || !permissions.accessibility.permitted() {
         return;
     }
 
@@ -2152,6 +2158,42 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn reset_camera_permissions(app: AppHandle) -> Result<(), ()> {
+    #[cfg(debug_assertions)]
+    let bundle_id = "com.apple.Terminal";
+    #[cfg(not(debug_assertions))]
+    let bundle_id = "so.cap.desktop";
+
+    Command::new("tccutil")
+        .arg("reset")
+        .arg("Camera")
+        .arg(bundle_id)
+        .output()
+        .expect("Failed to reset camera permissions");
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn reset_microphone_permissions(app: AppHandle) -> Result<(), ()> {
+    #[cfg(debug_assertions)]
+    let bundle_id = "com.apple.Terminal";
+    #[cfg(not(debug_assertions))]
+    let bundle_id = "so.cap.desktop";
+
+    Command::new("tccutil")
+        .arg("reset")
+        .arg("Microphone")
+        .arg(bundle_id)
+        .output()
+        .expect("Failed to reset microphone permissions");
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -2205,7 +2247,9 @@ pub fn run() {
             open_external_link,
             hotkeys::set_hotkey,
             set_general_settings,
-            delete_auth_open_signin
+            delete_auth_open_signin,
+            reset_camera_permissions,
+            reset_microphone_permissions
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2270,7 +2314,7 @@ pub fn run() {
             if permissions::do_permissions_check(true).necessary_granted() {
                 open_main_window(app_handle.clone());
             } else {
-                permissions::open_permissions_window(app);
+                permissions::open_permissions_window(app_handle.clone());
             }
 
             app.manage(Arc::new(RwLock::new(App {

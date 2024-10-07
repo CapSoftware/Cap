@@ -11,7 +11,7 @@ import { commands } from "./tauri";
 export function createDevices() {
   const [devices, { refetch }] = createResource(async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ video: true });
+      await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       return await navigator.mediaDevices.enumerateDevices();
     } catch (error) {
       console.error("Error accessing media devices:", error);
@@ -65,4 +65,19 @@ export function createCameraForLabel(label: Accessor<string>) {
     const camera = cameras().find((camera) => camera.label === label());
     return camera || null;
   };
+}
+
+export async function stopMediaStream(kind: "audio" | "video" | "both") {
+  const streams = await navigator.mediaDevices.getUserMedia({
+    audio: kind === "audio" || kind === "both",
+    video: kind === "video" || kind === "both",
+  });
+
+  streams.getTracks().forEach((track) => {
+    if ((kind === "audio" && track.kind === "audio") ||
+        (kind === "video" && track.kind === "video") ||
+        kind === "both") {
+      track.stop();
+    }
+  });
 }

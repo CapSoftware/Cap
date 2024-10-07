@@ -38,7 +38,7 @@ export default function () {
 
   const camera = createCameraForLabel(() => options.data?.cameraLabel ?? "");
 
-  const [cameraPreviewRef, setCameraStream] = createCameraPreview(
+  const [cameraPreviewRef, getCameraStream] = createCameraPreview(
     () => camera()?.deviceId
   );
 
@@ -53,15 +53,42 @@ export default function () {
   createEffect(on(() => state.size, resizeWindow));
 
   const [isLoading, setIsLoading] = createSignal(true);
+  const [loadingText, setLoadingText] = createSignal("Camera is loading");
 
   createEffect(() => {
-    if (setCameraStream()) {
+    const stream = getCameraStream();
+    if (stream) {
       setIsLoading(false);
+    } else {
+      setIsLoading(true);
+    }
+  });
+
+  createEffect(() => {
+    if (isLoading()) {
+      const loadingMessages = [
+        "Camera is loading",
+        "Acquiring lock on camera",
+        "Camera is starting",
+        "Almost there...",
+        "Just a moment longer",
+      ];
+      let index = 0;
+      const interval = setInterval(() => {
+        setLoadingText(loadingMessages[index]);
+        index = (index + 1) % loadingMessages.length;
+      }, 1000);
+
+      onCleanup(() => clearInterval(interval));
     }
   });
 
   return (
-    <Suspense fallback={<CameraLoadingState shape={state.shape} />}>
+    <Suspense
+      fallback={
+        <CameraLoadingState shape={state.shape} loadingText={loadingText()} />
+      }
+    >
       <Show when={options.data}>
         {(options) => (
           <div
@@ -73,7 +100,12 @@ export default function () {
             <div class="flex flex-col flex-1 relative" data-tauri-drag-region>
               <Show
                 when={!isLoading()}
-                fallback={<CameraLoadingState shape={state.shape} />}
+                fallback={
+                  <CameraLoadingState
+                    shape={state.shape}
+                    loadingText={loadingText()}
+                  />
+                }
               >
                 <video
                   data-tauri-drag-region
@@ -136,15 +168,21 @@ export default function () {
   );
 }
 
-function CameraLoadingState({ shape }: { shape: CameraWindow.Shape }) {
+function CameraLoadingState({
+  shape,
+  loadingText,
+}: {
+  shape: CameraWindow.Shape;
+  loadingText: string;
+}) {
   return (
     <div
       class={cx(
-        "w-full h-full bg-[#000000] flex items-center justify-center",
+        "w-full h-full bg-gray-500 flex items-center justify-center",
         shape === "round" ? "rounded-full" : "rounded-3xl"
       )}
     >
-      <IconLucideLoaderCircle class="size-[4rem] animate-spin text-gray-300" />
+      <div class="text-gray-300 text-sm">{loadingText}</div>
     </div>
   );
 }
@@ -174,44 +212,47 @@ async function resizeWindow(size: CameraWindow.Size) {
 }
 
 function createCameraPreview(deviceId: () => string | undefined) {
-  const [cameraStream, { refetch }] = createResource(
-    deviceId,
-    async (cameraInputId) => {
-      if (!cameraInputId) return null;
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            deviceId: cameraInputId,
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            frameRate: { ideal: 30 },
-          },
-        });
-
-        // Get the actual settings of the stream
-        const videoTrack = stream.getVideoTracks()[0];
-        const settings = videoTrack.getSettings();
-        console.log("Camera settings:", settings);
-
-        return stream;
-      } catch (error) {
-        console.error("Error accessing camera:", error);
-        return null;
-      }
-    }
+  const [cameraStream, setCameraStream] = createSignal<MediaStream | null>(
+    null
   );
-
   const [cameraRef, setCameraRef] = createSignal<HTMLVideoElement>();
+
+  createEffect(async () => {
+    const id = deviceId();
+    if (!id) {
+      setCameraStream(null);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: { exact: id },
+          height: 720,
+        },
+      });
+
+      setCameraStream(stream);
+
+      // Get the actual settings of the stream
+      const videoTrack = stream.getVideoTracks()[0];
+      const settings = videoTrack.getSettings();
+      console.log("Camera settings:", settings);
+    } catch (error) {
+      console.error("Error accessing camera:", error);
+      setCameraStream(null);
+    }
+  });
 
   createEffect(() => {
     const stream = cameraStream();
     const ref = cameraRef();
 
     if (ref && stream) {
-      if (ref.srcObject !== stream) {
-        ref.srcObject = stream;
-        ref.play().catch(console.error);
-      }
+      ref.srcObject = stream;
+      ref.play().catch(console.error);
+    } else if (ref) {
+      ref.srcObject = null;
     }
   });
 
