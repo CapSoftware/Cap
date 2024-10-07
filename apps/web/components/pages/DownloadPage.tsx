@@ -49,7 +49,7 @@ export const DownloadPage = () => {
           )}
         </div>
         <div className="fade-in-up animate-delay-2">
-          <p className="text-xs">macOS 12.3+ or later recommended.</p>
+          <p className="text-xs">macOS 13+ or later recommended.</p>
         </div>
         {!showOtherOptions && (
           <button

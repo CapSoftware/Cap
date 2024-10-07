@@ -66,3 +66,18 @@ export function createCameraForLabel(label: Accessor<string>) {
     return camera || null;
   };
 }
+
+export async function stopMediaStream(kind: "audio" | "video" | "both") {
+  const streams = await navigator.mediaDevices.getUserMedia({
+    audio: kind === "audio" || kind === "both",
+    video: kind === "video" || kind === "both",
+  });
+
+  streams.getTracks().forEach((track) => {
+    if ((kind === "audio" && track.kind === "audio") ||
+        (kind === "video" && track.kind === "video") ||
+        kind === "both") {
+      track.stop();
+    }
+  });
+}

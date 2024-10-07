@@ -30,7 +30,7 @@ export const listAudioDevices = queryOptions({
   queryKey: ["audioDevices"] as const,
   queryFn: async () => {
     const r = await commands.listAudioDevices();
-    if (r.status === "ok") return r.data.map((name) => ({ name }));
+    if (r.status === "ok") return r.data.map((name) => ({ name, deviceId: name }));
   },
   reconcile: "name",
   refetchInterval: 1000
