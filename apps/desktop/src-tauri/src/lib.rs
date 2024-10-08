@@ -21,7 +21,7 @@ mod web_api;
 
 use audio::AppSounds;
 use auth::AuthStore;
-use camera::{create_camera_window, list_cameras};
+use camera::{create_camera_window, find_camera_by_label, list_cameras, CameraFeed};
 use cap_ffmpeg::FFmpeg;
 use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
@@ -46,7 +46,7 @@ use specta::Type;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
@@ -58,7 +58,7 @@ use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task;
 use tokio::{
     sync::{Mutex, RwLock},
@@ -90,6 +90,10 @@ impl RecordingOptions {
 #[serde(rename_all = "camelCase")]
 pub struct App {
     start_recording_options: RecordingOptions,
+    #[serde(skip)]
+    camera_tx: watch::Sender<camera::LatestFrame>,
+    #[serde(skip)]
+    camera_feed: Option<camera::CameraFeed>,
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
@@ -182,19 +186,37 @@ impl App {
             .map(|window| window.close().ok());
     }
 
-    fn set_start_recording_options(&mut self, new_value: RecordingOptions) {
-        self.start_recording_options = new_value;
-        let options = &self.start_recording_options;
-
+    async fn set_start_recording_options(&mut self, new_options: RecordingOptions) {
         match self.handle.get_webview_window(camera::WINDOW_LABEL) {
-            Some(window) if options.camera_label.is_none() => {
+            Some(window) if new_options.camera_label.is_none() => {
+                println!("closing camera window");
                 window.close().ok();
             }
-            None if options.camera_label.is_some() => {
+            None if new_options.camera_label.is_some() => {
+                println!("creating camera window");
                 create_camera_window(self.handle.clone());
             }
             _ => {}
         }
+
+        match &new_options.camera_label {
+            Some(camera_label) => {
+                if self
+                    .camera_feed
+                    .as_ref()
+                    .map(|f| &f.camera_info.human_name() != camera_label)
+                    .unwrap_or(true)
+                {
+                    self.camera_feed =
+                        Some(CameraFeed::new(&camera_label, self.camera_tx.clone()).await);
+                }
+            }
+            None => {
+                self.camera_feed = None;
+            }
+        }
+
+        self.start_recording_options = new_options;
 
         RecordingOptionsChanged.emit(&self.handle).ok();
     }
@@ -257,7 +279,11 @@ async fn set_recording_options(
     state: MutableState<'_, App>,
     options: RecordingOptions,
 ) -> Result<(), ()> {
-    state.write().await.set_start_recording_options(options);
+    state
+        .write()
+        .await
+        .set_start_recording_options(options)
+        .await;
 
     Ok(())
 }
@@ -308,7 +334,12 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         .join("recordings")
         .join(format!("{id}.cap"));
 
-    let recording = recording::start(recording_dir, &state.start_recording_options).await;
+    let recording = recording::start(
+        recording_dir,
+        &state.start_recording_options,
+        state.camera_feed.as_ref(),
+    )
+    .await;
 
     state.set_current_recording(recording);
 
@@ -2317,8 +2348,14 @@ pub fn run() {
                 permissions::open_permissions_window(app_handle.clone());
             }
 
+            let (camera_tx, camera_rx) = watch::channel(None);
+
+            tokio::spawn(camera::create_camera_ws(camera_rx.clone()));
+
             app.manage(Arc::new(RwLock::new(App {
                 handle: app_handle.clone(),
+                camera_tx,
+                camera_feed: None,
                 start_recording_options: RecordingOptions {
                     capture_target: CaptureTarget::Screen,
                     camera_label: None,

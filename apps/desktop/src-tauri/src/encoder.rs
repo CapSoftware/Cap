@@ -168,6 +168,14 @@ pub fn uyvy422_frame(bytes: &[u8], width: u32, height: u32) -> ffmpeg::frame::Vi
     frame
 }
 
+pub fn yuyv422_frame(bytes: &[u8], width: u32, height: u32) -> ffmpeg::frame::Video {
+    let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUYV422, width, height);
+
+    frame.data_mut(0).copy_from_slice(bytes);
+
+    frame
+}
+
 pub fn nv12_frame(bytes: &[u8], width: u32, height: u32) -> ffmpeg::frame::Video {
     let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::NV12, width, height);
     let y_size = (width * height) as usize;

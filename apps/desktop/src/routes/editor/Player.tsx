@@ -28,7 +28,7 @@ export function Player() {
     videoId,
     editorInstance,
     history,
-    currentFrame,
+    latestFrame,
     setDialog,
     playbackTime,
     playing,
@@ -40,10 +40,10 @@ export function Player() {
   let canvasRef: HTMLCanvasElement;
 
   createEffect(() => {
-    const frame = currentFrame();
+    const frame = latestFrame();
     if (!frame) return;
     const ctx = canvasRef.getContext("2d");
-    ctx?.putImageData(frame.data, 0, 0);
+    ctx?.putImageData(frame, 0, 0);
   });
 
   const [canvasContainerRef, setCanvasContainerRef] =
@@ -109,7 +109,7 @@ export function Player() {
         </div>
       </div>
       <div ref={setCanvasContainerRef} class="bg-gray-100 flex-1 relative">
-        <Show when={currentFrame()}>
+        <Show when={latestFrame()}>
           {(currentFrame) => {
             const padding = 16;
 

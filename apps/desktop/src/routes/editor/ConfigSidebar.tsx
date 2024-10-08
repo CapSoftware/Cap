@@ -4,14 +4,7 @@ import {
 } from "@kobalte/core/radio-group";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { cx } from "cva";
-import {
-  type Component,
-  createRoot,
-  createSignal,
-  For,
-  ParentProps,
-  Show,
-} from "solid-js";
+import { type Component, createRoot, For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 

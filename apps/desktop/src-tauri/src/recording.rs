@@ -1,4 +1,5 @@
 use crate::audio::AudioCapturer;
+use crate::camera::CameraFeed;
 use crate::capture::CaptureController;
 use crate::flags;
 use cap_ffmpeg::{FFmpeg, FFmpegInput, FFmpegProcess, FFmpegRawAudioInput};
@@ -223,6 +224,7 @@ pub struct FFmpegCaptureOutput<T> {
 pub async fn start(
     recording_dir: PathBuf,
     recording_options: &RecordingOptions,
+    camera_feed: Option<&CameraFeed>,
 ) -> InProgressRecording {
     let content_dir = recording_dir.join("content");
 
@@ -240,18 +242,13 @@ pub async fn start(
             &recording_options.capture_target,
             start_writing_rx.clone(),
         ),
-        OptionFuture::from(
-            recording_options
-                .camera_label()
-                .and_then(camera::find_camera_by_label)
-                .map(|camera_info| {
-                    camera::start_capturing(
-                        content_dir.join("camera.mp4"),
-                        camera_info,
-                        start_writing_rx.clone(),
-                    )
-                }),
-        ),
+        OptionFuture::from(camera_feed.map(|camera_feed| {
+            camera::start_capturing(
+                content_dir.join("camera.mp4"),
+                camera_feed,
+                start_writing_rx.clone(),
+            )
+        }),),
         OptionFuture::from(
             recording_options
                 .audio_input_name()

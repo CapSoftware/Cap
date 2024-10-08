@@ -2,7 +2,7 @@ import { Button, SwitchTab } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
-import { createMutation } from "@tanstack/solid-query";
+import { createMutation, createQuery } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { cx } from "cva";
 import {
@@ -11,7 +11,6 @@ import {
   createEffect,
   createResource,
   createSignal,
-  onCleanup,
   onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -19,12 +18,12 @@ import { createStore } from "solid-js/store";
 import { authStore } from "~/store";
 import { clientEnv } from "~/utils/env";
 import {
-  createAudioDevicesQuery,
   createCurrentRecordingQuery,
   createOptionsQuery,
-  createPermissionsQuery,
+  listWindows,
+  listAudioDevices,
+  getPermissions,
   createVideoDevicesQuery,
-  createWindowsQuery,
 } from "~/utils/queries";
 import { type CaptureWindow, commands, events } from "~/utils/tauri";
 import {
@@ -34,7 +33,6 @@ import {
   topLeftAnimateClasses,
   topRightAnimateClasses,
 } from "../editor/ui";
-import { stopMediaStream } from "~/utils/media";
 
 const getAuth = cache(async () => {
   const value = await authStore.get();
@@ -48,15 +46,14 @@ export const route = {
 
 export default function () {
   const options = createOptionsQuery();
-  const windows = createWindowsQuery();
-  const videoDevicesQuery = createVideoDevicesQuery();
-  const audioDevicesQuery = createAudioDevicesQuery();
+  const windows = createQuery(() => listWindows);
+  const videoDevices = createVideoDevicesQuery();
+  const audioDevices = createQuery(() => listAudioDevices);
   const currentRecording = createCurrentRecordingQuery();
 
   const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
-  const permissions = createPermissionsQuery();
+  const permissions = createQuery(() => getPermissions);
 
-  const [cameraSelectOpen, setCameraSelectOpen] = createSignal(false);
   const [microphoneSelectOpen, setMicrophoneSelectOpen] = createSignal(false);
 
   events.showCapturesPanel.listen(() => {
@@ -67,8 +64,6 @@ export default function () {
     commands.showPreviousRecordingsWindow();
   });
 
-  type CameraOption = MediaDeviceInfo | { deviceId: string; label: string };
-
   const isRecording = () => !!currentRecording.data;
 
   const toggleRecording = createMutation(() => ({
@@ -77,7 +72,6 @@ export default function () {
         await commands.startRecording();
       } else {
         await commands.stopRecording();
-        await stopMediaStream("both");
       }
     },
   }));
@@ -149,9 +143,6 @@ export default function () {
     }
   };
 
-  const camera = () =>
-    videoDevicesQuery?.data.find((d) => d.label === options.data?.cameraLabel);
-
   const selectedWindow = () => {
     const d = options.data?.captureTarget;
     if (d?.type !== "window") return;
@@ -159,7 +150,7 @@ export default function () {
   };
 
   const audioDevice = () =>
-    audioDevicesQuery?.data?.find(
+    audioDevices?.data?.find(
       (d) => d.name === options.data?.audioInputName
     ) ?? { name: "No Audio", deviceId: "" };
 
@@ -167,10 +158,8 @@ export default function () {
     try {
       if (type === "camera") {
         await commands.resetCameraPermissions();
-        await navigator.mediaDevices.getUserMedia({ video: true });
       } else if (type === "microphone") {
         await commands.resetMicrophonePermissions();
-        await navigator.mediaDevices.getUserMedia({ audio: true });
       }
       // Refresh permissions after request
       await permissions.refetch();
@@ -179,17 +168,15 @@ export default function () {
     }
   };
 
-  const handleCameraChange = async (item: CameraOption | null) => {
+  const handleCameraChange = async (item: string | null) => {
+    console.log({ item });
     if (!item && permissions?.data?.camera !== "granted") {
       return requestPermission("camera");
     }
 
     if (!options.data) return;
 
-    // Stop the current camera stream before changing
-    await stopMediaStream("video");
-
-    if (!item || item.label === "No Camera") {
+    if (!item) {
       await commands.setRecordingOptions({
         ...options.data,
         cameraLabel: null,
@@ -197,7 +184,7 @@ export default function () {
     } else {
       await commands.setRecordingOptions({
         ...options.data,
-        cameraLabel: item.label,
+        cameraLabel: item,
       });
     }
   };
@@ -211,20 +198,11 @@ export default function () {
 
     if (!item || !options.data) return;
 
-    // Stop the current audio stream before changing
-    if (options.data.audioInputName) {
-      await stopMediaStream("audio");
-    }
-
     commands.setRecordingOptions({
       ...options.data,
       audioInputName: item.name !== "No Audio" ? item.name : null,
     });
   };
-
-  onCleanup(() => {
-    stopMediaStream("both");
-  });
 
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
@@ -359,38 +337,19 @@ export default function () {
       </KSelect>
       <div class="flex flex-col gap-[0.25rem] items-stretch">
         <label class="text-gray-400 text-[0.875rem]">Camera</label>
-        <KSelect<CameraOption>
-          options={[
-            { deviceId: "", label: "No Camera" },
-            ...(videoDevicesQuery.data ?? []),
-          ]}
-          optionValue="deviceId"
-          optionTextValue="label"
+        <KSelect<string>
+          options={videoDevices}
           placeholder="No Camera"
-          value={camera() ?? { deviceId: "", label: "No Camera" }}
+          value={options.data?.cameraLabel}
           disabled={isRecording()}
           onChange={handleCameraChange}
           itemComponent={(props) => (
             <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
               <KSelect.ItemLabel class="flex-1">
-                {props.item.rawValue.label}
+                {props.item.rawValue}
               </KSelect.ItemLabel>
             </MenuItem>
           )}
-          open={cameraSelectOpen()}
-          onOpenChange={async (isOpen: boolean) => {
-            if (isOpen) {
-              if (camera()) {
-                setCameraSelectOpen(true);
-              } else {
-                setCameraSelectOpen(false);
-                await videoDevicesQuery.refetch();
-                setCameraSelectOpen(true);
-              }
-            } else {
-              setCameraSelectOpen(false);
-            }
-          }}
         >
           <KSelect.Trigger
             class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
@@ -401,10 +360,8 @@ export default function () {
             }}
           >
             <IconCapCamera class="text-gray-400 size-[1.25rem]" />
-            <KSelect.Value<{
-              label: string;
-            }> class="flex-1 text-left truncate">
-              {(state) => <span>{state.selectedOption().label}</span>}
+            <KSelect.Value<string> class="flex-1 text-left truncate">
+              {(state) => <span>{state.selectedOption()}</span>}
             </KSelect.Value>
             <button
               type="button"
@@ -451,7 +408,7 @@ export default function () {
         <KSelect<{ name: string; deviceId: string }>
           options={[
             { name: "No Audio", deviceId: "" },
-            ...(audioDevicesQuery.data ?? []),
+            ...(audioDevices.data ?? []),
           ]}
           optionValue="deviceId"
           optionTextValue="name"
@@ -471,7 +428,7 @@ export default function () {
             if (isOpen) {
               if (audioDevice().name === "No Audio") {
                 setMicrophoneSelectOpen(false);
-                await audioDevicesQuery.refetch();
+                await audioDevices.refetch();
               }
               setMicrophoneSelectOpen(true);
             } else {
