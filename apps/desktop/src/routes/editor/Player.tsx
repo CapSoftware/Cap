@@ -52,7 +52,7 @@ export function Player() {
 
   const splitButton = () => (
     <EditorButton<typeof KToggleButton>
-      disabled={flags.split}
+      disabled={!flags.split}
       pressed={split()}
       onChange={setSplit}
       as={KToggleButton}

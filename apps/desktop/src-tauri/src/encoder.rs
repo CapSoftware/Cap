@@ -184,21 +184,11 @@ pub fn nv12_frame(bytes: &[u8], width: u32, height: u32) -> ffmpeg::frame::Video
     frame
 }
 
-pub fn bgra_frame(
-    data: &[u8],
-    width: u32,
-    height: u32,
-    previous_frame: Option<&ffmpeg::frame::Video>,
-) -> Option<ffmpeg::frame::Video> {
+pub fn bgra_frame(data: &[u8], width: u32, height: u32) -> Option<ffmpeg::frame::Video> {
     let expected_size = (width as usize) * (height as usize) * 4; // 4 bytes per pixel for BGRA
 
     if data.len() != expected_size {
-        println!(
-            "Invalid frame size: expected {}, got {}",
-            expected_size,
-            data.len()
-        );
-        return previous_frame.cloned();
+        return None;
     }
 
     let mut frame = Video::new(Pixel::BGRA, width, height);

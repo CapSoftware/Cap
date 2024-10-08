@@ -1,8 +1,5 @@
 use ffmpeg::{format as avformat, frame::Video, software};
-use std::{
-    path::PathBuf,
-    time::{Instant, SystemTime},
-};
+use std::path::PathBuf;
 
 use scap::{
     capturer::{Area, Capturer, Options, Point, Resolution, Size},
@@ -195,8 +192,6 @@ pub async fn start_capturing(
 
             let mut start_time_tx = Some(tx);
 
-            let mut last_valid_frame: Option<ffmpeg::frame::Video> = None;
-
             loop {
                 if controller.is_stopped() {
                     break;
@@ -218,28 +213,13 @@ pub async fn start_capturing(
 
                 match frame {
                     Ok(Frame::BGRA(frame)) => {
-                        if let Some(rgb_frame) = bgra_frame(
-                            &frame.data,
-                            capture_size[0],
-                            capture_size[1],
-                            last_valid_frame.as_ref(),
-                        ) {
-                            // Successfully created RGB frame
-                            last_valid_frame = Some(rgb_frame.clone());
-
+                        if let Some(rgb_frame) =
+                            bgra_frame(&frame.data, capture_size[0], capture_size[1])
+                        {
                             let mut yuv_frame = Video::empty();
                             scaler.run(&rgb_frame, &mut yuv_frame).unwrap();
 
                             encoder.encode_frame(yuv_frame, frame.display_time / 1_000_000);
-                        } else {
-                            println!("Failed to create valid frame, using last valid frame.");
-                            if let Some(ref last_frame) = last_valid_frame {
-                                let mut yuv_frame = Video::empty();
-                                scaler.run(last_frame, &mut yuv_frame).unwrap();
-                                encoder.encode_frame(yuv_frame, frame.display_time / 1_000_000);
-                            } else {
-                                println!("No valid frame available to use.");
-                            }
                         }
                     }
                     _ => println!("Failed to get frame"),

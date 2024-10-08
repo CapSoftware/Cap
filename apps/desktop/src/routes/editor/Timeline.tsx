@@ -139,11 +139,9 @@ export function Timeline() {
                     segments[i()].end = splitTime;
                   })
                 );
-
-                // console.log({ splitTime });
               }}
             >
-              <div class="h-full border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden">
+              <div class="h-full border border-white ring-1 ring-blue-300 flex flex-row rounded-xl overflow-hidden group">
                 <div
                   class="bg-blue-300 w-[0.5rem] cursor-col-resize"
                   onMouseDown={(downEvent) => {
@@ -197,11 +195,27 @@ export function Timeline() {
                     });
                   }}
                 />
-                <div class="bg-blue-50 relative w-full h-full flex flex-row items-end justify-end px-[0.5rem] py-[0.25rem]">
-                  <span class="text-black-transparent-60 text-[0.625rem]">
+                <div class="bg-blue-50 relative w-full h-full flex flex-row items-center justify-between px-[0.5rem] py-[0.25rem]">
+                  <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
                     {formatTime(segment.start)}
                   </span>
-                  <span class="text-black-transparent-60 text-[0.625rem] ml-auto">
+                  <Show when={segments().length > 1}>
+                    <button
+                      onClick={() => {
+                        setProject(
+                          "timeline",
+                          "segments",
+                          produce((segments) => {
+                            segments.splice(i(), 1);
+                          })
+                        );
+                      }}
+                      class="size-7 opacity-0 group/button group-hover:opacity-100 transition-opacity bg-gray-50 rounded-full flex flex-col items-center justify-center"
+                    >
+                      <IconCapTrash class="size-4 text-gray-400 group-hover/button:text-gray-500 transition-colors" />
+                    </button>
+                  </Show>
+                  <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
                     {formatTime(segment.end)}
                   </span>
                 </div>
