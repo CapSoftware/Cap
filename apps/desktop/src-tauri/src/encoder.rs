@@ -1,6 +1,11 @@
 use std::path::PathBuf;
 
-use ffmpeg::{self as ffmpeg, Dictionary};
+use ffmpeg::{
+    self as ffmpeg,
+    format::{self as avformat, context::Output, Pixel},
+    frame::Video,
+    Dictionary,
+};
 
 macro_rules! dict {
 	( $($key:expr => $value:expr),* $(,)*) => ({
@@ -179,21 +184,37 @@ pub fn nv12_frame(bytes: &[u8], width: u32, height: u32) -> ffmpeg::frame::Video
     frame
 }
 
-pub fn bgra_frame(bytes: &[u8], width: u32, height: u32) -> Option<ffmpeg::frame::Video> {
-    let expected_size = (width * height * 4) as usize;
+pub fn bgra_frame(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    previous_frame: Option<&ffmpeg::frame::Video>,
+) -> Option<ffmpeg::frame::Video> {
+    let expected_size = (width as usize) * (height as usize) * 4; // 4 bytes per pixel for BGRA
 
-    if bytes.len() != expected_size {
-        // Unexpected frame data size
+    if data.len() != expected_size {
         println!(
-            "Unexpected frame data size: expected {}, got {}",
+            "Invalid frame size: expected {}, got {}",
             expected_size,
-            bytes.len()
+            data.len()
         );
-        return None;
+        return previous_frame.cloned();
     }
 
-    let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width, height);
-    frame.data_mut(0).copy_from_slice(bytes);
+    let mut frame = Video::new(Pixel::BGRA, width, height);
+
+    let frame_linesize = frame.stride(0) as usize;
+    let bytes_per_pixel = 4; // For BGRA format
+
+    let expected_linesize = (width as usize) * bytes_per_pixel;
+
+    // Copy data line by line considering linesize differences
+    for (src_row, dst_row) in data
+        .chunks_exact(expected_linesize)
+        .zip(frame.data_mut(0).chunks_exact_mut(frame_linesize))
+    {
+        dst_row[..expected_linesize].copy_from_slice(src_row);
+    }
 
     Some(frame)
 }
