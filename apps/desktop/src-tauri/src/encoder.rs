@@ -145,21 +145,6 @@ impl H264Encoder {
     }
 }
 
-pub fn bgra_frame(bytes: &[u8], width: u32, height: u32) -> ffmpeg::frame::Video {
-    let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width, height);
-
-    let stride = frame.stride(0);
-
-    for (in_line, out_line) in bytes
-        .chunks(width as usize * 4)
-        .zip(frame.data_mut(0).chunks_mut(stride))
-    {
-        out_line[0..(width as usize * 4)].copy_from_slice(in_line);
-    }
-
-    frame
-}
-
 pub fn uyvy422_frame(bytes: &[u8], width: u32, height: u32) -> ffmpeg::frame::Video {
     let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::UYVY422, width, height);
 
@@ -185,6 +170,25 @@ pub fn nv12_frame(bytes: &[u8], width: u32, height: u32) -> ffmpeg::frame::Video
     frame.data_mut(1)[..uv_size].copy_from_slice(&bytes[y_size..y_size + uv_size]);
 
     frame
+}
+
+pub fn bgra_frame(bytes: &[u8], width: u32, height: u32) -> Option<ffmpeg::frame::Video> {
+    let expected_size = (width * height * 4) as usize;
+
+    if bytes.len() != expected_size {
+        // Unexpected frame data size
+        println!(
+            "Unexpected frame data size: expected {}, got {}",
+            expected_size,
+            bytes.len()
+        );
+        return None;
+    }
+
+    let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::BGRA, width, height);
+    frame.data_mut(0).copy_from_slice(bytes);
+
+    Some(frame)
 }
 
 pub struct MP3Encoder {
