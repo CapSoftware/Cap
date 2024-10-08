@@ -2254,6 +2254,8 @@ pub async fn run() {
     let (camera_tx, camera_rx) = watch::channel(None);
     let camera_ws_port = camera::create_camera_ws(camera_rx.clone()).await;
 
+    tauri::async_runtime::set(tokio::runtime::Handle::current());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_nspanel::init())
@@ -2403,6 +2405,39 @@ pub async fn run() {
                     });
                 }
             }
+
+            let app = window.app_handle();
+
+            match event {
+                WindowEvent::Destroyed => {
+                    if window.label() == "main" {
+                        if let Some(w) = app.get_webview_window(camera::WINDOW_LABEL) {
+                            w.close().ok();
+                        }
+                    }
+
+                    if let Some(settings) = GeneralSettingsStore::get(app).unwrap() {
+                        if settings.hide_dock_icon
+                            && app
+                                .webview_windows()
+                                .keys()
+                                .all(|label| !window_activates_dock(label))
+                        {
+                            #[cfg(target_os = "macos")]
+                            app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                                .ok();
+                        }
+                    }
+                }
+                WindowEvent::Focused(focused) if *focused => {
+                    if window_activates_dock(label) {
+                        #[cfg(target_os = "macos")]
+                        app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                            .ok();
+                    }
+                }
+                _ => {}
+            }
         })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
@@ -2411,6 +2446,10 @@ pub async fn run() {
             tauri::RunEvent::Reopen { .. } => open_main_window(handle.clone()),
             _ => {}
         });
+}
+
+fn window_activates_dock(label: &str) -> bool {
+    label == "main" || label.starts_with("editor-") || label == "settings"
 }
 
 type EditorInstancesState = Arc<Mutex<HashMap<String, Arc<EditorInstance>>>>;

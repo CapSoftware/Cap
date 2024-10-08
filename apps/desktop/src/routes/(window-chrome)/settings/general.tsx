@@ -16,6 +16,12 @@ const settingsList = [
     description:
       "The editor will be shown immediately after you finish recording.",
   },
+  {
+    key: "hide_dock_icon",
+    label: "Hide dock icon",
+    description:
+      "The dock icon will be hidden when there are no windows available to close.",
+  },
 ];
 
 export default function GeneralSettings() {

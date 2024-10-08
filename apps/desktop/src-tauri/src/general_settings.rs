@@ -2,17 +2,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Manager, Runtime, Wry};
 use tauri_plugin_store::{with_store, StoreCollection};
 
 #[derive(Serialize, Deserialize, Type, Default)]
 pub struct GeneralSettingsStore {
     pub upload_individual_files: bool,
     pub open_editor_after_recording: bool,
+    #[serde(default)]
+    pub hide_dock_icon: bool,
 }
 
 impl GeneralSettingsStore {
-    pub fn get(app: &AppHandle) -> Result<Option<Self>, String> {
+    pub fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
         println!("Attempting to get GeneralSettingsStore");
         let stores = app
             .try_state::<StoreCollection<Wry>>()
