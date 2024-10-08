@@ -80,7 +80,9 @@ impl H264Encoder {
     }
 
     pub fn encode_frame(&mut self, mut frame: ffmpeg::util::frame::Video, timestamp: u64) {
-        if let Some(last_frame) = &mut self.last_frame {
+        let last_frame_pts = self.last_frame.as_ref().and_then(|f| f.pts());
+
+        if let Some(mut last_frame_pts) = last_frame_pts {
             let pts = {
                 let delta_time = if let Some(start_time) = self.start_time {
                     (timestamp - start_time) as i64
@@ -94,15 +96,20 @@ impl H264Encoder {
             };
 
             // we should probably do something better than just dropping frames lol
-            if Some(pts) <= last_frame.pts() {
+            if pts <= last_frame_pts {
                 return;
             }
 
             // duplicate previous frame if this frame is >1 frame in the future
-            while Some(pts - 1) > last_frame.pts() {
-                let pts = Some(last_frame.pts().unwrap() + 1);
-                last_frame.set_pts(pts);
-                self.context.send_frame(&last_frame).unwrap();
+            while pts - 1 > last_frame_pts {
+                last_frame_pts = last_frame_pts + 1;
+
+                if let Some(last_frame) = &mut self.last_frame {
+                    last_frame.set_pts(Some(last_frame_pts));
+                    self.context.send_frame(&last_frame).unwrap();
+                }
+
+                self.receive_and_process_packets();
             }
 
             frame.set_pts(Some(pts));
