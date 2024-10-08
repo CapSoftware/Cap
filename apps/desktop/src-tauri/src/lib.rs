@@ -8,6 +8,7 @@ mod flags;
 mod general_settings;
 mod hotkeys;
 mod macos;
+mod main_window;
 mod notifications;
 mod permissions;
 mod recording;
@@ -29,6 +30,7 @@ use cap_utils::create_named_pipe;
 use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
+use main_window::create_main_window;
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
@@ -1435,47 +1437,12 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
 #[tauri::command(async)]
 #[specta::specta]
 fn open_main_window(app: AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        println!("Main window already exists, setting focus");
-        window.set_focus().ok();
-        return;
-    }
-
     let permissions = permissions::do_permissions_check(false);
     if !permissions.screen_recording.permitted() || !permissions.accessibility.permitted() {
         return;
     }
 
-    println!("Creating new main window");
-    let Some(window) = WebviewWindow::builder(&app, "main", tauri::WebviewUrl::App("/".into()))
-        .title("Cap")
-        .inner_size(300.0, 375.0)
-        .resizable(false)
-        .maximized(false)
-        .shadow(true)
-        .accept_first_mouse(true)
-        .transparent(true)
-        .hidden_title(true)
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .theme(Some(tauri::Theme::Light))
-        .build()
-        .ok()
-    else {
-        println!("Failed to create main window");
-        return;
-    };
-
-    println!("Creating overlay titlebar");
-    window.create_overlay_titlebar().unwrap();
-    #[cfg(target_os = "macos")]
-    {
-        println!("Setting traffic lights inset for macOS");
-        window.set_traffic_lights_inset(14.0, 22.0).unwrap();
-    }
-
-    println!("Showing main window");
-    window.show().unwrap();
-    println!("Main window opened successfully");
+    create_main_window(app);
 }
 
 #[tauri::command]
@@ -1579,37 +1546,37 @@ async fn open_settings_window(app: AppHandle, page: String) {
 #[tauri::command]
 #[specta::specta]
 async fn upload_rendered_video(
-    _app: AppHandle,
+    app: AppHandle,
     video_id: String,
     project: ProjectConfiguration,
 ) -> Result<UploadResult, String> {
-    let Ok(Some(mut auth)) = AuthStore::get(&_app) else {
+    let Ok(Some(mut auth)) = AuthStore::get(&app) else {
         println!("not authenticated!");
         return Ok(UploadResult::NotAuthenticated);
     };
 
-    notifications::send_notification(&_app, notifications::NotificationType::ShareableLinkCopied);
+    notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
 
     // Check if user has an upgraded plan
     if !auth.is_upgraded() {
         // Fetch and update plan information
-        if let Err(e) = AuthStore::fetch_and_update_plan(&_app).await {
+        if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
             println!("Failed to update plan information: {}", e);
             return Ok(UploadResult::PlanCheckFailed);
         }
 
         // Refresh auth information after update
-        auth = AuthStore::get(&_app).unwrap().unwrap();
+        auth = AuthStore::get(&app).unwrap().unwrap();
 
         // Re-check upgraded status after refresh
         if !auth.is_upgraded() {
             // Open upgrade window instead of returning an error
-            open_upgrade_window(_app).await;
+            open_upgrade_window(app).await;
             return Ok(UploadResult::UpgradeRequired);
         }
     }
 
-    let editor_instance = upsert_editor_instance(&_app, video_id.clone()).await;
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
 
     let mut meta = editor_instance.meta();
 
@@ -1627,12 +1594,12 @@ async fn upload_rendered_video(
             }
         };
 
-        let uploaded_video = upload_video(video_id.clone(), &auth, output_path, false).await?;
+        let uploaded_video = upload_video(&app, video_id.clone(), output_path, false).await?;
 
-        let general_settings = GeneralSettingsStore::get(&_app)?;
+        let general_settings = GeneralSettingsStore::get(&app)?;
         if let Some(settings) = general_settings {
             if settings.upload_individual_files {
-                let video_dir = _app
+                let video_dir = app
                     .path()
                     .app_data_dir()
                     .unwrap()
@@ -1650,7 +1617,7 @@ async fn upload_rendered_video(
                         let file_name = file_path.file_name().unwrap().to_str().unwrap();
                         let result = if is_audio {
                             upload_individual_file(
-                                &auth,
+                                &app,
                                 file_path.clone(),
                                 uploaded_video.config.clone(),
                                 file_name,
@@ -1659,7 +1626,7 @@ async fn upload_rendered_video(
                             .await
                         } else {
                             upload_individual_file(
-                                &auth,
+                                &app,
                                 file_path.clone(),
                                 uploaded_video.config.clone(),
                                 file_name,
@@ -1684,7 +1651,7 @@ async fn upload_rendered_video(
             id: uploaded_video.id.clone(),
         });
         meta.save_for_project();
-        RecordingMetaChanged { id: video_id }.emit(&_app).ok();
+        RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
         uploaded_video.link
     };
@@ -1773,7 +1740,7 @@ async fn upload_screenshot(
         sharing.link.clone()
     } else {
         // Upload the screenshot
-        let uploaded = upload_image(&auth, screenshot_path.clone())
+        let uploaded = upload_image(&app, screenshot_path.clone())
             .await
             .map_err(|e| e.to_string())?;
 

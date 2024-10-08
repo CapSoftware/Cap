@@ -4,9 +4,13 @@ use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
 use reqwest::{multipart::Form, Client, StatusCode};
 use std::path::PathBuf;
+use tauri::AppHandle;
 use tokio::task;
 
-use crate::{auth::AuthStore, web_api};
+use crate::{
+    auth::AuthStore,
+    web_api::{self, ManagerExt},
+};
 
 #[derive(serde::Deserialize, Clone)]
 pub struct S3UploadMeta {
@@ -72,8 +76,8 @@ pub struct UploadedAudio {
 }
 
 pub async fn upload_video(
+    app: &AppHandle,
     video_id: String,
-    auth: &AuthStore,
     file_path: PathBuf,
     is_individual: bool,
 ) -> Result<UploadedVideo, String> {
@@ -86,7 +90,7 @@ pub async fn upload_video(
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = get_s3_config(&client, &auth, false).await?;
+    let s3_config = get_s3_config(&app, false).await?;
 
     let file_key = if is_individual {
         format!(
@@ -107,7 +111,7 @@ pub async fn upload_video(
         },
     )?;
 
-    let (upload_url, mut form) = presigned_s3_url(body, &auth).await?;
+    let (upload_url, mut form) = presigned_s3_url(app, body).await?;
 
     let file_bytes = tokio::fs::read(&file_path)
         .await
@@ -128,7 +132,7 @@ pub async fn upload_video(
         .join("display.jpg");
 
     let screenshot_upload = if screenshot_path.exists() {
-        Some(prepare_screenshot_upload(&s3_config, &auth, screenshot_path).await?)
+        Some(prepare_screenshot_upload(&app, &s3_config, screenshot_path).await?)
     } else {
         None
     };
@@ -190,7 +194,7 @@ pub async fn upload_video(
     ))
 }
 
-pub async fn upload_image(auth: &AuthStore, file_path: PathBuf) -> Result<UploadedImage, String> {
+pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<UploadedImage, String> {
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -199,7 +203,7 @@ pub async fn upload_image(auth: &AuthStore, file_path: PathBuf) -> Result<Upload
 
     let client = reqwest::Client::new();
 
-    let s3_config = get_s3_config(&client, &auth, true).await?;
+    let s3_config = get_s3_config(app, true).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -214,7 +218,7 @@ pub async fn upload_image(auth: &AuthStore, file_path: PathBuf) -> Result<Upload
         },
     };
 
-    let (upload_url, mut form) = presigned_s3_url_image(body, &auth).await?;
+    let (upload_url, mut form) = presigned_s3_url_image(app, body).await?;
 
     let file_content = tokio::fs::read(&file_path)
         .await
@@ -257,7 +261,7 @@ pub async fn upload_image(auth: &AuthStore, file_path: PathBuf) -> Result<Upload
     ))
 }
 
-pub async fn upload_audio(auth: &AuthStore, file_path: PathBuf) -> Result<UploadedAudio, String> {
+pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<UploadedAudio, String> {
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -266,7 +270,7 @@ pub async fn upload_audio(auth: &AuthStore, file_path: PathBuf) -> Result<Upload
 
     let client = reqwest::Client::new();
 
-    let s3_config = get_s3_config(&client, &auth, false).await?;
+    let s3_config = get_s3_config(&app, false).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -282,7 +286,7 @@ pub async fn upload_audio(auth: &AuthStore, file_path: PathBuf) -> Result<Upload
         },
     )?;
 
-    let (upload_url, mut form) = presigned_s3_url_audio(body, &auth).await?;
+    let (upload_url, mut form) = presigned_s3_url_audio(&app, body).await?;
 
     let file_content = tokio::fs::read(&file_path)
         .await
@@ -332,11 +336,7 @@ pub async fn upload_audio(auth: &AuthStore, file_path: PathBuf) -> Result<Upload
     ))
 }
 
-async fn get_s3_config(
-    client: &Client,
-    auth: &AuthStore,
-    is_screenshot: bool,
-) -> Result<S3UploadMeta, String> {
+async fn get_s3_config(app: &AppHandle, is_screenshot: bool) -> Result<S3UploadMeta, String> {
     let origin = "http://tauri.localhost";
     let config_url = web_api::make_url(if is_screenshot {
         format!(
@@ -350,7 +350,8 @@ async fn get_s3_config(
         )
     });
 
-    let response = web_api::do_authed_request(auth, |client| client.get(config_url))
+    let response = app
+        .authed_api_request(|client| client.get(config_url))
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
 
@@ -374,16 +375,17 @@ async fn get_s3_config(
 }
 
 async fn presigned_s3_url(
+    app: &AppHandle,
     body: S3VideoUploadBody,
-    auth: &AuthStore,
 ) -> Result<(String, Form), String> {
-    let response = web_api::do_authed_request(auth, |client| {
-        client
-            .post(web_api::make_url("/api/upload/signed"))
-            .json(&serde_json::json!(body))
-    })
-    .await
-    .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
+    let response = app
+        .authed_api_request(|client| {
+            client
+                .post(web_api::make_url("/api/upload/signed"))
+                .json(&serde_json::json!(body))
+        })
+        .await
+        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err("Failed to authenticate request; please log in again".into());
@@ -415,20 +417,17 @@ async fn presigned_s3_url(
 }
 
 async fn presigned_s3_url_image(
+    app: &AppHandle,
     body: S3ImageUploadBody,
-    auth: &AuthStore,
 ) -> Result<(String, Form), String> {
-    let response = web_api::do_authed_request(auth, |client| {
-        client
-            .post(web_api::make_url("/api/upload/signed"))
-            .json(&serde_json::json!(body))
-    })
-    .await
-    .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
-
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Err("Failed to authenticate request; please log in again".into());
-    }
+    let response = app
+        .authed_api_request(|client| {
+            client
+                .post(web_api::make_url("/api/upload/signed"))
+                .json(&serde_json::json!(body))
+        })
+        .await
+        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
 
     let presigned_post_data = response
         .json::<serde_json::Value>()
@@ -456,20 +455,17 @@ async fn presigned_s3_url_image(
 }
 
 async fn presigned_s3_url_audio(
+    app: &AppHandle,
     body: S3AudioUploadBody,
-    auth: &AuthStore,
 ) -> Result<(String, Form), String> {
-    let response = web_api::do_authed_request(auth, |client| {
-        client
-            .post(web_api::make_url("/api/upload/signed"))
-            .json(&serde_json::json!(body))
-    })
-    .await
-    .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
-
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Err("Failed to authenticate request; please log in again".into());
-    }
+    let response = app
+        .authed_api_request(|client| {
+            client
+                .post(web_api::make_url("/api/upload/signed"))
+                .json(&serde_json::json!(body))
+        })
+        .await
+        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
 
     let presigned_post_data = response
         .json::<serde_json::Value>()
@@ -559,7 +555,7 @@ fn build_audio_upload_body(
 }
 
 pub async fn upload_individual_file(
-    auth: &AuthStore,
+    app: &AppHandle,
     file_path: PathBuf,
     s3_config: S3UploadMeta,
     file_name: &str,
@@ -581,10 +577,10 @@ pub async fn upload_individual_file(
 
     let (upload_url, mut form) = if is_audio {
         let audio_body = build_audio_upload_body(&file_path, base_upload_body)?;
-        presigned_s3_url_audio(audio_body, &auth).await?
+        presigned_s3_url_audio(app, audio_body).await?
     } else {
         let video_body = build_video_upload_body(&file_path, base_upload_body)?;
-        presigned_s3_url(video_body, &auth).await?
+        presigned_s3_url(app, video_body).await?
     };
 
     let file_content = tokio::fs::read(&file_path)
@@ -623,8 +619,8 @@ pub async fn upload_individual_file(
 }
 
 async fn prepare_screenshot_upload(
+    app: &AppHandle,
     s3_config: &S3UploadMeta,
-    auth: &AuthStore,
     screenshot_path: PathBuf,
 ) -> Result<(String, Form), String> {
     let file_name = screenshot_path
@@ -646,7 +642,7 @@ async fn prepare_screenshot_upload(
         },
     };
 
-    let (upload_url, mut form) = presigned_s3_url_image(body, auth).await?;
+    let (upload_url, mut form) = presigned_s3_url_image(app, body).await?;
 
     let compressed_image = compress_image(screenshot_path).await?;
 

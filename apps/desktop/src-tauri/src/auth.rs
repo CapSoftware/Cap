@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Manager, Runtime, Wry};
 use tauri_plugin_store::{with_store, StoreCollection};
+
+use web_api::ManagerExt;
 
 use crate::web_api;
 
@@ -19,9 +21,9 @@ pub struct Plan {
 }
 
 impl AuthStore {
-    pub fn get(app: &AppHandle) -> Result<Option<Self>, String> {
+    pub fn get<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Self>, String> {
         let stores = app
-            .try_state::<StoreCollection<Wry>>()
+            .try_state::<StoreCollection<R>>()
             .ok_or("Store not found")?;
         with_store(app.clone(), stores, "store", |store| {
             let Some(store) = store.get("auth").cloned() else {
@@ -39,11 +41,10 @@ impl AuthStore {
             return Err("User not authenticated".to_string());
         };
 
-        let response = web_api::do_authed_request(&auth, |client| {
-            client.get(web_api::make_url("/api/desktop/plan"))
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+        let response = app
+            .authed_api_request(|client| client.get(web_api::make_url("/api/desktop/plan")))
+            .await
+            .map_err(|e| e.to_string())?;
 
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             println!("Authentication expired. Please log in again.");
@@ -88,3 +89,6 @@ impl AuthStore {
         .map_err(|e| e.to_string())
     }
 }
+
+#[derive(specta::Type, serde::Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct AuthenticationInvalid;
