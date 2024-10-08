@@ -46,6 +46,7 @@ use specta::Type;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
+use std::sync::atomic::AtomicU16;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
@@ -92,6 +93,7 @@ pub struct App {
     start_recording_options: RecordingOptions,
     #[serde(skip)]
     camera_tx: watch::Sender<camera::LatestFrame>,
+    camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<camera::CameraFeed>,
     #[serde(skip)]
@@ -194,7 +196,7 @@ impl App {
             }
             None if new_options.camera_label.is_some() => {
                 println!("creating camera window");
-                create_camera_window(self.handle.clone());
+                create_camera_window(self.handle.clone(), self.camera_ws_port);
             }
             _ => {}
         }
@@ -1335,20 +1337,6 @@ fn close_previous_recordings_window(app: AppHandle) {
     }
 }
 
-fn on_recording_options_change(app: &AppHandle, options: &RecordingOptions) {
-    match app.get_webview_window(camera::WINDOW_LABEL) {
-        Some(window) if options.camera_label.is_none() => {
-            window.close().ok();
-        }
-        None if options.camera_label.is_some() => {
-            create_camera_window(app.clone());
-        }
-        _ => {}
-    }
-
-    RecordingOptionsChanged.emit(app).ok();
-}
-
 #[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(app: AppHandle) {
@@ -2226,12 +2214,11 @@ async fn reset_microphone_permissions(app: AppHandle) -> Result<(), ()> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub async fn run() {
     let specta_builder = tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
             get_recording_options,
             set_recording_options,
-            create_camera_window,
             start_recording,
             stop_recording,
             pause_recording,
@@ -2312,6 +2299,9 @@ pub fn run() {
         )
         .expect("Failed to export typescript bindings");
 
+    let (camera_tx, camera_rx) = watch::channel(None);
+    let camera_ws_port = camera::create_camera_ws(camera_rx.clone()).await;
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_nspanel::init())
@@ -2348,13 +2338,10 @@ pub fn run() {
                 permissions::open_permissions_window(app_handle.clone());
             }
 
-            let (camera_tx, camera_rx) = watch::channel(None);
-
-            tokio::spawn(camera::create_camera_ws(camera_rx.clone()));
-
             app.manage(Arc::new(RwLock::new(App {
                 handle: app_handle.clone(),
                 camera_tx,
+                camera_ws_port,
                 camera_feed: None,
                 start_recording_options: RecordingOptions {
                     capture_target: CaptureTarget::Screen,

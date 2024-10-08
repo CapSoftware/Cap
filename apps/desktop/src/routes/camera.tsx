@@ -34,6 +34,8 @@ namespace CameraWindow {
 
 const BAR_HEIGHT = 56;
 
+const { cameraWsPort } = (window as any).__CAP__;
+
 export default function () {
   const options = createOptionsQuery();
 
@@ -47,7 +49,7 @@ export default function () {
 
   const [latestFrame, setLatestFrame] = createLazySignal<ImageData | null>();
 
-  createImageDataWS("ws://localhost:9182", (imageData) => {
+  createImageDataWS(`ws://localhost:${cameraWsPort}`, (imageData) => {
     setLatestFrame(imageData);
     const ctx = cameraCanvasRef?.getContext("2d");
     ctx?.putImageData(imageData, 0, 0);

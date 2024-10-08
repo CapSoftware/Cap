@@ -21,9 +21,6 @@ async setRecordingOptions(options: RecordingOptions) : Promise<Result<null, null
     else return { status: "error", error: e  as any };
 }
 },
-async createCameraWindow() : Promise<void> {
-    await TAURI_INVOKE("create_camera_window");
-},
 async startRecording() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("start_recording") };

@@ -9,6 +9,7 @@ import {
   Show,
   type ValidComponent,
   createEffect,
+  createMemo,
   createResource,
   createSignal,
   onMount,
@@ -90,13 +91,14 @@ export default function () {
 
   createUpdateCheck();
 
-  const [changelogState, setChangelogState] = createStore({
-    hasUpdate: false,
-    lastOpenedVersion: localStorage.getItem("lastOpenedChangelogVersion") || "",
-    changelogClicked: JSON.parse(
-      localStorage.getItem("changelogClicked") || "false"
-    ),
-  });
+  const [changelogState, setChangelogState] = makePersisted(
+    createStore({
+      hasUpdate: false,
+      lastOpenedVersion: "",
+      changelogClicked: false,
+    }),
+    { name: "changelogState" }
+  );
 
   const [currentVersion] = createResource(() => getVersion());
 
@@ -138,8 +140,6 @@ export default function () {
         lastOpenedVersion: version,
         changelogClicked: true,
       });
-      localStorage.setItem("lastOpenedChangelogVersion", version);
-      localStorage.setItem("changelogClicked", "true");
     }
   };
 
@@ -161,31 +161,11 @@ export default function () {
       } else if (type === "microphone") {
         await commands.resetMicrophonePermissions();
       }
+      await commands.requestPermission(type);
       // Refresh permissions after request
       await permissions.refetch();
     } catch (error) {
       console.error(`Failed to get ${type} permission:`, error);
-    }
-  };
-
-  const handleCameraChange = async (item: string | null) => {
-    console.log({ item });
-    if (!item && permissions?.data?.camera !== "granted") {
-      return requestPermission("camera");
-    }
-
-    if (!options.data) return;
-
-    if (!item) {
-      await commands.setRecordingOptions({
-        ...options.data,
-        cameraLabel: null,
-      });
-    } else {
-      await commands.setRecordingOptions({
-        ...options.data,
-        cameraLabel: item,
-      });
     }
   };
 
@@ -337,71 +317,124 @@ export default function () {
       </KSelect>
       <div class="flex flex-col gap-[0.25rem] items-stretch">
         <label class="text-gray-400 text-[0.875rem]">Camera</label>
-        <KSelect<string>
-          options={videoDevices}
-          placeholder="No Camera"
-          value={options.data?.cameraLabel}
-          disabled={isRecording()}
-          onChange={handleCameraChange}
-          itemComponent={(props) => (
-            <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-              <KSelect.ItemLabel class="flex-1">
-                {props.item.rawValue}
-              </KSelect.ItemLabel>
-            </MenuItem>
-          )}
-        >
-          <KSelect.Trigger
-            class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
-            onClick={(e) => {
-              if (permissions?.data?.camera !== "granted") {
-                requestPermission("camera");
+        <Show when>
+          {(_) => {
+            type Option = { isCamera: boolean; name: string };
+
+            const onChange = async (item: Option | null) => {
+              if (!item && permissions?.data?.camera !== "granted") {
+                return requestPermission("camera");
               }
-            }}
-          >
-            <IconCapCamera class="text-gray-400 size-[1.25rem]" />
-            <KSelect.Value<string> class="flex-1 text-left truncate">
-              {(state) => <span>{state.selectedOption()}</span>}
-            </KSelect.Value>
-            <button
-              type="button"
-              class={cx(
-                "px-[0.375rem] rounded-full text-[0.75rem]",
-                options.data?.cameraLabel
-                  ? "bg-blue-50 text-blue-300"
-                  : "bg-red-50 text-red-300"
-              )}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (permissions?.data?.camera !== "granted") {
-                  return requestPermission("camera");
-                }
-                if (!options.data?.cameraLabel) return;
-                commands.setRecordingOptions({
+
+              if (!options.data) return;
+
+              if (!item || !item.isCamera) {
+                await commands.setRecordingOptions({
                   ...options.data,
                   cameraLabel: null,
                 });
-              }}
-            >
-              {permissions?.data?.camera !== "granted"
-                ? "Request Permission"
-                : options.data?.cameraLabel
-                ? "On"
-                : "Off"}
-            </button>
-          </KSelect.Trigger>
-          <KSelect.Portal>
-            <PopperContent<typeof KSelect.Content>
-              as={KSelect.Content}
-              class={topLeftAnimateClasses}
-            >
-              <MenuItemList<typeof KSelect.Listbox>
-                class="max-h-36 overflow-y-auto"
-                as={KSelect.Listbox}
-              />
-            </PopperContent>
-          </KSelect.Portal>
-        </KSelect>
+              } else {
+                await commands.setRecordingOptions({
+                  ...options.data,
+                  cameraLabel: item.name,
+                });
+              }
+            };
+            const selectOptions = createMemo(() => [
+              { name: "No Camera", isCamera: false },
+              ...videoDevices.map((d) => ({ isCamera: true, name: d })),
+            ]);
+
+            const value = () =>
+              selectOptions()?.find(
+                (o) => o.name === options.data?.cameraLabel
+              ) ?? null;
+
+            return (
+              <KSelect<Option>
+                options={selectOptions()}
+                optionValue="name"
+                optionTextValue="name"
+                placeholder="No Camera"
+                value={value()}
+                disabled={isRecording()}
+                onChange={onChange}
+                itemComponent={(props) => (
+                  <MenuItem<typeof KSelect.Item>
+                    as={KSelect.Item}
+                    item={props.item}
+                  >
+                    <KSelect.ItemLabel class="flex-1">
+                      {props.item.rawValue.name}
+                    </KSelect.ItemLabel>
+                  </MenuItem>
+                )}
+              >
+                <KSelect.Trigger
+                  class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
+                  onClick={(e) => {
+                    if (permissions?.data?.camera !== "granted") {
+                      requestPermission("camera");
+                    }
+                  }}
+                >
+                  <IconCapCamera class="text-gray-400 size-[1.25rem]" />
+                  <KSelect.Value<Option> class="flex-1 text-left truncate">
+                    {(state) => <span>{state.selectedOption().name}</span>}
+                  </KSelect.Value>
+                  <button
+                    type="button"
+                    class={cx(
+                      "px-[0.375rem] rounded-full text-[0.75rem]",
+                      options.data?.cameraLabel
+                        ? "bg-blue-50 text-blue-300"
+                        : "bg-red-50 text-red-300"
+                    )}
+                    onPointerDown={(e) => {
+                      const permission = permissions?.data?.camera;
+
+                      if (
+                        permission !== "granted" &&
+                        permission !== "notNeeded"
+                      ) {
+                        e.stopPropagation();
+                      }
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (permissions?.data?.camera !== "granted") {
+                        console.log("requesting permission");
+                        return requestPermission("camera");
+                      }
+                      if (!options.data?.cameraLabel) return;
+                      commands.setRecordingOptions({
+                        ...options.data,
+                        cameraLabel: null,
+                      });
+                    }}
+                  >
+                    {permissions?.data?.camera !== "granted"
+                      ? "Request Permission"
+                      : options.data?.cameraLabel
+                      ? "On"
+                      : "Off"}
+                  </button>
+                </KSelect.Trigger>
+                <KSelect.Portal>
+                  <PopperContent<typeof KSelect.Content>
+                    as={KSelect.Content}
+                    class={topLeftAnimateClasses}
+                  >
+                    <MenuItemList<typeof KSelect.Listbox>
+                      class="max-h-36 overflow-y-auto"
+                      as={KSelect.Listbox}
+                    />
+                  </PopperContent>
+                </KSelect.Portal>
+              </KSelect>
+            );
+          }}
+        </Show>
       </div>
       <div class="flex flex-col gap-[0.25rem] items-stretch">
         <label class="text-gray-400">Microphone</label>
@@ -532,6 +565,7 @@ export default function () {
 
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";
+import { makePersisted } from "@solid-primitives/storage";
 
 let hasChecked = false;
 function createUpdateCheck() {

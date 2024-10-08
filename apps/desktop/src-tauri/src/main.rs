@@ -3,5 +3,5 @@
 
 #[tokio::main]
 async fn main() {
-    desktop_solid_lib::run()
+    desktop_solid_lib::run().await
 }

@@ -19,9 +19,7 @@ pub const WINDOW_LABEL: &str = "camera";
 const CAMERA_ROUTE: &str = "/camera";
 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
-#[tauri::command(async)]
-#[specta::specta]
-pub fn create_camera_window(app: AppHandle) {
+pub fn create_camera_window(app: AppHandle, ws_port: u16) {
     if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
         window.set_focus().ok();
     } else {
@@ -47,6 +45,12 @@ pub fn create_camera_window(app: AppHandle) {
             100.0,
             (monitor.size().height as f64) / monitor.scale_factor() - WINDOW_SIZE - 100.0,
         )
+        .initialization_script(&format!(
+            "
+            window.__CAP__ = window.__CAP__ ?? {{}};
+            window.__CAP__.cameraWsPort = {ws_port};
+            ",
+        ))
         .build()
         .unwrap();
 
@@ -274,9 +278,7 @@ pub async fn create_camera_ws(frame_rx: watch::Receiver<Option<CameraFrame>>) ->
         .route("/", get(ws_handler))
         .with_state(Arc::new(Mutex::new(frame_rx)));
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:9182")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         axum::serve(listener, router.into_make_service())
@@ -325,7 +327,7 @@ impl CameraFeed {
 
                 camera.open_stream().unwrap();
 
-                setup_tx.send(camera.camera_format());
+                setup_tx.send(camera.camera_format()).unwrap();
 
                 loop {
                     if shutdown_rx.try_recv().is_ok() {
