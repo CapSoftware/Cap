@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
         customer: user.stripeCustomerId,
       });
       const activeSubscription = subscriptions.data.find(
-        (sub) => sub.status === 'active'
+        (sub) => sub.status === "active"
       );
       if (activeSubscription) {
         isSubscribed = true;
@@ -86,7 +86,7 @@ export async function GET(req: NextRequest) {
           .where(eq(users.id, user.id));
       }
     } catch (error) {
-      console.error('Error fetching subscription from Stripe:', error);
+      console.error("Error fetching subscription from Stripe:", error);
     }
   }
 
