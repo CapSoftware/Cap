@@ -70,12 +70,16 @@ export function createVideoDevicesQuery() {
   const options = () => queryOptions({
     queryKey: ["videoDevices"] as const,
     queryFn: async () => {
-      await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       const browserDevices = await navigator.mediaDevices.enumerateDevices();
       const rustCameras = await commands.listCameras();
-      return browserDevices.filter(device => device.kind === "videoinput"
+      const result = browserDevices.filter(device => device.kind === "videoinput"
         && rustCameras.some(rDevice => rDevice === device.label)
       )
+      // this is not a better solution, since `navigator.mediaDevices.getUserMedia` is always return a new instance of the stream
+      // we need to clean up the stream because we just want to get the devices.
+      stream.getTracks().forEach(track => track.stop())
+      return result
     },
     initialData: [],
     reconcile: (oldData, newData) => permissions?.data?.camera === 'granted' ? newData
