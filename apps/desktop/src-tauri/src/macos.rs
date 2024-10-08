@@ -3,7 +3,7 @@ use std::ffi::c_void;
 use core_graphics::{
     base::boolean_t,
     display::{CFDictionaryRef, CGRect},
-    window::kCGWindowBounds,
+    window::{kCGWindowBounds, kCGWindowOwnerPID},
 };
 
 #[derive(Debug)]
@@ -11,7 +11,7 @@ pub struct Window {
     pub window_number: u32,
     pub name: String,
     pub owner_name: String,
-    pub level: u32,
+    pub process_id: u32,
     pub bounds: Bounds,
 }
 
@@ -24,8 +24,6 @@ pub struct Bounds {
 }
 
 pub fn get_on_screen_windows() -> Vec<Window> {
-    use std::ffi::c_void;
-
     use core_foundation::{
         array::CFArrayGetCount,
         base::FromVoid,
@@ -34,7 +32,7 @@ pub fn get_on_screen_windows() -> Vec<Window> {
         string::CFString,
     };
     use core_graphics::{
-        display::{CFArrayGetValueAtIndex, CFDictionaryRef},
+        display::CFArrayGetValueAtIndex,
         window::{
             kCGNullWindowID, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
             kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
@@ -131,14 +129,37 @@ pub fn get_on_screen_windows() -> Vec<Window> {
                 value
             };
 
-            let name = {
-                let value_ref =
-                    CFDictionaryGetValue(window_cf_dictionary_ref, kCGWindowName as *const c_void);
+            let process_id = {
+                let value_ref = CFDictionaryGetValue(
+                    window_cf_dictionary_ref,
+                    kCGWindowOwnerPID as *const c_void,
+                );
                 if value_ref.is_null() {
                     continue;
                 }
 
-                CFString::from_void(value_ref).to_string()
+                let mut value: u32 = 0;
+                let is_success = CFNumberGetValue(
+                    value_ref as CFNumberRef,
+                    kCFNumberIntType,
+                    &mut value as *mut _ as *mut c_void,
+                );
+
+                if !is_success {
+                    continue;
+                }
+
+                value
+            };
+
+            let name = {
+                let value_ref =
+                    CFDictionaryGetValue(window_cf_dictionary_ref, kCGWindowName as *const c_void);
+                if value_ref.is_null() {
+                    String::new()
+                } else {
+                    CFString::from_void(value_ref).to_string()
+                }
             };
 
             let owner_name = {
@@ -147,10 +168,10 @@ pub fn get_on_screen_windows() -> Vec<Window> {
                     kCGWindowOwnerName as *const c_void,
                 );
                 if value_ref.is_null() {
-                    continue;
+                    String::new()
+                } else {
+                    CFString::from_void(value_ref).to_string()
                 }
-
-                CFString::from_void(value_ref).to_string()
             };
 
             if owner_name == "Window Server" {
@@ -161,8 +182,8 @@ pub fn get_on_screen_windows() -> Vec<Window> {
                 array.push(Window {
                     name,
                     owner_name,
+                    process_id,
                     window_number,
-                    level,
                     bounds,
                 });
             }
