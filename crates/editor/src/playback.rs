@@ -8,7 +8,7 @@ use cpal::{
 };
 use tokio::{sync::watch, time::Instant};
 
-use crate::{editor, project_recordings::ProjectRecordings, AudioData};
+use crate::{audio::AudioData, editor, project_recordings::ProjectRecordings};
 
 pub struct Playback {
     pub audio: Option<AudioData>,

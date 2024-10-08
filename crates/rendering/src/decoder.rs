@@ -6,7 +6,7 @@ use std::{
     sync::{mpsc, Arc},
 };
 
-use ffmpeg_next::{
+use ffmpeg::{
     codec,
     format::{self, context::input::PacketIter, Pixel},
     frame::{self, Video},
@@ -39,11 +39,11 @@ impl AsyncVideoDecoder {
         let (tx, rx) = mpsc::channel();
 
         std::thread::spawn(move || {
-            let mut input = ffmpeg_next::format::input(&path).unwrap();
+            let mut input = ffmpeg::format::input(&path).unwrap();
 
             let input_stream = input
                 .streams()
-                .best(ffmpeg_next::media::Type::Video)
+                .best(ffmpeg::media::Type::Video)
                 .ok_or("Could not find a video stream")
                 .unwrap();
 
@@ -75,8 +75,8 @@ impl AsyncVideoDecoder {
             // Create a decoder for the video stream
             let mut decoder = context.decoder().video().unwrap();
 
-            use ffmpeg_next::format::Pixel;
-            use ffmpeg_next::software::scaling::{context::Context, flag::Flags};
+            use ffmpeg::format::Pixel;
+            use ffmpeg::software::scaling::{context::Context, flag::Flags};
 
             let mut scaler_input_format = hw_device
                 .as_ref()
@@ -94,7 +94,7 @@ impl AsyncVideoDecoder {
             )
             .unwrap();
 
-            let mut temp_frame = ffmpeg_next::frame::Video::empty();
+            let mut temp_frame = ffmpeg::frame::Video::empty();
 
             let render_more_margin = (FRAME_CACHE_SIZE / 4) as u32;
 
@@ -366,7 +366,7 @@ fn ff_find_decoder(
     codec_id: codec::Id,
 ) -> Option<Codec> {
     unsafe {
-        use ffmpeg_next::media::Type;
+        use ffmpeg::media::Type;
         let codec = match st.parameters().medium() {
             Type::Video => Some((*s.as_ptr()).video_codec),
             Type::Audio => Some((*s.as_ptr()).audio_codec),

@@ -3,8 +3,6 @@ mod auth;
 mod camera;
 mod capture;
 mod display;
-mod editor;
-mod editor_instance;
 mod encoder;
 mod flags;
 mod general_settings;
@@ -12,8 +10,6 @@ mod hotkeys;
 mod macos;
 mod notifications;
 mod permissions;
-mod playback;
-mod project_recordings;
 mod recording;
 mod tray;
 mod upload;
@@ -21,7 +17,9 @@ mod web_api;
 
 use audio::AppSounds;
 use auth::AuthStore;
-use camera::{create_camera_window, find_camera_by_label, list_cameras, CameraFeed};
+use camera::{create_camera_window, list_cameras, CameraFeed};
+use cap_editor::{AudioData, EditorState, ProjectRecordings};
+use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_ffmpeg::FFmpeg;
 use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
@@ -29,14 +27,12 @@ use cap_project::{
 use cap_rendering::ProjectUniforms;
 use cap_utils::create_named_pipe;
 use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
-use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use objc2_app_kit::NSScreenSaverWindowLevel;
 use png::{ColorType, Encoder};
-use project_recordings::ProjectRecordings;
 use recording::{DisplaySource, InProgressRecording};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
@@ -46,8 +42,7 @@ use specta::Type;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
-use std::sync::atomic::AtomicU16;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
@@ -58,16 +53,13 @@ use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::watch;
 use tokio::task;
 use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
 };
-use upload::{
-    upload_audio, upload_image, upload_individual_file, upload_video, UploadedAudio, UploadedVideo,
-};
+use upload::{upload_image, upload_individual_file, upload_video};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -949,13 +941,6 @@ impl EditorStateChanged {
             playhead_position: s.playhead_position,
         }
     }
-}
-
-#[derive(Clone)]
-pub struct AudioData {
-    pub buffer: Arc<Vec<f64>>,
-    pub sample_rate: u32,
-    // pub channels: u18
 }
 
 #[tauri::command]

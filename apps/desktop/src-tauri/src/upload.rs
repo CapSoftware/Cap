@@ -501,15 +501,15 @@ fn build_video_upload_body(
     base: S3UploadBody,
 ) -> Result<S3VideoUploadBody, String> {
     let input =
-        ffmpeg_next::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
+        ffmpeg::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
     let stream = input
         .streams()
-        .best(ffmpeg_next::media::Type::Video)
+        .best(ffmpeg::media::Type::Video)
         .ok_or_else(|| "Failed to find appropriate video stream in file".to_string())?;
 
     let duration_millis = input.duration() as f64 / 1000.;
 
-    let codec = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())
+    let codec = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(|e| format!("Unable to read video codec information: {e}"))?;
     let codec_name = codec.id();
     let video = codec.decoder().video().unwrap();
@@ -536,15 +536,15 @@ fn build_audio_upload_body(
     base: S3UploadBody,
 ) -> Result<S3AudioUploadBody, String> {
     let input =
-        ffmpeg_next::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
+        ffmpeg::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
     let stream = input
         .streams()
-        .best(ffmpeg_next::media::Type::Audio)
+        .best(ffmpeg::media::Type::Audio)
         .ok_or_else(|| "Failed to find appropriate audio stream in file".to_string())?;
 
     let duration_millis = input.duration() as f64 / 1000.;
 
-    let codec = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())
+    let codec = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(|e| format!("Unable to read audio codec information: {e}"))?;
     let codec_name = codec.id();
 

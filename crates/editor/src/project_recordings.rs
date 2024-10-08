@@ -14,13 +14,10 @@ pub struct Video {
 
 impl Video {
     pub fn new(path: &PathBuf) -> Self {
-        let input = ffmpeg_next::format::input(path).unwrap();
-        let stream = input
-            .streams()
-            .best(ffmpeg_next::media::Type::Video)
-            .unwrap();
+        let input = ffmpeg::format::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
 
-        let video_decoder = ffmpeg_next::codec::Context::from_parameters(stream.parameters())
+        let video_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
             .unwrap()
             .decoder()
             .video()
@@ -46,13 +43,10 @@ pub struct Audio {
 
 impl Audio {
     pub fn new(path: &PathBuf) -> Self {
-        let input = ffmpeg_next::format::input(path).unwrap();
-        let stream = input
-            .streams()
-            .best(ffmpeg_next::media::Type::Audio)
-            .unwrap();
+        let input = ffmpeg::format::input(path).unwrap();
+        let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
 
-        let video_decoder = ffmpeg_next::codec::Context::from_parameters(stream.parameters())
+        let video_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
             .unwrap()
             .decoder()
             .audio()

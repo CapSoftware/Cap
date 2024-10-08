@@ -3,7 +3,7 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, SampleFormat, SizedSample, Stream, StreamConfig, SupportedStreamConfig,
 };
-use ffmpeg_next as ffmpeg;
+
 use indexmap::IndexMap;
 use num_traits::ToBytes;
 use std::{fs::File, io::Write, path::PathBuf, sync::Arc, time::Instant};

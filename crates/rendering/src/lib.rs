@@ -104,7 +104,7 @@ pub async fn render_video_to_channel(
 
     println!("Setting up FFmpeg input for screen recording...");
 
-    ffmpeg_next::init().unwrap();
+    ffmpeg::init().unwrap();
 
     let start_time = Instant::now();
 

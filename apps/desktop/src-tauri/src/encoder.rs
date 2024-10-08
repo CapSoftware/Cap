@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use ffmpeg_next::{self as ffmpeg, Dictionary};
+use ffmpeg::{self as ffmpeg, Dictionary};
 
 macro_rules! dict {
 	( $($key:expr => $value:expr),* $(,)*) => ({

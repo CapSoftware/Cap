@@ -1,7 +1,7 @@
-use crate::display::FPS;
+use crate::audio::AudioData;
+use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
-use crate::{editor, AudioData};
 use cap_ffmpeg::FFmpeg;
 use cap_project::{ProjectConfiguration, RecordingMeta};
 use cap_rendering::decoder::AsyncVideoDecoder;
@@ -9,15 +9,8 @@ use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVid
 use std::ops::Deref;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
-use tracing::instrument::WithSubscriber;
 
-type PreviewFrameInstruction = u32;
-
-pub struct EditorState {
-    pub playhead_position: u32,
-    pub playback_task: Option<PlaybackHandle>,
-    pub preview_task: Option<tokio::task::JoinHandle<()>>,
-}
+const FPS: u32 = 30;
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
@@ -260,16 +253,6 @@ impl EditorInstance {
     }
 }
 
-pub const FRAMES_WS_PATH: &str = "/frames-ws";
-
-pub enum SocketMessage {
-    Frame {
-        data: Vec<u8>,
-        width: u32,
-        height: u32,
-    },
-}
-
 async fn create_frames_ws(frame_rx: mpsc::UnboundedReceiver<SocketMessage>) -> u16 {
     use axum::{
         extract::{
@@ -334,4 +317,21 @@ async fn create_frames_ws(frame_rx: mpsc::UnboundedReceiver<SocketMessage>) -> u
     });
 
     port
+}
+type PreviewFrameInstruction = u32;
+
+pub struct EditorState {
+    pub playhead_position: u32,
+    pub playback_task: Option<PlaybackHandle>,
+    pub preview_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+pub const FRAMES_WS_PATH: &str = "/frames-ws";
+
+pub enum SocketMessage {
+    Frame {
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
 }

@@ -1,4 +1,4 @@
-use ffmpeg_next::{format as avformat, frame::Video, software};
+use ffmpeg::{format as avformat, frame::Video, software};
 use std::{
     path::PathBuf,
     time::{Instant, SystemTime},

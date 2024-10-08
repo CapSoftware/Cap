@@ -6,8 +6,9 @@ members = [
 	"crates/ffmpeg",
 	"crates/utils",
 	"crates/project",
+	"crates/editor",
 ]
 
 [workspace.dependencies]
-ffmpeg-next = { git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "11f8d264bbc0" }
+ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "11f8d264bbc0" }
 tauri = { version = "2.0.0-rc" }

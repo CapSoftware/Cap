@@ -391,14 +391,7 @@ export default function () {
                         : "bg-red-50 text-red-300"
                     )}
                     onPointerDown={(e) => {
-                      const permission = permissions?.data?.camera;
-
-                      if (
-                        permission !== "granted" &&
-                        permission !== "notNeeded"
-                      ) {
-                        e.stopPropagation();
-                      }
+                      e.stopPropagation();
                     }}
                     onClick={(e) => {
                       e.stopPropagation();
