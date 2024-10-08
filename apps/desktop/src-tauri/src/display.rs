@@ -63,9 +63,17 @@ pub fn list_capture_windows() -> Vec<CaptureWindow> {
             }
             _ => None,
         })
-        .map(|target| CaptureWindow {
-            id: target.id,
-            name: target.title,
+        .map(|scap_window| {
+            // Find the corresponding window to get the application name
+            let app_name = windows
+                .iter()
+                .find(|window| window.window_number == scap_window.raw_handle)
+                .map(|window| window.owner_name.clone())
+                .unwrap_or(scap_window.title.clone());
+            CaptureWindow {
+                id: scap_window.id,
+                name: app_name,
+            }
         })
         .collect::<Vec<_>>()
 }
