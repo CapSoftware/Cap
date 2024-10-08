@@ -198,14 +198,12 @@ function CameraLoadingState(props: { shape: CameraWindow.Shape }) {
       "Camera is loading",
       "Acquiring lock on camera",
       "Camera is starting",
-      "Almost there...",
-      "Just a moment longer",
     ];
     let index = 0;
     const interval = setInterval(() => {
       setLoadingText(loadingMessages[index]);
       index = (index + 1) % loadingMessages.length;
-    }, 1000);
+    }, 2000);
 
     onCleanup(() => clearInterval(interval));
   });
