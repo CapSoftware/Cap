@@ -10,7 +10,6 @@ import {
   Show,
   Suspense,
   createEffect,
-  createResource,
   createSignal,
   on,
   onCleanup,
@@ -33,7 +32,7 @@ namespace CameraWindow {
   };
 }
 
-export default function () {
+export default function() {
   const options = createOptionsQuery();
 
   const camera = createCameraForLabel(() => options.data?.cameraLabel ?? "");
@@ -254,15 +253,18 @@ function createCameraPreview(deviceId: () => string | undefined) {
     } else if (ref) {
       ref.srcObject = null;
     }
+
+    // Cleanup effect
+    onCleanup(() => {
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      if (ref?.srcObject) {
+        ref.srcObject = null;
+      }
+    });
   });
 
-  // Cleanup effect
-  onCleanup(() => {
-    const stream = cameraStream();
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-  });
 
   return [setCameraRef, () => cameraStream()] as const;
 }

@@ -11,8 +11,12 @@ import { commands } from "./tauri";
 export function createDevices() {
   const [devices, { refetch }] = createResource(async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      return await navigator.mediaDevices.enumerateDevices();
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      const result = await navigator.mediaDevices.enumerateDevices();
+      // this is not a better solution, since `navigator.mediaDevices.getUserMedia` is always return a new instance of the stream
+      // we need to clean up the stream because we just want to get the devices.
+      stream.getTracks().forEach(track => track.stop())
+      return result
     } catch (error) {
       console.error("Error accessing media devices:", error);
       return [];
@@ -75,8 +79,8 @@ export async function stopMediaStream(kind: "audio" | "video" | "both") {
 
   streams.getTracks().forEach((track) => {
     if ((kind === "audio" && track.kind === "audio") ||
-        (kind === "video" && track.kind === "video") ||
-        kind === "both") {
+      (kind === "video" && track.kind === "video") ||
+      kind === "both") {
       track.stop();
     }
   });
