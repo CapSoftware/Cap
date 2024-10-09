@@ -7,7 +7,6 @@ mod encoder;
 mod flags;
 mod general_settings;
 mod hotkeys;
-mod macos;
 mod notifications;
 mod permissions;
 mod recording;
@@ -15,6 +14,9 @@ mod tray;
 mod upload;
 mod web_api;
 mod windows;
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 use audio::AppSounds;
 use auth::AuthStore;
@@ -48,7 +50,6 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
-use tauri_nspanel::ManagerExt;
 use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
@@ -60,6 +61,9 @@ use tokio::{
 };
 use upload::{upload_image, upload_individual_file, upload_video};
 use windows::CapWindow;
+
+#[cfg(target_os = "macos")]
+use tauri_nspanel::ManagerExt;
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -121,45 +125,7 @@ impl App {
         CurrentRecordingChanged(json).emit(&self.handle).ok();
 
         if let DisplaySource::Window { .. } = &current_recording.display_source {
-            match self
-                .handle
-                .get_webview_window(WINDOW_CAPTURE_OCCLUDER_LABEL)
-            {
-                None => {
-                    let monitor = self.handle.primary_monitor().unwrap().unwrap();
-
-                    let occluder_window = WebviewWindow::builder(
-                        &self.handle,
-                        WINDOW_CAPTURE_OCCLUDER_LABEL,
-                        tauri::WebviewUrl::App("/window-capture-occluder".into()),
-                    )
-                    .title("Cap Window Capture Occluder")
-                    .maximized(false)
-                    .resizable(false)
-                    .fullscreen(false)
-                    .decorations(false)
-                    .shadow(false)
-                    .always_on_top(true)
-                    .visible_on_all_workspaces(true)
-                    .content_protected(true)
-                    .inner_size(
-                        (monitor.size().width as f64) / monitor.scale_factor(),
-                        (monitor.size().height as f64) / monitor.scale_factor(),
-                    )
-                    .position(0.0, 0.0)
-                    .build()
-                    .unwrap();
-
-                    occluder_window
-                        .set_window_level(NSScreenSaverWindowLevel as u32)
-                        .unwrap();
-                    occluder_window.set_ignore_cursor_events(true).unwrap();
-                    occluder_window.make_transparent().unwrap();
-                }
-                Some(w) => {
-                    w.show();
-                }
-            }
+            CapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
             self.close_occluder_window();
         }
@@ -550,7 +516,6 @@ async fn copy_file_to_path(src: String, dst: String) -> Result<(), String> {
     }
 }
 
-// TODO: Use arboard or clipboard-rs
 #[tauri::command]
 #[specta::specta]
 async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(), String> {
@@ -1201,17 +1166,23 @@ fn open_editor(app: AppHandle, id: String) {
 #[tauri::command(async)]
 #[specta::specta]
 fn close_previous_recordings_window(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(PREV_RECORDINGS_WINDOW) {
-        panel.released_when_closed(true);
-        panel.close();
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
+            panel.released_when_closed(true);
+            panel.close();
+        }
     }
 }
 
 #[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
-        panel.make_key_window();
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
+            panel.make_key_window();
+        }
     }
 }
 
