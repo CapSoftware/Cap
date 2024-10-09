@@ -63,12 +63,17 @@ export async function POST(request: NextRequest) {
       .where(eq(users.id, user.id));
   }
 
+  // After updating user and creating space
   return new Response(
     JSON.stringify({
+      success: true,
+      message: "Onboarding completed successfully",
+    }),
+    {
       status: 200,
       headers: {
         "Content-Type": "application/json",
       },
-    })
+    }
   );
 }

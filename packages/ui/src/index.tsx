@@ -21,6 +21,7 @@ export * from "./components/NavigationMenu";
 export * from "./components/Dropdown";
 export * from "./components/Pagination";
 export * from "./components/Switch";
+export * from "./components/Table";
 
 // Forms & Inputs
 export * from "./components/input/Form";

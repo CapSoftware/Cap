@@ -51,6 +51,7 @@ export const users = mysqlTable(
     updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
     onboarding_completed_at: timestamp("onboarding_completed_at"),
     customBucket: nanoId("customBucket"),
+    inviteQuota: int("inviteQuota").notNull().default(1),
   },
   (table) => ({
     emailIndex: uniqueIndex("email_idx").on(table.email),
@@ -140,6 +141,27 @@ export const spaceMembers = mysqlTable(
       table.userId,
       table.spaceId
     ),
+  })
+);
+
+export const spaceInvites = mysqlTable(
+  "space_invites",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    spaceId: nanoId("spaceId").notNull(),
+    invitedEmail: varchar("invitedEmail", { length: 255 }).notNull(),
+    invitedByUserId: nanoId("invitedByUserId").notNull(),
+    role: varchar("role", { length: 255 }).notNull(),
+    status: varchar("status", { length: 255 }).notNull().default("pending"),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    expiresAt: timestamp("expiresAt"),
+  },
+  (table) => ({
+    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    invitedEmailIndex: index("invited_email_idx").on(table.invitedEmail),
+    invitedByUserIdIndex: index("invited_by_user_id_idx").on(table.invitedByUserId),
+    statusIndex: index("status_idx").on(table.status),
   })
 );
 
@@ -271,6 +293,7 @@ export const spacesRelations = relations(spaces, ({ one, many }) => ({
   }),
   spaceMembers: many(spaceMembers),
   sharedVideos: many(sharedVideos),
+  spaceInvites: many(spaceInvites),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
@@ -295,6 +318,17 @@ export const spaceMembersRelations = relations(spaceMembers, ({ one }) => ({
   space: one(spaces, {
     fields: [spaceMembers.spaceId],
     references: [spaces.id],
+  }),
+}));
+
+export const spaceInvitesRelations = relations(spaceInvites, ({ one }) => ({
+  space: one(spaces, {
+    fields: [spaceInvites.spaceId],
+    references: [spaces.id],
+  }),
+  invitedByUser: one(users, {
+    fields: [spaceInvites.invitedByUserId],
+    references: [users.id],
   }),
 }));
 

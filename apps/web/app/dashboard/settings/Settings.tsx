@@ -13,6 +13,7 @@ import {
   Label,
 } from "@cap/ui";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import toast from "react-hot-toast";
 
 export const Settings = ({
@@ -55,59 +56,57 @@ export const Settings = ({
 
   return (
     <form onSubmit={handleSubmit}>
-      <Card>
-        <CardHeader>
-          <CardTitle>Your name</CardTitle>
-          <CardDescription>
-            Changing your name below will update how your name appears when
-            sharing a Cap, and in your profile.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            <div className="flex flex-col items-center">
-              <Label htmlFor="firstName">First name</Label>
-              <Input
-                type="text"
-                defaultValue={firstName as string}
-                id="firstName"
-                name="firstName"
-              />
-            </div>
-            <div className="flex flex-col items-center">
-              <Label htmlFor="lastName">Last name</Label>
-              <Input
-                type="text"
-                defaultValue={lastName as string}
-                id="lastName"
-                name="lastName"
-              />
-            </div>
-          </div>
-        </CardContent>
-        <CardHeader>
-          <CardTitle>Contact email address</CardTitle>
-          <CardDescription>
-            This is the email address you used to sign up to Cap with.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      <CardContent>
+        <CardTitle>Your name</CardTitle>
+        <CardDescription>
+          Changing your name below will update how your name appears when
+          sharing a Cap, and in your profile.
+        </CardDescription>
+      </CardContent>
+      <CardContent>
+        <div className="space-y-3">
           <div>
+            <Label htmlFor="firstName">First name</Label>
             <Input
-              type="email"
-              value={email as string}
-              id="contactEmail"
-              name="contactEmail"
-              disabled
+              type="text"
+              defaultValue={firstName as string}
+              id="firstName"
+              name="firstName"
             />
           </div>
-        </CardContent>
-        <CardFooter className="border-t px-6 py-4">
-          <Button type="submit" size="md" variant="gray">
-            Save
-          </Button>
-        </CardFooter>
-      </Card>
+          <div>
+            <Label htmlFor="lastName">Last name</Label>
+            <Input
+              type="text"
+              defaultValue={lastName as string}
+              id="lastName"
+              name="lastName"
+            />
+          </div>
+        </div>
+      </CardContent>
+      <CardContent>
+        <CardTitle>Contact email address</CardTitle>
+        <CardDescription>
+          This is the email address you used to sign up to Cap with.
+        </CardDescription>
+      </CardContent>
+      <CardContent>
+        <div>
+          <Input
+            type="email"
+            value={email as string}
+            id="contactEmail"
+            name="contactEmail"
+            disabled
+          />
+        </div>
+      </CardContent>
+      <CardFooter className="border-t px-6 py-4">
+        <Button type="submit" size="sm" variant="gray">
+          Save
+        </Button>
+      </CardFooter>
     </form>
   );
 };

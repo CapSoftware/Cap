@@ -1,29 +1,10 @@
-import { useEffect, useState } from "react";
 import Link from "next/link";
 
-export const UsageButton = () => {
-  const [isSubscribed, setIsSubscribed] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    fetch("/api/settings/billing/subscription")
-      .then((response) => response.json())
-      .then((data) => {
-        setIsSubscribed(data.subscription);
-        setIsLoading(false);
-      });
-  }, []);
-
-  if (isLoading) {
-    return (
-      <div className="w-full h-12 bg-gray-200 rounded-xl py-2 px-4 animate-pulse"></div>
-    );
-  }
-
+export const UsageButton = ({ subscribed }: { subscribed: boolean }) => {
   return (
-    <Link href={isSubscribed ? "/dashboard/settings/billing" : "/pricing"}>
+    <Link href={subscribed ? "/dashboard/settings/workspace" : "/pricing"}>
       <div className="w-full flex items-center justify-center bg-white border border-gray-200 rounded-xl py-2 px-4 hover:border-blue-500 transition-all">
-        {isSubscribed ? (
+        {subscribed ? (
           <div className="text-primary font-medium tracking-tighter">
             Cap Pro
           </div>
