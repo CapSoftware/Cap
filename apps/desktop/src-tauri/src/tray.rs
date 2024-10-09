@@ -85,8 +85,10 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                         if let Some(window) = app.get_webview_window("main") {
                             window.set_focus().ok();
                         } else {
-                            let Some(_window) = WebviewWindow::builder(
-                                &app.clone(),
+                            let c_app = app.clone();
+                            #[allow(unused_mut)]
+                            let mut window_builder = WebviewWindow::builder(
+                                &c_app,
                                 "main",
                                 tauri::WebviewUrl::App("/".into()),
                             )
@@ -97,13 +99,16 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                             .shadow(true)
                             .accept_first_mouse(true)
                             .transparent(true)
-                            .hidden_title(true)
-                            .title_bar_style(tauri::TitleBarStyle::Overlay)
-                            .theme(Some(tauri::Theme::Light))
-                            .build()
-                            .ok() else {
-                                return;
-                            };
+                            .theme(Some(tauri::Theme::Light));
+
+                            #[cfg(target_os = "macos")]
+                            {
+                                window_builder = window_builder
+                                    .hidden_title(true)
+                                    .title_bar_style(tauri::TitleBarStyle::Overlay);
+                            }
+
+                            window_builder.build().ok();
                         }
 
                         let _ = RequestStartRecording.emit(&app_handle);

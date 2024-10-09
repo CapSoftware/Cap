@@ -7,7 +7,6 @@ mod encoder;
 mod flags;
 mod general_settings;
 mod hotkeys;
-mod macos;
 mod main_window;
 mod notifications;
 mod permissions;
@@ -15,6 +14,9 @@ mod recording;
 mod tray;
 mod upload;
 mod web_api;
+
+#[cfg(target_os = "macos")]
+mod macos;
 
 use audio::AppSounds;
 use auth::AuthStore;
@@ -33,7 +35,6 @@ use image::{ImageBuffer, Rgba};
 use main_window::create_main_window;
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
-use objc2_app_kit::NSScreenSaverWindowLevel;
 use png::{ColorType, Encoder};
 use recording::{DisplaySource, InProgressRecording};
 use scap::capturer::Capturer;
@@ -50,7 +51,6 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WindowEvent};
-use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
 use tauri_plugin_decorum::WebviewWindowExt;
 use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
@@ -62,6 +62,14 @@ use tokio::{
     time::sleep,
 };
 use upload::{upload_image, upload_individual_file, upload_video};
+
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSScreenSaverWindowLevel;
+
+#[cfg(target_os = "macos")]
+use tauri_nspanel::{cocoa::appkit::NSMainMenuWindowLevel, ManagerExt};
+
+// #[cfg(target_os = "windows")]
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -155,11 +163,16 @@ impl App {
                     .build()
                     .unwrap();
 
-                    occluder_window
-                        .set_window_level(NSScreenSaverWindowLevel as u32)
-                        .unwrap();
                     occluder_window.set_ignore_cursor_events(true).unwrap();
-                    occluder_window.make_transparent().unwrap();
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        occluder_window
+                            .set_window_level(NSScreenSaverWindowLevel as u32)
+                            .unwrap();
+
+                        occluder_window.make_transparent().unwrap();
+                    }
                 }
                 Some(w) => {
                     w.show();
@@ -585,6 +598,7 @@ async fn copy_file_to_path(src: String, dst: String) -> Result<(), String> {
     }
 }
 
+// TODO: Use arboard or clipboard-rs
 #[tauri::command]
 #[specta::specta]
 async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(), String> {
@@ -1188,12 +1202,16 @@ fn show_previous_recordings_window(app: AppHandle) {
         window.show().ok();
         return;
     }
-    if let Ok(panel) = app.get_webview_panel(PREV_RECORDINGS_WINDOW) {
-        if !panel.is_visible() {
-            panel.show();
-        }
-        return;
-    };
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel(PREV_RECORDINGS_WINDOW) {
+            if !panel.is_visible() {
+                panel.show();
+            }
+            return;
+        };
+    }
 
     let Some(monitor) = app.primary_monitor().ok().flatten() else {
         return;
@@ -1224,9 +1242,13 @@ fn show_previous_recordings_window(app: AppHandle) {
         return;
     };
 
-    use tauri_plugin_decorum::WebviewWindowExt;
-    window.make_transparent().ok();
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_decorum::WebviewWindowExt;
+        window.make_transparent().ok();
+    }
 
+    #[cfg(target_os = "macos")]
     app.run_on_main_thread({
         let window = window.clone();
         move || {
@@ -1296,19 +1318,25 @@ fn show_previous_recordings_window(app: AppHandle) {
 #[specta::specta]
 fn open_editor(app: AppHandle, id: String) {
     println!("Opening editor for recording: {}", id);
-    let window = WebviewWindow::builder(
+    #[allow(unused_mut)]
+    let mut window_builder = WebviewWindow::builder(
         &app,
         format!("editor-{id}"),
         WebviewUrl::App(format!("/editor?id={id}").into()),
     )
     .inner_size(1150.0, 800.0)
     .title("Cap Editor")
-    .hidden_title(true)
-    .title_bar_style(tauri::TitleBarStyle::Overlay)
     .accept_first_mouse(true)
-    .theme(Some(tauri::Theme::Light))
-    .build()
-    .unwrap();
+    .theme(Some(tauri::Theme::Light));
+
+    #[cfg(target_os = "macos")]
+    {
+        window_builder = window_builder
+            .hidden_title(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+
+    let window = window_builder.build().unwrap();
 
     window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]
@@ -1318,17 +1346,25 @@ fn open_editor(app: AppHandle, id: String) {
 #[tauri::command(async)]
 #[specta::specta]
 fn close_previous_recordings_window(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(PREV_RECORDINGS_WINDOW) {
-        panel.released_when_closed(true);
-        panel.close();
+    // TODO (Windows): Fix
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel(PREV_RECORDINGS_WINDOW) {
+            panel.released_when_closed(true);
+            panel.close();
+        }
     }
 }
 
 #[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(app: AppHandle) {
-    let panel = app.get_webview_panel(PREV_RECORDINGS_WINDOW).unwrap();
-    panel.make_key_window();
+    // TODO (Windows): Fix
+    #[cfg(target_os = "macos")]
+    {
+        let panel = app.get_webview_panel(PREV_RECORDINGS_WINDOW).unwrap();
+        panel.make_key_window();
+    }
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Clone)]
@@ -1448,7 +1484,8 @@ fn open_main_window(app: AppHandle) {
 #[tauri::command]
 #[specta::specta]
 async fn open_feedback_window(app: AppHandle) {
-    let window =
+    #[allow(unused_mut)]
+    let mut window_builder =
         WebviewWindow::builder(&app, "feedback", tauri::WebviewUrl::App("/feedback".into()))
             .title("Cap Feedback")
             .inner_size(400.0, 400.0)
@@ -1456,11 +1493,16 @@ async fn open_feedback_window(app: AppHandle) {
             .maximized(false)
             .shadow(true)
             .accept_first_mouse(true)
-            .transparent(true)
+            .transparent(true);
+
+    #[cfg(target_os = "macos")]
+    {
+        window_builder = window_builder
             .hidden_title(true)
-            .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .build()
-            .unwrap();
+            .title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+
+    let window = window_builder.build().unwrap();
 
     window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]
@@ -1475,18 +1517,25 @@ async fn open_upgrade_window(app: AppHandle) {
         return;
     }
 
-    let window = WebviewWindow::builder(&app, "upgrade", tauri::WebviewUrl::App("/upgrade".into()))
-        .title("Cap Upgrade")
-        .inner_size(800.0, 850.0)
-        .resizable(false)
-        .maximized(false)
-        .shadow(true)
-        .accept_first_mouse(true)
-        .transparent(true)
-        .hidden_title(true)
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .build()
-        .unwrap();
+    #[allow(unused_mut)]
+    let mut window_builder =
+        WebviewWindow::builder(&app, "upgrade", tauri::WebviewUrl::App("/upgrade".into()))
+            .title("Cap Upgrade")
+            .inner_size(800.0, 850.0)
+            .resizable(false)
+            .maximized(false)
+            .shadow(true)
+            .accept_first_mouse(true)
+            .transparent(true);
+
+    #[cfg(target_os = "macos")]
+    {
+        window_builder = window_builder
+            .hidden_title(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+
+    let window = window_builder.build().unwrap();
 
     window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]
@@ -1496,7 +1545,8 @@ async fn open_upgrade_window(app: AppHandle) {
 #[tauri::command]
 #[specta::specta]
 async fn open_changelog_window(app: AppHandle) {
-    let window = WebviewWindow::builder(
+    #[allow(unused_mut)]
+    let mut window_builder = WebviewWindow::builder(
         &app,
         "changelog",
         tauri::WebviewUrl::App("/changelog".into()),
@@ -1507,11 +1557,16 @@ async fn open_changelog_window(app: AppHandle) {
     .maximized(false)
     .shadow(true)
     .accept_first_mouse(true)
-    .transparent(true)
-    .hidden_title(true)
-    .title_bar_style(tauri::TitleBarStyle::Overlay)
-    .build()
-    .unwrap();
+    .transparent(true);
+
+    #[cfg(target_os = "macos")]
+    {
+        window_builder = window_builder
+            .hidden_title(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+
+    let window = window_builder.build().unwrap();
 
     window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]
@@ -1521,7 +1576,8 @@ async fn open_changelog_window(app: AppHandle) {
 #[tauri::command]
 #[specta::specta]
 async fn open_settings_window(app: AppHandle, page: String) {
-    let window = WebviewWindow::builder(
+    #[allow(unused_mut)]
+    let mut window_builder = WebviewWindow::builder(
         &app,
         "settings",
         tauri::WebviewUrl::App(format!("/settings?page={page}").into()),
@@ -1532,11 +1588,16 @@ async fn open_settings_window(app: AppHandle, page: String) {
     .maximized(false)
     .shadow(true)
     .accept_first_mouse(true)
-    .transparent(true)
-    .hidden_title(true)
-    .title_bar_style(tauri::TitleBarStyle::Overlay)
-    .build()
-    .unwrap();
+    .transparent(true);
+
+    #[cfg(target_os = "macos")]
+    {
+        window_builder = window_builder
+            .hidden_title(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+
+    let window = window_builder.build().unwrap();
 
     window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]

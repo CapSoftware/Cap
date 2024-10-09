@@ -2,8 +2,11 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow};
 use tauri_plugin_decorum::WebviewWindowExt;
 
+#[cfg(target_os = "macos")]
 use core_foundation::boolean::CFBoolean;
+#[cfg(target_os = "macos")]
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef}; // Import CFDictionaryRef
+#[cfg(target_os = "macos")]
 use core_foundation::string::CFString;
 #[cfg(target_os = "macos")]
 use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
@@ -160,7 +163,7 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
             microphone: OSPermissionStatus::NotNeeded,
             camera: OSPermissionStatus::NotNeeded,
             accessibility: OSPermissionStatus::NotNeeded,
-        };
+        }
     }
 }
 
@@ -219,7 +222,8 @@ pub fn open_permissions_window(app: AppHandle) {
         return;
     }
 
-    let window =
+    #[allow(unused_mut)]
+    let mut window_builder =
         WebviewWindow::builder(&app, "permissions", WebviewUrl::App("/permissions".into()))
             .title("Cap")
             .inner_size(300.0, 350.0)
@@ -227,11 +231,16 @@ pub fn open_permissions_window(app: AppHandle) {
             .maximized(false)
             .shadow(true)
             .accept_first_mouse(true)
-            .transparent(true)
+            .transparent(true);
+
+    #[cfg(target_os = "macos")]
+    {
+        window_builder = window_builder
             .hidden_title(true)
-            .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .build()
-            .unwrap();
+            .title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+
+    let window = window_builder.build().unwrap();
 
     window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]

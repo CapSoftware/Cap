@@ -8,19 +8,25 @@ pub fn create_main_window(app: AppHandle) -> WebviewWindow {
     }
 
     println!("Creating new main window");
-    let window = WebviewWindow::builder(&app, "main", tauri::WebviewUrl::App("/".into()))
-        .title("Cap")
-        .inner_size(300.0, 375.0)
-        .resizable(false)
-        .maximized(false)
-        .shadow(true)
-        .accept_first_mouse(true)
-        .transparent(true)
-        .hidden_title(true)
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .theme(Some(tauri::Theme::Light))
-        .build()
-        .unwrap();
+    #[allow(unused_mut)]
+    let mut window_builder =
+        WebviewWindow::builder(&app, "main", tauri::WebviewUrl::App("/".into()))
+            .title("Cap")
+            .inner_size(300.0, 375.0)
+            .resizable(false)
+            .maximized(false)
+            .shadow(true)
+            .accept_first_mouse(true)
+            .transparent(true);
+
+    #[cfg(target_os = "macos")]
+    {
+        window_builder = window_builder
+            .hidden_title(true)
+            .title_bar_style(tauri::TitleBarStyle::Overlay);
+    }
+
+    let window = window_builder.build().unwrap();
 
     #[cfg(target_os = "macos")]
     {
