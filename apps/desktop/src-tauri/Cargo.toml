@@ -87,6 +87,11 @@ objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
 cocoa = "0.26.0"
 objc = "0.2.7"
 
+# Lock the version of windows-capture used by scap@691bd88798d3
+# TODO: Remove this once scap uses the latest version of `windows` and `windows-capture`
+[target.'cfg(target_os= "windows")'.dependencies]
+windows-capture = "=1.2.0"
+
 # Optimize for smaller binary size
 [profile.release]
 panic = "abort"   # Strip expensive panic clean-up logic

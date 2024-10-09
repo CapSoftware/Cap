@@ -53,3 +53,23 @@ You can run cap in "local mode", which means that no auth is required for the de
 ### How do I view the screen recording segments locally?
 
 The video segments are stored in your app data directory, under the folder `so.cap.desktop`. You should see a directory called `chunks`, which will contain both `video` and `audio` directories. You can find the relevant segments in either of those.
+
+### Notes for development on Windows:
+
+Requires `vcpkg`, `pkg-config` and CMake.
+
+[Setting up vcpkg](https://learn.microsoft.com/en-us/vcpkg/get_started/get-started?pivots=shell-powershell#1---set-up-vcpkg)
+
+[Installing pkg-config on Windows](https://gtk-rs.org/gtk4-rs/stable/latest/book/installation_windows.html#pkg-config)
+
+TODO: Create a script to automate this install.
+
+(Temp;)
+Install LLVM: https://github.com/llvm/llvm-project/releases/download/
+
+Set LIBCLANG_PATH environment variable:
+Open Termianl (Powershell) as Administrator
+Run: setx LIBCLANG_PATH "C:\Program Files\LLVM\bin"
+Replace the path with your actual LLVM installation directory if different.
+
+https://github.com/zmwangx/rust-ffmpeg-sys/issues/62
