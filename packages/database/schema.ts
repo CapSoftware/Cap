@@ -40,6 +40,9 @@ export const users = mysqlTable(
     stripeSubscriptionId: varchar("stripeSubscriptionId", {
       length: 255,
     }),
+    thirdPartyStripeSubscriptionId: varchar("thirdPartyStripeSubscriptionId", {
+      length: 255,
+    }),
     stripeSubscriptionStatus: varchar("stripeSubscriptionStatus", {
       length: 255,
     }),

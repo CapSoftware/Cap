@@ -66,6 +66,12 @@ export async function GET(req: NextRequest) {
   let isSubscribed = isUserOnProPlan({
     subscriptionStatus: user.stripeSubscriptionStatus as string,
   });
+
+  // Check for third-party Stripe subscription
+  if (user.thirdPartyStripeSubscriptionId) {
+    isSubscribed = true;
+  }
+
   if (!isSubscribed && !user.stripeSubscriptionId && user.stripeCustomerId) {
     try {
       const subscriptions = await stripe.subscriptions.list({

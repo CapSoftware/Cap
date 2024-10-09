@@ -84,7 +84,7 @@ const Download = ({ className }: { className: string }) => (
 export const AdminNavItems = () => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const { spaceData, activeSpace, user } = useSharedContext();
+  const { spaceData, activeSpace, user, isSubscribed } = useSharedContext();
   const [menuOpen, setMenuOpen] = useState(false);
   const router = useRouter();
 
@@ -184,38 +184,12 @@ export const AdminNavItems = () => {
                 />
                 <span className="text-base ml-2.5 text-black">{item.name}</span>
               </Link>
-              {pathname.includes(item.href) && item.subNav.length > 0 && (
-                <div className="mt-1 space-y-1 flex-grow w-full">
-                  {item.subNav.map((subItem) => (
-                    <Link
-                      passHref
-                      prefetch={false}
-                      key={subItem.name + "-sub"}
-                      href={subItem.href}
-                      className={classNames(
-                        pathname === subItem.href
-                          ? "bg-white text-black border-[1px] border-gray-200"
-                          : "opacity-50 hover:opacity-75",
-                        navItemClass
-                      )}
-                    >
-                      <div className="w-6 h-6"></div>
-                      <span className="text-base ml-2.5">{subItem.name}</span>
-                    </Link>
-                  ))}
-                </div>
-              )}
             </div>
           ))}
         </div>
         <div className="mt-auto">
           <div className="w-full mb-3 pb-5 border-b-2 border-gray-200 border-dotted">
-            <UsageButton
-              subscribed={
-                user.stripeSubscriptionStatus !== null &&
-                user.stripeSubscriptionStatus !== "canceled"
-              }
-            />
+            <UsageButton subscribed={isSubscribed} />
           </div>
           <Popover open={menuOpen} onOpenChange={setMenuOpen}>
             <PopoverTrigger asChild>
@@ -224,7 +198,7 @@ export const AdminNavItems = () => {
                   <Avatar className="h-8 w-8">
                     <User className="h-4 w-4 text-gray-400" />
                   </Avatar>
-                  <span className="ml-2 text-sm">{user.name}</span>
+                  <span className="ml-2 text-sm">{user.name ?? "User"}</span>
                 </div>
                 <MoreVertical className="h-5 w-5 text-gray-500 group-hover:text-gray-500" />
               </div>

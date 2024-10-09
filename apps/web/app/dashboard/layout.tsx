@@ -127,11 +127,17 @@ export default async function DashboardLayout({
   console.log("spaceSelect", spaceSelect);
   console.log("findActiveSpace", findActiveSpace);
 
+  const isSubscribed =
+    (user.stripeSubscriptionId &&
+      user.stripeSubscriptionStatus !== "cancelled") ||
+    !!user.thirdPartyStripeSubscriptionId;
+
   return (
     <DynamicSharedLayout
       spaceData={spaceSelect}
       activeSpace={findActiveSpace || null}
       user={user}
+      isSubscribed={isSubscribed}
     >
       <div className="full-layout">
         <DashboardTemplate>{children}</DashboardTemplate>
