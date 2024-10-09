@@ -1,72 +1,103 @@
+use crate::windows::CapWindow;
 use crate::{
     RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings,
     RequestStartRecording, RequestStopRecording,
 };
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tauri::menu::{MenuId, PredefinedMenuItem};
 use tauri::{
     image::Image,
-    menu::{IsMenuItem, Menu, MenuItem},
+    menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, Runtime, WebviewWindow,
+    AppHandle,
 };
 use tauri_specta::Event;
 
-pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    // Add version menu item as the first item
-    let version = env!("CARGO_PKG_VERSION");
-    let version_i = MenuItem::with_id(
-        app,
-        "version",
-        format!("Cap v{}", version),
-        false,
-        None::<&str>,
-    )?;
+pub enum TrayItem {
+    OpenCap,
+    StartNewRecording,
+    TakeScreenshot,
+    PreviousRecordings,
+    PreviousScreenshots,
+    OpenSettings,
+    Quit,
+}
 
-    let new_recording_i = MenuItem::with_id(
-        app,
-        "new_recording",
-        "Start New Recording",
-        true,
-        None::<&str>,
-    )?;
+impl From<TrayItem> for MenuId {
+    fn from(value: TrayItem) -> Self {
+        match value {
+            TrayItem::OpenCap => "open_cap",
+            TrayItem::StartNewRecording => "new_recording",
+            TrayItem::TakeScreenshot => "take_screenshot",
+            TrayItem::PreviousRecordings => "previous_recordings",
+            TrayItem::PreviousScreenshots => "previous_screenshots",
+            TrayItem::OpenSettings => "open_settings",
+            TrayItem::Quit => "quit",
+        }
+        .into()
+    }
+}
 
-    let take_screenshot_i = MenuItem::with_id(
-        app,
-        "take_screenshot",
-        "Take Screenshot",
-        true,
-        None::<&str>,
-    )?;
+impl From<MenuId> for TrayItem {
+    fn from(value: MenuId) -> Self {
+        match value.0.as_str() {
+            "open_cap" => TrayItem::OpenCap,
+            "new_recording" => TrayItem::StartNewRecording,
+            "take_screenshot" => TrayItem::TakeScreenshot,
+            "previous_recordings" => TrayItem::PreviousRecordings,
+            "previous_screenshots" => TrayItem::PreviousScreenshots,
+            "open_settings" => TrayItem::OpenSettings,
+            "quit" => TrayItem::Quit,
+            value => unreachable!("Invalid tray item id {value}"),
+        }
+    }
+}
 
-    let previous_recordings_i = MenuItem::with_id(
-        app,
-        "previous_recordings",
-        "Previous Recordings",
-        true,
-        None::<&str>,
-    )?;
-
-    let previous_screenshots_i = MenuItem::with_id(
-        app,
-        "previous_screenshots",
-        "Previous Screenshots",
-        true,
-        None::<&str>,
-    )?;
-
-    let quit_i = MenuItem::with_id(app, "quit", "Quit Cap", true, None::<&str>)?;
-
+pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &version_i,
-            &new_recording_i,
-            &take_screenshot_i,
-            &previous_recordings_i,
-            &previous_screenshots_i,
-            &quit_i,
+            &MenuItem::with_id(
+                app,
+                "version",
+                format!("Cap v{}", env!("CARGO_PKG_VERSION")),
+                false,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(app, TrayItem::OpenCap, "Open Cap", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(
+                app,
+                TrayItem::StartNewRecording,
+                "Start New Recording",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(
+                app,
+                TrayItem::TakeScreenshot,
+                "Take Screenshot",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(
+                app,
+                TrayItem::PreviousRecordings,
+                "Previous Recordings",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(
+                app,
+                TrayItem::PreviousScreenshots,
+                "Previous Screenshots",
+                true,
+                None::<&str>,
+            )?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, TrayItem::OpenSettings, "Settings", true, None::<&str>)?,
+            &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
         ],
     )?;
     let app_handle = app.clone();
@@ -79,60 +110,35 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .menu_on_left_click(true)
         .on_menu_event({
             let app_handle = app_handle.clone();
-            move |app: &AppHandle<R>, event| {
-                match event.id.as_ref() {
-                    "new_recording" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            window.set_focus().ok();
-                        } else {
-                            let Some(_window) = WebviewWindow::builder(
-                                &app.clone(),
-                                "main",
-                                tauri::WebviewUrl::App("/".into()),
-                            )
-                            .title("Cap")
-                            .inner_size(300.0, 375.0)
-                            .resizable(false)
-                            .maximized(false)
-                            .shadow(true)
-                            .accept_first_mouse(true)
-                            .transparent(true)
-                            .hidden_title(true)
-                            .title_bar_style(tauri::TitleBarStyle::Overlay)
-                            .theme(Some(tauri::Theme::Light))
-                            .build()
-                            .ok() else {
-                                return;
-                            };
-                        }
+            move |app: &AppHandle, event| match TrayItem::from(event.id) {
+                TrayItem::OpenCap => {
+                    CapWindow::Main.show(&app_handle);
+                }
+                TrayItem::StartNewRecording => {
+                    CapWindow::Main.show(&app_handle);
 
-                        let _ = RequestStartRecording.emit(&app_handle);
-
-                        // window.create_overlay_titlebar().unwrap();
-                        // #[cfg(target_os = "macos")]
-                        // window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+                    let _ = RequestStartRecording.emit(&app_handle);
+                }
+                TrayItem::TakeScreenshot => {
+                    let _ = RequestNewScreenshot.emit(&app_handle);
+                }
+                TrayItem::PreviousRecordings => {
+                    let _ = RequestOpenSettings {
+                        page: "recordings".to_string(),
                     }
-                    "take_screenshot" => {
-                        let _ = RequestNewScreenshot.emit(&app_handle);
+                    .emit(&app_handle);
+                }
+                TrayItem::PreviousScreenshots => {
+                    let _ = RequestOpenSettings {
+                        page: "screenshots".to_string(),
                     }
-                    "previous_recordings" => {
-                        let _ = RequestOpenSettings {
-                            page: "recordings".to_string(),
-                        }
-                        .emit(&app_handle);
-                    }
-                    "previous_screenshots" => {
-                        let _ = RequestOpenSettings {
-                            page: "screenshots".to_string(),
-                        }
-                        .emit(&app_handle);
-                    }
-                    "quit" => {
-                        app.exit(0);
-                    }
-                    _ => {
-                        println!("Unhandled menu item clicked: {:?}", event);
-                    }
+                    .emit(&app_handle);
+                }
+                TrayItem::OpenSettings => {
+                    CapWindow::Settings { page: None }.show(&app_handle);
+                }
+                TrayItem::Quit => {
+                    app.exit(0);
                 }
             }
         })
@@ -188,64 +194,6 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             });
         }
     });
-
-    Ok(())
-}
-
-fn handle_new_recording_added<R: Runtime>(app: &AppHandle<R>, path: PathBuf) -> tauri::Result<()> {
-    if let Some(tray_handle) = app.tray_by_id("tray") {
-        // Recreate the entire menu
-        let version = env!("CARGO_PKG_VERSION");
-        let version_i = MenuItem::with_id(
-            app,
-            "version",
-            format!("Cap v{}", version),
-            false,
-            None::<&str>,
-        )?;
-        let new_recording_i = MenuItem::with_id(
-            app,
-            "new_recording",
-            "Start New Recording",
-            true,
-            None::<&str>,
-        )?;
-        let take_screenshot_i = MenuItem::with_id(
-            app,
-            "take_screenshot",
-            "Take Screenshot",
-            true,
-            None::<&str>,
-        )?;
-        let previous_recordings_i = MenuItem::with_id(
-            app,
-            "previous_recordings",
-            "Previous Recordings",
-            true,
-            None::<&str>,
-        )?;
-        let previous_screenshots_i = MenuItem::with_id(
-            app,
-            "previous_screenshots",
-            "Previous Screenshots",
-            true,
-            None::<&str>,
-        )?;
-        let quit_i = MenuItem::with_id(app, "quit", "Quit Cap", true, None::<&str>)?;
-
-        let menu_items: Vec<&dyn IsMenuItem<R>> = vec![
-            &version_i,
-            &new_recording_i,
-            &take_screenshot_i,
-            &previous_recordings_i,
-            &previous_screenshots_i,
-            &quit_i,
-        ];
-        let menu = Menu::with_items(app, &menu_items)?;
-
-        // Set the updated menu
-        tray_handle.set_menu(Some(menu))?;
-    }
 
     Ok(())
 }

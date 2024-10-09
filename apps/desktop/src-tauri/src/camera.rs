@@ -14,54 +14,6 @@ use crate::{
     encoder::{uyvy422_frame, H264Encoder},
 };
 
-pub const WINDOW_LABEL: &str = "camera";
-const CAMERA_ROUTE: &str = "/camera";
-const WINDOW_SIZE: f64 = 230.0 * 2.0;
-
-pub fn create_camera_window(app: AppHandle, ws_port: u16) {
-    if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-        window.set_focus().ok();
-    } else {
-        let monitor = app.primary_monitor().unwrap().unwrap();
-
-        let window = tauri::webview::WebviewWindow::builder(
-            &app,
-            WINDOW_LABEL,
-            WebviewUrl::App(CAMERA_ROUTE.into()),
-        )
-        .title("Cap")
-        .maximized(false)
-        .resizable(false)
-        .shadow(false)
-        .fullscreen(false)
-        .decorations(false)
-        .always_on_top(true)
-        .content_protected(true)
-        .visible_on_all_workspaces(true)
-        .min_inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
-        .inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
-        .position(
-            100.0,
-            (monitor.size().height as f64) / monitor.scale_factor() - WINDOW_SIZE - 100.0,
-        )
-        .initialization_script(&format!(
-            "
-            window.__CAP__ = window.__CAP__ ?? {{}};
-            window.__CAP__.cameraWsPort = {ws_port};
-            ",
-        ))
-        .build()
-        .unwrap();
-
-        #[cfg(target_os = "macos")]
-        {
-            use tauri_plugin_decorum::WebviewWindowExt;
-
-            window.make_transparent().ok();
-        }
-    }
-}
-
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_cameras() -> Vec<String> {

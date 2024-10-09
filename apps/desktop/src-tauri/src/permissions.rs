@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow};
-use tauri_plugin_decorum::WebviewWindowExt;
+use tauri::AppHandle;
 
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef}; // Import CFDictionaryRef
 use core_foundation::string::CFString;
 #[cfg(target_os = "macos")]
 use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
+
+use crate::windows::CapWindow;
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -214,26 +215,5 @@ pub fn request_accessibility_permission() {
 #[tauri::command]
 #[specta::specta]
 pub fn open_permissions_window(app: AppHandle) {
-    if let Some(window) = app.get_webview_window("permissions") {
-        window.set_focus().ok();
-        return;
-    }
-
-    let window =
-        WebviewWindow::builder(&app, "permissions", WebviewUrl::App("/permissions".into()))
-            .title("Cap")
-            .inner_size(300.0, 350.0)
-            .resizable(false)
-            .maximized(false)
-            .shadow(true)
-            .accept_first_mouse(true)
-            .transparent(true)
-            .hidden_title(true)
-            .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .build()
-            .unwrap();
-
-    window.create_overlay_titlebar().unwrap();
-    #[cfg(target_os = "macos")]
-    window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+    CapWindow::Permissions.show(&app).ok();
 }
