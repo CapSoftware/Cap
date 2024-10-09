@@ -3,7 +3,7 @@ name = "cap-utils"
 version = "0.1.0"
 edition = "2021"
 
-[dependencies]
+[target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
