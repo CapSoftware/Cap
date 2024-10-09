@@ -3,7 +3,7 @@ use specta::Type;
 use std::{
     path::PathBuf,
     sync::Arc,
-    time::{Instant, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use tokio::sync::{oneshot, watch};
 
@@ -87,47 +87,63 @@ pub async fn start_capturing(
             )
             .unwrap();
 
-            loop {
-                handle.block_on(frames_rx.changed());
+            let mut last_frame_time = Instant::now();
+            let frame_duration = Duration::from_secs_f64(1.0 / 30.0);
 
+            loop {
                 if controller.is_stopped() {
                     println!("Stopping receiving camera frames");
                     break;
                 }
 
-                let frame = frames_rx.borrow_and_update();
-                let Some((frame, timestamp)) = frame.as_ref() else {
-                    continue;
-                };
+                // Use a non-blocking approach to check for changes
+                if frames_rx.has_changed().unwrap_or(false) {
+                    let frame = frames_rx.borrow_and_update();
+                    let Some((frame, timestamp)) = frame.as_ref() else {
+                        continue;
+                    };
 
-                if controller.is_paused() {
-                    continue;
+                    if controller.is_paused() {
+                        continue;
+                    }
+
+                    if let Some(start_tx) = start_tx.take() {
+                        start_tx.send(Instant::now()).unwrap();
+                    }
+
+                    if !*start_writing_rx.borrow_and_update() {
+                        continue;
+                    }
+
+                    let now = Instant::now();
+                    if now.duration_since(last_frame_time) < frame_duration {
+                        std::thread::sleep(frame_duration - now.duration_since(last_frame_time));
+                    }
+                    last_frame_time = Instant::now();
+
+                    let yuyv422_frame = uyvy422_frame(
+                        frame.buffer(),
+                        frame.resolution().width(),
+                        frame.resolution().height(),
+                    );
+
+                    let mut yuv_frame = ffmpeg::util::frame::Video::empty();
+                    if let Err(e) = scaler.run(&yuyv422_frame, &mut yuv_frame) {
+                        eprintln!("Error scaling frame: {:?}", e);
+                        continue;
+                    }
+
+                    encoder.encode_frame(
+                        yuv_frame,
+                        timestamp
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis() as u64,
+                    );
+                } else {
+                    // If no new frame, sleep for a short duration to avoid busy-waiting
+                    std::thread::sleep(Duration::from_millis(1));
                 }
-
-                if let Some(start_tx) = start_tx.take() {
-                    start_tx.send(Instant::now()).unwrap();
-                }
-
-                if !*start_writing_rx.borrow_and_update() {
-                    continue;
-                }
-
-                let yuyv422_frame = uyvy422_frame(
-                    frame.buffer(),
-                    frame.resolution().width(),
-                    frame.resolution().height(),
-                );
-
-                let mut yuv_frame = ffmpeg::util::frame::Video::empty();
-                scaler.run(&yuyv422_frame, &mut yuv_frame).unwrap();
-
-                encoder.encode_frame(
-                    yuv_frame,
-                    timestamp
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as u64,
-                );
             }
 
             encoder.close();
