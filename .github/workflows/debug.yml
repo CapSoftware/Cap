@@ -1,4 +1,4 @@
-name: "Debug Build"
+name: "Debug Build: Silicon"
 
 on:
   workflow_dispatch:
@@ -11,27 +11,30 @@ env:
 jobs:
   build:
     runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        settings:
-          - target: x86_64-apple-darwin
-            prebuild: x86_64
-          - target: aarch64-apple-darwin
-            prebuild: aarch64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Create API Key File
+        run: echo "${{ secrets.APPLE_API_KEY_FILE }}" > api.p8
+
+      - uses: apple-actions/import-codesign-certs@v2
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Verify certificate
+        run: security find-identity -v -p codesigning ${{ runner.temp }}/build.keychain
+
       - name: Rust setup
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.settings.target }}
+          targets: aarch64-apple-darwin
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          shared-key: ${{ matrix.settings.target }}
+          shared-key: aarch64-apple-darwin
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -61,19 +64,30 @@ jobs:
       - name: Output .env file
         run: cat apps/desktop/.env
 
-      - name: Build Debug MacOS Apps
+      - name: Build Debug MacOS App (aarch64)
         working-directory: apps/desktop
         run: |
-          export TARGET_TRIPLE=${{ matrix.settings.target }}
-          node ${{ github.workspace }}/.github/prebuild.js ${{ matrix.settings.prebuild }}
-          pnpm tauri build --target ${{ matrix.settings.target }} --debug
+          export TARGET_TRIPLE=aarch64-apple-darwin
+          node ${{ github.workspace }}/.github/prebuild.js aarch64
+          pnpm tauri build --target aarch64-apple-darwin --debug
         env:
           CI: false
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # codesigning
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # notarization
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ github.workspace }}/api.p8
+          APPLE_KEYCHAIN: ${{ runner.temp }}/build.keychain
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload Debug Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: debug-build-${{ matrix.settings.target }}
-          path: apps/desktop/src-tauri/target/${{ matrix.settings.target }}/debug/bundle/dmg/*.dmg
+          name: debug-build-aarch64-apple-darwin
+          path: apps/desktop/src-tauri/target/aarch64-apple-darwin/debug/bundle/dmg/*.dmg
           if-no-files-found: error
