@@ -290,7 +290,16 @@ impl CameraFeed {
         std::thread::spawn({
             let camera_info = camera_info.clone();
             move || {
-                let mut camera = Camera::new(camera_info.index().clone(), format).unwrap();
+                let mut camera =
+                    Camera::new(camera_info.index().clone(), format).unwrap_or_else(|_| {
+                        Camera::new(
+                            camera_info.index().clone(),
+                            RequestedFormat::new::<RgbFormat>(
+                                RequestedFormatType::AbsoluteHighestResolution,
+                            ),
+                        )
+                        .expect("Failed to create camera")
+                    });
 
                 camera.open_stream().unwrap();
 
