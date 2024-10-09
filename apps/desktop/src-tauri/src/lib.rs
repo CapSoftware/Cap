@@ -2042,7 +2042,7 @@ pub async fn run() {
 
     #[cfg(target_os = "macos")]
     {
-        builder.plugin(tauri_nspanel::init());
+        builder = builder.plugin(tauri_nspanel::init());
     }
 
     builder
