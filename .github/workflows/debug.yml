@@ -1,0 +1,70 @@
+name: "Debug Build"
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+env:
+  APP_CARGO_TOML: apps/desktop/src-tauri/Cargo.toml
+
+jobs:
+  build:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-apple-darwin
+            prebuild: x86_64
+          - target: aarch64-apple-darwin
+            prebuild: aarch64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.settings.target }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.8.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Create .env file
+        run: |
+          echo "appVersion=debug" >> apps/desktop/.env
+          echo "CAP_DESKTOP_SENTRY_URL=https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200" >> apps/desktop/.env
+          echo "NEXT_PUBLIC_URL=http://localhost:3000" >> apps/desktop/.env
+          echo 'NEXTAUTH_URL=${NEXT_PUBLIC_URL}' >> apps/desktop/.env
+          echo 'VITE_SERVER_URL=${NEXT_PUBLIC_URL}' >> apps/desktop/.env
+
+      - name: Build Debug MacOS Apps
+        working-directory: apps/desktop
+        run: |
+          export TARGET_TRIPLE=${{ matrix.settings.target }}
+          node ${{ github.workspace }}/.github/prebuild.js ${{ matrix.settings.prebuild }}
+          pnpm tauri build --target ${{ matrix.settings.target }} --debug
+
+      - name: Upload Debug Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: debug-build-${{ matrix.settings.target }}
+          path: apps/desktop/src-tauri/target/${{ matrix.settings.target }}/debug/bundle/dmg/*.dmg
+          if-no-files-found: error
