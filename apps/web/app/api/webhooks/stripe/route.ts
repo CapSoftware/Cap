@@ -38,10 +38,33 @@ export const POST = async (req: Request) => {
           foundUserId = customer.metadata.userId;
         }
         if (!foundUserId) {
-          console.log("No user found in checkout.session.completed event");
-          return new Response("No user found", {
-            status: 400,
-          });
+          console.log("No user found in metadata, checking customer email");
+          if ("email" in customer && customer.email) {
+            const userByEmail = await db
+              .select()
+              .from(users)
+              .where(eq(users.email, customer.email))
+              .limit(1);
+            
+            if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
+              foundUserId = userByEmail[0].id;
+              console.log(`User found by email: ${foundUserId}`);
+              // Update customer metadata with userId
+              await stripe.customers.update(customer.id, {
+                metadata: { userId: foundUserId },
+              });
+            } else {
+              console.log("No user found by email");
+              return new Response("No user found", {
+                status: 400,
+              });
+            }
+          } else {
+            console.log("No email found for customer");
+            return new Response("No user found", {
+              status: 400,
+            });
+          }
         }
 
         const user = await db
@@ -56,11 +79,15 @@ export const POST = async (req: Request) => {
           });
         }
 
+        const subscription = await stripe.subscriptions.retrieve(event.data.object.subscription as string);
+        const inviteQuota = subscription.items.data.reduce((total, item) => total + (item.quantity || 1), 0);
+
         await db
           .update(users)
           .set({
             stripeSubscriptionId: event.data.object.subscription as string,
             stripeSubscriptionStatus: event.data.object.status,
+            inviteQuota: inviteQuota,
           })
           .where(eq(users.id, foundUserId));
         console.log("User updated successfully for checkout.session.completed event");
@@ -76,10 +103,33 @@ export const POST = async (req: Request) => {
           foundUserId = customer.metadata.userId;
         }
         if (!foundUserId) {
-          console.log("No user found in customer.subscription.updated event");
-          return new Response("No user found", {
-            status: 400,
-          });
+          console.log("No user found in metadata, checking customer email");
+          if ("email" in customer && customer.email) {
+            const userByEmail = await db
+              .select()
+              .from(users)
+              .where(eq(users.email, customer.email))
+              .limit(1);
+            
+            if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
+              foundUserId = userByEmail[0].id;
+              console.log(`User found by email: ${foundUserId}`);
+              // Update customer metadata with userId
+              await stripe.customers.update(customer.id, {
+                metadata: { userId: foundUserId },
+              });
+            } else {
+              console.log("No user found by email");
+              return new Response("No user found", {
+                status: 400,
+              });
+            }
+          } else {
+            console.log("No email found for customer");
+            return new Response("No user found", {
+              status: 400,
+            });
+          }
         }
 
         const user = await db
@@ -94,11 +144,15 @@ export const POST = async (req: Request) => {
           });
         }
 
+        const subscription = event.data.object as Stripe.Subscription;
+        const inviteQuota = subscription.items.data.reduce((total, item) => total + (item.quantity || 1), 0);
+
         await db
           .update(users)
           .set({
             stripeSubscriptionId: event.data.object.id,
             stripeSubscriptionStatus: event.data.object.status,
+            inviteQuota: inviteQuota,
           })
           .where(eq(users.id, foundUserId));
         console.log("User updated successfully for customer.subscription.updated event");
@@ -114,10 +168,33 @@ export const POST = async (req: Request) => {
           foundUserId = customer.metadata.userId;
         }
         if (!foundUserId) {
-          console.log("No user found in customer.subscription.deleted event");
-          return new Response("No user found", {
-            status: 400,
-          });
+          console.log("No user found in metadata, checking customer email");
+          if ("email" in customer && customer.email) {
+            const userByEmail = await db
+              .select()
+              .from(users)
+              .where(eq(users.email, customer.email))
+              .limit(1);
+            
+            if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
+              foundUserId = userByEmail[0].id;
+              console.log(`User found by email: ${foundUserId}`);
+              // Update customer metadata with userId
+              await stripe.customers.update(customer.id, {
+                metadata: { userId: foundUserId },
+              });
+            } else {
+              console.log("No user found by email");
+              return new Response("No user found", {
+                status: 400,
+              });
+            }
+          } else {
+            console.log("No email found for customer");
+            return new Response("No user found", {
+              status: 400,
+            });
+          }
         }
 
         const user = await db
@@ -137,6 +214,7 @@ export const POST = async (req: Request) => {
           .set({
             stripeSubscriptionId: event.data.object.id,
             stripeSubscriptionStatus: event.data.object.status,
+            inviteQuota: 1, // Reset to default quota when subscription is deleted
           })
           .where(eq(users.id, foundUserId));
         console.log("User updated successfully for customer.subscription.deleted event");

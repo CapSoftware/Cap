@@ -9,6 +9,7 @@ export const Footer = () => {
   if (
     pathname === "/login" ||
     pathname.includes("/dashboard") ||
+    pathname.includes("/invite") ||
     pathname.includes("/s/") ||
     pathname.includes("/onboarding") ||
     pathname.includes("/record") ||

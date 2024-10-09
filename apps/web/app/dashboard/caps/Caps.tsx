@@ -2,7 +2,7 @@
 import { Button } from "@cap/ui";
 import moment from "moment";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
-import { useRouter, useSearchParams } from "next/navigation";
+import { redirect, useRouter, useSearchParams } from "next/navigation";
 import toast, { Toaster } from "react-hot-toast";
 import {
   EyeIcon,
@@ -38,16 +38,20 @@ type videoData = {
 }[];
 
 export const Caps = ({ data, count }: { data: videoData; count: number }) => {
-  const { refresh } = useRouter();
+  const { refresh, replace } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { user } = useSharedContext();
+  const { user, activeSpace } = useSharedContext();
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
   const [isEditing, setIsEditing] = useState<null | string>(null);
   const [isDownloading, setIsDownloading] = useState<null | string>(null);
   const [titles, setTitles] = useState<Record<string, string>>({});
+
+  if (!activeSpace && (user?.name === undefined || user?.name === "")) {
+    replace("/onboarding");
+  }
 
   const handleTitleBlur = async ({ id }: { id: string }) => {
     setIsEditing(id);

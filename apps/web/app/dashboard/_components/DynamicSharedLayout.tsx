@@ -1,24 +1,15 @@
 "use client";
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext } from "react";
 import AdminDesktopNav from "@/app/dashboard/_components/AdminNavbar/AdminDesktopNav";
 import AdminMobileNav from "@/app/dashboard/_components/AdminNavbar/AdminMobileNav";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@cap/ui";
-import { UsageButton } from "@/components/UsageButton";
 import { users, spaces } from "@cap/database/schema";
-import Link from "next/link";
-import { isUserOnProPlan } from "@cap/utils";
-import { signOut } from "next-auth/react";
+import { Space } from "@/app/dashboard/layout";
 
 type SharedContext = {
-  spaceData: (typeof spaces.$inferSelect)[] | null;
-  activeSpace: typeof spaces.$inferSelect | null;
+  spaceData: Space[] | null;
+  activeSpace: Space | null;
   user: typeof users.$inferSelect;
+  isSubscribed: boolean;
 };
 
 const Context = createContext<SharedContext>({} as SharedContext);
@@ -28,107 +19,20 @@ export default function DynamicSharedLayout({
   spaceData,
   activeSpace,
   user,
+  isSubscribed,
 }: {
   children: React.ReactNode;
   spaceData: SharedContext["spaceData"];
   activeSpace: SharedContext["activeSpace"];
   user: SharedContext["user"];
+  isSubscribed: SharedContext["isSubscribed"];
 }) {
   return (
-    <Context.Provider value={{ spaceData, activeSpace, user }}>
+    <Context.Provider value={{ spaceData, activeSpace, user, isSubscribed }}>
       <div className="dashboard-layout h-screen min-h-full flex">
         <AdminDesktopNav />
         <div className="flex-1 overflow-auto focus:outline-none">
           <AdminMobileNav />
-          {/* <div className="py-3 -mb-3 flex items-center justify-end wrapper space-x-3">
-            <div>
-              <UsageButton />
-            </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                asChild
-                className="flex items-center justify-center cursor-pointer w-9 h-9 bg-white hover:bg-gray-100 rounded-xl"
-              >
-                <button>
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="24"
-                    height="24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    className="w-7 h-7"
-                    viewBox="0 0 24 24"
-                  >
-                    <circle cx="12" cy="12" r="1"></circle>
-                    <circle cx="19" cy="12" r="1"></circle>
-                    <circle cx="5" cy="12" r="1"></circle>
-                  </svg>
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-56">
-                <DropdownMenuItem>
-                  <div>
-                    {isUserOnProPlan({
-                      subscriptionStatus:
-                        user?.stripeSubscriptionStatus as string,
-                    }) ? (
-                      <Link
-                        className="w-full text-blue-500 font-medium text-base"
-                        href="/dashboard/settings/billing"
-                      >
-                        Cap Pro
-                      </Link>
-                    ) : (
-                      <Link
-                        className="w-full text-blue-500 font-medium text-base"
-                        href="/pricing"
-                      >
-                        Upgrade to Cap Pro
-                      </Link>
-                    )}
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <Link className="w-full text-base" href="/dashboard/settings">
-                    Settings
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem>
-                  <Link
-                    className="w-full text-base"
-                    href="https://discord.gg/y8gdQ3WRN3"
-                    target="_blank"
-                  >
-                    Chat support
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <Link className="w-full text-base" href="/download">
-                    Download Mac App
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem>
-                  <Link className="w-full text-base" href="/record">
-                    Record a Video
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem>
-                  <button
-                    className="w-full text-base hover:text-black"
-                    onClick={() => signOut()}
-                  >
-                    Sign out
-                  </button>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div> */}
-
           <main className="min-h-screen w-full">{children}</main>
         </div>
       </div>

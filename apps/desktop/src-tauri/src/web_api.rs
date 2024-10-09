@@ -2,11 +2,7 @@ use reqwest::StatusCode;
 use tauri::{Emitter, Manager, Runtime};
 use tauri_specta::Event;
 
-use crate::{
-    auth::{AuthStore, AuthenticationInvalid},
-    main_window::create_main_window,
-    open_main_window,
-};
+use crate::auth::{AuthStore, AuthenticationInvalid};
 
 pub fn make_url(pathname: impl AsRef<str>) -> String {
     let server_url_base = dotenvy_macro::dotenv!("NEXT_PUBLIC_URL");

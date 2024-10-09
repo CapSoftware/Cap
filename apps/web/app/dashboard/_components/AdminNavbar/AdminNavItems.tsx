@@ -2,12 +2,12 @@
 import { usePathname, useRouter } from "next/navigation";
 import {
   Plus,
-  Settings,
   LogOut,
   ChevronDown,
-  Clapperboard,
-  Video,
-  Download,
+  User,
+  MoreVertical,
+  Settings,
+  MessageSquare,
 } from "lucide-react";
 import Link from "next/link";
 import { classNames } from "@cap/utils";
@@ -32,11 +32,62 @@ import { NewSpace } from "@/components/forms/NewSpace";
 import { signOut } from "next-auth/react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { UsageButton } from "@/components/UsageButton";
+import { updateActiveSpace } from "./server";
+
+const Avatar = ({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) => (
+  <div
+    className={`flex items-center justify-center rounded-lg bg-gray-200 ${className}`}
+  >
+    {children}
+  </div>
+);
+
+const Clapperboard = ({ className }: { className: string }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    fill="none"
+    viewBox="0 0 18 15"
+    className={className}
+  >
+    <path
+      stroke="#8991A3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.667"
+      d="M1.5 5.833h15m-15 0v5a2.5 2.5 0 002.5 2.5h10a2.5 2.5 0 002.5-2.5v-5m-15 0V4.167a2.5 2.5 0 012.5-2.5h10a2.5 2.5 0 012.5 2.5v1.666M5.583 2.083l-.666 3.334m4.416-3.334l-.666 3.334m4.416-3.334l-.666 3.334"
+    ></path>
+  </svg>
+);
+
+const Download = ({ className }: { className: string }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    fill="none"
+    viewBox="0 0 16 15"
+    className={className}
+  >
+    <path
+      stroke="#8991A3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.667"
+      d="M14.667 10v1.667a2.5 2.5 0 01-2.5 2.5H3.833a2.5 2.5 0 01-2.5-2.5V10M8 9.583V.833m0 8.75L5.083 6.667M8 9.583l2.917-2.916"
+    ></path>
+  </svg>
+);
 
 export const AdminNavItems = () => {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const { spaceData, activeSpace } = useSharedContext();
+  const { spaceData, activeSpace, user, isSubscribed } = useSharedContext();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const router = useRouter();
 
   const manageNavigation = [
     {
@@ -51,22 +102,15 @@ export const AdminNavItems = () => {
       icon: Download,
       subNav: [],
     },
-    {
-      name: "Settings",
-      href: `/dashboard/settings`,
-      icon: Settings,
-      subNav: [
-        { name: "My account", href: `/dashboard/settings` },
-        { name: "Billing", href: `/dashboard/settings/billing` },
-      ],
-    },
   ];
 
   const navItemClass =
     "flex items-center justify-start py-2 px-3 rounded-full outline-none tracking-tight w-full";
 
+  const [dialogOpen, setDialogOpen] = useState(false);
+
   return (
-    <Dialog>
+    <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
       <div className="w-full py-3 my-4 border-b-2 border-t-2 border-gray-300 border-dotted">
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
@@ -78,7 +122,7 @@ export const AdminNavItems = () => {
               <div className="flex items-center w-full text-left">
                 <div>
                   <p className="text-[0.875rem]">
-                    {activeSpace?.name ?? "No space found"}
+                    {activeSpace?.space.name ?? "No space found"}
                   </p>
                 </div>
               </div>
@@ -95,14 +139,13 @@ export const AdminNavItems = () => {
                 {spaceData !== null &&
                   spaceData?.map((space) => (
                     <CommandItem
-                      key={space.name + "-space"}
-                      // onSelect={async () => {
-                      //   await handleActiveSpace(space.id);
-                      //   router.refresh();
-                      //   setOpen(false);
-                      // }}
+                      key={space.space.name + "-space"}
+                      onSelect={async () => {
+                        await updateActiveSpace(space.space.id);
+                        setOpen(false);
+                      }}
                     >
-                      {space.name}
+                      {space.space.name}
                     </CommandItem>
                   ))}
                 <DialogTrigger className="w-full">
@@ -136,59 +179,79 @@ export const AdminNavItems = () => {
               >
                 <item.icon
                   className={classNames(
-                    "flex-shrink-0 w-6 h-6 stroke-[1.8px]",
+                    "flex-shrink-0 w-5 h-5 stroke-[1.5px]",
                     pathname.includes(item.href) ? "text-black" : ""
                   )}
                   aria-hidden="true"
                 />
                 <span className="text-base ml-2.5 text-black">{item.name}</span>
               </Link>
-              {pathname.includes(item.href) && item.subNav.length > 0 && (
-                <div className="mt-1 space-y-1 flex-grow w-full">
-                  {item.subNav.map((subItem) => (
-                    <Link
-                      passHref
-                      prefetch={false}
-                      key={subItem.name + "-sub"}
-                      href={subItem.href}
-                      className={classNames(
-                        pathname === subItem.href
-                          ? "bg-white text-black border-[1px] border-gray-200"
-                          : "opacity-50 hover:opacity-75",
-                        navItemClass
-                      )}
-                    >
-                      <div className="w-6 h-6"></div>
-                      <span className="text-base ml-2.5">{subItem.name}</span>
-                    </Link>
-                  ))}
-                </div>
-              )}
             </div>
           ))}
         </div>
         <div className="mt-auto">
           <div className="w-full mb-3 pb-5 border-b-2 border-gray-200 border-dotted">
-            <UsageButton />
+            <UsageButton subscribed={isSubscribed} />
           </div>
-          <button
-            onClick={() => signOut()}
-            className={classNames("opacity-75 hover:opacity-100", navItemClass)}
-          >
-            <LogOut className="flex-shrink-0 w-6 h-6" aria-hidden="true" />
-            <span className="text-base ml-2.5">Sign out</span>
-          </button>
+          <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+            <PopoverTrigger asChild>
+              <div className="flex items-center justify-between cursor-pointer hover:bg-gray-100 p-2 rounded-lg transition-colors">
+                <div className="flex items-center">
+                  <Avatar className="h-8 w-8">
+                    <User className="h-4 w-4 text-gray-400" />
+                  </Avatar>
+                  <span className="ml-2 text-sm">{user.name ?? "User"}</span>
+                </div>
+                <MoreVertical className="h-5 w-5 text-gray-500 group-hover:text-gray-500" />
+              </div>
+            </PopoverTrigger>
+            <PopoverContent className="bg-gray-100 w-48 p-1">
+              <Command>
+                <CommandGroup>
+                  <CommandItem
+                    className="py-2 px-2 rounded-lg hover:bg-gray-200 cursor-pointer group"
+                    onSelect={() => {
+                      router.push("/dashboard/settings");
+                      setMenuOpen(false);
+                    }}
+                  >
+                    <Settings className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-500" />
+                    <span className="text-gray-400 group-hover:text-gray-500 text-sm">
+                      Settings
+                    </span>
+                  </CommandItem>
+                  <CommandItem
+                    className="py-2 px-2 rounded-lg hover:bg-gray-200 cursor-pointer group"
+                    onSelect={() =>
+                      window.open("https://cap.link/discord", "_blank")
+                    }
+                  >
+                    <MessageSquare className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-500" />
+                    <span className="text-gray-400 group-hover:text-gray-500 text-sm">
+                      Chat Support
+                    </span>
+                  </CommandItem>
+                  <CommandItem
+                    className="py-2 px-2 rounded-lg hover:bg-gray-200 cursor-pointer group"
+                    onSelect={() => signOut()}
+                  >
+                    <LogOut className="mr-2 h-4 w-4 text-gray-400 group-hover:text-gray-500" />
+                    <span className="text-gray-400 group-hover:text-gray-500 text-sm">
+                      Sign Out
+                    </span>
+                  </CommandItem>
+                </CommandGroup>
+              </Command>
+            </PopoverContent>
+          </Popover>
         </div>
       </nav>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Create a new Space</DialogTitle>
-          <DialogDescription>
-            This feature is launching very soon.
-          </DialogDescription>
         </DialogHeader>
         <DialogDescription>
-          <NewSpace />
+          <NewSpace onSpaceCreated={() => setDialogOpen(false)} />
         </DialogDescription>
       </DialogContent>
     </Dialog>

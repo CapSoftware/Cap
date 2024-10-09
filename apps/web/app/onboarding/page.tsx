@@ -8,10 +8,10 @@ export default async function OnboardingPage() {
   const user = await getCurrentUser();
 
   if (
-    user !== null &&
-    user.name !== null &&
+    user &&
+    user.name &&
     user.name.length > 1 &&
-    user.activeSpaceId !== null &&
+    user.activeSpaceId &&
     user.activeSpaceId.length > 1
   ) {
     redirect("/dashboard");
@@ -32,7 +32,7 @@ export default async function OnboardingPage() {
           </p>
         </div>
         <div className="fade-in-down animate-delay-2 flex flex-col space-y-3">
-          <Onboarding user={user} />
+          <Onboarding user={user ?? null} />
         </div>
       </div>
     </div>

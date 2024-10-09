@@ -45,15 +45,15 @@ export const Onboarding = ({
 
       if (response.ok) {
         toast.success("Name updated successfully");
-        router.refresh();
+        // Redirect to dashboard after successful onboarding
+        router.push("/dashboard");
       } else {
         toast.error("Failed to update name");
       }
-
-      setLoading(false);
     } catch (error) {
       console.error("Error updating name:", error);
       toast.error("An error occurred while updating name");
+    } finally {
       setLoading(false);
     }
   };
