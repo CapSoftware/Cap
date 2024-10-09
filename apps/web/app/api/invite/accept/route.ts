@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
           stripeSubscriptionId: users.stripeSubscriptionId,
         })
         .from(users)
-        .where(eq(users.id, invite.spaceId));
+        .where(eq(users.id, invite.invitedByUserId));
   
       if (!spaceOwner || !spaceOwner.stripeSubscriptionId) {
         return NextResponse.json({ error: "Space owner not found or has no subscription" }, { status: 404 });
