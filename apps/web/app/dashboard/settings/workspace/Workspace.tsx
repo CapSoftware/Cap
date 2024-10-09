@@ -218,6 +218,10 @@ export const Workspace = () => {
                   : "subscription"
               } across all of your workspaces`}
             </CardDescription>
+            <CardDescription>
+              Seats remaining:{" "}
+              {activeSpace?.inviteQuota ?? 1 - (activeSpace?.totalInvites ?? 1)}
+            </CardDescription>
           </div>
         </div>
       </CardHeader>

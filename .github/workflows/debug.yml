@@ -89,5 +89,5 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: debug-build-aarch64-apple-darwin
-          path: apps/desktop/src-tauri/target/aarch64-apple-darwin/debug/bundle/dmg/*.dmg
+          path: apps/desktop/src-tauri/target/aarch64-apple-darwin/debug/bundle/**/*.app
           if-no-files-found: error
