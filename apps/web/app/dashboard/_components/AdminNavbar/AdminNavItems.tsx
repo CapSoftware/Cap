@@ -32,6 +32,7 @@ import { NewSpace } from "@/components/forms/NewSpace";
 import { signOut } from "next-auth/react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { UsageButton } from "@/components/UsageButton";
+import { updateActiveSpace } from "./server";
 
 const Avatar = ({
   children,
@@ -106,8 +107,10 @@ export const AdminNavItems = () => {
   const navItemClass =
     "flex items-center justify-start py-2 px-3 rounded-full outline-none tracking-tight w-full";
 
+  const [dialogOpen, setDialogOpen] = useState(false);
+
   return (
-    <Dialog>
+    <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
       <div className="w-full py-3 my-4 border-b-2 border-t-2 border-gray-300 border-dotted">
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
@@ -137,11 +140,10 @@ export const AdminNavItems = () => {
                   spaceData?.map((space) => (
                     <CommandItem
                       key={space.space.name + "-space"}
-                      // onSelect={async () => {
-                      //   await handleActiveSpace(space.id);
-                      //   router.refresh();
-                      //   setOpen(false);
-                      // }}
+                      onSelect={async () => {
+                        await updateActiveSpace(space.space.id);
+                        setOpen(false);
+                      }}
                     >
                       {space.space.name}
                     </CommandItem>
@@ -247,12 +249,9 @@ export const AdminNavItems = () => {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Create a new Space</DialogTitle>
-          <DialogDescription>
-            This feature is launching very soon.
-          </DialogDescription>
         </DialogHeader>
         <DialogDescription>
-          <NewSpace />
+          <NewSpace onSpaceCreated={() => setDialogOpen(false)} />
         </DialogDescription>
       </DialogContent>
     </Dialog>

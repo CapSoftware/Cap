@@ -29,6 +29,7 @@ export const authOptions: NextAuthOptions = {
   providers: [
     EmailProvider({
       sendVerificationRequest({ identifier, url }) {
+        console.log({ NODE_ENV: process.env.NODE_ENV });
         if (process.env.NODE_ENV === "development") {
           console.log(`Login link: ${url}`);
         } else {

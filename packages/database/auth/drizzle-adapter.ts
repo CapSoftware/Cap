@@ -176,6 +176,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
       await db.delete(sessions).where(eq(sessions.sessionToken, sessionToken));
     },
     async createVerificationToken(verificationToken) {
+      console.log({ verificationToken });
       // First, check if a token for the given identifier already exists
       const existingTokens = await db
         .select()

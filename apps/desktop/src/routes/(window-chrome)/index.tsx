@@ -545,7 +545,7 @@ export default function () {
         </Button>
       </div>
       <a
-        href="https://cap.so/dashboard"
+        href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
         target="_blank"
         rel="noreferrer"
         class="text-gray-400 text-[0.875rem] mx-auto hover:text-gray-500 hover:underline"
