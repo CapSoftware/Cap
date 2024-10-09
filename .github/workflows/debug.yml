@@ -51,7 +51,7 @@ jobs:
         run: |
           echo "appVersion=debug" >> apps/desktop/.env
           echo "CAP_DESKTOP_SENTRY_URL=https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200" >> apps/desktop/.env
-          echo "NEXT_PUBLIC_URL=http://localhost:3000" >> apps/desktop/.env
+          echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" >> apps/desktop/.env
           echo 'NEXTAUTH_URL=${NEXT_PUBLIC_URL}' >> apps/desktop/.env
           echo 'VITE_SERVER_URL=${NEXT_PUBLIC_URL}' >> apps/desktop/.env
 
