@@ -5,7 +5,9 @@ import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalyti
 import { toast } from "react-hot-toast";
 import moment from "moment";
 import { Tooltip } from "react-tooltip";
-import { ShareIcon } from "lucide-react";
+import { ShareIcon, ChevronDown } from "lucide-react";
+import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
+import { useRouter } from "next/navigation"; // Add this import
 
 interface CapCardProps {
   cap: {
@@ -16,10 +18,12 @@ interface CapCardProps {
     totalComments: number;
     totalReactions: number;
     sharedSpaces: { id: string; name: string }[];
+    ownerName: string;
   };
   analytics: number;
   onDelete: (videoId: string) => Promise<void>;
   userId: string;
+  userSpaces: { id: string; name: string }[];
 }
 
 export const CapCard: React.FC<CapCardProps> = ({
@@ -27,9 +31,13 @@ export const CapCard: React.FC<CapCardProps> = ({
   analytics,
   onDelete,
   userId,
+  userSpaces,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(cap.name);
+  const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+  const [sharedSpaces, setSharedSpaces] = useState(cap.sharedSpaces);
+  const router = useRouter(); // Add this line
 
   const handleTitleBlur = async () => {
     if (!title) {
@@ -66,6 +74,43 @@ export const CapCard: React.FC<CapCardProps> = ({
       ? Math.max(cap.totalComments, cap.totalReactions)
       : analytics;
 
+  const isOwner = userId === cap.ownerId;
+
+  const renderSharedStatus = () => {
+    const baseClassName =
+      "text-gray-400 text-sm cursor-pointer flex items-center";
+    if (isOwner) {
+      if (cap.sharedSpaces.length === 0) {
+        return (
+          <span
+            className={baseClassName}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Not shared <ChevronDown className="ml-1" size={16} />
+          </span>
+        );
+      } else {
+        return (
+          <span
+            className={baseClassName}
+            onClick={() => setIsSharingDialogOpen(true)}
+          >
+            Shared <ChevronDown className="ml-1" size={16} />
+          </span>
+        );
+      }
+    } else {
+      return <span className={baseClassName}>Shared with you</span>;
+    }
+  };
+
+  const handleSharingUpdated = (updatedSharedSpaces: string[]) => {
+    setSharedSpaces(
+      userSpaces.filter((space) => updatedSharedSpaces.includes(space.id))
+    );
+    router.refresh(); // Add this line to refresh the page
+  };
+
   return (
     <div
       className="rounded-xl border-[1px] border-gray-200 relative"
@@ -88,6 +133,16 @@ export const CapCard: React.FC<CapCardProps> = ({
         />
       </a>
       <div className="flex flex-col p-4">
+        <div className="mb-2">
+          <div>
+            <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
+              {isOwner ? cap.ownerName : cap.sharedSpaces[0]?.name}
+            </span>
+          </div>
+          <div>
+            <span>{renderSharedStatus()}</span>
+          </div>
+        </div>
         {isEditing ? (
           <textarea
             rows={1}
@@ -126,16 +181,16 @@ export const CapCard: React.FC<CapCardProps> = ({
           totalComments={cap.totalComments}
           totalReactions={cap.totalReactions}
         />
-        {cap.sharedSpaces.length > 0 && (
-          <div className="mt-2 flex items-center">
-            <ShareIcon className="w-4 h-4 mr-2 text-gray-400" />
-            <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
-              Shared to:{" "}
-              {cap.sharedSpaces.map((space) => space.name).join(", ")}
-            </span>
-          </div>
-        )}
       </div>
+      <SharingDialog
+        isOpen={isSharingDialogOpen}
+        onClose={() => setIsSharingDialogOpen(false)}
+        capId={cap.id}
+        capName={cap.name}
+        sharedSpaces={sharedSpaces}
+        userSpaces={userSpaces}
+        onSharingUpdated={handleSharingUpdated}
+      />
     </div>
   );
 };

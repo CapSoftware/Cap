@@ -1,7 +1,14 @@
 import { Caps } from "./Caps";
 import { db } from "@cap/database";
-import { comments, videos, sharedVideos, spaces } from "@cap/database/schema";
-import { desc, eq, sql, count } from "drizzle-orm";
+import {
+  comments,
+  videos,
+  sharedVideos,
+  spaces,
+  users,
+  spaceMembers,
+} from "@cap/database/schema";
+import { desc, eq, sql, count, or } from "drizzle-orm";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { Metadata } from "next";
 
@@ -38,31 +45,54 @@ export default async function CapsPage({
       totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
       totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
       sharedSpaces: sql<{ id: string; name: string }[]>`
-        JSON_ARRAYAGG(
-          JSON_OBJECT(
-            'id', ${spaces.id},
-            'name', ${spaces.name}
-          )
+        COALESCE(
+          JSON_ARRAYAGG(
+            JSON_OBJECT(
+              'id', ${spaces.id},
+              'name', ${spaces.name}
+            )
+          ),
+          JSON_ARRAY()
         )
       `,
+      ownerName: users.name,
     })
     .from(videos)
     .leftJoin(comments, eq(videos.id, comments.videoId))
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
     .leftJoin(spaces, eq(sharedVideos.spaceId, spaces.id))
+    .leftJoin(users, eq(videos.ownerId, users.id))
     .where(eq(videos.ownerId, userId))
-    .groupBy(videos.id, videos.ownerId, videos.name, videos.createdAt)
+    .groupBy(
+      videos.id,
+      videos.ownerId,
+      videos.name,
+      videos.createdAt,
+      users.name
+    )
     .orderBy(desc(videos.createdAt))
     .limit(limit)
     .offset(offset);
+
+  const userSpaces = await db
+    .select({
+      id: spaces.id,
+      name: spaces.name,
+    })
+    .from(spaces)
+    .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
+    .where(eq(spaceMembers.userId, userId));
 
   const processedVideoData = videoData.map((video) => ({
     ...video,
     sharedSpaces: video.sharedSpaces.filter((space) => space.id !== null),
   }));
 
-  console.log("processedVideoData:");
-  console.log(processedVideoData);
-
-  return <Caps data={processedVideoData} count={totalCount} />;
+  return (
+    <Caps
+      data={processedVideoData}
+      count={totalCount}
+      userSpaces={userSpaces}
+    />
+  );
 }

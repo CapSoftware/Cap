@@ -6,7 +6,7 @@ interface EmptyCapStateProps {
 
 export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
   return (
-    <div className="flex flex-col items-center justify-center">
+    <div className="w-full flex flex-col items-center justify-center">
       <div className="w-full max-w-md mx-auto">
         <img
           className="w-full h-auto"
