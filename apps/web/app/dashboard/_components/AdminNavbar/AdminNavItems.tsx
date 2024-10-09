@@ -8,6 +8,7 @@ import {
   MoreVertical,
   Settings,
   MessageSquare,
+  Share2,
 } from "lucide-react";
 import Link from "next/link";
 import { classNames } from "@cap/utils";
@@ -94,6 +95,12 @@ export const AdminNavItems = () => {
       name: "My Caps",
       href: `/dashboard/caps`,
       icon: Clapperboard,
+      subNav: [],
+    },
+    {
+      name: "Shared Caps",
+      href: `/dashboard/shared-caps`,
+      icon: Share2,
       subNav: [],
     },
     {
