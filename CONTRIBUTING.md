@@ -73,3 +73,6 @@ Run: setx LIBCLANG_PATH "C:\Program Files\LLVM\bin"
 Replace the path with your actual LLVM installation directory if different.
 
 https://github.com/zmwangx/rust-ffmpeg-sys/issues/62
+
+for now you might need to install ffmpeg via `vcpkg`.
+required dlls: `avutil`, `avformat`, `avcodec`, `avdevice`
