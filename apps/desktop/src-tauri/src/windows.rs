@@ -94,25 +94,34 @@ impl CapWindow {
 
         Ok(match self {
             Self::Main => {
-                let window = WebviewWindow::builder(app, label, WebviewUrl::App("/".into()))
-                    .title(self.title())
-                    .inner_size(300.0, 375.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .shadow(true)
-                    .accept_first_mouse(true)
-                    .transparent(true)
-                    .hidden_title(true)
-                    .title_bar_style(tauri::TitleBarStyle::Overlay)
-                    .theme(Some(tauri::Theme::Light))
-                    .build()?;
+                #[allow(unused_mut)]
+                let mut window_builder =
+                    WebviewWindow::builder(app, label, WebviewUrl::App("/".into()))
+                        .title(self.title())
+                        .inner_size(300.0, 375.0)
+                        .resizable(false)
+                        .maximized(false)
+                        .shadow(true)
+                        .accept_first_mouse(true)
+                        .transparent(true)
+                        .theme(Some(tauri::Theme::Light));
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
+                        .hidden_title(true)
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Settings { page } => {
-                let window = WebviewWindow::builder(
+                #[allow(unused_mut)]
+                let mut window_builder = WebviewWindow::builder(
                     app,
                     label,
                     WebviewUrl::App(
@@ -125,10 +134,16 @@ impl CapWindow {
                 .maximized(false)
                 .shadow(true)
                 .accept_first_mouse(true)
-                .transparent(true)
-                .hidden_title(true)
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .build()?;
+                .transparent(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
+                        .hidden_title(true)
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 
@@ -295,18 +310,25 @@ impl CapWindow {
                 window
             }
             Self::Editor { project_id } => {
-                let window = WebviewWindow::builder(
+                #[allow(unused_mut)]
+                let mut window_builder = WebviewWindow::builder(
                     app,
                     label,
                     WebviewUrl::App(format!("/editor?id={project_id}").into()),
                 )
                 .inner_size(1150.0, 800.0)
                 .title(self.title())
-                .hidden_title(true)
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .accept_first_mouse(true)
-                .theme(Some(tauri::Theme::Light))
-                .build()?;
+                .theme(Some(tauri::Theme::Light));
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
+                        .hidden_title(true)
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 #[cfg(target_os = "macos")]
                 {
@@ -318,7 +340,8 @@ impl CapWindow {
                 window
             }
             Self::Permissions => {
-                let window =
+                #[allow(unused_mut)]
+                let mut window_builder =
                     WebviewWindow::builder(app, label, WebviewUrl::App("/permissions".into()))
                         .title(self.title())
                         .inner_size(300.0, 350.0)
@@ -326,17 +349,24 @@ impl CapWindow {
                         .maximized(false)
                         .shadow(true)
                         .accept_first_mouse(true)
-                        .transparent(true)
+                        .transparent(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
                         .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Feedback => {
-                let window =
+                #[allow(unused_mut)]
+                let mut window_builder =
                     WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/feedback".into()))
                         .title(self.title())
                         .inner_size(400.0, 400.0)
@@ -344,17 +374,24 @@ impl CapWindow {
                         .maximized(false)
                         .shadow(true)
                         .accept_first_mouse(true)
-                        .transparent(true)
+                        .transparent(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
                         .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Upgrade => {
-                let window =
+                #[allow(unused_mut)]
+                let mut window_builder =
                     WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/upgrade".into()))
                         .title(self.title())
                         .inner_size(800.0, 850.0)
@@ -362,17 +399,24 @@ impl CapWindow {
                         .maximized(false)
                         .shadow(true)
                         .accept_first_mouse(true)
-                        .transparent(true)
+                        .transparent(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
                         .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Changelog => {
-                let window =
+                #[allow(unused_mut)]
+                let mut window_builder =
                     WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/changelog".into()))
                         .title(self.title())
                         .inner_size(600.0, 450.0)
@@ -380,10 +424,16 @@ impl CapWindow {
                         .maximized(false)
                         .shadow(true)
                         .accept_first_mouse(true)
-                        .transparent(true)
+                        .transparent(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
                         .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 

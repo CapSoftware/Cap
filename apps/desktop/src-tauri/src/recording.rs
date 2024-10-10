@@ -17,8 +17,11 @@ use std::{path::PathBuf, time::Duration};
 use tauri::AppHandle;
 use tokio::sync::watch;
 
+#[cfg(target_os = "macos")]
 use objc::rc::autoreleasepool;
+#[cfg(target_os = "macos")]
 use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
+#[cfg(target_os = "macos")]
 use objc::*;
 
 use crate::{
@@ -317,6 +320,7 @@ pub async fn start(
         let mut last_mouse_state = device_state.get_mouse();
         let start_time = Instant::now();
 
+        // TODO: Fix
         while !*stop_signal_clone.lock().unwrap() {
             let mouse_state = device_state.get_mouse();
             let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
@@ -325,7 +329,7 @@ pub async fn start(
             if mouse_state.coords != last_mouse_state.coords {
                 let mouse_event = MouseEvent {
                     active_modifiers: vec![],
-                    cursor_id: get_cursor_id(),
+                    cursor_id: "".into(),
                     process_time_ms: elapsed,
                     event_type: "mouseMoved".to_string(),
                     unix_time_ms: unix_time,
@@ -338,7 +342,7 @@ pub async fn start(
             if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
                 let mouse_event = MouseEvent {
                     active_modifiers: vec![],
-                    cursor_id: get_cursor_id(),
+                    cursor_id: "".into(),
                     process_time_ms: elapsed,
                     event_type: "mouseClicked".to_string(),
                     unix_time_ms: unix_time,
@@ -375,6 +379,34 @@ pub async fn start(
     }
 }
 
+enum CursorId {
+    Arrow,
+    IBeam,
+    Crosshair,
+    ClosedHand,
+    OpenHand,
+    PointingHand,
+    ResizeLeft,
+    ResizeRight,
+    ResizeLeftRight,
+    ResizeUp,
+    ResizeDown,
+    ResizeUpDown,
+    DisappearingItem,
+    VerticalIBeam,
+    NotAllowed,
+    DragLink,
+    DragCopy,
+    ContextualMenu,
+    Unknown,
+}
+
+#[cfg(target_os = "windows")]
+fn get_cursor_id() -> CursorId {
+    todo!()
+}
+
+#[cfg(target_os = "macos")]
 fn get_cursor_id() -> String {
     autoreleasepool(|| {
         // Get the NSCursor class

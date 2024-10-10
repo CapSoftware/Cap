@@ -13,8 +13,10 @@ use tokio::sync::{oneshot, watch};
 use crate::{
     capture::CaptureController,
     encoder::{bgra_frame, H264Encoder},
-    macos,
 };
+
+#[cfg(target_os = "macos")]
+use crate::macos;
 
 #[derive(Type, Serialize, Deserialize, Debug, Clone)]
 pub struct Bounds {
@@ -37,8 +39,17 @@ pub enum CaptureTarget {
     Window { id: u32 },
 }
 
+// TODO (Windows): Fix
 #[tauri::command(async)]
 #[specta::specta]
+#[cfg(target_os = "windows")]
+pub fn list_capture_windows() -> Vec<CaptureWindow> {
+    vec![]
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+#[cfg(target_os = "macos")]
 pub fn list_capture_windows() -> Vec<CaptureWindow> {
     if !scap::has_permission() {
         return vec![];
@@ -235,6 +246,12 @@ pub async fn start_capturing(
     controller
 }
 
+#[cfg(target_os = "windows")]
+pub fn get_window_bounds(_window_number: u32) -> Option<Bounds> {
+    None
+}
+
+#[cfg(target_os = "macos")]
 pub fn get_window_bounds(window_number: u32) -> Option<Bounds> {
     let windows = macos::get_on_screen_windows();
 
@@ -263,11 +280,18 @@ fn scale_dimensions(width: u32, height: u32, max_width: u32) -> (u32, u32) {
     (new_width & !1, new_height & !1)
 }
 
+#[cfg(target_os = "macos")]
 use crate::macos::get_on_screen_windows;
+
 use std::io::Write;
 use std::process::Command;
 use tempfile::NamedTempFile;
 
+// TODO (Windows): Fix
+#[cfg(target_os = "windows")]
+fn bring_window_to_focus(_window_id: u32) {}
+
+#[cfg(target_os = "macos")]
 fn bring_window_to_focus(window_id: u32) {
     println!("Attempting to bring window {} to focus", window_id);
 
