@@ -261,6 +261,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-net"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b948000fad4873c1c9339d60f2623323a0cfd3816e5181033c6a5cb68b2accf7"
+dependencies = [
+ "async-io",
+ "blocking",
+ "futures-lite",
+]
+
+[[package]]
 name = "async-process"
 version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -703,6 +714,31 @@ dependencies = [
  "nix 0.29.0",
  "tauri",
  "tauri-plugin-shell",
+]
+
+[[package]]
+name = "cap-media"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-project",
+ "core-foundation 0.10.0",
+ "core-graphics 0.24.0",
+ "cpal",
+ "ctrlc",
+ "ffmpeg-next",
+ "ffmpeg-sys-next",
+ "flume 0.11.0",
+ "indexmap 2.5.0",
+ "nokhwa 0.10.3 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "scap 0.0.5",
+ "serde",
+ "smol",
+ "specta",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1333,6 +1369,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctrlc"
+version = "3.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90eeab0aa92f3f9b4e87f258c72b139c207d251f9cbc1080a0086b86a8870dd3"
+dependencies = [
+ "nix 0.29.0",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "d3d12"
 version = "22.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1455,6 +1501,7 @@ dependencies = [
  "bytemuck",
  "cap-editor",
  "cap-ffmpeg",
+ "cap-media",
  "cap-project",
  "cap-rendering",
  "cap-utils",
@@ -1475,7 +1522,7 @@ dependencies = [
  "indexmap 2.5.0",
  "mp4",
  "nix 0.29.0",
- "nokhwa",
+ "nokhwa 0.10.3 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
  "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
  "num-traits",
  "objc",
@@ -1483,7 +1530,7 @@ dependencies = [
  "png",
  "reqwest",
  "rodio",
- "scap",
+ "scap 0.0.5 (git+https://github.com/CapSoftware/scap?rev=691bd88798d3)",
  "serde",
  "serde_json",
  "specta",
@@ -1938,6 +1985,9 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55ac459de2512911e4b674ce33cf20befaba382d05b62b008afc1c8b57cbf181"
 dependencies = [
+ "futures-core",
+ "futures-sink",
+ "nanorand",
  "spin",
 ]
 
@@ -3725,6 +3775,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nokhwa"
+version = "0.10.3"
+source = "git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1#2de5a760d5f1abfc062bf7d7fec155e8a0eafdcd"
+dependencies = [
+ "flume 0.10.14",
+ "image 0.24.9",
+ "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "nokhwa-core 0.1.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "paste",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "nokhwa-bindings-macos"
 version = "0.2.0"
 source = "git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork#523b6d9b6266da8d1d9495a64506953961b748be"
@@ -3773,6 +3837,8 @@ source = "git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1#2de5a760d5
 dependencies = [
  "bytes",
  "image 0.24.9",
+ "mozjpeg",
+ "serde",
  "thiserror",
 ]
 
@@ -5204,6 +5270,24 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.5"
+dependencies = [
+ "cocoa 0.25.0",
+ "core-graphics-helmer-fork",
+ "dbus",
+ "objc",
+ "pipewire",
+ "rand 0.8.5",
+ "screencapturekit",
+ "screencapturekit-sys",
+ "sysinfo",
+ "tao-core-video-sys",
+ "windows 0.52.0",
+ "windows-capture",
+]
+
+[[package]]
+name = "scap"
+version = "0.0.5"
 source = "git+https://github.com/CapSoftware/scap?rev=691bd88798d3#691bd88798d39478e09afb04d460e113097bb855"
 dependencies = [
  "cocoa 0.25.0",
@@ -5600,6 +5684,23 @@ name = "smallvec"
 version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c5e1a9a646d36c3599cd173a41282daf47c44583ad367b8e6837255952e5c67"
+
+[[package]]
+name = "smol"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a33bd3e260892199c3ccfc487c88b2da2265080acb316cd920da72fdfd7c599f"
+dependencies = [
+ "async-channel",
+ "async-executor",
+ "async-fs",
+ "async-io",
+ "async-lock",
+ "async-net",
+ "async-process",
+ "blocking",
+ "futures-lite",
+]
 
 [[package]]
 name = "socket2"
