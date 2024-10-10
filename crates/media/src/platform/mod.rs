@@ -1,15 +1,18 @@
+use serde::{Deserialize, Serialize};
+use specta::Type;
+
 #[cfg(target_os = "macos")]
 #[path = "macos.rs"]
 mod platform_impl;
 
 pub use platform_impl::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 pub struct Bounds {
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Debug)]

@@ -31,7 +31,7 @@ pub struct AudioInputSource {
 }
 
 impl AudioInputSource {
-    pub fn init(selected_audio_input: Option<&str>) -> Option<Self> {
+    pub fn init(selected_audio_input: Option<&String>) -> Option<Self> {
         tracing::debug!("Selected audio input: {:?}", selected_audio_input);
 
         let mut devices = Self::get_devices();

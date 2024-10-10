@@ -10,7 +10,7 @@ pub mod data;
 pub mod encoders;
 pub mod filters;
 pub mod pipeline;
-mod platform;
+pub mod platform;
 pub mod sources;
 
 pub fn init() -> Result<(), MediaError> {
@@ -26,6 +26,9 @@ pub enum MediaError {
 
     #[error("Cannot build a pipeline without any tasks")]
     EmptyPipeline,
+
+    #[error("Cannot run any further operations on a pipeline that has been shut down")]
+    ShutdownPipeline,
 
     #[error("Failed to launch task: #{0}")]
     TaskLaunch(String),

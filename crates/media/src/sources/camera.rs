@@ -21,7 +21,7 @@ pub struct CameraSource {
 }
 
 impl CameraSource {
-    pub fn init(selected_camera: Option<&str>) -> Option<Self> {
+    pub fn init(selected_camera: Option<&String>) -> Option<Self> {
         tracing::debug!("Selected camera: {:?}", selected_camera);
 
         let cameras = nokhwa::query(ApiBackend::Auto).unwrap();

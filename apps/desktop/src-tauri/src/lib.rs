@@ -2,7 +2,6 @@ mod audio;
 mod auth;
 mod camera;
 mod capture;
-mod display;
 mod encoder;
 mod flags;
 mod general_settings;
@@ -21,19 +20,19 @@ use auth::AuthStore;
 use camera::{list_cameras, CameraFeed};
 use cap_editor::{AudioData, EditorState, ProjectRecordings};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
-use cap_ffmpeg::FFmpeg;
+use cap_media::{platform::Bounds, sources::ScreenCaptureTarget};
 use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
 };
 use cap_rendering::ProjectUniforms;
 use cap_utils::create_named_pipe;
-use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
+// use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use png::{ColorType, Encoder};
-use recording::{DisplaySource, InProgressRecording};
+use recording::{list_capture_windows, InProgressRecording, FPS};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -64,7 +63,7 @@ use windows::CapWindow;
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingOptions {
-    capture_target: CaptureTarget,
+    capture_target: ScreenCaptureTarget,
     camera_label: Option<String>,
     audio_input_name: Option<String>,
 }
@@ -120,7 +119,7 @@ impl App {
 
         CurrentRecordingChanged(json).emit(&self.handle).ok();
 
-        if let DisplaySource::Window { .. } = &current_recording.display_source {
+        if let ScreenCaptureTarget::Window { .. } = &current_recording.display_source {
             CapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
             self.close_occluder_window();
@@ -291,14 +290,19 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         .join("recordings")
         .join(format!("{id}.cap"));
 
-    let recording = recording::start(
+    match recording::start(
         recording_dir,
         &state.start_recording_options,
         state.camera_feed.as_ref(),
     )
-    .await;
-
-    state.set_current_recording(recording);
+    .await
+    {
+        Ok(recording) => state.set_current_recording(recording),
+        Err(error) => {
+            eprintln!("{error}");
+            return Err("Failed to set up recording".into());
+        }
+    };
 
     if let Some(window) = CapWindow::Main.get(&app) {
         window.minimize().ok();
@@ -339,7 +343,7 @@ async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
     if let Some(recording) = &mut state.current_recording {
-        recording.resume().await?;
+        recording.play().await?;
         recording.segments.push(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -364,7 +368,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
             .as_secs_f64(),
     );
 
-    current_recording.stop();
+    current_recording.stop().await;
     println!("Recording stopped");
 
     if let Some(window) = (CapWindow::InProgressRecording { position: None }).get(&app) {
@@ -380,7 +384,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         .recording_dir
         .join("screenshots/display.jpg");
     create_screenshot(
-        current_recording.display.output_path.clone(),
+        current_recording.display_output_path.clone(),
         display_screenshot.clone(),
         None,
     )
@@ -2185,7 +2189,7 @@ pub async fn run() {
                 camera_ws_port,
                 camera_feed: None,
                 start_recording_options: RecordingOptions {
-                    capture_target: CaptureTarget::Screen,
+                    capture_target: ScreenCaptureTarget::Screen,
                     camera_label: None,
                     audio_input_name: None,
                 },

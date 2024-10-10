@@ -101,6 +101,7 @@ impl<T: PipelineClock> PipelineBuilder<T> {
             clock,
             control,
             task_handles,
+            is_shutdown: false,
         })
     }
 }

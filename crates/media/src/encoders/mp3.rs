@@ -24,7 +24,7 @@ pub struct MP3Encoder {
 }
 
 impl MP3Encoder {
-    const OUTPUT_BITRATE: usize = 192 * 1000; // 192k
+    const OUTPUT_BITRATE: usize = 128 * 1000; // 128k
 
     pub fn init(tag: &'static str, config: AudioInfo, output: Output) -> Result<Self, MediaError> {
         let destination = match output {

@@ -21,6 +21,7 @@ scap = { path = "../../../scap" }
 # scap = { git = "https://github.com/CapSoftware/scap", rev = "691bd88798d3" }
 serde = { version = "1", features = ["derive"] }
 specta = "=2.0.0-rc.19"
+tempfile = "3.12.0"
 thiserror = "1.0"
 tracing = "0.1"
 

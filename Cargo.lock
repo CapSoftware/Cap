@@ -736,6 +736,7 @@ dependencies = [
  "serde",
  "smol",
  "specta",
+ "tempfile",
  "thiserror",
  "tracing",
  "tracing-subscriber",
@@ -1554,6 +1555,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
  "wgpu",
 ]

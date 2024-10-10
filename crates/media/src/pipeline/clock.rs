@@ -159,7 +159,8 @@ impl PipelineClock for SynchronisedClock<()> {
         if !self.running() {
             let mut start_time = self.global_start_time.write().unwrap();
 
-            *start_time = Instant::now();
+            let now = Instant::now();
+            *start_time = now;
             self.set_running(true);
         }
     }

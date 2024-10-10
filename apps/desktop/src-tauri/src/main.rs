@@ -3,5 +3,7 @@
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
+
     desktop_solid_lib::run().await
 }
