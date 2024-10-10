@@ -376,32 +376,21 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     }
 
     std::fs::create_dir_all(current_recording.recording_dir.join("screenshots")).ok();
+    let display_screenshot = current_recording
+        .recording_dir
+        .join("screenshots/display.jpg");
+    create_screenshot(
+        current_recording.display.output_path.clone(),
+        display_screenshot.clone(),
+        None,
+    )
+    .await?;
 
-    FFmpeg::new()
-        .command
-        .args(["-ss", "0:00:00", "-i"])
-        .arg(&current_recording.display.output_path)
-        .args(["-frames:v", "1", "-q:v", "2"])
-        .arg(
-            current_recording
-                .recording_dir
-                .join("screenshots/display.jpg"),
-        )
-        .output()
-        .unwrap();
-
-    FFmpeg::new()
-        .command
-        .args(["-ss", "0:00:00", "-i"])
-        .arg(&current_recording.display.output_path)
-        .args(["-frames:v", "1", "-vf", "scale=100:-1"])
-        .arg(
-            current_recording
-                .recording_dir
-                .join("screenshots/thumbnail.png"),
-        )
-        .output()
-        .unwrap();
+    // Create thumbnail
+    let thumbnail = current_recording
+        .recording_dir
+        .join("screenshots/thumbnail.png");
+    create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
 
     let recording_dir = current_recording.recording_dir.clone();
 
@@ -466,6 +455,133 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         .ok();
 
     Ok(())
+}
+
+async fn create_screenshot(
+    input: PathBuf,
+    output: PathBuf,
+    size: Option<(u32, u32)>,
+) -> Result<(), String> {
+    println!(
+        "Creating screenshot: input={:?}, output={:?}, size={:?}",
+        input, output, size
+    );
+
+    let result: Result<(), String> = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        ffmpeg::init().map_err(|e| {
+            eprintln!("Failed to initialize ffmpeg: {}", e);
+            e.to_string()
+        })?;
+
+        let mut ictx = ffmpeg::format::input(&input).map_err(|e| {
+            eprintln!("Failed to create input context: {}", e);
+            e.to_string()
+        })?;
+        let input_stream = ictx
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or("No video stream found")?;
+        let video_stream_index = input_stream.index();
+        println!("Found video stream at index {}", video_stream_index);
+
+        let mut decoder =
+            ffmpeg::codec::context::Context::from_parameters(input_stream.parameters())
+                .map_err(|e| {
+                    eprintln!("Failed to create decoder context: {}", e);
+                    e.to_string()
+                })?
+                .decoder()
+                .video()
+                .map_err(|e| {
+                    eprintln!("Failed to create video decoder: {}", e);
+                    e.to_string()
+                })?;
+
+        let mut scaler = ffmpeg::software::scaling::context::Context::get(
+            decoder.format(),
+            decoder.width(),
+            decoder.height(),
+            ffmpeg::format::Pixel::RGB24,
+            size.map_or(decoder.width(), |s| s.0),
+            size.map_or(decoder.height(), |s| s.1),
+            ffmpeg::software::scaling::flag::Flags::BILINEAR,
+        )
+        .map_err(|e| {
+            eprintln!("Failed to create scaler: {}", e);
+            e.to_string()
+        })?;
+
+        println!("Decoder and scaler initialized");
+
+        let mut frame = ffmpeg::frame::Video::empty();
+        for (stream, packet) in ictx.packets() {
+            if stream.index() == video_stream_index {
+                decoder.send_packet(&packet).map_err(|e| {
+                    eprintln!("Failed to send packet to decoder: {}", e);
+                    e.to_string()
+                })?;
+                if decoder.receive_frame(&mut frame).is_ok() {
+                    println!("Frame received, scaling...");
+                    let mut rgb_frame = ffmpeg::frame::Video::empty();
+                    scaler.run(&frame, &mut rgb_frame).map_err(|e| {
+                        eprintln!("Failed to scale frame: {}", e);
+                        e.to_string()
+                    })?;
+
+                    // Use image crate to save the frame as an image file
+                    let width = rgb_frame.width() as u32;
+                    let height = rgb_frame.height() as u32;
+                    let data = rgb_frame.data(0);
+                    let img = image::RgbImage::from_raw(width, height, data.to_vec())
+                        .ok_or("Failed to create image from frame data")?;
+                    println!("Saving image to {:?}", output);
+
+                    img.save_with_format(&output, image::ImageFormat::Jpeg)
+                        .map_err(|e| {
+                            eprintln!("Failed to save image: {}", e);
+                            e.to_string()
+                        })?;
+
+                    println!("Screenshot created successfully");
+                    return Ok(());
+                }
+            }
+        }
+
+        eprintln!("Failed to create screenshot: No suitable frame found");
+        Err("Failed to create screenshot".to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
+
+    result
+}
+
+async fn create_thumbnail(input: PathBuf, output: PathBuf, size: (u32, u32)) -> Result<(), String> {
+    println!(
+        "Creating thumbnail: input={:?}, output={:?}, size={:?}",
+        input, output, size
+    );
+
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let img = image::open(&input).map_err(|e| {
+            eprintln!("Failed to open image: {}", e);
+            e.to_string()
+        })?;
+
+        let thumbnail = img.thumbnail(size.0, size.1);
+        thumbnail
+            .save_with_format(&output, image::ImageFormat::Png)
+            .map_err(|e| {
+                eprintln!("Failed to save thumbnail: {}", e);
+                e.to_string()
+            })?;
+
+        println!("Thumbnail created successfully");
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 #[tauri::command]
