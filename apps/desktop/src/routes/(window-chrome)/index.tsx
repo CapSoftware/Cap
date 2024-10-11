@@ -1,6 +1,5 @@
 import { Button, SwitchTab } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
-import { createEventListener } from "@solid-primitives/event-listener";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 import { createMutation, createQuery } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
@@ -25,8 +24,9 @@ import {
   listAudioDevices,
   getPermissions,
   createVideoDevicesQuery,
+  listScreens,
 } from "~/utils/queries";
-import { type CaptureWindow, commands, events } from "~/utils/tauri";
+import { CaptureScreen, type CaptureWindow, commands, events } from "~/utils/tauri";
 import {
   MenuItem,
   MenuItemList,
@@ -47,12 +47,19 @@ export const route = {
 
 export default function () {
   const options = createOptionsQuery();
+  const screens = createQuery(() => listScreens);
   const windows = createQuery(() => listWindows);
   const videoDevices = createVideoDevicesQuery();
   const audioDevices = createQuery(() => listAudioDevices);
   const currentRecording = createCurrentRecordingQuery();
 
   const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
+  const [screenSelectOpen, setScreenSelectOpen] = createSignal(false);
+  const [selectedTarget, setSelectedTarget] = createSignal<CaptureScreen | CaptureWindow | null>();
+  
+  const screenLabel = createMemo(() => options.data?.captureTarget?.type === "screen" && selectedTarget()?.name ? selectedTarget()?.name : "Screen");
+  const windowLabel = createMemo(() => options.data?.captureTarget?.type === "window" && selectedTarget()?.name ? selectedTarget()?.name : "Window")
+
   const permissions = createQuery(() => getPermissions);
 
   const [microphoneSelectOpen, setMicrophoneSelectOpen] = createSignal(false);
@@ -76,15 +83,6 @@ export default function () {
       }
     },
   }));
-
-  createEventListener(window, "mousedown", (e: MouseEvent) => {
-    if (windowSelectOpen()) {
-      const target = e.target as HTMLElement;
-      if (!target.closest(".KSelect")) {
-        setWindowSelectOpen(false);
-      }
-    }
-  });
 
   // important for sign in redirect, trust me
   createAsync(() => getAuth());
@@ -143,9 +141,15 @@ export default function () {
     }
   };
 
+  const selectedScreen = () => {
+    const d = options.data?.captureTarget;
+    if (d?.type !== "screen") return 
+    return screens.data?.find((data) => data.id === d.id);
+  };
+
   const selectedWindow = () => {
     const d = options.data?.captureTarget;
-    if (d?.type !== "window") return;
+    if (d?.type !== "window") return 
     return windows.data?.find((data) => data.id === d.id);
   };
 
@@ -224,34 +228,27 @@ export default function () {
         </button>
       </div>
       <KSelect<CaptureWindow | null>
-        options={windows.data ?? []}
+        options={(screenSelectOpen() ? screens.data : windows.data) ?? []}
         optionValue="id"
         optionTextValue="name"
-        placeholder="Window"
         gutter={8}
-        open={windowSelectOpen()}
-        onOpenChange={(o: boolean) => {
-          // prevents tab onChange from interfering with dropdown trigger click
-          if (o === false && options.data?.captureTarget.type === "screen")
-            return;
-          setWindowSelectOpen(o);
-        }}
-        itemComponent={(props: { item: any }) => (
-          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-            <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue?.name}
-            </KSelect.ItemLabel>
-          </MenuItem>
-        )}
-        value={selectedWindow() ?? null}
-        onChange={(d: CaptureWindow | null) => {
-          if (!d || !options.data) return;
-          commands.setRecordingOptions({
-            ...options.data,
-            captureTarget: { type: "window", id: d.id },
-          });
-          setWindowSelectOpen(false);
-        }}
+        open={screenSelectOpen() || windowSelectOpen()}
+        itemComponent={(props: { item: any }) => {
+          return (
+          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item} 
+            onClick={() => {
+              setSelectedTarget(props.item.rawValue)
+              setScreenSelectOpen(false);
+              setWindowSelectOpen(false)
+            }}
+          >
+            	<KSelect.ItemLabel class="flex-1">
+              	{props.item.rawValue?.name}
+            	</KSelect.ItemLabel>
+          	</MenuItem>
+        	)}
+        }
+        value={selectedTarget() ?? null}
         placement="top-end"
       >
         <SwitchTab
@@ -259,60 +256,97 @@ export default function () {
           disabled={isRecording()}
           onChange={(s) => {
             if (!options.data) return;
-            if (options.data?.captureTarget.type === s) {
-              setWindowSelectOpen(false);
-              return;
-            }
-            if (s === "screen") {
-              commands.setRecordingOptions({
-                ...options.data,
-                captureTarget: { type: "screen" },
-              });
-              setWindowSelectOpen(false);
-            } else if (s === "window") {
-              if (windowSelectOpen()) {
-                setWindowSelectOpen(false);
-              } else {
-                setWindowSelectOpen(true);
-              }
-            }
+
+            setScreenSelectOpen(s === "screen");
+            setWindowSelectOpen(s === "window");
           }}
         >
           <SwitchTab.List>
-            <SwitchTab.Trigger value="screen">Screen</SwitchTab.Trigger>
+            <SwitchTab.Trigger<ValidComponent>
+              as={(p) => <KSelect.Trigger<ValidComponent> {...p} />}
+              value="screen"
+              id="screen"
+              class="w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
+              onClick={() => {
+                const id = selectedTarget()?.id
+                if (!id || !options.data) return;
+
+                if (options.data.captureTarget.type !== "screen") {
+                  setSelectedTarget(null)
+                }
+
+                commands.setRecordingOptions({
+                  ...options.data,
+                  captureTarget: { type: "screen", id },
+                });
+
+              }}
+            >
+              {screenLabel()}
+              <IconCapChevronDown class={`size-4 shrink-0 transform transition-transform ${screenSelectOpen() && "-rotate-180"}`} />
+            </SwitchTab.Trigger>
             <SwitchTab.Trigger<ValidComponent>
               as={(p) => <KSelect.Trigger<ValidComponent> {...p} />}
               value="window"
-              class="w-full text-nowrap overflow-hidden px-2 group KSelect"
-            >
-              <KSelect.Value<CaptureWindow> class="flex flex-row items-center justify-center">
-                {(item) => (
-                  <>
-                    <span class="flex-1 truncate">
-                      {item.selectedOption()?.name ?? "Select Window"}
-                    </span>
+              id="window"
+              class="w-full text-nowrap overflow-hidden px-2 group flex gap-2 items-center justify-center"
+              onClick={() => {
+                const id = selectedTarget()?.id
+                if (!id || !options.data) return;
 
-                    <IconCapChevronDown class="size-4 shrink-0 ui-group-expanded:-rotate-180 transform transition-transform" />
-                  </>
-                )}
-              </KSelect.Value>
+                if (options.data.captureTarget.type !== "window") {
+                  setSelectedTarget(null)
+                }
+
+                commands.setRecordingOptions({
+                  ...options.data,
+                  captureTarget: { type: "window", id },
+                });
+
+              }}
+            >
+              {windowLabel()}
+              <IconCapChevronDown  class={`size-4 shrink-0 transform transition-transform ${windowSelectOpen() && "-rotate-180"}`}  />
             </SwitchTab.Trigger>
           </SwitchTab.List>
         </SwitchTab>
         <KSelect.Portal>
-          <PopperContent<typeof KSelect.Content>
-            as={KSelect.Content}
-            class={topRightAnimateClasses}
-          >
-            <Show
-              when={(windows.data ?? []).length > 0}
-              fallback={
-                <div class="p-2 text-gray-500">No windows available</div>
-              }
+          {screenSelectOpen() && (
+            <PopperContent<typeof KSelect.Content>
+              as={KSelect.Content}
+              class={topRightAnimateClasses}
+              onPointerDownOutside={() => {
+                setScreenSelectOpen(false);
+            }}
             >
-              <KSelect.Listbox class="max-h-52 max-w-64" as={MenuItemList} />
-            </Show>
-          </PopperContent>
+              <Show
+                when={(screens.data ?? []).length > 0}
+                fallback={
+                  <div class="p-2 text-gray-500">No screens available</div>
+                }
+              >
+                <KSelect.Listbox class="max-h-52 max-w-64" as={MenuItemList} />
+              </Show>
+            </PopperContent>
+          )}
+          {windowSelectOpen() && ( 
+            <PopperContent<typeof KSelect.Content>
+              as={KSelect.Content}
+              class={topRightAnimateClasses}
+              onPointerDownOutside={() => {
+                  setWindowSelectOpen(false);
+              }}
+            >
+              <Show
+                when={(windows.data ?? []).length > 0}
+                fallback={
+                  <div class="p-2 text-gray-500">No windows available</div>
+                }
+              >
+                <KSelect.Listbox class="max-h-52 max-w-64" as={MenuItemList} />
+              </Show>
+            </PopperContent>
+          )}
         </KSelect.Portal>
       </KSelect>
       <div class="flex flex-col gap-[0.25rem] items-stretch">
