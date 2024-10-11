@@ -24,6 +24,15 @@ pub struct Bounds {
     pub height: f64,
 }
 
+// use std::collections::HashSet;
+// use tauri::command;
+
+#[derive(Type, Serialize)]
+pub struct CaptureScreen {
+    id: u32,
+    name: String,
+}
+
 #[derive(Type, Serialize)]
 pub struct CaptureWindow {
     id: u32,
@@ -39,13 +48,36 @@ pub enum CaptureTarget {
 
 #[tauri::command(async)]
 #[specta::specta]
+pub fn list_capture_screens() -> Vec<CaptureScreen> {
+    if !scap::has_permission() {
+        return vec![];
+    }
+
+    let mut targets = vec![];
+    let screens = scap::get_all_targets();
+
+    for (idx, target) in screens.into_iter().enumerate() {
+        // Handle Target::Screen variant (assuming this is how it's structured in scap)
+        if let Target::Display(screen) = target {
+            // Only add the screen if it hasn't been added already
+            targets.push(CaptureScreen {
+                id: screen.id as u32,
+                name: format!("Screen {}", idx + 1),
+            });
+        }
+    }
+    targets
+}
+
+
+#[tauri::command(async)]
+#[specta::specta]
 pub fn list_capture_windows() -> Vec<CaptureWindow> {
     if !scap::has_permission() {
         return vec![];
     }
 
     let targets = scap::get_all_targets();
-
     let windows = macos::get_on_screen_windows();
 
     targets

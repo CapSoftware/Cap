@@ -27,7 +27,7 @@ use cap_project::{
 };
 use cap_rendering::ProjectUniforms;
 use cap_utils::create_named_pipe;
-use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
+use display::{list_capture_windows, list_capture_screens, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
@@ -2065,6 +2065,7 @@ pub async fn run() {
             take_screenshot,
             list_cameras,
             list_capture_windows,
+            list_capture_screens,
             list_audio_devices,
             show_previous_recordings_window,
             close_previous_recordings_window,
