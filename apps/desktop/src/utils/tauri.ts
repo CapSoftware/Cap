@@ -67,6 +67,9 @@ async listCameras() : Promise<string[]> {
 async listCaptureWindows() : Promise<CaptureWindow[]> {
     return await TAURI_INVOKE("list_capture_windows");
 },
+async listCaptureScreens() : Promise<CaptureScreen[]> {
+    return await TAURI_INVOKE("list_capture_screens");
+},
 async listAudioDevices() : Promise<Result<string[], null>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_audio_devices") };
@@ -366,7 +369,8 @@ export type CameraMeta = { path: string }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
-export type CaptureTarget = { type: "screen" } | { type: "window"; id: number }
+export type CaptureScreen = { id: number; name: string }
+export type CaptureTarget = { type: "screen"; id: number } | { type: "window"; id: number }
 export type CaptureWindow = { id: number; name: string }
 export type Crop = { position: XY<number>; size: XY<number> }
 export type CurrentRecordingChanged = JsonValue<InProgressRecording | null>
