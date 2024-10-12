@@ -26,7 +26,7 @@ import {
   createVideoDevicesQuery,
   listScreens,
 } from "~/utils/queries";
-import { CaptureScreen, type CaptureWindow, commands, events } from "~/utils/tauri";
+import { CaptureScreen, CaptureTarget, type CaptureWindow, commands, events } from "~/utils/tauri";
 import {
   MenuItem,
   MenuItemList,
@@ -53,6 +53,7 @@ export default function () {
   const audioDevices = createQuery(() => listAudioDevices);
   const currentRecording = createCurrentRecordingQuery();
 
+  const [selectedTab, setSelectedTab] = createSignal<CaptureTarget['type']>("screen");
   const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
   const [screenSelectOpen, setScreenSelectOpen] = createSignal(false);
   const [selectedTarget, setSelectedTarget] = createSignal<CaptureScreen | CaptureWindow | null>();
@@ -244,6 +245,17 @@ export default function () {
           onChange={(s) => {
             if (!options.data) return;
 
+            commands.setRecordingOptions({
+              ...options.data,
+              captureTarget: { ...options.data.captureTarget,type: s as CaptureTarget['type'] },
+            });
+
+            if (selectedTab() !== s) {
+              setSelectedTarget(null)
+            }
+
+            setSelectedTab(s as CaptureTarget['type'])
+
             if (windows.data && windows.data.length > 0) {
               setWindowSelectOpen(s === "window");
             }
@@ -259,20 +271,6 @@ export default function () {
               value="screen"
               id="screen"
               class="w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
-              onClick={() => {
-                const id = selectedTarget()?.id
-                if (!id || !options.data) return;
-
-                if (options.data.captureTarget.type !== "screen") {
-                  setSelectedTarget(null)
-                }
-
-                commands.setRecordingOptions({
-                  ...options.data,
-                  captureTarget: { type: "screen", id },
-                });
-
-              }}
             >
               <p class="truncate">{screenLabel()}</p>
               {screens.data && screens.data.length > 1 && <IconCapChevronDown class={`size-4 shrink-0 transform transition-transform ${screenSelectOpen() && "-rotate-180"}`} />}
@@ -283,20 +281,6 @@ export default function () {
               id="window"
               class="w-full text-nowrap overflow-hidden px-2 group flex gap-2 items-center justify-center"
               disabled={!windows.data || windows.data.length === 0}
-              onClick={() => {
-                const id = selectedTarget()?.id
-                if (!id || !options.data) return;
-
-                if (options.data.captureTarget.type !== "window") {
-                  setSelectedTarget(null)
-                }
-
-                commands.setRecordingOptions({
-                  ...options.data,
-                  captureTarget: { type: "window", id },
-                });
-
-              }}
             >
               <p class="truncate">{windowLabel()}</p>
               <IconCapChevronDown  class={`size-4 shrink-0 transform transition-transform ${windowSelectOpen() && "-rotate-180"}`}  />
