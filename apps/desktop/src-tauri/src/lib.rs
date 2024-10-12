@@ -2186,7 +2186,7 @@ pub async fn run() {
                 camera_ws_port,
                 camera_feed: None,
                 start_recording_options: RecordingOptions {
-                    capture_target: CaptureTarget::Screen,
+                    capture_target: CaptureTarget::Screen { id: 0 },
                     camera_label: None,
                     audio_input_name: None,
                 },
