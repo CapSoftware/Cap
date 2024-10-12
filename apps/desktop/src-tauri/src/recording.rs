@@ -362,7 +362,7 @@ pub async fn start(
         ffmpeg_process,
         display,
         display_source: match recording_options.capture_target {
-            CaptureTarget::Screen => DisplaySource::Screen,
+            CaptureTarget::Screen { id: screen_id } => DisplaySource::Screen,
             CaptureTarget::Window { id: window_number } => DisplaySource::Window {
                 bounds: get_window_bounds(window_number).unwrap(),
             },

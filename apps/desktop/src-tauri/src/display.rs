@@ -42,7 +42,7 @@ pub struct CaptureWindow {
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum CaptureTarget {
-    Screen,
+    Screen { id: u32 },
     Window { id: u32 },
 }
 
