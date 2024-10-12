@@ -53,20 +53,28 @@ pub fn list_capture_screens() -> Vec<CaptureScreen> {
         return vec![];
     }
 
-    let mut targets = vec![];
     let screens = scap::get_all_targets();
+    let targets = scap::get_all_targets();
 
-    for (idx, target) in screens.into_iter().enumerate() {
-        // Handle Target::Screen variant (assuming this is how it's structured in scap)
-        if let Target::Display(screen) = target {
-            // Only add the screen if it hasn't been added already
-            targets.push(CaptureScreen {
-                id: screen.id as u32,
-                name: format!("Screen {}", idx + 1),
-            });
-        }
-    }
-    targets
+    // Filter only the Display targets and map them to CaptureScreen structs
+    screens
+        .into_iter()
+        .filter_map(|target| {
+            if let Target::Display(scap_screen) = target {
+                Some(scap_screen)
+            } else {
+                None
+            }
+        })
+        .enumerate()
+        .map(|(idx, scap_screen)| {
+            // Create the CaptureScreen struct with the screen ID and name
+            CaptureScreen {
+                id: scap_screen.id as u32,
+                name: scap_screen.title.clone(),
+            }
+        })
+        .collect::<Vec<_>>()
 }
 
 
