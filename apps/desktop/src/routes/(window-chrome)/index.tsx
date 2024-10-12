@@ -141,18 +141,6 @@ export default function () {
     }
   };
 
-  const selectedScreen = () => {
-    const d = options.data?.captureTarget;
-    if (d?.type !== "screen") return 
-    return screens.data?.find((data) => data.id === d.id);
-  };
-
-  const selectedWindow = () => {
-    const d = options.data?.captureTarget;
-    if (d?.type !== "window") return 
-    return windows.data?.find((data) => data.id === d.id);
-  };
-
   const audioDevice = () =>
     audioDevices?.data?.find(
       (d) => d.name === options.data?.audioInputName
@@ -249,16 +237,20 @@ export default function () {
         	)}
         }
         value={selectedTarget() ?? null}
-        placement="top-end"
+        placement="bottom"
       >
         <SwitchTab
-          value={options.data?.captureTarget.type}
           disabled={isRecording()}
           onChange={(s) => {
             if (!options.data) return;
 
-            setScreenSelectOpen(s === "screen");
-            setWindowSelectOpen(s === "window");
+            if (windows.data && windows.data.length > 0) {
+              setWindowSelectOpen(s === "window");
+            }
+
+            if (screens.data && screens.data.length > 1) {
+              setScreenSelectOpen(s === "screen");
+            }
           }}
         >
           <SwitchTab.List>
@@ -282,14 +274,15 @@ export default function () {
 
               }}
             >
-              {screenLabel()}
-              <IconCapChevronDown class={`size-4 shrink-0 transform transition-transform ${screenSelectOpen() && "-rotate-180"}`} />
+              <p class="truncate">{screenLabel()}</p>
+              {screens.data && screens.data.length > 1 && <IconCapChevronDown class={`size-4 shrink-0 transform transition-transform ${screenSelectOpen() && "-rotate-180"}`} />}
             </SwitchTab.Trigger>
             <SwitchTab.Trigger<ValidComponent>
               as={(p) => <KSelect.Trigger<ValidComponent> {...p} />}
               value="window"
               id="window"
               class="w-full text-nowrap overflow-hidden px-2 group flex gap-2 items-center justify-center"
+              disabled={!windows.data || windows.data.length === 0}
               onClick={() => {
                 const id = selectedTarget()?.id
                 if (!id || !options.data) return;
@@ -305,7 +298,7 @@ export default function () {
 
               }}
             >
-              {windowLabel()}
+              <p class="truncate">{windowLabel()}</p>
               <IconCapChevronDown  class={`size-4 shrink-0 transform transition-transform ${windowSelectOpen() && "-rotate-180"}`}  />
             </SwitchTab.Trigger>
           </SwitchTab.List>
