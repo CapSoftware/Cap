@@ -35,8 +35,8 @@ impl H264Encoder {
 
         encoder.set_width(config.width);
         encoder.set_height(config.height);
-        encoder.set_format(Pixel::YUV420P);
-        encoder.set_time_base(config.time_base);
+        encoder.set_format(config.pixel_format);
+        encoder.set_time_base(config.frame_rate.invert());
 
         let video_encoder = encoder.open_with(options)?;
 

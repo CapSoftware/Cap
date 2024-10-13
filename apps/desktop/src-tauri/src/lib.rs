@@ -17,10 +17,13 @@ mod windows;
 
 use audio::AppSounds;
 use auth::AuthStore;
-use camera::{list_cameras, CameraFeed};
 use cap_editor::{AudioData, EditorState, ProjectRecordings};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
-use cap_media::{platform::Bounds, sources::ScreenCaptureTarget};
+use cap_media::{
+    feeds::{CameraFeed, CameraFrameSender},
+    platform::Bounds,
+    sources::{AudioInputSource, ScreenCaptureTarget},
+};
 use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
 };
@@ -32,7 +35,7 @@ use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use png::{ColorType, Encoder};
-use recording::{list_capture_windows, InProgressRecording, FPS};
+use recording::{list_cameras, list_capture_windows, InProgressRecording, FPS};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -51,7 +54,6 @@ use tauri_nspanel::ManagerExt;
 use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-use tokio::sync::watch;
 use tokio::task;
 use tokio::{
     sync::{Mutex, RwLock},
@@ -83,10 +85,10 @@ impl RecordingOptions {
 pub struct App {
     start_recording_options: RecordingOptions,
     #[serde(skip)]
-    camera_tx: watch::Sender<camera::LatestFrame>,
+    camera_tx: CameraFrameSender,
     camera_ws_port: u16,
     #[serde(skip)]
-    camera_feed: Option<camera::CameraFeed>,
+    camera_feed: Option<CameraFeed>,
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
@@ -120,7 +122,7 @@ impl App {
         CurrentRecordingChanged(json).emit(&self.handle).ok();
 
         if let ScreenCaptureTarget::Window { .. } = &current_recording.display_source {
-            CapWindow::WindowCaptureOccluder.show(&self.handle);
+            let _ = CapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
             self.close_occluder_window();
         }
@@ -157,14 +159,14 @@ impl App {
 
         match &new_options.camera_label {
             Some(camera_label) => {
-                if self
-                    .camera_feed
-                    .as_ref()
-                    .map(|f| &f.camera_info.human_name() != camera_label)
-                    .unwrap_or(true)
-                {
-                    self.camera_feed =
-                        Some(CameraFeed::new(&camera_label, self.camera_tx.clone()).await);
+                if self.camera_feed.is_none() {
+                    self.camera_feed = CameraFeed::init(&camera_label, self.camera_tx.clone())
+                        .await
+                        .ok();
+                }
+
+                if let Some(camera_feed) = self.camera_feed.as_mut() {
+                    camera_feed.switch_cameras(&camera_label).await.ok();
                 }
             }
             None => {
@@ -1390,8 +1392,9 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
         return Ok(vec![]);
     }
 
+    // TODO: Check - is this necessary? `spawn_blocking` is quite a bit of overhead.
     tokio::task::spawn_blocking(|| {
-        let devices = audio::get_input_devices();
+        let devices = AudioInputSource::get_devices();
 
         devices.keys().cloned().collect()
     })
@@ -2142,7 +2145,7 @@ pub async fn run() {
         )
         .expect("Failed to export typescript bindings");
 
-    let (camera_tx, camera_rx) = watch::channel(None);
+    let (camera_tx, camera_rx) = CameraFeed::create_channel();
     let camera_ws_port = camera::create_camera_ws(camera_rx.clone()).await;
 
     tauri::async_runtime::set(tokio::runtime::Handle::current());

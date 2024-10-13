@@ -1,71 +1,70 @@
-use flume::Sender;
-use nokhwa::{pixel_format::*, utils::*, Camera};
+use flume::{Receiver, Sender};
 use std::time::Instant;
 
 use crate::{
-    data::{FFVideo, RawVideoFormat, VideoInfo},
+    data::{FFVideo, VideoInfo},
+    feeds::{CameraConnection, CameraFeed, RawCameraFrame},
     pipeline::{clock::SynchronisedClock, control::Control, task::PipelineSourceTask},
     MediaError,
 };
 
-fn create_camera(camera_info: &CameraInfo) -> Result<Camera, ()> {
-    let format = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
-    Camera::new(camera_info.index().clone(), format).map_err(|error| {
-        tracing::error!("Error while initializing camera: {error}");
-    })
-}
-
 pub struct CameraSource {
-    info: CameraInfo,
-    format: CameraFormat,
+    feed_connection: CameraConnection,
+    video_info: VideoInfo,
 }
 
 impl CameraSource {
-    pub fn init(selected_camera: Option<&String>) -> Option<Self> {
-        tracing::debug!("Selected camera: {:?}", selected_camera);
-
-        let cameras = nokhwa::query(ApiBackend::Auto).unwrap();
-
-        selected_camera
-            .and_then(|camera_name| cameras.into_iter().find(|c| &c.human_name() == camera_name))
-            .and_then(|camera_info| create_camera(&camera_info).ok())
-            .and_then(|camera| {
-                let format = camera.camera_format();
-                if format_for(format.format()).is_some() {
-                    return Some(Self {
-                        info: camera.info().clone(),
-                        format,
-                    });
-                }
-
-                None
-            })
-    }
-
-    pub fn list_cameras() -> Vec<String> {
-        nokhwa::query(ApiBackend::Auto)
-            .unwrap()
-            .into_iter()
-            .map(|i| i.human_name().to_string())
-            .collect()
+    pub fn init(camera_feed: Option<&CameraFeed>) -> Option<Self> {
+        camera_feed.map(|feed| Self {
+            feed_connection: feed.create_connection(),
+            video_info: feed.video_info(),
+        })
     }
 
     pub fn info(&self) -> VideoInfo {
-        VideoInfo::from_raw(
-            format_for(self.format.format()).unwrap(),
-            self.format.width(),
-            self.format.height(),
-            self.format.frame_rate(),
-        )
+        self.video_info
     }
-}
 
-fn format_for(format: FrameFormat) -> Option<RawVideoFormat> {
-    match format {
-        FrameFormat::YUYV => Some(RawVideoFormat::Yuyv),
-        FrameFormat::RAWRGB => Some(RawVideoFormat::RawRgb),
-        FrameFormat::NV12 => Some(RawVideoFormat::Nv12),
-        _ => None,
+    fn process_frame(
+        &self,
+        clock: &mut SynchronisedClock<Instant>,
+        output: &Sender<FFVideo>,
+        camera_frame: RawCameraFrame,
+    ) -> Result<(), MediaError> {
+        let RawCameraFrame {
+            mut frame,
+            captured_at,
+        } = camera_frame;
+        match clock.timestamp_for(captured_at) {
+            None => {
+                tracing::warn!("Clock is currently stopped. Dropping frames.");
+            }
+            Some(timestamp) => {
+                frame.set_pts(Some(timestamp));
+                if let Err(_) = output.send(frame) {
+                    return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn pause_and_drain_frames(
+        &self,
+        clock: &mut SynchronisedClock<Instant>,
+        output: &Sender<FFVideo>,
+        frames_rx: Receiver<RawCameraFrame>,
+    ) {
+        let frames: Vec<RawCameraFrame> = frames_rx.drain().collect();
+        drop(frames_rx);
+
+        for frame in frames {
+            if let Err(error) = self.process_frame(clock, output, frame) {
+                tracing::error!("{error}");
+                break;
+            }
+        }
     }
 }
 
@@ -83,76 +82,42 @@ impl PipelineSourceTask for CameraSource {
         output: Sender<Self::Output>,
     ) {
         tracing::info!("Preparing camera source thread...");
+        let mut frames_rx: Option<Receiver<RawCameraFrame>> = None;
+        ready_signal.send(Ok(())).unwrap();
 
-        match create_camera(&self.info) {
-            Ok(mut camera) if camera.camera_format() == self.format => {
-                ready_signal.send(Ok(())).unwrap();
-                let mut capturing = false;
-                let info = self.info();
+        loop {
+            match control_signal.last() {
+                Some(Control::Play) => {
+                    let frames = frames_rx.get_or_insert_with(|| self.feed_connection.attach());
 
-                loop {
-                    match control_signal.last() {
-                        Some(Control::Play) => {
-                            if !capturing {
-                                camera
-                                    .open_stream()
-                                    .expect("Failed to start camera recording");
-                                capturing = true;
-
-                                tracing::info!("Camera recording started.");
-                            }
-
-                            match camera.frame() {
-                                // TODO: Set PTS in nokhwa library
-                                Ok(frame) => match clock.timestamp_for(Instant::now()) {
-                                    None => {
-                                        tracing::warn!(
-                                            "Clock is currently stopped. Dropping frames."
-                                        )
-                                    }
-                                    Some(timestamp) => {
-                                        let buffer = info.wrap_frame(
-                                            frame.buffer(),
-                                            timestamp.try_into().unwrap(),
-                                        );
-                                        if let Err(_) = output.send(buffer) {
-                                            tracing::warn!(
-                                                "Pipeline is unreachable. Dropping samples."
-                                            )
-                                        }
-                                    }
-                                },
-                                Err(error) => {
-                                    tracing::error!("Capture error: {error}");
-                                    break;
-                                }
+                    match frames.recv() {
+                        Ok(frame) => {
+                            if let Err(error) = self.process_frame(&mut clock, &output, frame) {
+                                tracing::error!("{error}");
+                                break;
                             }
                         }
-                        Some(Control::Pause) => {
-                            if capturing {
-                                camera
-                                    .stop_stream()
-                                    .expect("Failed to halt camera recording");
-                                capturing = false;
-                            }
-                        }
-                        Some(Control::Shutdown) | None => {
-                            if capturing {
-                                camera
-                                    .stop_stream()
-                                    .expect("Failed to halt camera recording");
-                            }
+                        Err(_) => {
+                            tracing::error!("Lost connection with the camera feed");
                             break;
                         }
                     }
                 }
+                Some(Control::Pause) => {
+                    // TODO: This blocks to process frames in the queue, which may delay resumption
+                    // Some way to prevent this from delaying the listen loop?
+                    if let Some(rx) = frames_rx.take() {
+                        self.pause_and_drain_frames(&mut clock, &output, rx);
+                    }
+                }
+                Some(Control::Shutdown) | None => {
+                    if let Some(rx) = frames_rx.take() {
+                        self.pause_and_drain_frames(&mut clock, &output, rx);
+                    }
+                    break;
+                }
             }
-            _ => ready_signal
-                .send(Err(MediaError::TaskLaunch(
-                    "Failed to create camera stream".into(),
-                )))
-                .unwrap(),
-        };
+        }
 
         tracing::info!("Shutting down screen capture source thread.");
     }

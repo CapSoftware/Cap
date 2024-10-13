@@ -21,9 +21,11 @@ pub enum RawAudioFormat {
 
 pub enum RawVideoFormat {
     Bgra,
+    Mjpeg,
     Yuyv,
     RawRgb,
     Nv12,
+    Gray,
 }
 
 impl From<RawAudioFormat> for Sample {
@@ -109,13 +111,36 @@ impl VideoInfo {
         Self {
             pixel_format: match format {
                 RawVideoFormat::Bgra => Pixel::BGRA,
+                RawVideoFormat::Mjpeg => Pixel::YUVJ422P,
                 RawVideoFormat::Yuyv => Pixel::UYVY422,
                 RawVideoFormat::RawRgb => Pixel::RGB24,
                 RawVideoFormat::Nv12 => Pixel::NV12,
+                RawVideoFormat::Gray => Pixel::GRAY8,
             },
             width,
             height,
             time_base: FFRational(1, 1_000_000),
+            frame_rate: FFRational(fps.try_into().unwrap(), 1),
+        }
+    }
+
+    pub fn scaled(&self, width: u32, fps: u32) -> Self {
+        let (width, height) = match self.width <= width {
+            true => (self.width, self.height),
+            false => {
+                let new_width = width & !1;
+                let new_height = (((new_width as f32) * (self.height as f32) / (self.width as f32))
+                    .round() as u32)
+                    & !1;
+                (new_width, new_height)
+            }
+        };
+
+        Self {
+            pixel_format: Pixel::YUV420P,
+            width,
+            height,
+            time_base: self.time_base,
             frame_rate: FFRational(fps.try_into().unwrap(), 1),
         }
     }

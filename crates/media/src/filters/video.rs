@@ -13,27 +13,41 @@ pub struct VideoFilter {
 }
 
 impl VideoFilter {
-    pub fn init(tag: &'static str, config: VideoInfo, spec: &str) -> Result<Self, MediaError> {
+    pub fn init(
+        tag: &'static str,
+        input_config: VideoInfo,
+        output_config: VideoInfo,
+    ) -> Result<Self, MediaError> {
         let mut filter_graph = filter::Graph::new();
 
         let input_args = format!(
             "pix_fmt={}:width={}:height={}:time_base={}/{}",
-            config.pixel_format_int(),
-            config.width,
-            config.height,
-            config.time_base.numerator(),
-            config.time_base.denominator()
+            input_config.pixel_format_int(),
+            input_config.width,
+            input_config.height,
+            input_config.time_base.numerator(),
+            input_config.time_base.denominator()
         );
         filter_graph.add(&filter::find("buffer").unwrap(), "in", &input_args)?;
         filter_graph.add(&filter::find("buffersink").unwrap(), "out", "")?;
 
         let mut input = filter_graph.get("in").unwrap();
-        input.set_pixel_format(config.pixel_format);
+        input.set_pixel_format(input_config.pixel_format);
 
         let mut output = filter_graph.get("out").unwrap();
-        output.set_pixel_format(Pixel::YUV420P);
+        output.set_pixel_format(output_config.pixel_format);
 
-        filter_graph.output("in", 0)?.input("out", 0)?.parse(spec)?;
+        // TODO: Remove fps hardcoding?
+        let spec = format!(
+            "scale={}x{}:flags=bilinear,fps=fps={}",
+            output_config.width,
+            output_config.height,
+            output_config.frame_rate.numerator()
+        );
+        filter_graph
+            .output("in", 0)?
+            .input("out", 0)?
+            .parse(&spec)?;
         filter_graph.validate()?;
 
         Ok(Self { filter_graph, tag })

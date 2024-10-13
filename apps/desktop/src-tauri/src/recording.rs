@@ -1,33 +1,17 @@
-// use crate::audio::AudioCapturer;
-use crate::camera::CameraFeed;
-// use crate::capture::CaptureController;
 use crate::flags;
-// use cap_ffmpeg::{FFmpeg, FFmpegInput, FFmpegProcess, FFmpegRawAudioInput};
-use cap_media::{encoders::*, filters::*, pipeline::*, sources::*, MediaError};
+use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
 use device_query::{DeviceQuery, DeviceState};
-use futures::future::OptionFuture;
 use serde::Deserialize;
 use serde::Serialize;
 use specta::Type;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use std::{
-    fs::File,
-    sync::{Arc, Mutex},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, time::Duration};
-use tauri::AppHandle;
-use tokio::sync::watch;
 
 use objc::rc::autoreleasepool;
 use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
 use objc::*;
 
-use crate::{
-    audio,
-    camera,
-    // display::{self, get_window_bounds, CaptureTarget},
-    RecordingOptions,
-};
+use crate::RecordingOptions;
 
 // TODO: Hacky, please fix
 pub const FPS: u32 = 30;
@@ -36,6 +20,12 @@ pub const FPS: u32 = 30;
 #[specta::specta]
 pub fn list_capture_windows() -> Vec<CaptureWindow> {
     ScreenCaptureSource::list_targets()
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn list_cameras() -> Vec<String> {
+    CameraFeed::list_cameras()
 }
 
 #[derive(Serialize, Deserialize, Clone, Type)]
@@ -185,14 +175,11 @@ pub async fn start(
 
     let screen_source = ScreenCaptureSource::init(&recording_options.capture_target, None, None);
     let screen_config = screen_source.info();
-    let screen_filter = VideoFilter::init(
-        "screen",
-        screen_config,
-        "scale=in_range=full:out_range=limited",
-    )?;
+    let output_config = screen_config.scaled(1920, 30);
+    let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
     let screen_encoder = H264Encoder::init(
         "screen",
-        screen_config,
+        output_config,
         Output::File(display_output_path.clone()),
     )?;
     pipeline_builder = pipeline_builder
@@ -217,18 +204,15 @@ pub async fn start(
             .sink("microphone_encoder", mic_encoder);
     }
 
-    if let Some(camera_source) = CameraSource::init(recording_options.camera_label.as_ref()) {
+    if let Some(camera_source) = CameraSource::init(camera_feed) {
         let camera_config = camera_source.info();
+        let output_config = camera_config.scaled(1920, 30);
         camera_output_path = Some(content_dir.join("camera.mp4"));
 
-        let camera_filter = VideoFilter::init(
-            "camera",
-            camera_config,
-            "scale=in_range=full:out_range=limited",
-        )?;
+        let camera_filter = VideoFilter::init("camera", camera_config, output_config)?;
         let camera_encoder = H264Encoder::init(
             "camera",
-            camera_config,
+            output_config,
             Output::File(camera_output_path.clone().unwrap()),
         )?;
 
