@@ -1,9 +1,10 @@
 use std::{
     cell::Cell,
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     path::PathBuf,
     ptr::{null, null_mut},
     sync::{mpsc, Arc},
+    time::{Duration, Instant},
 };
 
 use ffmpeg::{
@@ -18,19 +19,27 @@ use ffmpeg_sys_next::{
     AVPixelFormat, AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX,
 };
 
+const FRAME_CACHE_SIZE: usize = 50;
+const MAX_CACHE_MEMORY: usize = 1024 * 1024 * 1024; // 1 GB max cache size
+const CACHE_CLEANUP_INTERVAL: Duration = Duration::from_secs(60); // Clean up every 60 seconds
+
 pub type DecodedFrame = Arc<Vec<u8>>;
 
 enum VideoDecoderMessage {
-    GetFrame(u32, tokio::sync::oneshot::Sender<Option<Arc<Vec<u8>>>>),
+    GetFrame(u32, tokio::sync::oneshot::Sender<Option<DecodedFrame>>),
+}
+
+#[derive(Clone)]
+struct CachedFrame {
+    frame_number: u32,
+    frame: DecodedFrame,
+    last_accessed: Instant,
 }
 
 fn ts_to_frame(ts: i64, time_base: Rational, frame_rate: Rational) -> u32 {
-    // dbg!((ts, time_base, frame_rate));
     ((ts * time_base.numerator() as i64 * frame_rate.numerator() as i64)
         / (time_base.denominator() as i64 * frame_rate.denominator() as i64)) as u32
 }
-
-const FRAME_CACHE_SIZE: usize = 50;
 
 pub struct AsyncVideoDecoder;
 
@@ -40,7 +49,6 @@ impl AsyncVideoDecoder {
 
         std::thread::spawn(move || {
             let mut input = ffmpeg::format::input(&path).unwrap();
-
             let input_stream = input
                 .streams()
                 .best(ffmpeg::media::Type::Video)
@@ -72,206 +80,140 @@ impl AsyncVideoDecoder {
             let time_base = input_stream.time_base();
             let frame_rate = input_stream.rate();
 
-            // Create a decoder for the video stream
             let mut decoder = context.decoder().video().unwrap();
-
-            use ffmpeg::format::Pixel;
-            use ffmpeg::software::scaling::{context::Context, flag::Flags};
 
             let mut scaler_input_format = hw_device
                 .as_ref()
                 .map(|d| d.pix_fmt)
                 .unwrap_or(decoder.format());
 
-            let mut scaler = Context::get(
+            let mut scaler = ffmpeg::software::scaling::context::Context::get(
                 scaler_input_format,
                 decoder.width(),
                 decoder.height(),
                 Pixel::RGBA,
                 decoder.width(),
                 decoder.height(),
-                Flags::BILINEAR,
+                ffmpeg::software::scaling::flag::Flags::BILINEAR,
             )
             .unwrap();
 
             let mut temp_frame = ffmpeg::frame::Video::empty();
-
-            let render_more_margin = (FRAME_CACHE_SIZE / 4) as u32;
-
-            let mut cache = BTreeMap::<u32, Arc<Vec<u8>>>::new();
-            // active frame is a frame that triggered decode.
-            // frames that are within render_more_margin of this frame won't trigger decode.
-            let mut last_active_frame = None::<u32>;
-
+            let mut cache = VecDeque::new();
+            let mut cache_size = 0;
+            let mut last_cleanup = Instant::now();
             let mut last_decoded_frame = None::<u32>;
 
-            struct PacketStuff<'a> {
-                packets: PacketIter<'a>,
-                skipped_packet: Option<(Stream<'a>, Packet)>,
-            }
-
             let mut peekable_requests = PeekableReceiver { rx, peeked: None };
-
             let mut packets = input.packets();
-            // let mut packet_stuff = PacketStuff {
-            //     packets: input.packets(),
-            //     skipped_packet: None,
-            // };
 
             while let Ok(r) = peekable_requests.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(frame_number, sender) => {
-                        // println!("retrieving frame {frame_number}");
+                        let mut frame_to_send: Option<DecodedFrame> = None;
 
-                        let mut sender = if let Some(cached) = cache.get(&frame_number) {
-                            // println!("sending frame {frame_number} from cache");
-                            sender.send(Some(cached.clone())).ok();
-                            continue;
+                        if let Some(index) = cache.iter().position(|f: &CachedFrame| f.frame_number == frame_number) {
+                            let mut cached = cache.remove(index).unwrap();
+                            cached.last_accessed = Instant::now();
+                            cache.push_front(cached.clone());
+                            frame_to_send = Some(cached.frame.clone());
                         } else {
-                            Some(sender)
-                        };
-
-                        let cache_min = frame_number.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
-                        let cache_max = frame_number + FRAME_CACHE_SIZE as u32 / 2;
-
-                        if frame_number <= 0
-                            || last_decoded_frame
-                                .map(|f| {
-                                    frame_number < f ||
-                                    // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-                                    frame_number - f > FRAME_CACHE_SIZE as u32
-                                })
-                                .unwrap_or(true)
-                        {
-                            let timestamp_us =
-                                ((frame_number as f32 / frame_rate.numerator() as f32)
+                            if frame_number <= 0
+                                || last_decoded_frame
+                                    .map(|f| frame_number < f || frame_number - f > FRAME_CACHE_SIZE as u32)
+                                    .unwrap_or(true)
+                            {
+                                let timestamp_us = ((frame_number as f32 / frame_rate.numerator() as f32)
                                     * 1_000_000.0) as i64;
-                            let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
+                                let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
-                            println!("seeking to {position} for frame {frame_number}");
-
-                            decoder.flush();
-                            input.seek(position, ..position).unwrap();
-                            cache.clear();
-                            last_decoded_frame = None;
-
-                            packets = input.packets();
-                        }
-
-                        last_active_frame = Some(frame_number);
-
-                        loop {
-                            if peekable_requests.peek().is_some() {
-                                break;
+                                decoder.flush();
+                                input.seek(position, ..position).unwrap();
+                                cache.clear();
+                                cache_size = 0;
+                                last_decoded_frame = None;
+                                packets = input.packets();
                             }
-                            let Some((stream, packet)) = packets.next() else {
-                                break;
-                            };
 
-                            if stream.index() == input_stream_index {
-                                let packet_frame =
-                                    ts_to_frame(packet.pts().unwrap(), time_base, frame_rate);
-                                // println!("sending frame {packet_frame} packet");
-
-                                decoder.send_packet(&packet).ok(); // decode failures are ok, we just fail to return a frame
-
-                                let mut exit = false;
-
-                                while decoder.receive_frame(&mut temp_frame).is_ok() {
-                                    let current_frame = ts_to_frame(
-                                        temp_frame.pts().unwrap(),
-                                        time_base,
-                                        frame_rate,
-                                    );
-                                    // println!("processing frame {current_frame}");
-                                    last_decoded_frame = Some(current_frame);
-
-                                    let exceeds_cache_bounds = current_frame > cache_max;
-                                    let too_small_for_cache_bounds = current_frame < cache_min;
-
-                                    let hw_frame =
-                                        hw_device.as_ref().and_then(|d| d.get_hwframe(&temp_frame));
-
-                                    let frame = hw_frame.as_ref().unwrap_or(&temp_frame);
-
-                                    if frame.format() != scaler_input_format {
-                                        // Reinitialize the scaler with the new input format
-                                        scaler_input_format = frame.format();
-                                        scaler = Context::get(
-                                            scaler_input_format,
-                                            decoder.width(),
-                                            decoder.height(),
-                                            Pixel::RGBA,
-                                            decoder.width(),
-                                            decoder.height(),
-                                            Flags::BILINEAR,
-                                        )
-                                        .unwrap();
-                                    }
-
-                                    let mut rgb_frame = frame::Video::empty();
-                                    scaler.run(frame, &mut rgb_frame).unwrap();
-
-                                    let width = rgb_frame.width() as usize;
-                                    let height = rgb_frame.height() as usize;
-                                    let stride = rgb_frame.stride(0);
-                                    let data = rgb_frame.data(0);
-
-                                    let expected_size = width * height * 4;
-
-                                    let mut frame_buffer = Vec::with_capacity(expected_size);
-
-                                    // account for stride > width
-                                    for line_data in data.chunks_exact(stride) {
-                                        frame_buffer.extend_from_slice(&line_data[0..width * 4]);
-                                    }
-
-                                    let frame = Arc::new(frame_buffer);
-
-                                    if current_frame == frame_number {
-                                        if let Some(sender) = sender.take() {
-                                            sender.send(Some(frame.clone())).ok();
-                                        }
-                                    }
-
-                                    if !too_small_for_cache_bounds {
-                                        if cache.len() >= FRAME_CACHE_SIZE {
-                                            if let Some(last_active_frame) = &last_active_frame {
-                                                let frame = if frame_number > *last_active_frame {
-                                                    *cache.keys().next().unwrap()
-                                                } else if frame_number < *last_active_frame {
-                                                    *cache.keys().next_back().unwrap()
-                                                } else {
-                                                    let min = *cache.keys().min().unwrap();
-                                                    let max = *cache.keys().max().unwrap();
-
-                                                    if current_frame > max {
-                                                        min
-                                                    } else {
-                                                        max
-                                                    }
-                                                };
-
-                                                cache.remove(&frame);
-                                            } else {
-                                                cache.clear()
-                                            }
-                                        }
-
-                                        cache.insert(current_frame, frame);
-                                    }
-
-                                    exit = exit || exceeds_cache_bounds;
-                                }
-
-                                if exit {
+                            'packet_loop: loop {
+                                if peekable_requests.peek().is_some() {
                                     break;
                                 }
+                                let Some((stream, packet)) = packets.next() else {
+                                    break;
+                                };
+
+                                if stream.index() == input_stream_index {
+                                    decoder.send_packet(&packet).ok();
+
+                                    while decoder.receive_frame(&mut temp_frame).is_ok() {
+                                        let current_frame = ts_to_frame(
+                                            temp_frame.pts().unwrap(),
+                                            time_base,
+                                            frame_rate,
+                                        );
+                                        last_decoded_frame = Some(current_frame);
+
+                                        let hw_frame = hw_device.as_ref().and_then(|d| d.get_hwframe(&temp_frame));
+                                        let frame = hw_frame.as_ref().unwrap_or(&temp_frame);
+
+                                        if frame.format() != scaler_input_format {
+                                            scaler_input_format = frame.format();
+                                            scaler = ffmpeg::software::scaling::context::Context::get(
+                                                scaler_input_format,
+                                                decoder.width(),
+                                                decoder.height(),
+                                                Pixel::RGBA,
+                                                decoder.width(),
+                                                decoder.height(),
+                                                ffmpeg::software::scaling::flag::Flags::BILINEAR,
+                                            )
+                                            .unwrap();
+                                        }
+
+                                        let mut rgb_frame = frame::Video::empty();
+                                        scaler.run(frame, &mut rgb_frame).unwrap();
+
+                                        let width = rgb_frame.width() as usize;
+                                        let height = rgb_frame.height() as usize;
+                                        let stride = rgb_frame.stride(0);
+                                        let data = rgb_frame.data(0);
+
+                                        let mut frame_buffer = Vec::with_capacity(width * height * 4);
+                                        for line_data in data.chunks_exact(stride) {
+                                            frame_buffer.extend_from_slice(&line_data[0..width * 4]);
+                                        }
+
+                                        let frame_size = frame_buffer.len();
+                                        let new_frame = Arc::new(frame_buffer);
+
+                                        if current_frame == frame_number && frame_to_send.is_none() {
+                                            frame_to_send = Some(new_frame.clone());
+                                        }
+
+                                        cache.push_front(CachedFrame {
+                                            frame_number: current_frame,
+                                            frame: new_frame,
+                                            last_accessed: Instant::now(),
+                                        });
+                                        cache_size += frame_size;
+
+                                        Self::cleanup_cache(&mut cache, &mut cache_size);
+
+                                        if frame_to_send.is_some() {
+                                            break 'packet_loop;
+                                        }
+                                    }
+                                }
                             }
                         }
 
-                        if sender.is_some() {
-                            println!("failed to send frame {frame_number}");
+                        // Send the frame outside of all loops
+                        sender.send(frame_to_send).ok();
+
+                        if last_cleanup.elapsed() > CACHE_CLEANUP_INTERVAL {
+                            Self::aggressive_cleanup(&mut cache, &mut cache_size);
+                            last_cleanup = Instant::now();
                         }
                     }
                 }
@@ -279,6 +221,27 @@ impl AsyncVideoDecoder {
         });
 
         AsyncVideoDecoderHandle { sender: tx }
+    }
+
+    fn cleanup_cache(cache: &mut VecDeque<CachedFrame>, cache_size: &mut usize) {
+        while *cache_size > MAX_CACHE_MEMORY || cache.len() > FRAME_CACHE_SIZE {
+            if let Some(old_frame) = cache.pop_back() {
+                *cache_size -= old_frame.frame.len();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn aggressive_cleanup(cache: &mut VecDeque<CachedFrame>, cache_size: &mut usize) {
+        let now = Instant::now();
+        cache.retain(|frame| {
+            let keep = now.duration_since(frame.last_accessed) < Duration::from_secs(300); // 5 minutes
+            if !keep {
+                *cache_size -= frame.frame.len();
+            }
+            keep
+        });
     }
 }
 
@@ -288,7 +251,7 @@ pub struct AsyncVideoDecoderHandle {
 }
 
 impl AsyncVideoDecoderHandle {
-    pub async fn get_frame(&self, frame_number: u32) -> Option<Arc<Vec<u8>>> {
+    pub async fn get_frame(&self, frame_number: u32) -> Option<DecodedFrame> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.sender
             .send(VideoDecoderMessage::GetFrame(frame_number, tx))
@@ -318,7 +281,6 @@ impl<T> PeekableReceiver<T> {
     }
 
     fn try_recv(&mut self) -> Result<T, mpsc::TryRecvError> {
-        println!("try_recv");
         if let Some(value) = self.peeked.take() {
             Ok(value)
         } else {
