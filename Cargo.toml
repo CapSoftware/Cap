@@ -12,8 +12,9 @@ members = [
 
 [workspace.dependencies]
 anyhow = "1.0.86"
-ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "11f8d264bbc0" }
-ffmpeg-sys-next = "7.0.2"
+ffmpeg = { package = "ffmpeg-next", git = "https://github.com/zmwangx/rust-ffmpeg", branch = "master" }
+ffmpeg-sys-next = "7.1.0"
+ffmpeg-next = "7.1.0"
 tokio = { version = "1.39.3", features = [
 	"macros",
 	"process",
@@ -21,6 +22,6 @@ tokio = { version = "1.39.3", features = [
 	"sync",
 	"rt",
 	"rt-multi-thread",
-	"time"
+	"time",
 ] }
 tauri = { version = "2.0.0-rc" }
