@@ -1,3 +1,4 @@
+#![allow(unused_mut)]
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, Wry};
 
 pub enum CapWindow {
@@ -94,14 +95,12 @@ impl CapWindow {
 
         Ok(match self {
             Self::Main => {
-                #[allow(unused_mut)]
                 let mut window_builder =
                     WebviewWindow::builder(app, label, WebviewUrl::App("/".into()))
                         .title(self.title())
                         .inner_size(300.0, 375.0)
                         .resizable(false)
                         .maximized(false)
-                        .shadow(true)
                         .accept_first_mouse(true)
                         .transparent(true)
                         .theme(Some(tauri::Theme::Light));
@@ -110,7 +109,13 @@ impl CapWindow {
                 {
                     window_builder = window_builder
                         .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .shadow(true);
+                }
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.decorations(false).shadow(false);
                 }
 
                 let window = window_builder.build()?;
@@ -120,7 +125,6 @@ impl CapWindow {
                 window
             }
             Self::Settings { page } => {
-                #[allow(unused_mut)]
                 let mut window_builder = WebviewWindow::builder(
                     app,
                     label,
@@ -132,15 +136,22 @@ impl CapWindow {
                 .min_inner_size(600.0, 450.0)
                 .resizable(true)
                 .maximized(false)
-                .shadow(true)
-                .accept_first_mouse(true)
-                .transparent(true);
+                .accept_first_mouse(true);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder
+                        .transparent(true)
+                        .decorations(false)
+                        .shadow(false);
+                }
 
                 #[cfg(target_os = "macos")]
                 {
                     window_builder = window_builder
                         .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .shadow(true);
                 }
 
                 let window = window_builder.build()?;
@@ -152,7 +163,7 @@ impl CapWindow {
             Self::Camera { ws_port } => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
-                let window = tauri::webview::WebviewWindow::builder(
+                let mut window_builder = tauri::webview::WebviewWindow::builder(
                     app,
                     label,
                     WebviewUrl::App("/camera".into()),
@@ -177,8 +188,14 @@ impl CapWindow {
 			                window.__CAP__ = window.__CAP__ ?? {{}};
 			                window.__CAP__.cameraWsPort = {ws_port};
 		                ",
-                ))
-                .build()?;
+                ));
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.transparent(true);
+                }
+
+                let window = window_builder.build()?;
 
                 #[cfg(target_os = "macos")]
                 {
@@ -190,7 +207,7 @@ impl CapWindow {
                 window
             }
             Self::WindowCaptureOccluder => {
-                let window = WebviewWindow::builder(
+                let mut window_builder = WebviewWindow::builder(
                     app,
                     label,
                     WebviewUrl::App("/window-capture-occluder".into()),
@@ -208,9 +225,14 @@ impl CapWindow {
                     (monitor.size().width as f64) / monitor.scale_factor(),
                     (monitor.size().height as f64) / monitor.scale_factor(),
                 )
-                .position(0.0, 0.0)
-                .build()
-                .unwrap();
+                .position(0.0, 0.0);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.transparent(true);
+                }
+
+                let window = window_builder.build()?;
 
                 window.set_ignore_cursor_events(true).unwrap();
 
@@ -258,7 +280,7 @@ impl CapWindow {
                 window
             }
             Self::PrevRecordings => {
-                let window =
+                let mut window_builder =
                     WebviewWindow::builder(app, &label, WebviewUrl::App("/prev-recordings".into()))
                         .title(self.title())
                         .maximized(false)
@@ -274,8 +296,15 @@ impl CapWindow {
                             350.0,
                             (monitor.size().height as f64) / monitor.scale_factor(),
                         )
-                        .position(0.0, 0.0)
-                        .build()?;
+                        .skip_taskbar(true)
+                        .position(0.0, 0.0);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.transparent(true);
+                }
+
+                let window = window_builder.build()?;
 
                 #[cfg(target_os = "macos")]
                 {
@@ -310,7 +339,6 @@ impl CapWindow {
                 window
             }
             Self::Editor { project_id } => {
-                #[allow(unused_mut)]
                 let mut window_builder = WebviewWindow::builder(
                     app,
                     label,
@@ -340,7 +368,6 @@ impl CapWindow {
                 window
             }
             Self::Permissions => {
-                #[allow(unused_mut)]
                 let mut window_builder =
                     WebviewWindow::builder(app, label, WebviewUrl::App("/permissions".into()))
                         .title(self.title())
@@ -365,7 +392,6 @@ impl CapWindow {
                 window
             }
             Self::Feedback => {
-                #[allow(unused_mut)]
                 let mut window_builder =
                     WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/feedback".into()))
                         .title(self.title())
@@ -390,7 +416,6 @@ impl CapWindow {
                 window
             }
             Self::Upgrade => {
-                #[allow(unused_mut)]
                 let mut window_builder =
                     WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/upgrade".into()))
                         .title(self.title())
@@ -415,7 +440,6 @@ impl CapWindow {
                 window
             }
             Self::Changelog => {
-                #[allow(unused_mut)]
                 let mut window_builder =
                     WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/changelog".into()))
                         .title(self.title())
