@@ -9,6 +9,7 @@ mod general_settings;
 mod hotkeys;
 mod notifications;
 mod permissions;
+mod platform;
 mod recording;
 mod tray;
 mod upload;
