@@ -125,6 +125,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Install FFmpeg
+        run: |
+          brew update
+          brew install ffmpeg
+          
       - name: Create .env file in root
         run: |
           echo "appVersion=${{ needs.draft.outputs.version }}" >> .env
