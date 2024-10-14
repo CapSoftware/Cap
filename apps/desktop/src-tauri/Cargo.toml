@@ -74,8 +74,12 @@ reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
 dotenvy_macro = "0.15.7"
 global-hotkey = "0.5.5"
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+# [target.'cfg(not(target_os = "macos"))'.dependencies]
+# nokhwa = { git = "https://github.com/CapSoftware/nokhwa", branch = "brendonovich-fork", features = [
+# 	"serialize",
+# ] }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", branch = "brendonovich-fork", features = [
+	"input-native",
 	"serialize",
 ] }
 
@@ -87,10 +91,6 @@ objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
 cocoa = "0.26.0"
 objc = "0.2.7"
 swift-rs = "1.0.6"
-nokhwa = { git = "https://github.com/CapSoftware/nokhwa", branch = "brendonovich-fork", features = [
-	"input-avfoundation",
-	"serialize",
-] }
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 
 [target.'cfg(target_os= "windows")'.dependencies]

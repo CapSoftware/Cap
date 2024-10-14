@@ -5,7 +5,7 @@
   "build": {
     "beforeDevCommand": "pnpm localdev",
     "devUrl": "http://localhost:3001",
-    "beforeBuildCommand": "node scripts/prepareSidecars.js && pnpm build",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../.output/public"
   },
   "app": {
