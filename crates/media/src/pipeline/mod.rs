@@ -29,7 +29,7 @@ impl<T: PipelineClock> Pipeline<T> {
             return Err(MediaError::ShutdownPipeline);
         };
 
-        tracing::info!("Starting pipeline execution");
+        println!("Starting pipeline execution");
         self.clock.start();
         self.control.broadcast(Control::Play).await
     }
@@ -39,7 +39,7 @@ impl<T: PipelineClock> Pipeline<T> {
             return Err(MediaError::ShutdownPipeline);
         };
 
-        tracing::info!("Pausing pipeline execution");
+        println!("Pausing pipeline execution");
         self.clock.stop();
         self.control.broadcast(Control::Pause).await
     }
@@ -49,12 +49,12 @@ impl<T: PipelineClock> Pipeline<T> {
             return Err(MediaError::ShutdownPipeline);
         };
 
-        tracing::info!("Shutting down pipeline execution");
+        println!("Shutting down pipeline execution");
         let _ = self.control.broadcast(Control::Shutdown).await;
         for (_name, task) in self.task_handles.drain(..) {
             let _ = task.join();
         }
-        tracing::info!("Pipeline has been stopped.");
+        println!("Pipeline has been stopped.");
         // TODO: Collect shutdown errors?
         Ok(())
     }

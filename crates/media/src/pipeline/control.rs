@@ -22,7 +22,7 @@ impl PipelineControlSignal {
                 // Only peek for a new signal, else relinquish control to the caller
                 match self.receiver.try_recv() {
                     Ok(control) => {
-                        tracing::info!("Received new signal: {control:?}");
+                        println!("Received new signal: {control:?}");
                         self.last_value = Some(control)
                     }
                     Err(TryRecvError::Empty) => {}
@@ -40,7 +40,7 @@ impl PipelineControlSignal {
     }
 
     pub fn blocking_last(&mut self) -> Option<Control> {
-        tracing::info!("Waiting for play signal...");
+        println!("Waiting for play signal...");
         self.last_value = self.receiver.recv().ok();
 
         self.last_value
@@ -68,13 +68,13 @@ impl ControlBroadcast {
         let mut any_dropped = false;
 
         if self.listeners.is_empty() {
-            tracing::warn!("Attempting to broadcast value without any listeners");
+            eprintln!("Attempting to broadcast value without any listeners");
         }
 
         for (name, listener) in self.listeners.iter() {
-            tracing::info!("Sending signal {value:?} to {name}");
+            println!("Sending signal {value:?} to {name}");
             if let Err(_) = listener.send_async(value).await {
-                tracing::warn!("{name} is unreachable!");
+                eprintln!("{name} is unreachable!");
                 any_dropped = true;
             }
         }

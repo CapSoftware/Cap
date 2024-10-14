@@ -89,7 +89,7 @@ impl PipelineSinkTask for H264Encoder {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         input: flume::Receiver<Self::Input>,
     ) {
-        tracing::info!("Starting {} video encoding thread", self.tag);
+        println!("Starting {} video encoding thread", self.tag);
         ready_signal.send(Ok(())).unwrap();
 
         while let Ok(frame) = input.recv() {
@@ -97,10 +97,10 @@ impl PipelineSinkTask for H264Encoder {
             self.process_frame();
         }
 
-        tracing::info!("Received last {} frame. Finishing up encoding.", self.tag);
+        println!("Received last {} frame. Finishing up encoding.", self.tag);
         self.finish();
 
-        tracing::info!("Shutting down {} video encoding thread", self.tag);
+        println!("Shutting down {} video encoding thread", self.tag);
     }
 }
 

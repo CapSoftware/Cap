@@ -37,7 +37,7 @@ impl CameraSource {
         } = camera_frame;
         match clock.timestamp_for(captured_at) {
             None => {
-                tracing::warn!("Clock is currently stopped. Dropping frames.");
+                eprintln!("Clock is currently stopped. Dropping frames.");
             }
             Some(timestamp) => {
                 frame.set_pts(Some(timestamp));
@@ -61,7 +61,7 @@ impl CameraSource {
 
         for frame in frames {
             if let Err(error) = self.process_frame(clock, output, frame) {
-                tracing::error!("{error}");
+                eprintln!("{error}");
                 break;
             }
         }
@@ -73,7 +73,7 @@ impl PipelineSourceTask for CameraSource {
 
     type Clock = SynchronisedClock<Instant>;
 
-    #[tracing::instrument(skip_all)]
+    // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
         mut clock: Self::Clock,
@@ -81,7 +81,7 @@ impl PipelineSourceTask for CameraSource {
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        tracing::info!("Preparing camera source thread...");
+        println!("Preparing camera source thread...");
         let mut frames_rx: Option<Receiver<RawCameraFrame>> = None;
         ready_signal.send(Ok(())).unwrap();
 
@@ -93,12 +93,12 @@ impl PipelineSourceTask for CameraSource {
                     match frames.recv() {
                         Ok(frame) => {
                             if let Err(error) = self.process_frame(&mut clock, &output, frame) {
-                                tracing::error!("{error}");
+                                eprintln!("{error}");
                                 break;
                             }
                         }
                         Err(_) => {
-                            tracing::error!("Lost connection with the camera feed");
+                            eprintln!("Lost connection with the camera feed");
                             break;
                         }
                     }
@@ -119,6 +119,6 @@ impl PipelineSourceTask for CameraSource {
             }
         }
 
-        tracing::info!("Shutting down screen capture source thread.");
+        println!("Shutting down screen capture source thread.");
     }
 }

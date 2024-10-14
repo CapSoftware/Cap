@@ -261,17 +261,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-net"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b948000fad4873c1c9339d60f2623323a0cfd3816e5181033c6a5cb68b2accf7"
-dependencies = [
- "async-io",
- "blocking",
- "futures-lite",
-]
-
-[[package]]
 name = "async-process"
 version = "2.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -725,21 +714,17 @@ dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
  "cpal",
- "ctrlc",
  "ffmpeg-next",
  "ffmpeg-sys-next",
  "flume 0.11.0",
  "indexmap 2.5.0",
  "nokhwa 0.10.3 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
  "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
- "scap 0.0.5",
+ "scap 0.0.5 (git+https://github.com/filleduchaos/scap?rev=8eb00ce1b9bcf)",
  "serde",
- "smol",
  "specta",
  "tempfile",
  "thiserror",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1370,16 +1355,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctrlc"
-version = "3.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90eeab0aa92f3f9b4e87f258c72b139c207d251f9cbc1080a0086b86a8870dd3"
-dependencies = [
- "nix 0.29.0",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "d3d12"
 version = "22.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1555,7 +1530,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "uuid",
  "wgpu",
 ]
@@ -5272,6 +5246,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.5"
+source = "git+https://github.com/CapSoftware/scap?rev=691bd88798d3#691bd88798d39478e09afb04d460e113097bb855"
 dependencies = [
  "cocoa 0.25.0",
  "core-graphics-helmer-fork",
@@ -5290,7 +5265,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.5"
-source = "git+https://github.com/CapSoftware/scap?rev=691bd88798d3#691bd88798d39478e09afb04d460e113097bb855"
+source = "git+https://github.com/filleduchaos/scap?rev=8eb00ce1b9bcf#8eb00ce1b9bcfa22d38f7c2857539f2c5139dfe3"
 dependencies = [
  "cocoa 0.25.0",
  "core-graphics-helmer-fork",
@@ -5686,23 +5661,6 @@ name = "smallvec"
 version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c5e1a9a646d36c3599cd173a41282daf47c44583ad367b8e6837255952e5c67"
-
-[[package]]
-name = "smol"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a33bd3e260892199c3ccfc487c88b2da2265080acb316cd920da72fdfd7c599f"
-dependencies = [
- "async-channel",
- "async-executor",
- "async-fs",
- "async-io",
- "async-lock",
- "async-net",
- "async-process",
- "blocking",
- "futures-lite",
-]
 
 [[package]]
 name = "socket2"

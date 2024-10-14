@@ -32,14 +32,14 @@ pub struct AudioInputSource {
 
 impl AudioInputSource {
     pub fn init(selected_audio_input: Option<&String>) -> Option<Self> {
-        tracing::debug!("Selected audio input: {:?}", selected_audio_input);
+        println!("Selected audio input: {:?}", selected_audio_input);
 
         let mut devices = Self::get_devices();
 
         selected_audio_input
             .and_then(|device_name| devices.swap_remove_entry(device_name))
             .map(|(device_name, (device, config))| {
-                tracing::info!("Using audio device: {}", device_name);
+                println!("Using audio device: {}", device_name);
 
                 Self {
                     device,
@@ -70,7 +70,7 @@ impl AudioInputSource {
         let get_usable_device = |device: Device| {
             device
                 .supported_input_configs()
-                .map_err(|error| tracing::debug!("Error: {error}"))
+                .map_err(|error| eprintln!("Error: {error}"))
                 .ok()
                 .and_then(|mut configs| configs.find(|c| format_for(c.sample_format()).is_some()))
                 .and_then(|config| {
@@ -94,8 +94,8 @@ impl AudioInputSource {
                 }
             }
             Err(error) => {
-                tracing::warn!("Could not access audio input devices");
-                tracing::debug!("{error}");
+                eprintln!("Could not access audio input devices");
+                eprintln!("{error}");
             }
         }
 
@@ -115,19 +115,21 @@ impl AudioInputSource {
         let data_callback = move |data: &cpal::Data, info: &cpal::InputCallbackInfo| {
             let capture_time = info.timestamp().capture;
             match clock.timestamp_for(capture_time) {
-                None => tracing::warn!("Clock is currently stopped. Dropping samples."),
+                None => eprintln!("Clock is currently stopped. Dropping samples."),
                 Some(timestamp) => {
                     let buffer = audio_info.wrap_frame(data.bytes(), timestamp.try_into().unwrap());
-                    if let Err(_) = output.send(buffer) {
-                        tracing::debug!("Pipeline is unreachable. Recording will shut down.");
-                    }
+                    // TODO(PJ): Send error when I bring error infra back online
+                    output.send(buffer).unwrap();
+                    // if let Err(_) = output.send(buffer) {
+                    //     tracing::debug!("Pipeline is unreachable. Recording will shut down.");
+                    // }
                 }
             };
         };
 
         let error_callback = |err| {
             // TODO: Handle errors such as device being disconnected. Some kind of fallback or pop-up?
-            tracing::error!("An error occurred on the audio stream: {}", err);
+            eprintln!("An error occurred on the audio stream: {}", err);
         };
 
         self.device
@@ -139,7 +141,7 @@ impl AudioInputSource {
                 None,
             )
             .map_err(|error| {
-                tracing::error!("Error while preparing audio capture: {error}");
+                eprintln!("Error while preparing audio capture: {error}");
                 MediaError::TaskLaunch("Failed to start audio capture".into())
             })
     }
@@ -162,7 +164,7 @@ impl PipelineSourceTask for AudioInputSource {
 
     type Clock = SynchronisedClock<StreamInstant>;
 
-    #[tracing::instrument(skip_all)]
+    // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
         clock: Self::Clock,
@@ -170,12 +172,12 @@ impl PipelineSourceTask for AudioInputSource {
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        tracing::info!("Preparing audio input source thread...");
+        println!("Preparing audio input source thread...");
 
         match self.build_stream(clock, output) {
             Err(error) => ready_signal.send(Err(error)).unwrap(),
             Ok(stream) => {
-                tracing::info!("Using audio input device {}", self.device_name);
+                println!("Using audio input device {}", self.device_name);
                 ready_signal.send(Ok(())).unwrap();
 
                 loop {
@@ -186,7 +188,7 @@ impl PipelineSourceTask for AudioInputSource {
                             stream
                                 .play()
                                 .expect("Failed to start audio input recording");
-                            tracing::info!("Audio input recording started.");
+                            println!("Audio input recording started.");
                         }
                         Some(Control::Pause) => {
                             stream
@@ -200,7 +202,7 @@ impl PipelineSourceTask for AudioInputSource {
                     }
                 }
 
-                tracing::info!("Shutting down audio input source thread.")
+                println!("Shutting down audio input source thread.")
             }
         }
     }

@@ -181,7 +181,7 @@ impl PipelineSourceTask for ScreenCaptureSource {
     type Clock = SynchronisedClock<RawNanoseconds>;
     type Output = FFVideo;
 
-    #[tracing::instrument(skip_all)]
+    // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
         mut clock: Self::Clock,
@@ -189,7 +189,7 @@ impl PipelineSourceTask for ScreenCaptureSource {
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        tracing::info!("Preparing screen capture source thread...");
+        println!("Preparing screen capture source thread...");
 
         let maybe_capture_window_id = match &self.options.target {
             Some(Target::Window(window)) => Some(window.id),
@@ -209,7 +209,7 @@ impl PipelineSourceTask for ScreenCaptureSource {
                         capturer.start_capture();
                         capturing = true;
 
-                        tracing::info!("Screen recording started.");
+                        println!("Screen recording started.");
                     }
 
                     match capturer.get_next_frame() {
@@ -217,14 +217,14 @@ impl PipelineSourceTask for ScreenCaptureSource {
                             let raw_timestamp = RawNanoseconds(frame.display_time);
                             match clock.timestamp_for(raw_timestamp) {
                                 None => {
-                                    tracing::warn!("Clock is currently stopped. Dropping frames.")
+                                    eprintln!("Clock is currently stopped. Dropping frames.")
                                 }
                                 Some(timestamp) => {
                                     // TODO: I wonder if we should do stride adjustments here or leave it for later (as it is now).
                                     let buffer = self.video_info.wrap_frame(&frame.data, timestamp);
 
                                     if let Err(_) = output.send(buffer) {
-                                        tracing::error!(
+                                        eprintln!(
                                             "Pipeline is unreachable. Shutting down recording."
                                         );
                                         break;
@@ -234,20 +234,20 @@ impl PipelineSourceTask for ScreenCaptureSource {
                         }
                         Ok(_) => unreachable!(),
                         Err(error) => {
-                            tracing::error!("Capture error: {error}");
+                            eprintln!("Capture error: {error}");
                             break;
                         }
                     }
                 }
                 Some(Control::Pause) => {
-                    tracing::info!("Received pause signal");
+                    println!("Received pause signal");
                     if capturing {
                         capturer.stop_capture();
                         capturing = false;
                     }
                 }
                 Some(Control::Shutdown) | None => {
-                    tracing::info!("Received shutdown signal");
+                    println!("Received shutdown signal");
                     if capturing {
                         capturer.stop_capture();
                     }
@@ -256,6 +256,6 @@ impl PipelineSourceTask for ScreenCaptureSource {
             }
         }
 
-        tracing::info!("Shutting down screen capture source thread.");
+        println!("Shutting down screen capture source thread.");
     }
 }

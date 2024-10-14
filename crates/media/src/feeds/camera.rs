@@ -58,7 +58,7 @@ impl CameraFeed {
         selected_camera: &String,
         rgba_data: Sender<Vec<u8>>,
     ) -> Result<CameraFeed, MediaError> {
-        tracing::debug!("Selected camera: {:?}", selected_camera);
+        println!("Selected camera: {:?}", selected_camera);
 
         let camera_info = find_camera(&selected_camera)?;
         let (control, control_receiver) = flume::bounded(1);
@@ -174,7 +174,7 @@ async fn start_capturing(
     Ok((video_info, join_handle))
 }
 
-#[tracing::instrument(skip_all)]
+// #[tracing::instrument(skip_all)]
 fn run_camera_feed(
     camera_info: CameraInfo,
     control: Receiver<CameraControl>,
@@ -199,34 +199,34 @@ fn run_camera_feed(
     }
 
     ready_signal.send(Ok(converter.video_info)).unwrap();
-    tracing::info!("Launched camera feed");
+    println!("Launched camera feed");
 
     loop {
         match control.try_recv() {
             Err(TryRecvError::Disconnected) => {
-                tracing::info!("Control receiver is unreachable! Shutting down");
+                println!("Control receiver is unreachable! Shutting down");
                 break;
             }
             Err(TryRecvError::Empty) => {
                 // No signal received, nothing to do
             }
             Ok(CameraControl::Shutdown) => {
-                tracing::info!("Shutdown request received.");
+                println!("Shutdown request received.");
                 break;
             }
             Ok(CameraControl::AttachRawConsumer(rgba_sender)) => {
-                tracing::warn!("Attaching to a new pipeline consumer. Any previously attached consumer will be dropped");
+                eprintln!("Attaching to a new pipeline consumer. Any previously attached consumer will be dropped");
                 maybe_raw_data = Some(rgba_sender);
             }
             Ok(CameraControl::Switch(camera_name, switch_result)) => {
                 if maybe_raw_data.is_some() {
                     switch_result.send(Err(MediaError::Any("Cannot switch cameras while the feed is attached to a running pipeline"))).unwrap();
                 } else {
-                    tracing::info!("Switching camera to {camera_name}");
+                    println!("Switching camera to {camera_name}");
 
                     match find_and_create_camera(&camera_name) {
                         Err(error) => {
-                            tracing::error!("{error}");
+                            eprintln!("{error}");
                             switch_result.send(Err(error)).unwrap();
                         }
                         Ok((new_info, mut new_camera)) => {
@@ -234,7 +234,7 @@ fn run_camera_feed(
                             let new_converter = FrameConverter::build(new_format);
 
                             if new_camera.open_stream().is_ok() {
-                                tracing::info!("Now using {camera_name}");
+                                println!("Now using {camera_name}");
                                 let _ = camera.stop_stream();
                                 switch_result
                                     .send(Ok((new_info, new_converter.video_info)))
@@ -242,7 +242,7 @@ fn run_camera_feed(
                                 camera = new_camera;
                                 converter = new_converter;
                             } else {
-                                tracing::warn!(
+                                eprintln!(
                                     "Unable to switch to {camera_name}. Still using previous camera"
                                 );
                                 switch_result
@@ -264,7 +264,7 @@ fn run_camera_feed(
 
         if dropping_send(&rgba_data, rgba_frame).is_err() {
             // TODO: Also allow changing the connection?
-            tracing::error!("Camera preview has been disconnected. Shutting down feed");
+            eprintln!("Camera preview has been disconnected. Shutting down feed");
             break;
         }
 
@@ -274,14 +274,14 @@ fn run_camera_feed(
                 captured_at,
             };
             if dropping_send(raw_data, frame).is_err() {
-                tracing::warn!("Raw data consumer has been disconnected.");
+                eprintln!("Raw data consumer has been disconnected.");
                 maybe_raw_data = None;
             }
         }
     }
 
     let _ = camera.stop_stream();
-    tracing::info!("Closed {} stream", camera.info().human_name());
+    println!("Closed {} stream", camera.info().human_name());
 }
 
 struct FrameConverter {
@@ -343,7 +343,7 @@ impl FrameConverter {
 fn dropping_send<T>(sender: &Sender<T>, value: T) -> Result<(), flume::SendError<T>> {
     sender.try_send(value).or_else(|error| match error {
         flume::TrySendError::Full(_) => {
-            tracing::warn!("Channel is full. Dropping camera frame");
+            // tracing::debug!("Channel is full. Dropping camera frame");
             Ok(())
         }
         flume::TrySendError::Disconnected(v) => Err(flume::SendError(v)),

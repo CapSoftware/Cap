@@ -79,7 +79,7 @@ impl PipelinePipeTask for AudioFilter {
         input: Receiver<Self::Input>,
         output: Sender<Self::Output>,
     ) {
-        tracing::info!("Starting {} audio filtering thread", self.tag);
+        println!("Starting {} audio filtering thread", self.tag);
         ready_signal.send(Ok(())).unwrap();
 
         while let Ok(raw_frame) = input.recv() {
@@ -87,12 +87,12 @@ impl PipelinePipeTask for AudioFilter {
             self.process_frame(&output);
         }
 
-        tracing::info!(
+        println!(
             "Received last raw {} sample. Finishing up filtering.",
             self.tag
         );
         self.finish(&output);
 
-        tracing::info!("Shutting down {} audio filtering thread", self.tag);
+        println!("Shutting down {} audio filtering thread", self.tag);
     }
 }
