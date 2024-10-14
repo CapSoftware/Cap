@@ -139,6 +139,9 @@ jobs:
       - name: Output .env file
         run: cat apps/desktop/.env
 
+      - name: Log ffmpeg version
+        run: ffmpeg -version
+
       - name: Build MacOS Apps
         working-directory: apps/desktop
         run: |
