@@ -15,8 +15,7 @@ use crate::{
     encoder::{bgra_frame, H264Encoder},
 };
 
-#[cfg(target_os = "macos")]
-use crate::macos;
+use crate::platform;
 
 #[derive(Type, Serialize, Deserialize, Debug, Clone)]
 pub struct Bounds {
@@ -51,13 +50,15 @@ pub fn list_capture_windows() -> Vec<CaptureWindow> {
 #[specta::specta]
 #[cfg(target_os = "macos")]
 pub fn list_capture_windows() -> Vec<CaptureWindow> {
+    use crate::platform;
+
     if !scap::has_permission() {
         return vec![];
     }
 
     let targets = scap::get_all_targets();
 
-    let windows = macos::get_on_screen_windows();
+    let windows = platform::get_on_screen_windows();
 
     targets
         .into_iter()
@@ -253,7 +254,7 @@ pub fn get_window_bounds(_window_number: u32) -> Option<Bounds> {
 
 #[cfg(target_os = "macos")]
 pub fn get_window_bounds(window_number: u32) -> Option<Bounds> {
-    let windows = macos::get_on_screen_windows();
+    let windows = crate::platform::get_on_screen_windows();
 
     let window = windows
         .into_iter()
@@ -280,9 +281,6 @@ fn scale_dimensions(width: u32, height: u32, max_width: u32) -> (u32, u32) {
     (new_width & !1, new_height & !1)
 }
 
-#[cfg(target_os = "macos")]
-use crate::macos::get_on_screen_windows;
-
 use std::io::Write;
 use std::process::Command;
 use tempfile::NamedTempFile;
@@ -296,7 +294,7 @@ fn bring_window_to_focus(window_id: u32) {
     println!("Attempting to bring window {} to focus", window_id);
 
     // Get the window information associated with the window id
-    let windows = get_on_screen_windows();
+    let windows = crate::platform::get_on_screen_windows();
     if let Some(window) = windows.into_iter().find(|w| w.window_number == window_id) {
         let process_id = window.process_id;
         let window_title = window.name.clone();

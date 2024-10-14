@@ -16,9 +16,6 @@ mod upload;
 mod web_api;
 mod windows;
 
-#[cfg(target_os = "macos")]
-mod macos;
-
 use audio::AppSounds;
 use auth::AuthStore;
 use camera::{list_cameras, CameraFeed};
