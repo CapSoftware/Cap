@@ -147,6 +147,9 @@ jobs:
       - name: Log ffmpeg version
         run: ffmpeg -version
 
+      - name: Cargo clean
+        run: cargo clean
+
       - name: Build MacOS Apps
         working-directory: apps/desktop
         run: |
