@@ -25,3 +25,4 @@ ffmpeg.workspace = true
 lru = "0.12.4"
 ffmpeg-sys-next = "7.0.2"
 futures = "0.3.30"
+num_cpus = "1.13.1"

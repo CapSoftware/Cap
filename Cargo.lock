@@ -728,6 +728,7 @@ dependencies = [
  "futures-intrusive",
  "lru",
  "nix 0.29.0",
+ "num_cpus",
  "serde",
  "serde_json",
  "specta",

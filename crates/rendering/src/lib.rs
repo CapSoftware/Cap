@@ -9,9 +9,17 @@ use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
+use tokio::sync::mpsc;
+use tokio::time::{timeout, Duration};
+use futures::stream::{self, StreamExt};
+use std::sync::Arc;
+use num_cpus;
+
 use cap_project::{
     AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, ProjectConfiguration, XY,
 };
+
+
 
 use std::time::Instant;
 
@@ -97,10 +105,10 @@ impl RecordingDecoders {
 pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
-    sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    sender: mpsc::Sender<Vec<u8>>,
     decoders: RecordingDecoders,
 ) -> Result<(), String> {
-    let constants = RenderVideoConstants::new(options).await?;
+    let constants = Arc::new(RenderVideoConstants::new(options).await?);
 
     println!("Setting up FFmpeg input for screen recording...");
 
@@ -109,80 +117,96 @@ pub async fn render_video_to_channel(
     let start_time = Instant::now();
 
     let duration = project.timeline().map(|t| t.duration()).unwrap_or(f64::MAX);
+    let uniforms = Arc::new(ProjectUniforms::new(&constants, &project));
+    let background = Background::from(project.background.source.clone());
 
-    let render_handle: tokio::task::JoinHandle<Result<u32, String>> = tokio::spawn(async move {
-        let mut frame_number = 0;
+    let total_frames = (30_f64 * duration) as u32;
 
-        let uniforms = ProjectUniforms::new(&constants, &project);
-        let background = Background::from(project.background.source.clone());
-
-        loop {
-            if frame_number as f64 > 30_f64 * duration {
-                break;
-            };
-
-            let time = if let Some(timeline) = project.timeline() {
-                match timeline.get_recording_time(frame_number as f64 / 30_f64) {
-                    Some(time) => time,
-                    None => break,
-                }
-            } else {
-                frame_number as f64 / 30_f64
-            };
-
-            let Some((screen_frame, camera_frame)) =
-                decoders.get_frames((time * 30.0) as u32).await
-            else {
-                break;
-            };
-
-            let frame = match produce_frame(
-                &constants,
-                &screen_frame,
-                &camera_frame,
-                background,
-                &uniforms,
-            )
-            .await
-            {
-                Ok(frame) => frame,
-                Err(e) => {
-                    eprintln!("{e}");
-                    break;
-                }
-            };
-
-            if sender.send(frame).is_err() {
-                eprintln!("Failed to send processed frame to channel");
-                break;
+    let stream = stream::iter(0..total_frames)
+        .map(|frame_number| {
+            let constants = constants.clone();
+            let uniforms = uniforms.clone();
+            let decoders = decoders.clone();
+            let project = project.clone();
+            async move {
+                process_frame(frame_number, &constants, &uniforms, &decoders, &project, background).await
             }
+        })
+        .buffer_unordered(num_cpus::get());
 
-            frame_number += 1;
-            if frame_number % 60 == 0 {
-                let elapsed = start_time.elapsed();
-                println!(
-                    "Rendered {} frames in {:?} seconds",
-                    frame_number,
-                    elapsed.as_secs_f32()
-                );
+        let frames_processed = stream
+        .fold(0, |acc, result| {
+            let sender = sender.clone(); // Clone the sender here
+            async move {
+                match result {
+                    Ok(Some((frame_number, frame))) => {
+                        if let Err(e) = sender.send(frame).await {
+                            eprintln!("Failed to send processed frame to channel: {}", e);
+                        }
+                        let new_acc = acc + 1;
+                        if new_acc % 60 == 0 {
+                            let now = Instant::now();
+                            let elapsed = now.duration_since(start_time);
+                            println!(
+                                "Rendered {} frames in {:?} seconds",
+                                new_acc,
+                                elapsed.as_secs_f32()
+                            );
+                        }
+                        new_acc
+                    }
+                    Ok(None) => acc,
+                    Err(e) => {
+                        eprintln!("Error processing frame: {}", e);
+                        acc
+                    }
+                }
             }
-        }
-
-        println!("Render loop exited");
-
-        Ok(frame_number)
-    });
-
-    let total_frames = render_handle.await.map_err(|e| e.to_string())??;
+        })
+        .await;
 
     let total_time = start_time.elapsed();
     println!(
         "Render complete. Processed {} frames in {:?} seconds",
-        total_frames,
+        frames_processed,
         total_time.as_secs_f32()
     );
 
     Ok(())
+}
+
+async fn process_frame(
+    frame_number: u32,
+    constants: &Arc<RenderVideoConstants>,
+    uniforms: &Arc<ProjectUniforms>,
+    decoders: &RecordingDecoders,
+    project: &ProjectConfiguration,
+    background: Background,
+) -> Result<Option<(u32, Vec<u8>)>, String> {
+    let time = if let Some(timeline) = project.timeline() {
+        match timeline.get_recording_time(frame_number as f64 / 30_f64) {
+            Some(time) => time,
+            None => return Ok(None),
+        }
+    } else {
+        frame_number as f64 / 30_f64
+    };
+
+    let (screen_frame, camera_frame) = match decoders.get_frames((time * 30.0) as u32).await {
+        Some(frames) => frames,
+        None => return Ok(None),
+    };
+
+    match timeout(
+        Duration::from_secs(30),
+        produce_frame(constants, &screen_frame, &camera_frame, background, uniforms),
+    )
+    .await
+    {
+        Ok(Ok(frame)) => Ok(Some((frame_number, frame))),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err("Frame production timed out".to_string()),
+    }
 }
 
 pub struct RenderVideoConstants {

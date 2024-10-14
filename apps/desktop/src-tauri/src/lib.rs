@@ -53,6 +53,7 @@ use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::watch;
+use tokio::sync::mpsc;
 use tokio::task;
 use tokio::{
     sync::{Mutex, RwLock},
@@ -730,7 +731,9 @@ async fn render_to_file_impl(
     let decoders = editor_instance.decoders.clone();
     let options = editor_instance.render_constants.options.clone();
 
-    let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    // Change this to be whatever is the most ideal for certain processors
+    let buffer_size = 60 * 3; // 3 seconds at 60 fps, or 6 seconds at 30 fps
+    let (tx_image_data, mut rx_image_data) = mpsc::channel::<Vec<u8>>(buffer_size);// Adjust buffer size as needed
 
     let output_folder = output_path.parent().unwrap();
     std::fs::create_dir_all(output_folder)
