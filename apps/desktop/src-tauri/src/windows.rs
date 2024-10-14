@@ -23,7 +23,7 @@ impl CapWindow {
             "window-capture-occluder" => Self::WindowCaptureOccluder,
             "in-progress-recording" => Self::InProgressRecording { position: None },
             "prev-recordings" => Self::PrevRecordings,
-            "permission" => Self::Permissions,
+            "permissions" => Self::Permissions,
             "feedback" => Self::Feedback,
             "upgrade" => Self::Upgrade,
             "changelog" => Self::Changelog,

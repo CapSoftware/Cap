@@ -124,9 +124,6 @@ export default async function DashboardLayout({
     findActiveSpace = spaceSelect[0];
   }
 
-  console.log("spaceSelect", spaceSelect);
-  console.log("findActiveSpace", findActiveSpace);
-
   const isSubscribed =
     (user.stripeSubscriptionId &&
       user.stripeSubscriptionStatus !== "cancelled") ||
