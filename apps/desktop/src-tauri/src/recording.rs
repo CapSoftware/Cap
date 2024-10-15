@@ -260,23 +260,23 @@ pub async fn start(
     //             mouse_moves_clone.lock().unwrap().push(mouse_event);
     //         }
 
-            if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
-                let mouse_event = MouseEvent {
-                    active_modifiers: vec![],
-                    cursor_id: get_cursor_id(),
-                    process_time_ms: elapsed,
-                    event_type: "mouseClicked".to_string(),
-                    unix_time_ms: unix_time,
-                    x: mouse_state.coords.0 as f64,
-                    y: mouse_state.coords.1 as f64,
-                };
-                mouse_clicks_clone.lock().unwrap().push(mouse_event);
-            }
+    //         if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
+    //             let mouse_event = MouseEvent {
+    //                 active_modifiers: vec![],
+    //                 cursor_id: get_cursor_id(),
+    //                 process_time_ms: elapsed,
+    //                 event_type: "mouseClicked".to_string(),
+    //                 unix_time_ms: unix_time,
+    //                 x: mouse_state.coords.0 as f64,
+    //                 y: mouse_state.coords.1 as f64,
+    //             };
+    //             mouse_clicks_clone.lock().unwrap().push(mouse_event);
+    //         }
 
-            last_mouse_state = mouse_state;
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    });
+    //         last_mouse_state = mouse_state;
+    //         tokio::time::sleep(Duration::from_millis(10)).await;
+    //     }
+    // });
 
     Ok(InProgressRecording {
         segments: vec![SystemTime::now()
