@@ -12,7 +12,7 @@ members = [
 
 [workspace.dependencies]
 anyhow = "1.0.86"
-ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "e1308f3023508afc7ac6aa589da17aaf70b57d08" }
+ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "91b29d09a8c7cb4f5659c38f1f0924b980a30cba" }
 ffmpeg-sys-next = "7.1.0"
 tokio = { version = "1.39.3", features = [
 	"macros",

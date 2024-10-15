@@ -782,15 +782,14 @@ async fn render_to_file_impl(
 
                 tx
             };
-
-            let audio = if let Some(audio) = audio {
+            let audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
                 let pipe_path = audio_dir.path().join("audio.pipe");
                 create_named_pipe(&pipe_path).unwrap();
 
                 ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
                     input: pipe_path.clone().into_os_string(),
                     sample_format: "f64le".to_string(),
-                    sample_rate: audio.sample_rate,
+                    sample_rate: audio_data.sample_rate,
                     channels: 1,
                 });
 
@@ -812,7 +811,7 @@ async fn render_to_file_impl(
                 });
 
                 Some(AudioRender {
-                    data: audio,
+                    data: audio_data.clone(),
                     pipe_tx: tx,
                 })
             } else {
@@ -1277,6 +1276,10 @@ fn show_previous_recordings_window(app: AppHandle) {
 #[specta::specta]
 fn open_editor(app: AppHandle, id: String) {
     println!("Opening editor for recording: {}", id);
+
+    if let Some(window) = app.get_webview_window("camera") {
+        window.close().ok();
+    }
 
     CapWindow::Editor { project_id: id }.show(&app).unwrap();
 }
@@ -2292,11 +2295,15 @@ pub async fn run() {
             let label = window.label();
             if let CapWindow::Editor { project_id } = CapWindow::from_label(label) {
                 if let WindowEvent::CloseRequested { .. } = event {
-                    let app = window.app_handle().clone();
+                    let app_handle = window.app_handle().clone();
                     tokio::spawn(async move {
-                        if let Some(editor) = remove_editor_instance(&app, project_id).await {
+                        if let Some(editor) = remove_editor_instance(&app_handle, project_id).await
+                        {
                             editor.dispose().await;
+                            std::mem::drop(editor);
                         }
+
+                        tokio::task::yield_now().await;
                     });
                 }
             }
@@ -2356,7 +2363,18 @@ pub async fn remove_editor_instance(
 
     let mut map = map.lock().await;
 
-    map.remove(&video_id).clone()
+    let result = if let Some(editor) = map.remove(&video_id) {
+        editor.dispose().await;
+        Some(editor)
+    } else {
+        None
+    };
+
+    if let Some(window) = app.get_webview_window(&format!("editor-{}", video_id)) {
+        window.close().ok();
+    }
+
+    result
 }
 
 pub async fn upsert_editor_instance(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {

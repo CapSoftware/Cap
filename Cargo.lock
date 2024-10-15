@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.0-beta.5.6.1"
+version = "0.3.0-beta.5.6.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -1891,7 +1891,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-next"
 version = "7.1.0"
-source = "git+https://github.com/CapSoftware/rust-ffmpeg?rev=e1308f3023508afc7ac6aa589da17aaf70b57d08#e1308f3023508afc7ac6aa589da17aaf70b57d08"
+source = "git+https://github.com/CapSoftware/rust-ffmpeg?rev=91b29d09a8c7cb4f5659c38f1f0924b980a30cba#91b29d09a8c7cb4f5659c38f1f0924b980a30cba"
 dependencies = [
  "bitflags 2.6.0",
  "ffmpeg-sys-next",

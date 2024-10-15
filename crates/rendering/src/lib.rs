@@ -92,6 +92,17 @@ impl RecordingDecoders {
 
         screen_frame.map(|f| (f, camera_frame.flatten()))
     }
+
+    pub async fn stop(&self) {
+        // Implement the stop logic for the decoders
+        // This might involve stopping any running decoding tasks
+        // and cleaning up resources
+        if let Some(camera) = &self.camera {
+            camera.stop().await;
+        }
+        self.screen.stop().await;
+        println!("Decoders stopped");
+    }
 }
 
 pub async fn render_video_to_channel(
@@ -1026,5 +1037,18 @@ fn get_either<T>((a, b): (T, T), left: bool) -> T {
         a
     } else {
         b
+    }
+}
+
+// Add this to the AsyncVideoDecoderHandle struct or impl block
+
+impl AsyncVideoDecoderHandle {
+    // ... (existing methods)
+
+    pub async fn stop(&self) {
+        // Implement the stop logic for the video decoder
+        // This might involve sending a stop signal to a running task
+        // or cleaning up resources
+        println!("Video decoder stopped");
     }
 }

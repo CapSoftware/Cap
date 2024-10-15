@@ -5,6 +5,7 @@ use std::{
     thread::{self, JoinHandle},
     time::Instant,
 };
+use tracing::{error, info, warn};
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
@@ -186,6 +187,7 @@ fn run_camera_feed(
     let mut camera = match create_camera(&camera_info) {
         Ok(cam) => cam,
         Err(error) => {
+            error!("Failed to create camera: {:?}", error);
             ready_signal.send(Err(error)).unwrap();
             return;
         }
@@ -194,10 +196,12 @@ fn run_camera_feed(
     let mut converter = FrameConverter::build(camera.camera_format());
 
     if let Err(error) = camera.open_stream() {
+        error!("Failed to open camera stream: {:?}", error);
         ready_signal.send(Err(error.into())).unwrap();
         return;
     }
 
+    info!("Camera stream opened successfully");
     ready_signal.send(Ok(converter.video_info)).unwrap();
     println!("Launched camera feed");
 
@@ -256,26 +260,35 @@ fn run_camera_feed(
         }
 
         // Actual data capture
-        let raw_buffer = camera.frame().unwrap();
-        // TODO: Merge fix in nokhwa lib to use presentation timestamps from the system, like scap does
-        let captured_at = Instant::now();
+        match camera.frame() {
+            Ok(raw_buffer) => {
+                // TODO: Merge fix in nokhwa lib to use presentation timestamps from the system, like scap does
+                let captured_at = Instant::now();
 
-        let rgba_frame = converter.rgba(&raw_buffer);
+                let rgba_frame = converter.rgba(&raw_buffer);
 
-        if dropping_send(&rgba_data, rgba_frame).is_err() {
-            // TODO: Also allow changing the connection?
-            eprintln!("Camera preview has been disconnected. Shutting down feed");
-            break;
-        }
+                if dropping_send(&rgba_data, rgba_frame).is_err() {
+                    // TODO: Also allow changing the connection?
+                    eprintln!("Camera preview has been disconnected. Shutting down feed");
+                    break;
+                }
 
-        if let Some(ref raw_data) = maybe_raw_data {
-            let frame = RawCameraFrame {
-                frame: converter.raw(&raw_buffer),
-                captured_at,
-            };
-            if dropping_send(raw_data, frame).is_err() {
-                eprintln!("Raw data consumer has been disconnected.");
-                maybe_raw_data = None;
+                if let Some(ref raw_data) = maybe_raw_data {
+                    let frame = RawCameraFrame {
+                        frame: converter.raw(&raw_buffer),
+                        captured_at,
+                    };
+                    if dropping_send(raw_data, frame).is_err() {
+                        eprintln!("Raw data consumer has been disconnected.");
+                        maybe_raw_data = None;
+                    }
+                }
+            }
+            Err(error) => {
+                warn!("Failed to capture frame: {:?}", error);
+                // Optionally, add a small delay to avoid busy-waiting
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                continue;
             }
         }
     }
