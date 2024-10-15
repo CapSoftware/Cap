@@ -1230,6 +1230,11 @@ async fn remove_fake_window(
 #[tauri::command(async)]
 #[specta::specta]
 fn show_previous_recordings_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("prev-recordings") {
+        println!("prev-recordings window already exists");
+        return;
+    }
+
     let window = CapWindow::PrevRecordings.show(&app).unwrap();
 
     tokio::spawn(async move {

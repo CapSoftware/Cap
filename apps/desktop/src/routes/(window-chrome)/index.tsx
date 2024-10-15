@@ -4,6 +4,7 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 import { createMutation, createQuery } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
+import { Window } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
   Show,
@@ -61,8 +62,11 @@ export default function () {
     commands.showPreviousRecordingsWindow();
   });
 
-  onMount(() => {
-    commands.showPreviousRecordingsWindow();
+  onMount(async () => {
+    const w = await Window.getByLabel("prev-recordings");
+    if (!w) {
+      await commands.showPreviousRecordingsWindow();
+    }
   });
 
   const isRecording = () => !!currentRecording.data;
