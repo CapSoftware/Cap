@@ -3,10 +3,7 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     ptr::{null, null_mut},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
-    },
+    sync::{mpsc, Arc},
 };
 
 use ffmpeg::{
@@ -25,7 +22,6 @@ pub type DecodedFrame = Arc<Vec<u8>>;
 
 enum VideoDecoderMessage {
     GetFrame(u32, tokio::sync::oneshot::Sender<Option<Arc<Vec<u8>>>>),
-    Stop(tokio::sync::oneshot::Sender<()>),
 }
 
 fn ts_to_frame(ts: i64, time_base: Rational, frame_rate: Rational) -> u32 {
@@ -41,7 +37,6 @@ pub struct AsyncVideoDecoder;
 impl AsyncVideoDecoder {
     pub fn spawn(path: PathBuf) -> AsyncVideoDecoderHandle {
         let (tx, rx) = mpsc::channel();
-        let is_stopped = Arc::new(AtomicBool::new(false));
 
         std::thread::spawn(move || {
             let mut input = ffmpeg::format::input(&path).unwrap();
@@ -280,45 +275,25 @@ impl AsyncVideoDecoder {
                             println!("failed to send frame {frame_number}");
                         }
                     }
-                    VideoDecoderMessage::Stop(sender) => {
-                        sender.send(()).ok();
-                        break;
-                    }
                 }
             }
         });
 
-        AsyncVideoDecoderHandle {
-            sender: tx,
-            is_stopped,
-        }
+        AsyncVideoDecoderHandle { sender: tx }
     }
 }
 
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
     sender: mpsc::Sender<VideoDecoderMessage>,
-    is_stopped: Arc<AtomicBool>,
 }
 
 impl AsyncVideoDecoderHandle {
-    pub async fn stop(&self) {
-        if !self.is_stopped.load(Ordering::SeqCst) {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            self.sender.send(VideoDecoderMessage::Stop(tx)).ok();
-            rx.await.ok();
-            self.is_stopped.store(true, Ordering::SeqCst);
-        }
-    }
-
     pub async fn get_frame(&self, frame_number: u32) -> Option<Arc<Vec<u8>>> {
-        if self.is_stopped.load(Ordering::SeqCst) {
-            return None;
-        }
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.sender
             .send(VideoDecoderMessage::GetFrame(frame_number, tx))
-            .ok()?;
+            .unwrap();
         rx.await.ok().flatten()
     }
 }

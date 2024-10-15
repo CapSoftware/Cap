@@ -1,8 +1,4 @@
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    sync::Arc,
-    time::Instant,
-};
+use std::{sync::Arc, time::Instant};
 
 use cap_project::{BackgroundSource, ProjectConfiguration};
 use cap_rendering::{decoder::DecodedFrame, produce_frame, ProjectUniforms, RenderVideoConstants};
@@ -118,12 +114,10 @@ pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
     frame_tx: mpsc::UnboundedSender<SocketMessage>,
     render_constants: Arc<RenderVideoConstants>,
-    shutdown: Arc<AtomicBool>,
 }
 
 pub struct RendererHandle {
     tx: mpsc::Sender<RendererMessage>,
-    shutdown: Arc<AtomicBool>,
 }
 
 impl Renderer {
@@ -132,85 +126,78 @@ impl Renderer {
         frame_tx: mpsc::UnboundedSender<SocketMessage>,
     ) -> RendererHandle {
         let (tx, rx) = mpsc::channel(4);
-        let shutdown = Arc::new(AtomicBool::new(false));
 
         let this = Self {
             rx,
             frame_tx,
             render_constants,
-            shutdown: shutdown.clone(),
         };
 
         tokio::spawn(this.run());
 
-        RendererHandle { tx, shutdown }
+        RendererHandle { tx }
     }
 
     async fn run(mut self) {
         let mut frame_task: Option<JoinHandle<()>> = None;
 
-        while !self.shutdown.load(Ordering::SeqCst) {
-            tokio::select! {
-                Some(msg) = self.rx.recv() => {
-                    match msg {
-                        RendererMessage::RenderFrame {
-                            screen_frame,
-                            camera_frame,
-                            background,
-                            uniforms,
-                            finished,
-                        } => {
-                            if let Some(task) = frame_task.as_ref() {
-                                if task.is_finished() {
-                                    frame_task = None
-                                } else {
-                                    continue;
-                                }
+        loop {
+            while let Some(msg) = self.rx.recv().await {
+                match msg {
+                    RendererMessage::RenderFrame {
+                        screen_frame,
+                        camera_frame,
+                        background,
+                        uniforms,
+                        finished,
+                    } => {
+                        if let Some(task) = frame_task.as_ref() {
+                            if task.is_finished() {
+                                frame_task = None
+                            } else {
+                                continue;
                             }
-
-                            let render_constants = self.render_constants.clone();
-                            let frame_tx = self.frame_tx.clone();
-
-                            frame_task = Some(tokio::spawn(async move {
-                                let time = Instant::now();
-                                let frame = produce_frame(
-                                    &render_constants,
-                                    &screen_frame,
-                                    &camera_frame,
-                                    cap_rendering::Background::from(background),
-                                    &uniforms,
-                                )
-                                .await
-                                .unwrap();
-
-                                frame_tx
-                                    .send(SocketMessage::Frame {
-                                        data: frame,
-                                        width: uniforms.output_size.0,
-                                        height: uniforms.output_size.1,
-                                    })
-                                    .ok();
-                                finished.send(()).ok();
-                            }));
                         }
-                        RendererMessage::Stop { finished } => {
-                            // Cancel any ongoing frame task
-                            if let Some(task) = frame_task.take() {
-                                task.abort();
-                            }
-                            // Acknowledge the stop
-                            let _ = finished.send(());
-                            // Set the shutdown flag
-                            self.shutdown.store(true, Ordering::SeqCst);
-                        }
+
+                        let render_constants = self.render_constants.clone();
+                        let frame_tx = self.frame_tx.clone();
+
+                        frame_task = Some(tokio::spawn(async move {
+                            let time = Instant::now();
+                            let frame = produce_frame(
+                                &render_constants,
+                                &screen_frame,
+                                &camera_frame,
+                                cap_rendering::Background::from(background),
+                                &uniforms,
+                            )
+                            .await
+                            .unwrap();
+                            // println!("produced frame in {:?}", time.elapsed());
+
+                            frame_tx
+                                .send(SocketMessage::Frame {
+                                    data: frame,
+                                    width: uniforms.output_size.0,
+                                    height: uniforms.output_size.1,
+                                })
+                                .ok();
+                            finished.send(()).ok();
+                        }));
                     }
-                }
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                    // Check shutdown flag periodically
+                    RendererMessage::Stop { finished } => {
+                        // Cancel any ongoing frame task
+                        if let Some(task) = frame_task.take() {
+                            task.abort();
+                        }
+                        // Acknowledge the stop
+                        let _ = finished.send(());
+                        // Exit the run loop
+                        return;
+                    }
                 }
             }
         }
-        println!("Renderer run loop exited");
     }
 }
 
@@ -241,22 +228,12 @@ impl RendererHandle {
     }
 
     pub async fn stop(&self) {
-        // Only proceed if we haven't already shut down
-        if !self.shutdown.swap(true, Ordering::SeqCst) {
-            // Send a stop message to the renderer
-            let (tx, rx) = oneshot::channel();
-            match self.tx.send(RendererMessage::Stop { finished: tx }).await {
-                Ok(_) => {
-                    // Wait for the renderer to acknowledge the stop
-                    let _ = rx.await;
-                    println!("Renderer stopped successfully");
-                }
-                Err(_) => {
-                    println!("Renderer was already stopped");
-                }
-            }
-        } else {
-            println!("Renderer stop was already requested");
+        // Send a stop message to the renderer
+        let (tx, rx) = oneshot::channel();
+        if let Err(_) = self.tx.send(RendererMessage::Stop { finished: tx }).await {
+            println!("Failed to send stop message to renderer");
         }
+        // Wait for the renderer to acknowledge the stop
+        let _ = rx.await;
     }
 }
