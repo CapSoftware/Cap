@@ -145,7 +145,7 @@ export default function () {
 
   const selectedWindow = () => {
     const d = options.data?.captureTarget;
-    if (d?.type !== "window") return;
+    if (d?.variant !== "window") return;
     return windows.data?.find((data) => data.id === d.id);
   };
 
@@ -232,7 +232,7 @@ export default function () {
         open={windowSelectOpen()}
         onOpenChange={(o: boolean) => {
           // prevents tab onChange from interfering with dropdown trigger click
-          if (o === false && options.data?.captureTarget.type === "screen")
+          if (o === false && options.data?.captureTarget.variant === "screen")
             return;
           setWindowSelectOpen(o);
         }}
@@ -248,25 +248,25 @@ export default function () {
           if (!d || !options.data) return;
           commands.setRecordingOptions({
             ...options.data,
-            captureTarget: { type: "window", id: d.id },
+            captureTarget: { variant: "window", ...d },
           });
           setWindowSelectOpen(false);
         }}
         placement="top-end"
       >
         <SwitchTab
-          value={options.data?.captureTarget.type}
+          value={options.data?.captureTarget.variant}
           disabled={isRecording()}
           onChange={(s) => {
             if (!options.data) return;
-            if (options.data?.captureTarget.type === s) {
+            if (options.data?.captureTarget.variant === s) {
               setWindowSelectOpen(false);
               return;
             }
             if (s === "screen") {
               commands.setRecordingOptions({
                 ...options.data,
-                captureTarget: { type: "screen" },
+                captureTarget: { variant: "screen" },
               });
               setWindowSelectOpen(false);
             } else if (s === "window") {
@@ -492,7 +492,7 @@ export default function () {
                   await requestPermission("microphone");
                   if (permissions?.data?.microphone === "granted") {
                     commands.setRecordingOptions({
-                      ...options.data,
+                      ...options.data!,
                       audioInputName: audioDevice().name,
                     });
                   }

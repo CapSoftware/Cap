@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, sync::Mutex as StdMutex, time::Duration};
 
 use cap_project::ProjectConfiguration;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderVideoConstants};
@@ -11,7 +11,7 @@ use tokio::{sync::watch, time::Instant};
 use crate::{audio::AudioData, editor, project_recordings::ProjectRecordings};
 
 pub struct Playback {
-    pub audio: Option<AudioData>,
+    pub audio: Arc<StdMutex<Option<AudioData>>>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
     pub decoders: RecordingDecoders,
@@ -60,9 +60,10 @@ impl Playback {
                 .map(|t| t.duration())
                 .unwrap_or(f64::MAX);
 
-            if let Some(audio) = self.audio.clone() {
+            // Lock the mutex and check if audio data is available
+            if let Some(audio_data) = self.audio.lock().unwrap().as_ref() {
                 AudioPlayback {
-                    audio,
+                    audio: audio_data.clone(),
                     stop_rx: stop_rx.clone(),
                     start_frame_number: self.start_frame_number,
                     duration,
