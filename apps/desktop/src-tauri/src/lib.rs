@@ -782,7 +782,7 @@ async fn render_to_file_impl(
 
                 tx
             };
-            let audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
+            let audio = if let Some((audio_data, _)) = audio.lock().unwrap().as_ref() {
                 let pipe_path = audio_dir.path().join("audio.pipe");
                 create_named_pipe(&pipe_path).unwrap();
 

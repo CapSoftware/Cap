@@ -7,6 +7,7 @@ use cap_project::{ProjectConfiguration, RecordingMeta};
 use cap_rendering::decoder::AsyncVideoDecoder;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
 use std::ops::Deref;
+use std::process::Child;
 use std::sync::Mutex as StdMutex;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
@@ -16,7 +17,7 @@ const FPS: u32 = 30;
 pub struct EditorInstance {
     pub project_path: PathBuf,
     pub id: String,
-    pub audio: Arc<StdMutex<Option<AudioData>>>,
+    pub audio: Arc<StdMutex<Option<(AudioData, Child)>>>,
     pub ws_port: u16,
     pub decoders: RecordingDecoders,
     pub recordings: ProjectRecordings,
@@ -78,28 +79,35 @@ impl EditorInstance {
                 let audio_path = project_path.join(&meta.path);
 
                 // TODO: Use ffmpeg crate instead of command line
-                let stdout = FFmpeg::new()
+                let mut ffmpeg = FFmpeg::new();
+                let mut child = ffmpeg
                     .command
                     .arg("-i")
                     .arg(audio_path)
                     .args(["-f", "f64le", "-acodec", "pcm_f64le"])
                     .args(["-ar", &recording.sample_rate.to_string()])
                     .args(["-ac", &recording.channels.to_string(), "-"])
-                    .output()
-                    .unwrap()
-                    .stdout;
+                    .stdout(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
 
-                let buffer = stdout
+                let stdout = child.stdout.take().unwrap();
+                let buffer = std::io::Read::bytes(stdout)
+                    .collect::<Result<Vec<u8>, _>>()
+                    .unwrap()
                     .chunks_exact(8)
-                    .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+                    .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
                     .collect::<Vec<_>>();
 
                 println!("audio buffer length: {}", buffer.len());
 
-                AudioData {
-                    buffer: Arc::new(buffer),
-                    sample_rate: recording.sample_rate,
-                }
+                (
+                    AudioData {
+                        buffer: Arc::new(buffer),
+                        sample_rate: recording.sample_rate,
+                    },
+                    child,
+                )
             });
 
         let (frame_tx, frame_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -162,7 +170,7 @@ impl EditorInstance {
         if let Some(task) = state.preview_task.take() {
             println!("Stopping preview");
             task.abort();
-            task.await.ok(); // Await the task to ensure it's fully stopped
+            task.await.ok();
         }
 
         // Stop WebSocket server
@@ -179,10 +187,11 @@ impl EditorInstance {
         println!("Stopping decoders");
         self.decoders.stop().await;
 
-        // Clear audio data
-        if self.audio.lock().unwrap().is_some() {
-            println!("Clearing audio data");
-            *self.audio.lock().unwrap() = None; // Explicitly drop the audio data
+        // Clear audio data and stop FFmpeg process
+        if let Some((_, mut child)) = self.audio.lock().unwrap().take() {
+            println!("Stopping FFmpeg process and clearing audio data");
+            child.kill().expect("Failed to kill FFmpeg process");
+            child.wait().expect("Failed to wait for FFmpeg process");
         }
 
         // Cancel any remaining tasks
@@ -207,8 +216,16 @@ impl EditorInstance {
 
             let start_frame_number = state.playhead_position;
 
+            // Clone the AudioData outside the MutexGuard
+            let audio_data = self
+                .audio
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|(audio_data, _)| audio_data.clone());
+
             let playback_handle = playback::Playback {
-                audio: Arc::clone(&self.audio),
+                audio: Arc::new(StdMutex::new(audio_data)),
                 renderer: self.renderer.clone(),
                 render_constants: self.render_constants.clone(),
                 decoders: self.decoders.clone(),

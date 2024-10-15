@@ -14,6 +14,7 @@ import {
   createSignal,
   on,
   onMount,
+  onCleanup,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { createMutation } from "@tanstack/solid-query";
@@ -67,7 +68,6 @@ export function Editor() {
     </Show>
   );
 }
-
 function Inner() {
   const {
     project,
@@ -79,10 +79,14 @@ function Inner() {
     previewTime,
   } = useEditorContext();
 
-  onMount(() => {
-    events.editorStateChanged.listen((e) => {
+  onMount(async () => {
+    const unsubscribe = await events.editorStateChanged.listen((e) => {
       renderFrame.clear();
       setPlaybackTime(e.payload.playhead_position / 30);
+    });
+
+    onCleanup(() => {
+      unsubscribe();
     });
   });
 
@@ -141,9 +145,9 @@ function Inner() {
 
     document.addEventListener("keydown", handleKeyDown);
 
-    return () => {
+    onCleanup(() => {
       document.removeEventListener("keydown", handleKeyDown);
-    };
+    });
   });
 
   return (
