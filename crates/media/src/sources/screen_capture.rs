@@ -67,6 +67,7 @@ impl PartialEq<Target> for ScreenCaptureTarget {
 pub struct ScreenCaptureSource {
     options: Options,
     video_info: VideoInfo,
+    target: ScreenCaptureTarget,
 }
 
 impl ScreenCaptureSource {
@@ -131,6 +132,7 @@ impl ScreenCaptureSource {
 
         Self {
             options,
+            target: capture_target.clone(),
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps),
         }
     }
@@ -191,8 +193,8 @@ impl PipelineSourceTask for ScreenCaptureSource {
     ) {
         println!("Preparing screen capture source thread...");
 
-        let maybe_capture_window_id = match &self.options.target {
-            Some(Target::Window(window)) => Some(window.id),
+        let maybe_capture_window_id = match &self.target {
+            ScreenCaptureTarget::Window(window) => Some(window.id),
             _ => None,
         };
         let mut capturer = Capturer::new(self.options.clone());
