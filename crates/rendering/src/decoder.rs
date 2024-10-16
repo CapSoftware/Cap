@@ -143,16 +143,24 @@ impl AsyncVideoDecoder {
                                     break;
                                 };
 
-                                if stream.index() == input_stream_index {
-                                    decoder.send_packet(&packet).ok();
+                            if stream.index() == input_stream_index {
+                                let start_offset = stream.start_time();
+                                let packet_frame =
+                                    ts_to_frame(packet.pts().unwrap(), time_base, frame_rate);
+                                // println!("sending frame {packet_frame} packet");
 
-                                    while decoder.receive_frame(&mut temp_frame).is_ok() {
-                                        let current_frame = ts_to_frame(
-                                            temp_frame.pts().unwrap(),
-                                            time_base,
-                                            frame_rate,
-                                        );
-                                        last_decoded_frame = Some(current_frame);
+                                decoder.send_packet(&packet).ok(); // decode failures are ok, we just fail to return a frame
+
+                                let mut exit = false;
+
+                                while decoder.receive_frame(&mut temp_frame).is_ok() {
+                                    let current_frame = ts_to_frame(
+                                        temp_frame.pts().unwrap() - start_offset,
+                                        time_base,
+                                        frame_rate,
+                                    );
+                                    // println!("processing frame {current_frame}");
+                                    last_decoded_frame = Some(current_frame);
 
                                         let hw_frame = hw_device.as_ref().and_then(|d| d.get_hwframe(&temp_frame));
                                         let frame = hw_frame.as_ref().unwrap_or(&temp_frame);

@@ -4,11 +4,23 @@ members = [
 	"apps/desktop/src-tauri",
 	"crates/rendering",
 	"crates/ffmpeg",
+	"crates/media",
 	"crates/utils",
 	"crates/project",
 	"crates/editor",
 ]
 
 [workspace.dependencies]
-ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "11f8d264bbc0" }
+anyhow = "1.0.86"
+ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "91b29d09a8c7cb4f5659c38f1f0924b980a30cba" }
+ffmpeg-sys-next = "7.1.0"
+tokio = { version = "1.39.3", features = [
+	"macros",
+	"process",
+	"fs",
+	"sync",
+	"rt",
+	"rt-multi-thread",
+	"time",
+] }
 tauri = { version = "2.0.0-rc" }
