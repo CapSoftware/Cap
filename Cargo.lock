@@ -787,6 +787,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
+ "windows 0.52.0",
 ]
 
 [[package]]
@@ -3859,9 +3860,9 @@ source = "git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork#523
 dependencies = [
  "flume 0.10.14",
  "image 0.24.9",
- "nokhwa-bindings-linux",
+ "nokhwa-bindings-linux 0.1.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
  "nokhwa-bindings-macos 0.2.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
- "nokhwa-bindings-windows",
+ "nokhwa-bindings-windows 0.4.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
  "nokhwa-core 0.1.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
  "paste",
  "serde",
@@ -3875,7 +3876,9 @@ source = "git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1#2de5a760d5
 dependencies = [
  "flume 0.10.14",
  "image 0.24.9",
+ "nokhwa-bindings-linux 0.1.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
  "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "nokhwa-bindings-windows 0.4.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
  "nokhwa-core 0.1.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
  "paste",
  "serde",
@@ -3888,6 +3891,16 @@ version = "0.1.0"
 source = "git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork#523b6d9b6266da8d1d9495a64506953961b748be"
 dependencies = [
  "nokhwa-core 0.1.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
+ "v4l",
+ "v4l2-sys-mit",
+]
+
+[[package]]
+name = "nokhwa-bindings-linux"
+version = "0.1.0"
+source = "git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1#2de5a760d5f1abfc062bf7d7fec155e8a0eafdcd"
+dependencies = [
+ "nokhwa-core 0.1.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
  "v4l",
  "v4l2-sys-mit",
 ]
@@ -3928,6 +3941,16 @@ version = "0.4.0"
 source = "git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork#523b6d9b6266da8d1d9495a64506953961b748be"
 dependencies = [
  "nokhwa-core 0.1.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
+ "once_cell",
+ "windows 0.43.0",
+]
+
+[[package]]
+name = "nokhwa-bindings-windows"
+version = "0.4.0"
+source = "git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1#2de5a760d5f1abfc062bf7d7fec155e8a0eafdcd"
+dependencies = [
+ "nokhwa-core 0.1.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
  "once_cell",
  "windows 0.43.0",
 ]
