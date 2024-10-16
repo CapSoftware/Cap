@@ -1230,7 +1230,7 @@ async fn remove_fake_window(
 #[tauri::command(async)]
 #[specta::specta]
 fn show_previous_recordings_window(app: AppHandle) {
-    if let Some(window) = app.get_webview_window("prev-recordings") {
+    if app.get_webview_window("prev-recordings").is_some() {
         println!("prev-recordings window already exists");
         return;
     }
@@ -1267,7 +1267,7 @@ fn show_previous_recordings_window(app: AppHandle) {
                     && mouse_position.y <= y_max
                 {
                     ignore = false;
-                    ShowCapturesPanel.emit(&app).ok();
+                    // ShowCapturesPanel.emit(&app).ok();
                     break;
                 }
             }

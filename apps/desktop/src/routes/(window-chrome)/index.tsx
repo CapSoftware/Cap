@@ -63,10 +63,7 @@ export default function () {
   });
 
   onMount(async () => {
-    const w = await Window.getByLabel("prev-recordings");
-    if (!w) {
-      await commands.showPreviousRecordingsWindow();
-    }
+    await commands.showPreviousRecordingsWindow();
   });
 
   const isRecording = () => !!currentRecording.data;
