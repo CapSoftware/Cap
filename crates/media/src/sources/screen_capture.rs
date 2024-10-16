@@ -32,24 +32,8 @@ pub struct CaptureWindow {
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
     Window(CaptureWindow),
-    // TODO: Bring back selectable screens/multi-screen support once I figure out the UI
     Screen,
-    // Screen {
-    //     id: u32,
-    //     name: String,
-    // },
 }
-
-// impl Default for ScreenCaptureTarget {
-//     fn default() -> Self {
-//         let target = scap::targets::get_main_display();
-
-//         Self::Screen {
-//             id: target.id,
-//             name: target.title,
-//         }
-//     }
-// }
 
 impl PartialEq<Target> for ScreenCaptureTarget {
     fn eq(&self, other: &Target) -> bool {
@@ -57,7 +41,6 @@ impl PartialEq<Target> for ScreenCaptureTarget {
             (Self::Window(capture_window), Target::Window(window)) => {
                 window.id == capture_window.id
             }
-            // (Self::Screen { id, .. }, Target::Display(display)) => display.id == *id,
             (Self::Screen, Target::Display(_)) => true,
             _ => false,
         }
@@ -72,7 +55,6 @@ pub struct ScreenCaptureSource {
 impl ScreenCaptureSource {
     pub const DEFAULT_FPS: u32 = 30;
 
-    // TODO: Settings that can be passed here to control video quality
     pub fn init(
         capture_target: &ScreenCaptureTarget,
         fps: Option<u32>,
@@ -82,13 +64,6 @@ impl ScreenCaptureSource {
         let output_resolution = resolution.unwrap_or(Resolution::Captured);
         let targets = scap::get_all_targets();
 
-        // TODO: Revert to using actual target not crop area
-        // warning: this will fall back to the default display if the selected capture target
-        // is not in the current list
-        // let target = targets
-        //     .iter()
-        //     .find(|target| capture_target.eq(target))
-        //     .cloned();
         let excluded_targets: Vec<scap::Target> = targets
             .into_iter()
             .filter(|target| match target {
@@ -117,7 +92,6 @@ impl ScreenCaptureSource {
 
         let options = Options {
             fps,
-            // target,
             show_cursor: true,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
@@ -151,23 +125,18 @@ impl ScreenCaptureSource {
             .into_iter()
             .filter_map(|target| match target {
                 Target::Window(window) => {
-                    platform_windows.get(&window.id).map(|platform_window| {
-                        CaptureWindow {
+                    platform_windows
+                        .get(&window.id)
+                        .map(|platform_window| CaptureWindow {
                             id: window.id,
-                            // TODO: Only include window name if application has more than one window open?
                             name: format!(
                                 "{} - {}",
                                 platform_window.owner_name, platform_window.name
                             ),
                             bounds: platform_window.bounds,
-                        }
-                    })
+                        })
                 }
                 Target::Display(_) => None,
-                // Target::Display(display) => Some(ScreenCaptureTarget::Screen {
-                //     id: display.id,
-                //     name: display.title,
-                // }),
             })
             .collect()
     }
@@ -181,7 +150,6 @@ impl PipelineSourceTask for ScreenCaptureSource {
     type Clock = SynchronisedClock<RawNanoseconds>;
     type Output = FFVideo;
 
-    // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
         mut clock: Self::Clock,
@@ -220,8 +188,40 @@ impl PipelineSourceTask for ScreenCaptureSource {
                                     eprintln!("Clock is currently stopped. Dropping frames.")
                                 }
                                 Some(timestamp) => {
-                                    // TODO: I wonder if we should do stride adjustments here or leave it for later (as it is now).
-                                    let buffer = self.video_info.wrap_frame(&frame.data, timestamp);
+                                    let mut buffer = FFVideo::new(
+                                        self.video_info.pixel_format,
+                                        self.video_info.width,
+                                        self.video_info.height,
+                                    );
+                                    buffer.set_pts(Some(timestamp));
+
+                                    let bytes_per_pixel = 4; // For BGRA format
+                                    let width_in_bytes = frame.width as usize * bytes_per_pixel;
+                                    let src_stride = width_in_bytes;
+                                    let dst_stride = buffer.stride(0) as usize;
+                                    let height = frame.height as usize;
+
+                                    let src_data = &frame.data;
+                                    let dst_data = buffer.data_mut(0);
+
+                                    // Ensure we don't go out of bounds
+                                    if src_data.len() < src_stride * height
+                                        || dst_data.len() < dst_stride * height
+                                    {
+                                        eprintln!("Frame data size mismatch.");
+                                        break;
+                                    }
+
+                                    // Copy data line by line considering strides
+                                    for y in 0..height {
+                                        let src_offset = y * src_stride;
+                                        let dst_offset = y * dst_stride;
+                                        // Copy only the width_in_bytes to avoid overwriting
+                                        dst_data[dst_offset..dst_offset + width_in_bytes]
+                                            .copy_from_slice(
+                                                &src_data[src_offset..src_offset + width_in_bytes],
+                                            );
+                                    }
 
                                     if let Err(_) = output.send(buffer) {
                                         eprintln!(
