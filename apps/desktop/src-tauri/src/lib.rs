@@ -2298,30 +2298,26 @@ pub async fn run() {
         })
         .on_window_event(|window, event| {
             let label = window.label();
-            if let CapWindow::Editor { project_id } = CapWindow::from_label(label) {
-                if let WindowEvent::CloseRequested { .. } = event {
-                    let app_handle = window.app_handle().clone();
-                    tokio::spawn(async move {
-                        if let Some(editor) = remove_editor_instance(&app_handle, project_id).await
-                        {
-                            editor.dispose().await;
-                            std::mem::drop(editor);
-                        }
-
-                        tokio::task::yield_now().await;
-                    });
-                }
-            }
-
             let app = window.app_handle();
 
             match event {
                 WindowEvent::Destroyed => {
-                    if let CapWindow::Main = CapWindow::from_label(window.label()) {
-                        if let Some(w) = (CapWindow::Camera { ws_port: 0 }).get(app) {
-                            w.close().ok();
+                    match CapWindow::from_label(label) {
+                        CapWindow::Main => {
+                            if let Some(w) = (CapWindow::Camera { ws_port: 0 }).get(app) {
+                                w.close().ok();
+                            }
                         }
-                    }
+                        CapWindow::Editor { project_id } => {
+                            let app_handle = app.clone();
+                            tokio::spawn(async move {
+                                let _ = remove_editor_instance(&app_handle, project_id).await;
+
+                                tokio::task::yield_now().await;
+                            });
+                        }
+                        _ => {}
+                    };
 
                     if let Some(settings) = GeneralSettingsStore::get(app).unwrap() {
                         if settings.hide_dock_icon
@@ -2374,10 +2370,6 @@ pub async fn remove_editor_instance(
     } else {
         None
     };
-
-    if let Some(window) = app.get_webview_window(&format!("editor-{}", video_id)) {
-        window.close().ok();
-    }
 
     result
 }
