@@ -1557,7 +1557,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.0-beta.5.7"
+version = "0.3.0-beta.5.7.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1586,7 +1586,7 @@ dependencies = [
  "mp4",
  "nix 0.29.0",
  "nokhwa 0.10.3 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
- "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "nokhwa-bindings-macos 0.2.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
  "num-traits",
  "objc",
  "objc2-app-kit",
