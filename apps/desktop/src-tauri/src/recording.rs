@@ -1,14 +1,12 @@
-use crate::flags;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
-use device_query::{DeviceQuery, DeviceState};
 use serde::Deserialize;
 use serde::Serialize;
 use specta::Type;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 
 use objc::rc::autoreleasepool;
-use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
+use objc::runtime::{Class, Object, Sel, BOOL, YES};
 use objc::*;
 
 use crate::RecordingOptions;

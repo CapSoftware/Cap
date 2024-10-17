@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, Runtime, Wry};
+use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::{with_store, StoreCollection};
 
 #[derive(Serialize, Deserialize, Type, Default)]

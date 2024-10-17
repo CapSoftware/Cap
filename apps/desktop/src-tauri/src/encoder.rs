@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use ffmpeg::{
     self as ffmpeg,
-    format::{self as avformat, context::Output, Pixel},
+    format::Pixel,
     frame::Video,
     Dictionary,
 };

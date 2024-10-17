@@ -2,15 +2,12 @@
 
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
-use reqwest::{multipart::Form, Client, StatusCode};
+use reqwest::{multipart::Form, StatusCode};
 use std::path::PathBuf;
 use tauri::AppHandle;
 use tokio::task;
 
-use crate::{
-    auth::AuthStore,
-    web_api::{self, ManagerExt},
-};
+use crate::web_api::{self, ManagerExt};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
