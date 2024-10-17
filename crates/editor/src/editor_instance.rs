@@ -237,6 +237,7 @@ impl EditorInstance {
                         .await;
                     }
                     playback::PlaybackEvent::Stop => {
+                        // ! This editor instance (self) gets dropped here
                         return;
                     }
                 }
@@ -286,6 +287,14 @@ impl EditorInstance {
                     .await;
             }
         })
+    }
+}
+
+impl Drop for EditorInstance {
+    fn drop(&mut self) {
+        // TODO: Ensure that *all* resources have been released by this point?
+        // For now the `dispose` method is adequate.
+        println!("*** Editor instance {} has been released. ***", self.id);
     }
 }
 
