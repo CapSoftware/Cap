@@ -1,4 +1,8 @@
+#![allow(unused_mut)]
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, Wry};
+
+#[cfg(target_os = "macos")]
+use tauri_plugin_decorum::WebviewWindowExt;
 
 pub enum CapWindow {
     Main,
@@ -94,25 +98,37 @@ impl CapWindow {
 
         Ok(match self {
             Self::Main => {
-                let window = WebviewWindow::builder(app, label, WebviewUrl::App("/".into()))
-                    .title(self.title())
-                    .inner_size(300.0, 375.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .shadow(true)
-                    .accept_first_mouse(true)
-                    .transparent(true)
-                    .hidden_title(true)
-                    .title_bar_style(tauri::TitleBarStyle::Overlay)
-                    .theme(Some(tauri::Theme::Light))
-                    .build()?;
+                let mut window_builder =
+                    WebviewWindow::builder(app, label, WebviewUrl::App("/".into()))
+                        .title(self.title())
+                        .inner_size(300.0, 375.0)
+                        .resizable(false)
+                        .maximized(false)
+                        .accept_first_mouse(true)
+                        .transparent(true)
+                        .theme(Some(tauri::Theme::Light));
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
+                        .hidden_title(true)
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .shadow(true);
+                }
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.decorations(false).shadow(false);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Settings { page } => {
-                let window = WebviewWindow::builder(
+                let mut window_builder = WebviewWindow::builder(
                     app,
                     label,
                     WebviewUrl::App(
@@ -123,12 +139,28 @@ impl CapWindow {
                 .min_inner_size(600.0, 450.0)
                 .resizable(true)
                 .maximized(false)
-                .shadow(true)
-                .accept_first_mouse(true)
-                .transparent(true)
-                .hidden_title(true)
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .build()?;
+                .accept_first_mouse(true);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder
+                        .transparent(true)
+                        .decorations(false)
+                        .shadow(false);
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
+                        .hidden_title(true)
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .shadow(true);
+                }
+
+                let window = window_builder.build()?;
+
+                #[cfg(target_os = "macos")]
+                window.make_transparent().ok();
 
                 apply_window_chrome(&window);
 
@@ -137,7 +169,7 @@ impl CapWindow {
             Self::Camera { ws_port } => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
-                let window = tauri::webview::WebviewWindow::builder(
+                let mut window_builder = tauri::webview::WebviewWindow::builder(
                     app,
                     label,
                     WebviewUrl::App("/camera".into()),
@@ -162,20 +194,22 @@ impl CapWindow {
 			                window.__CAP__ = window.__CAP__ ?? {{}};
 			                window.__CAP__.cameraWsPort = {ws_port};
 		                ",
-                ))
-                .build()?;
+                ));
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.transparent(true);
+                }
+
+                let window = window_builder.build()?;
 
                 #[cfg(target_os = "macos")]
-                {
-                    use tauri_plugin_decorum::WebviewWindowExt;
-
-                    window.make_transparent().ok();
-                }
+                window.make_transparent().ok();
 
                 window
             }
             Self::WindowCaptureOccluder => {
-                let window = WebviewWindow::builder(
+                let mut window_builder = WebviewWindow::builder(
                     app,
                     label,
                     WebviewUrl::App("/window-capture-occluder".into()),
@@ -193,21 +227,25 @@ impl CapWindow {
                     (monitor.size().width as f64) / monitor.scale_factor(),
                     (monitor.size().height as f64) / monitor.scale_factor(),
                 )
-                .position(0.0, 0.0)
-                .build()
-                .unwrap();
+                .position(0.0, 0.0);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.transparent(true);
+                }
+
+                let window = window_builder.build()?;
 
                 window.set_ignore_cursor_events(true).unwrap();
 
                 #[cfg(target_os = "macos")]
                 {
                     use objc2_app_kit::NSScreenSaverWindowLevel;
-                    use tauri_plugin_decorum::WebviewWindowExt;
 
                     window
                         .set_window_level(NSScreenSaverWindowLevel as u32)
                         .unwrap();
-                    window.make_transparent().unwrap();
+                    window.make_transparent().ok();
                 }
 
                 window
@@ -243,7 +281,7 @@ impl CapWindow {
                 window
             }
             Self::PrevRecordings => {
-                let window =
+                let mut window_builder =
                     WebviewWindow::builder(app, &label, WebviewUrl::App("/prev-recordings".into()))
                         .title(self.title())
                         .maximized(false)
@@ -259,12 +297,18 @@ impl CapWindow {
                             350.0,
                             (monitor.size().height as f64) / monitor.scale_factor(),
                         )
-                        .position(0.0, 0.0)
-                        .build()?;
+                        .skip_taskbar(true)
+                        .position(0.0, 0.0);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.transparent(true);
+                }
+
+                let window = window_builder.build()?;
 
                 #[cfg(target_os = "macos")]
                 {
-                    use tauri_plugin_decorum::WebviewWindowExt;
                     window.make_transparent().ok();
 
                     app.run_on_main_thread({
@@ -295,22 +339,27 @@ impl CapWindow {
                 window
             }
             Self::Editor { project_id } => {
-                let window = WebviewWindow::builder(
+                let mut window_builder = WebviewWindow::builder(
                     app,
                     label,
                     WebviewUrl::App(format!("/editor?id={project_id}").into()),
                 )
                 .inner_size(1150.0, 800.0)
                 .title(self.title())
-                .hidden_title(true)
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
                 .accept_first_mouse(true)
-                .theme(Some(tauri::Theme::Light))
-                .build()?;
+                .theme(Some(tauri::Theme::Light));
 
                 #[cfg(target_os = "macos")]
                 {
-                    use tauri_plugin_decorum::WebviewWindowExt;
+                    window_builder = window_builder
+                        .hidden_title(true)
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
+
+                #[cfg(target_os = "macos")]
+                {
                     window.create_overlay_titlebar().unwrap();
                     window.set_traffic_lights_inset(20.0, 48.0).unwrap();
                 }
@@ -318,7 +367,7 @@ impl CapWindow {
                 window
             }
             Self::Permissions => {
-                let window =
+                let mut window_builder =
                     WebviewWindow::builder(app, label, WebviewUrl::App("/permissions".into()))
                         .title(self.title())
                         .inner_size(300.0, 350.0)
@@ -326,17 +375,23 @@ impl CapWindow {
                         .maximized(false)
                         .shadow(true)
                         .accept_first_mouse(true)
-                        .transparent(true)
+                        .transparent(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
                         .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Feedback => {
-                let window =
+                let mut window_builder =
                     WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/feedback".into()))
                         .title(self.title())
                         .inner_size(400.0, 400.0)
@@ -344,17 +399,23 @@ impl CapWindow {
                         .maximized(false)
                         .shadow(true)
                         .accept_first_mouse(true)
-                        .transparent(true)
+                        .transparent(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
                         .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Upgrade => {
-                let window =
+                let mut window_builder =
                     WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/upgrade".into()))
                         .title(self.title())
                         .inner_size(800.0, 850.0)
@@ -362,17 +423,23 @@ impl CapWindow {
                         .maximized(false)
                         .shadow(true)
                         .accept_first_mouse(true)
-                        .transparent(true)
+                        .transparent(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
                         .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Changelog => {
-                let window =
+                let mut window_builder =
                     WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/changelog".into()))
                         .title(self.title())
                         .inner_size(600.0, 450.0)
@@ -380,10 +447,16 @@ impl CapWindow {
                         .maximized(false)
                         .shadow(true)
                         .accept_first_mouse(true)
-                        .transparent(true)
+                        .transparent(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
                         .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                let window = window_builder.build()?;
 
                 apply_window_chrome(&window);
 
@@ -396,7 +469,6 @@ impl CapWindow {
 fn apply_window_chrome(window: &WebviewWindow<Wry>) {
     #[cfg(target_os = "macos")]
     {
-        use tauri_plugin_decorum::WebviewWindowExt;
         window.create_overlay_titlebar().unwrap();
         window.set_traffic_lights_inset(14.0, 22.0).unwrap();
     }

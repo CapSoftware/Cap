@@ -7,8 +7,11 @@ use specta::Type;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, time::Duration};
 
+#[cfg(target_os = "macos")]
 use objc::rc::autoreleasepool;
+#[cfg(target_os = "macos")]
 use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
+#[cfg(target_os = "macos")]
 use objc::*;
 
 use crate::RecordingOptions;
@@ -292,6 +295,34 @@ pub async fn start(
     })
 }
 
+enum CursorId {
+    Arrow,
+    IBeam,
+    Crosshair,
+    ClosedHand,
+    OpenHand,
+    PointingHand,
+    ResizeLeft,
+    ResizeRight,
+    ResizeLeftRight,
+    ResizeUp,
+    ResizeDown,
+    ResizeUpDown,
+    DisappearingItem,
+    VerticalIBeam,
+    NotAllowed,
+    DragLink,
+    DragCopy,
+    ContextualMenu,
+    Unknown,
+}
+
+#[cfg(target_os = "windows")]
+fn get_cursor_id() -> CursorId {
+    todo!()
+}
+
+#[cfg(target_os = "macos")]
 fn get_cursor_id() -> String {
     autoreleasepool(|| {
         // Get the NSCursor class

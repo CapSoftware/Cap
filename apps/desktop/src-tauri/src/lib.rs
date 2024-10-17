@@ -6,9 +6,9 @@ mod encoder;
 mod flags;
 mod general_settings;
 mod hotkeys;
-mod macos;
 mod notifications;
 mod permissions;
+mod platform;
 mod recording;
 mod tray;
 mod upload;
@@ -50,7 +50,6 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
-use tauri_nspanel::ManagerExt;
 use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
@@ -61,6 +60,9 @@ use tokio::{
 };
 use upload::{upload_image, upload_individual_file, upload_video};
 use windows::CapWindow;
+
+#[cfg(target_os = "macos")]
+use tauri_nspanel::ManagerExt;
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -1340,17 +1342,23 @@ fn open_editor(app: AppHandle, id: String) {
 #[tauri::command(async)]
 #[specta::specta]
 fn close_previous_recordings_window(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
-        panel.released_when_closed(true);
-        panel.close();
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
+            panel.released_when_closed(true);
+            panel.close();
+        }
     }
 }
 
 #[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
-        panel.make_key_window();
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
+            panel.make_key_window();
+        }
     }
 }
 
@@ -2206,9 +2214,16 @@ pub async fn run() {
 
     tauri::async_runtime::set(tokio::runtime::Handle::current());
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_nspanel::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_os::init())
