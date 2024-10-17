@@ -28,6 +28,7 @@ pub struct CaptureWindow {
     pub bounds: Bounds,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CaptureScreen {
     pub id: u32,
     pub name: String,
@@ -45,9 +46,11 @@ impl PartialEq<Target> for ScreenCaptureTarget {
         match (self, other) {
             (Self::Window(capture_window), Target::Window(window)) => {
                 window.id == capture_window.id
-            }
-            (Self::Screen, Target::Display(_)) => true,
-            _ => false,
+            },
+            (ScreenCaptureTarget::Screen(capture_screen), Target::Display(display)) => {
+                display.id == capture_screen.id
+            },
+            (&ScreenCaptureTarget::Window(_), &scap::Target::Display(_)) | (&ScreenCaptureTarget::Screen(_), &scap::Target::Window(_)) => todo!(),
         }
     }
 }
@@ -92,7 +95,7 @@ impl ScreenCaptureSource {
                     y: capture_window.bounds.y,
                 },
             }),
-            ScreenCaptureTarget::Screen => None,
+            ScreenCaptureTarget::Screen(_capture_screen) => None,
         };
 
         let options = Options {
@@ -112,6 +115,27 @@ impl ScreenCaptureSource {
             options,
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps),
         }
+    }
+
+    pub fn list_screens() -> Vec<CaptureScreen> {
+        if !scap::has_permission() {
+            return vec![];
+        }
+    
+        let mut targets = vec![];
+        let screens = scap::get_all_targets();
+    
+        for (idx, target) in screens.into_iter().enumerate() {
+            // Handle Target::Screen variant (assuming this is how it's structured in scap)
+            if let Target::Display(screen) = target {
+                // Only add the screen if it hasn't been added already
+                targets.push(CaptureScreen {
+                    id: screen.id as u32,
+                    name: format!("Screen {}", idx + 1),
+                });
+            }
+        }
+        targets
     }
 
     pub fn list_targets() -> Vec<CaptureWindow> {

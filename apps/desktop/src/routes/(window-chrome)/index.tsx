@@ -217,7 +217,7 @@ export default function () {
           <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
         </button>
       </div>
-      <KSelect<CaptureWindow | null>
+      <KSelect<CaptureScreen | CaptureWindow | null>
         options={(screenSelectOpen() ? screens.data : windows.data) ?? []}
         optionValue="id"
         optionTextValue="name"

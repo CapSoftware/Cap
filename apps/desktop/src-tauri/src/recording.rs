@@ -18,6 +18,12 @@ pub const FPS: u32 = 30;
 
 #[tauri::command(async)]
 #[specta::specta]
+pub fn list_capture_screens() -> Vec<CaptureScreen> {
+    ScreenCaptureSource::list_screens()
+}
+
+#[tauri::command(async)]
+#[specta::specta]
 pub fn list_capture_windows() -> Vec<CaptureWindow> {
     ScreenCaptureSource::list_targets()
 }
