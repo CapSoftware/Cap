@@ -67,6 +67,9 @@ async listCameras() : Promise<string[]> {
 async listCaptureWindows() : Promise<CaptureWindow[]> {
     return await TAURI_INVOKE("list_capture_windows");
 },
+async listCaptureScreens() : Promise<CaptureScreen[]> {
+    return await TAURI_INVOKE("list_capture_screens");
+},
 async listAudioDevices() : Promise<Result<string[], null>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_audio_devices") };
@@ -366,6 +369,7 @@ export type CameraMeta = { path: string }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
+export type CaptureScreen = { id: number; name: string }
 export type CaptureWindow = { id: number; name: string; bounds: Bounds }
 export type Crop = { position: XY<number>; size: XY<number> }
 export type CurrentRecordingChanged = JsonValue<InProgressRecording | null>
@@ -402,7 +406,7 @@ export type RequestOpenSettings = { page: string }
 export type RequestRestartRecording = null
 export type RequestStartRecording = null
 export type RequestStopRecording = null
-export type ScreenCaptureTarget = ({ variant: "window" } & CaptureWindow) | { variant: "screen" }
+export type ScreenCaptureTarget = { variant: "window" | "screen" } & CaptureScreen
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
