@@ -2407,9 +2407,9 @@ async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<E
     .await;
 
     RenderFrameEvent::listen_any(app, {
-        let instance = instance.clone();
+        let preview_tx = instance.preview_tx.clone();
         move |e| {
-            instance.preview_tx.send(Some(e.payload.frame_number)).ok();
+            preview_tx.send(Some(e.payload.frame_number)).ok();
         }
     });
 

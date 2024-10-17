@@ -286,16 +286,15 @@ impl EditorInstance {
                     )
                     .await;
             }
-            // Does the editor instance here (self) get dropped??? I have no idea
-            // The task gets cancelled, which should theoretically drop it
         })
     }
 }
 
 impl Drop for EditorInstance {
     fn drop(&mut self) {
-        // TODO: Ensure that *all* resources have been released by this point.
-        println!("Editor instance {} has been released.", self.id);
+        // TODO: Ensure that *all* resources have been released by this point?
+        // For now the `dispose` method is adequate.
+        println!("*** Editor instance {} has been released. ***", self.id);
     }
 }
 
