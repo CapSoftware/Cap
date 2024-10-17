@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.0-beta.5.7"
+version = "0.3.0-beta.5.7.1"
 description = "Beautiful, shareable screen recordings."
 authors = ["you"]
 edition = "2021"
@@ -83,7 +83,7 @@ global-hotkey = "0.5.5"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
-nokhwa-bindings-macos = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1" }
+nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", branch = "brendonovich-fork" }
 objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
 cocoa = "0.26.0"
 objc = "0.2.7"

@@ -162,11 +162,14 @@ impl App {
                 if self.camera_feed.is_none() {
                     self.camera_feed = CameraFeed::init(&camera_label, self.camera_tx.clone())
                         .await
+                        .map_err(|error| eprintln!("{error}"))
                         .ok();
-                }
-
-                if let Some(camera_feed) = self.camera_feed.as_mut() {
-                    camera_feed.switch_cameras(&camera_label).await.ok();
+                } else if let Some(camera_feed) = self.camera_feed.as_mut() {
+                    camera_feed
+                        .switch_cameras(&camera_label)
+                        .await
+                        .map_err(|error| eprintln!("{error}"))
+                        .ok();
                 }
             }
             None => {
