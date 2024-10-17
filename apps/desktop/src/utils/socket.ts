@@ -1,11 +1,28 @@
 import { createWS } from "@solid-primitives/websocket";
-import { createResource } from "solid-js";
+import { createResource, createSignal } from "solid-js";
 
 export function createImageDataWS(
   url: string,
   onmessage: (data: ImageData) => void
-): Omit<WebSocket, "onmessage"> {
+): [Omit<WebSocket, "onmessage">, () => boolean] {
+  const [isConnected, setIsConnected] = createSignal(false);
   const ws = createWS(url);
+
+  ws.addEventListener("open", () => {
+    console.log("WebSocket connected");
+    setIsConnected(true);
+  });
+
+  ws.addEventListener("close", () => {
+    console.log("WebSocket disconnected");
+    setIsConnected(false);
+  });
+
+  ws.addEventListener("error", (error) => {
+    console.error("WebSocket error:", error);
+    setIsConnected(false);
+  });
+
   ws.binaryType = "arraybuffer";
   ws.onmessage = (event) => {
     const buffer = event.data as ArrayBuffer;
@@ -33,7 +50,8 @@ export function createImageDataWS(
 
     onmessage(imageData);
   };
-  return ws;
+
+  return [ws, isConnected];
 }
 
 export function createLazySignal<T>() {

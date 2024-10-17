@@ -169,6 +169,7 @@ impl AsyncVideoDecoder {
                             };
 
                             if stream.index() == input_stream_index {
+                                let start_offset = stream.start_time();
                                 let packet_frame =
                                     ts_to_frame(packet.pts().unwrap(), time_base, frame_rate);
                                 // println!("sending frame {packet_frame} packet");
@@ -179,7 +180,7 @@ impl AsyncVideoDecoder {
 
                                 while decoder.receive_frame(&mut temp_frame).is_ok() {
                                     let current_frame = ts_to_frame(
-                                        temp_frame.pts().unwrap(),
+                                        temp_frame.pts().unwrap() - start_offset,
                                         time_base,
                                         frame_rate,
                                     );

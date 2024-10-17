@@ -48,11 +48,51 @@ export default function () {
   );
 
   const [latestFrame, setLatestFrame] = createLazySignal<ImageData | null>();
+  const [isLoading, setIsLoading] = createSignal(true);
+  const [error, setError] = createSignal<string | null>(null);
 
-  createImageDataWS(`ws://localhost:${cameraWsPort}`, (imageData) => {
-    setLatestFrame(imageData);
-    const ctx = cameraCanvasRef?.getContext("2d");
-    ctx?.putImageData(imageData, 0, 0);
+  const [ws, isConnected] = createImageDataWS(
+    `ws://localhost:${cameraWsPort}`,
+    (imageData) => {
+      setLatestFrame(imageData);
+      const ctx = cameraCanvasRef?.getContext("2d");
+      ctx?.putImageData(imageData, 0, 0);
+      setIsLoading(false);
+    }
+  );
+
+  createEffect(() => {
+    if (!isConnected()) {
+      setIsLoading(true);
+      setError("Failed to connect to the camera. Please try again.");
+    } else {
+      setError(null);
+    }
+  });
+
+  // Attempt to reconnect every 5 seconds if not connected
+  const reconnectInterval = setInterval(() => {
+    if (!isConnected()) {
+      console.log("Attempting to reconnect...");
+      ws.close();
+      // Create a new WebSocket connection
+      const newWs = createImageDataWS(
+        `ws://localhost:${cameraWsPort}`,
+        (imageData) => {
+          setLatestFrame(imageData);
+          const ctx = cameraCanvasRef?.getContext("2d");
+          ctx?.putImageData(imageData, 0, 0);
+          setIsLoading(false);
+        }
+      );
+      // Update the ws reference
+      Object.assign(ws, newWs[0]);
+    }
+  }, 5000);
+
+  onCleanup(() => {
+    clearInterval(reconnectInterval);
+    ws.close();
   });
 
   const [windowSize] = createResource(
@@ -135,52 +175,65 @@ export default function () {
               )}
               data-tauri-drag-region
             >
-              <Show when={latestFrame()}>
-                {(latestFrame) => {
-                  const style = () => {
-                    const aspectRatio =
-                      latestFrame().width / latestFrame().height;
+              <Show
+                when={!isLoading() && !error()}
+                fallback={
+                  <div class="flex items-center justify-center h-full">
+                    {error() ? (
+                      <div class="text-red-500">{error()}</div>
+                    ) : (
+                      <div class="text-white">Loading camera...</div>
+                    )}
+                  </div>
+                }
+              >
+                <Show when={latestFrame()}>
+                  {(latestFrame) => {
+                    const style = () => {
+                      const aspectRatio =
+                        latestFrame().width / latestFrame().height;
 
-                    const windowWidth = windowSize()?.size ?? 0;
+                      const windowWidth = windowSize()?.size ?? 0;
 
-                    const size = (() => {
-                      if (aspectRatio > 1)
-                        return {
-                          width: windowWidth * aspectRatio,
-                          height: windowWidth,
-                        };
-                      else
-                        return {
-                          width: windowWidth,
-                          height: windowWidth * aspectRatio,
-                        };
-                    })();
+                      const size = (() => {
+                        if (aspectRatio > 1)
+                          return {
+                            width: windowWidth * aspectRatio,
+                            height: windowWidth,
+                          };
+                        else
+                          return {
+                            width: windowWidth,
+                            height: windowWidth * aspectRatio,
+                          };
+                      })();
 
-                    const left =
-                      aspectRatio > 1 ? (size.width - windowWidth) / 2 : 0;
-                    const top =
-                      aspectRatio > 1 ? 0 : (windowWidth - size.height) / 2;
+                      const left =
+                        aspectRatio > 1 ? (size.width - windowWidth) / 2 : 0;
+                      const top =
+                        aspectRatio > 1 ? 0 : (windowWidth - size.height) / 2;
 
-                    return {
-                      width: `${size.width}px`,
-                      height: `${size.height}px`,
-                      left: `-${left}px`,
-                      top: `-${top}px`,
-                      transform: state.mirrored ? "scaleX(-1)" : "scaleX(1)",
+                      return {
+                        width: `${size.width}px`,
+                        height: `${size.height}px`,
+                        left: `-${left}px`,
+                        top: `-${top}px`,
+                        transform: state.mirrored ? "scaleX(-1)" : "scaleX(1)",
+                      };
                     };
-                  };
 
-                  return (
-                    <canvas
-                      data-tauri-drag-region
-                      class={cx("absolute")}
-                      style={style()}
-                      width={latestFrame().width}
-                      height={latestFrame().height}
-                      ref={cameraCanvasRef!}
-                    />
-                  );
-                }}
+                    return (
+                      <canvas
+                        data-tauri-drag-region
+                        class={cx("absolute")}
+                        style={style()}
+                        width={latestFrame().width}
+                        height={latestFrame().height}
+                        ref={cameraCanvasRef!}
+                      />
+                    );
+                  }}
+                </Show>
               </Show>
             </div>
           </div>

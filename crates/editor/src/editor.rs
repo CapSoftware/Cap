@@ -105,6 +105,9 @@ pub enum RendererMessage {
         uniforms: ProjectUniforms,
         finished: oneshot::Sender<()>,
     },
+    Stop {
+        finished: oneshot::Sender<()>,
+    },
 }
 
 pub struct Renderer {
@@ -182,6 +185,16 @@ impl Renderer {
                             finished.send(()).ok();
                         }));
                     }
+                    RendererMessage::Stop { finished } => {
+                        // Cancel any ongoing frame task
+                        if let Some(task) = frame_task.take() {
+                            task.abort();
+                        }
+                        // Acknowledge the stop
+                        let _ = finished.send(());
+                        // Exit the run loop
+                        return;
+                    }
                 }
             }
         }
@@ -212,5 +225,15 @@ impl RendererHandle {
         .await;
 
         finished_rx.await.ok();
+    }
+
+    pub async fn stop(&self) {
+        // Send a stop message to the renderer
+        let (tx, rx) = oneshot::channel();
+        if let Err(_) = self.tx.send(RendererMessage::Stop { finished: tx }).await {
+            println!("Failed to send stop message to renderer");
+        }
+        // Wait for the renderer to acknowledge the stop
+        let _ = rx.await;
     }
 }

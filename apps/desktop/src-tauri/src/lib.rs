@@ -2,7 +2,6 @@ mod audio;
 mod auth;
 mod camera;
 mod capture;
-mod display;
 mod encoder;
 mod flags;
 mod general_settings;
@@ -18,22 +17,25 @@ mod windows;
 
 use audio::AppSounds;
 use auth::AuthStore;
-use camera::{list_cameras, CameraFeed};
 use cap_editor::{AudioData, EditorState, ProjectRecordings};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
-use cap_ffmpeg::FFmpeg;
+use cap_media::{
+    feeds::{CameraFeed, CameraFrameSender},
+    platform::Bounds,
+    sources::{AudioInputSource, ScreenCaptureTarget},
+};
 use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
 };
 use cap_rendering::ProjectUniforms;
 use cap_utils::create_named_pipe;
-use display::{list_capture_windows, list_capture_screens, Bounds, CaptureTarget, FPS};
+// use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use png::{ColorType, Encoder};
-use recording::{DisplaySource, InProgressRecording};
+use recording::{list_cameras, list_capture_windows, InProgressRecording, FPS};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -52,7 +54,6 @@ use tauri_nspanel::ManagerExt;
 use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-use tokio::sync::watch;
 use tokio::task;
 use tokio::{
     sync::{Mutex, RwLock},
@@ -64,7 +65,7 @@ use windows::CapWindow;
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingOptions {
-    capture_target: CaptureTarget,
+    capture_target: ScreenCaptureTarget,
     camera_label: Option<String>,
     audio_input_name: Option<String>,
 }
@@ -84,10 +85,10 @@ impl RecordingOptions {
 pub struct App {
     start_recording_options: RecordingOptions,
     #[serde(skip)]
-    camera_tx: watch::Sender<camera::LatestFrame>,
+    camera_tx: CameraFrameSender,
     camera_ws_port: u16,
     #[serde(skip)]
-    camera_feed: Option<camera::CameraFeed>,
+    camera_feed: Option<CameraFeed>,
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
@@ -120,8 +121,8 @@ impl App {
 
         CurrentRecordingChanged(json).emit(&self.handle).ok();
 
-        if let DisplaySource::Window { .. } = &current_recording.display_source {
-            CapWindow::WindowCaptureOccluder.show(&self.handle);
+        if let ScreenCaptureTarget::Window { .. } = &current_recording.display_source {
+            let _ = CapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
             self.close_occluder_window();
         }
@@ -158,14 +159,14 @@ impl App {
 
         match &new_options.camera_label {
             Some(camera_label) => {
-                if self
-                    .camera_feed
-                    .as_ref()
-                    .map(|f| &f.camera_info.human_name() != camera_label)
-                    .unwrap_or(true)
-                {
-                    self.camera_feed =
-                        Some(CameraFeed::new(&camera_label, self.camera_tx.clone()).await);
+                if self.camera_feed.is_none() {
+                    self.camera_feed = CameraFeed::init(&camera_label, self.camera_tx.clone())
+                        .await
+                        .ok();
+                }
+
+                if let Some(camera_feed) = self.camera_feed.as_mut() {
+                    camera_feed.switch_cameras(&camera_label).await.ok();
                 }
             }
             None => {
@@ -291,14 +292,19 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         .join("recordings")
         .join(format!("{id}.cap"));
 
-    let recording = recording::start(
+    match recording::start(
         recording_dir,
         &state.start_recording_options,
         state.camera_feed.as_ref(),
     )
-    .await;
-
-    state.set_current_recording(recording);
+    .await
+    {
+        Ok(recording) => state.set_current_recording(recording),
+        Err(error) => {
+            eprintln!("{error}");
+            return Err("Failed to set up recording".into());
+        }
+    };
 
     if let Some(window) = CapWindow::Main.get(&app) {
         window.minimize().ok();
@@ -339,7 +345,7 @@ async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
     if let Some(recording) = &mut state.current_recording {
-        recording.resume().await?;
+        recording.play().await?;
         recording.segments.push(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -364,7 +370,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
             .as_secs_f64(),
     );
 
-    current_recording.stop();
+    current_recording.stop().await;
     println!("Recording stopped");
 
     if let Some(window) = (CapWindow::InProgressRecording { position: None }).get(&app) {
@@ -380,7 +386,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         .recording_dir
         .join("screenshots/display.jpg");
     create_screenshot(
-        current_recording.display.output_path.clone(),
+        current_recording.display_output_path.clone(),
         display_screenshot.clone(),
         None,
     )
@@ -776,15 +782,14 @@ async fn render_to_file_impl(
 
                 tx
             };
-
-            let audio = if let Some(audio) = audio {
+            let audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
                 let pipe_path = audio_dir.path().join("audio.pipe");
                 create_named_pipe(&pipe_path).unwrap();
 
                 ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
                     input: pipe_path.clone().into_os_string(),
                     sample_format: "f64le".to_string(),
-                    sample_rate: audio.sample_rate,
+                    sample_rate: audio_data.sample_rate,
                     channels: 1,
                 });
 
@@ -806,7 +811,7 @@ async fn render_to_file_impl(
                 });
 
                 Some(AudioRender {
-                    data: audio,
+                    data: audio_data.clone(),
                     pipe_tx: tx,
                 })
             } else {
@@ -1225,6 +1230,11 @@ async fn remove_fake_window(
 #[tauri::command(async)]
 #[specta::specta]
 fn show_previous_recordings_window(app: AppHandle) {
+    if app.get_webview_window("prev-recordings").is_some() {
+        println!("prev-recordings window already exists");
+        return;
+    }
+
     let window = CapWindow::PrevRecordings.show(&app).unwrap();
 
     tokio::spawn(async move {
@@ -1257,7 +1267,7 @@ fn show_previous_recordings_window(app: AppHandle) {
                     && mouse_position.y <= y_max
                 {
                     ignore = false;
-                    ShowCapturesPanel.emit(&app).ok();
+                    // ShowCapturesPanel.emit(&app).ok();
                     break;
                 }
             }
@@ -1271,6 +1281,10 @@ fn show_previous_recordings_window(app: AppHandle) {
 #[specta::specta]
 fn open_editor(app: AppHandle, id: String) {
     println!("Opening editor for recording: {}", id);
+
+    if let Some(window) = app.get_webview_window("camera") {
+        window.close().ok();
+    }
 
     CapWindow::Editor { project_id: id }.show(&app).unwrap();
 }
@@ -1386,8 +1400,9 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
         return Ok(vec![]);
     }
 
+    // TODO: Check - is this necessary? `spawn_blocking` is quite a bit of overhead.
     tokio::task::spawn_blocking(|| {
-        let devices = audio::get_input_devices();
+        let devices = AudioInputSource::get_devices();
 
         devices.keys().cloned().collect()
     })
@@ -2139,7 +2154,7 @@ pub async fn run() {
         )
         .expect("Failed to export typescript bindings");
 
-    let (camera_tx, camera_rx) = watch::channel(None);
+    let (camera_tx, camera_rx) = CameraFeed::create_channel();
     let camera_ws_port = camera::create_camera_ws(camera_rx.clone()).await;
 
     tauri::async_runtime::set(tokio::runtime::Handle::current());
@@ -2186,7 +2201,7 @@ pub async fn run() {
                 camera_ws_port,
                 camera_feed: None,
                 start_recording_options: RecordingOptions {
-                    capture_target: CaptureTarget::Screen { id: 0 },
+                    capture_target: ScreenCaptureTarget::Screen { id: 0 },
                     camera_label: None,
                     audio_input_name: None,
                 },
@@ -2286,11 +2301,15 @@ pub async fn run() {
             let label = window.label();
             if let CapWindow::Editor { project_id } = CapWindow::from_label(label) {
                 if let WindowEvent::CloseRequested { .. } = event {
-                    let app = window.app_handle().clone();
+                    let app_handle = window.app_handle().clone();
                     tokio::spawn(async move {
-                        if let Some(editor) = remove_editor_instance(&app, project_id).await {
+                        if let Some(editor) = remove_editor_instance(&app_handle, project_id).await
+                        {
                             editor.dispose().await;
+                            std::mem::drop(editor);
                         }
+
+                        tokio::task::yield_now().await;
                     });
                 }
             }
@@ -2350,7 +2369,18 @@ pub async fn remove_editor_instance(
 
     let mut map = map.lock().await;
 
-    map.remove(&video_id).clone()
+    let result = if let Some(editor) = map.remove(&video_id) {
+        editor.dispose().await;
+        Some(editor)
+    } else {
+        None
+    };
+
+    if let Some(window) = app.get_webview_window(&format!("editor-{}", video_id)) {
+        window.close().ok();
+    }
+
+    result
 }
 
 pub async fn upsert_editor_instance(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {

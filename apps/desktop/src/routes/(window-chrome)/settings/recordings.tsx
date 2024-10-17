@@ -53,6 +53,11 @@ export default function Recordings() {
     commands.openFilePath(path);
   };
 
+  const handleOpenEditor = (id: string) => {
+    const fileName = id.split("/").pop() || "";
+    commands.openEditor(fileName.replace(".cap", ""));
+  };
+
   return (
     <div class="flex flex-col w-full h-full divide-y divide-gray-200 pt-1 pb-12">
       <div class="flex-1 overflow-y-auto">
@@ -75,6 +80,7 @@ export default function Recordings() {
                     recording={recording}
                     onClick={() => handleRecordingClick(recording)}
                     onOpenFolder={() => handleOpenFolder(recording.path)}
+                    onOpenEditor={() => handleOpenEditor(recording.path)}
                   />
                 )}
               </For>
@@ -90,6 +96,7 @@ function RecordingItem(props: {
   recording: MediaEntry;
   onClick: () => void;
   onOpenFolder: () => void;
+  onOpenEditor: () => void;
 }) {
   const [imageExists, setImageExists] = createSignal(true);
 
@@ -121,6 +128,16 @@ function RecordingItem(props: {
           class="p-2 hover:bg-gray-200 rounded-full mr-2"
         >
           <IconLucideFolder class="size-5" />
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onOpenEditor();
+          }}
+          class="p-2 hover:bg-gray-200 rounded-full mr-2"
+        >
+          <IconLucideEdit class="size-5" />
         </button>
         <button
           type="button"

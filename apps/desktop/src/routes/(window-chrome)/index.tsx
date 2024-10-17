@@ -3,6 +3,7 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 import { createMutation, createQuery } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
+import { Window } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
   Show,
@@ -26,7 +27,7 @@ import {
   createVideoDevicesQuery,
   listScreens,
 } from "~/utils/queries";
-import { CaptureScreen, CaptureTarget, type CaptureWindow, commands, events } from "~/utils/tauri";
+import { CaptureScreen, ScreenCaptureTarget, type CaptureWindow, commands, events } from "~/utils/tauri";
 import {
   MenuItem,
   MenuItemList,
@@ -53,13 +54,13 @@ export default function () {
   const audioDevices = createQuery(() => listAudioDevices);
   const currentRecording = createCurrentRecordingQuery();
 
-  const [selectedTab, setSelectedTab] = createSignal<CaptureTarget['type']>("screen");
+  const [selectedTab, setSelectedTab] = createSignal<ScreenCaptureTarget['variant']>("screen");
   const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
   const [screenSelectOpen, setScreenSelectOpen] = createSignal(false);
   const [selectedTarget, setSelectedTarget] = createSignal<CaptureScreen | CaptureWindow | null>();
   
-  const screenLabel = createMemo(() => options.data?.captureTarget?.type === "screen" && selectedTarget()?.name ? selectedTarget()?.name : "Screen");
-  const windowLabel = createMemo(() => options.data?.captureTarget?.type === "window" && selectedTarget()?.name ? selectedTarget()?.name : "Window")
+  const screenLabel = createMemo(() => options.data?.captureTarget?.variant === "screen" && selectedTarget()?.name ? selectedTarget()?.name : "Screen");
+  const windowLabel = createMemo(() => options.data?.captureTarget?.variant === "window" && selectedTarget()?.name ? selectedTarget()?.name : "Window")
 
   const permissions = createQuery(() => getPermissions);
 
@@ -69,8 +70,8 @@ export default function () {
     commands.showPreviousRecordingsWindow();
   });
 
-  onMount(() => {
-    commands.showPreviousRecordingsWindow();
+  onMount(async () => {
+    await commands.showPreviousRecordingsWindow();
   });
 
   const isRecording = () => !!currentRecording.data;
@@ -247,14 +248,14 @@ export default function () {
 
             commands.setRecordingOptions({
               ...options.data,
-              captureTarget: { ...options.data.captureTarget,type: s as CaptureTarget['type'] },
+              captureTarget: { ...options.data.captureTarget, variant: s as ScreenCaptureTarget['variant'] },
             });
 
             if (selectedTab() !== s) {
               setSelectedTarget(null)
             }
 
-            setSelectedTab(s as CaptureTarget['type'])
+            setSelectedTab(s as ScreenCaptureTarget['variant'])
 
             if (windows.data && windows.data.length > 0) {
               setWindowSelectOpen(s === "window");
@@ -503,7 +504,7 @@ export default function () {
                   await requestPermission("microphone");
                   if (permissions?.data?.microphone === "granted") {
                     commands.setRecordingOptions({
-                      ...options.data,
+                      ...options.data!,
                       audioInputName: audioDevice().name,
                     });
                   }

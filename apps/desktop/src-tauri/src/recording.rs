@@ -1,37 +1,31 @@
-use crate::audio::AudioCapturer;
-use crate::camera::CameraFeed;
-use crate::capture::CaptureController;
 use crate::flags;
-use cap_ffmpeg::{FFmpeg, FFmpegInput, FFmpegProcess, FFmpegRawAudioInput};
+use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
 use device_query::{DeviceQuery, DeviceState};
-use futures::future::OptionFuture;
 use serde::Deserialize;
 use serde::Serialize;
 use specta::Type;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use std::{
-    fs::File,
-    sync::{Arc, Mutex},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, time::Duration};
-use tauri::AppHandle;
-use tokio::sync::watch;
 
 use objc::rc::autoreleasepool;
 use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
 use objc::*;
 
-use crate::{
-    audio, camera,
-    display::{self, get_window_bounds, CaptureTarget},
-    Bounds, RecordingOptions,
-};
+use crate::RecordingOptions;
 
-#[derive(Clone, Type, Serialize)]
-#[serde(rename_all = "camelCase", tag = "variant")]
-pub enum DisplaySource {
-    Screen,
-    Window { bounds: Bounds },
+// TODO: Hacky, please fix
+pub const FPS: u32 = 30;
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn list_capture_windows() -> Vec<CaptureWindow> {
+    ScreenCaptureSource::list_targets()
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn list_cameras() -> Vec<String> {
+    CameraFeed::list_cameras()
 }
 
 #[derive(Serialize, Deserialize, Clone, Type)]
@@ -50,28 +44,26 @@ pub struct MouseEvent {
 pub struct InProgressRecording {
     pub recording_dir: PathBuf,
     #[serde(skip)]
-    pub ffmpeg_process: FFmpegProcess,
+    pub pipeline: Pipeline<SynchronisedClock<()>>,
     #[serde(skip)]
-    pub display: CaptureController,
-    pub display_source: DisplaySource,
+    pub display_output_path: PathBuf,
     #[serde(skip)]
-    pub camera: Option<CaptureController>,
+    pub camera_output_path: Option<PathBuf>,
     #[serde(skip)]
-    pub audio: Option<(FFmpegCaptureOutput<FFmpegRawAudioInput>, AudioCapturer)>,
+    pub audio_output_path: Option<PathBuf>,
+    pub display_source: ScreenCaptureTarget,
     pub segments: Vec<f64>,
-    #[serde(skip)]
-    pub mouse_moves: Arc<Mutex<Vec<MouseEvent>>>,
-    #[serde(skip)]
-    pub mouse_clicks: Arc<Mutex<Vec<MouseEvent>>>,
-    #[serde(skip)]
-    pub stop_signal: Arc<Mutex<bool>>,
+    // #[serde(skip)]
+    // pub mouse_moves: Arc<Mutex<Vec<MouseEvent>>>,
+    // #[serde(skip)]
+    // pub mouse_clicks: Arc<Mutex<Vec<MouseEvent>>>,
 }
 
 unsafe impl Send for InProgressRecording {}
 unsafe impl Sync for InProgressRecording {}
 
 impl InProgressRecording {
-    pub fn stop(&mut self) {
+    pub async fn stop(&mut self) {
         use cap_project::*;
         let meta = RecordingMeta {
             project_path: self.recording_dir.clone(),
@@ -82,26 +74,16 @@ impl InProgressRecording {
             ),
             display: Display {
                 path: self
-                    .display
-                    .output_path
+                    .display_output_path
                     .strip_prefix(&self.recording_dir)
                     .unwrap()
                     .to_owned(),
             },
-            camera: self.camera.as_ref().map(|camera| CameraMeta {
-                path: camera
-                    .output_path
-                    .strip_prefix(&self.recording_dir)
-                    .unwrap()
-                    .to_owned(),
+            camera: self.camera_output_path.as_ref().map(|path| CameraMeta {
+                path: path.strip_prefix(&self.recording_dir).unwrap().to_owned(),
             }),
-            audio: self.audio.as_ref().map(|audio| AudioMeta {
-                path: audio
-                    .0
-                    .output_path
-                    .strip_prefix(&self.recording_dir)
-                    .unwrap()
-                    .to_owned(),
+            audio: self.audio_output_path.as_ref().map(|path| AudioMeta {
+                path: path.strip_prefix(&self.recording_dir).unwrap().to_owned(),
             }),
             segments: {
                 let relative_segments = self
@@ -130,57 +112,32 @@ impl InProgressRecording {
         };
 
         // Signal the mouse event tracking to stop
-        *self.stop_signal.lock().unwrap() = true;
-
-        self.display.stop();
-        if let Some(camera) = &self.camera {
-            camera.stop();
+        if let Err(error) = self.pipeline.shutdown().await {
+            eprintln!("Error while stopping recording: {error}");
         }
 
-        self.ffmpeg_process.stop();
-        if let Err(e) = self.ffmpeg_process.wait() {
-            eprintln!("Failed to wait for ffmpeg process: {:?}", e);
-        }
-        if let Some(audio) = self.audio.take() {
-            audio.0.capture.stop();
-            drop(audio);
-        }
+        // if flags::RECORD_MOUSE {
+        //     // Save mouse events to files
+        //     let mouse_moves_path = self.recording_dir.join("mousemoves.json");
+        //     let mouse_clicks_path = self.recording_dir.join("mouseclicks.json");
 
-        if flags::RECORD_MOUSE {
-            // Save mouse events to files
-            let mouse_moves_path = self.recording_dir.join("mousemoves.json");
-            let mouse_clicks_path = self.recording_dir.join("mouseclicks.json");
+        //     let mouse_moves = self.mouse_moves.lock().unwrap();
+        //     let mouse_clicks = self.mouse_clicks.lock().unwrap();
 
-            let mouse_moves = self.mouse_moves.lock().unwrap();
-            let mouse_clicks = self.mouse_clicks.lock().unwrap();
+        //     let mut mouse_moves_file = File::create(mouse_moves_path).unwrap();
+        //     let mut mouse_clicks_file = File::create(mouse_clicks_path).unwrap();
 
-            let mut mouse_moves_file = File::create(mouse_moves_path).unwrap();
-            let mut mouse_clicks_file = File::create(mouse_clicks_path).unwrap();
-
-            serde_json::to_writer(&mut mouse_moves_file, &*mouse_moves).unwrap();
-            serde_json::to_writer(&mut mouse_clicks_file, &*mouse_clicks).unwrap();
-        }
+        //     serde_json::to_writer(&mut mouse_moves_file, &*mouse_moves).unwrap();
+        //     serde_json::to_writer(&mut mouse_clicks_file, &*mouse_clicks).unwrap();
+        // }
 
         meta.save_for_project();
     }
 
-    pub fn stop_and_discard(&mut self) {
+    pub async fn stop_and_discard(&mut self) {
         // Signal the mouse event tracking to stop
-        *self.stop_signal.lock().unwrap() = true;
-
-        // Stop all recording processes
-        self.display.stop();
-        if let Some(camera) = &self.camera {
-            camera.stop();
-        }
-
-        self.ffmpeg_process.stop();
-        if let Err(e) = self.ffmpeg_process.wait() {
-            eprintln!("Failed to wait for ffmpeg process: {:?}", e);
-        }
-        if let Some(audio) = self.audio.take() {
-            audio.0.capture.stop();
-            drop(audio);
+        if let Err(error) = self.pipeline.shutdown().await {
+            eprintln!("Error while stopping recording: {error}");
         }
 
         // Delete all recorded files
@@ -190,189 +147,149 @@ impl InProgressRecording {
     }
 
     pub async fn pause(&mut self) -> Result<(), String> {
-        self.display.pause();
-        if let Some(camera) = &mut self.camera {
-            camera.pause();
-        }
-        if let Some(audio) = &mut self.audio {
-            audio.0.capture.pause();
-        }
-        println!("Sent pause command to FFmpeg");
+        let _ = self.pipeline.pause().await;
         Ok(())
     }
 
-    pub async fn resume(&mut self) -> Result<(), String> {
-        self.display.resume();
-        if let Some(camera) = &mut self.camera {
-            camera.resume();
-        }
-        if let Some(audio) = &mut self.audio {
-            audio.0.capture.resume();
-        }
-
-        println!("Sent resume command to FFmpeg");
+    pub async fn play(&mut self) -> Result<(), String> {
+        let _ = self.pipeline.play().await;
         Ok(())
     }
-}
-
-pub struct FFmpegCaptureOutput<T> {
-    pub input: FFmpegInput<T>,
-    pub capture: CaptureController,
-    pub output_path: PathBuf,
 }
 
 pub async fn start(
     recording_dir: PathBuf,
     recording_options: &RecordingOptions,
     camera_feed: Option<&CameraFeed>,
-) -> InProgressRecording {
+) -> Result<InProgressRecording, MediaError> {
     let content_dir = recording_dir.join("content");
 
     std::fs::create_dir_all(&content_dir).unwrap();
 
-    let mut ffmpeg = FFmpeg::new();
+    let clock = SynchronisedClock::<()>::new();
+    let mut pipeline_builder = Pipeline::builder(clock);
 
-    let (start_writing_tx, start_writing_rx) = watch::channel(false);
+    let display_output_path = content_dir.join("display.mp4");
+    let mut audio_output_path = None;
+    let mut camera_output_path = None;
 
-    let audio_pipe_path = content_dir.join("audio-input.pipe");
+    let screen_source = ScreenCaptureSource::init(&recording_options.capture_target, None, None);
+    let screen_config = screen_source.info();
+    let output_config = screen_config.scaled(1920, 30);
+    let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
+    let screen_encoder = H264Encoder::init(
+        "screen",
+        output_config,
+        Output::File(display_output_path.clone()),
+    )?;
+    pipeline_builder = pipeline_builder
+        .source("screen_capture", screen_source)
+        .pipe("screen_capture_filter", screen_filter)
+        .sink("screen_capture_encoder", screen_encoder);
 
-    let (display, camera, audio) = tokio::join!(
-        display::start_capturing(
-            content_dir.join("display.mp4"),
-            &recording_options.capture_target,
-            start_writing_rx.clone(),
-        ),
-        OptionFuture::from(camera_feed.map(|camera_feed| {
-            camera::start_capturing(
-                content_dir.join("camera.mp4"),
-                camera_feed,
-                start_writing_rx.clone(),
-            )
-        }),),
-        OptionFuture::from(
-            recording_options
-                .audio_input_name()
-                .and_then(audio::AudioCapturer::init)
-                .map(|capturer| {
-                    audio::start_capturing(capturer, audio_pipe_path.clone(), start_writing_rx)
-                }),
-        )
-    );
+    if let Some(mic_source) = AudioInputSource::init(recording_options.audio_input_name.as_ref()) {
+        let mic_config = mic_source.info();
+        audio_output_path = Some(content_dir.join("audio-input.mp3"));
 
-    let audio = if let Some((controller, capturer)) = audio {
-        let output_path = content_dir.join("audio-input.mp3");
+        // let mic_filter = AudioFilter::init("microphone", mic_config, "aresample=async=1:min_hard_comp=0.100000:first_pts=0")?;
+        let mic_encoder = MP3Encoder::init(
+            "microphone",
+            mic_config,
+            Output::File(audio_output_path.clone().unwrap()),
+        )?;
 
-        dbg!(&capturer.config);
+        pipeline_builder = pipeline_builder
+            .source("microphone_capture", mic_source)
+            // .pipe("microphone_filter", mic_filter)
+            .sink("microphone_encoder", mic_encoder);
+    }
 
-        let ffmpeg_input = ffmpeg.add_input(FFmpegRawAudioInput {
-            input: audio_pipe_path.into_os_string(),
-            sample_format: capturer.sample_format().to_string(),
-            sample_rate: capturer.sample_rate(),
-            channels: capturer.channels(),
-        });
+    if let Some(camera_source) = CameraSource::init(camera_feed) {
+        let camera_config = camera_source.info();
+        let output_config = camera_config.scaled(1920, 30);
+        camera_output_path = Some(content_dir.join("camera.mp4"));
 
-        ffmpeg
-            .command
-            .args(["-f", "mp3", "-map", &format!("{}:a", ffmpeg_input.index)])
-            .args(["-b:a", "128k"])
-            .args(["-ar", &capturer.sample_rate().to_string()])
-            .args(["-ac", &capturer.channels().to_string(), "-async", "1"])
-            .args([
-                "-af",
-                "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
-            ])
-            .arg(&output_path);
+        let camera_filter = VideoFilter::init("camera", camera_config, output_config)?;
+        let camera_encoder = H264Encoder::init(
+            "camera",
+            output_config,
+            Output::File(camera_output_path.clone().unwrap()),
+        )?;
 
-        Some((
-            FFmpegCaptureOutput {
-                input: ffmpeg_input,
-                capture: controller,
-                output_path,
-            },
-            capturer,
-        ))
-    } else {
-        None
-    };
+        pipeline_builder = pipeline_builder
+            .source("camera_capture", camera_source)
+            .pipe("camera_filter", camera_filter)
+            .sink("camera_encoder", camera_encoder);
+    }
 
-    let ffmpeg_process = ffmpeg.start();
-
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
-    println!("Starting writing to named pipes");
-
-    start_writing_tx.send(true).unwrap();
+    let mut pipeline = pipeline_builder.build().await?;
+    pipeline.play().await?;
 
     // Initialize mouse event tracking
-    let mouse_moves = Arc::new(Mutex::new(Vec::new()));
-    let mouse_clicks = Arc::new(Mutex::new(Vec::new()));
-    let stop_signal = Arc::new(Mutex::new(false));
+    // let mouse_moves = Arc::new(Mutex::new(Vec::new()));
+    // let mouse_clicks = Arc::new(Mutex::new(Vec::new()));
+    // let stop_signal = Arc::new(Mutex::new(false));
 
     // Start mouse event tracking
-    let mouse_moves_clone = Arc::clone(&mouse_moves);
-    let mouse_clicks_clone = Arc::clone(&mouse_clicks);
-    let stop_signal_clone = Arc::clone(&stop_signal);
-    tokio::spawn(async move {
-        let device_state = DeviceState::new();
-        let mut last_mouse_state = device_state.get_mouse();
-        let start_time = Instant::now();
+    // let mouse_moves_clone = Arc::clone(&mouse_moves);
+    // let mouse_clicks_clone = Arc::clone(&mouse_clicks);
+    // let stop_signal_clone = Arc::clone(&stop_signal);
+    // tokio::spawn(async move {
+    //     let device_state = DeviceState::new();
+    //     let mut last_mouse_state = device_state.get_mouse();
+    //     let start_time = Instant::now();
 
-        while !*stop_signal_clone.lock().unwrap() {
-            let mouse_state = device_state.get_mouse();
-            let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
-            let unix_time = chrono::Utc::now().timestamp_millis() as f64;
+    //     while !*stop_signal_clone.lock().unwrap() {
+    //         let mouse_state = device_state.get_mouse();
+    //         let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+    //         let unix_time = chrono::Utc::now().timestamp_millis() as f64;
 
-            if mouse_state.coords != last_mouse_state.coords {
-                let mouse_event = MouseEvent {
-                    active_modifiers: vec![],
-                    cursor_id: get_cursor_id(),
-                    process_time_ms: elapsed,
-                    event_type: "mouseMoved".to_string(),
-                    unix_time_ms: unix_time,
-                    x: mouse_state.coords.0 as f64,
-                    y: mouse_state.coords.1 as f64,
-                };
-                mouse_moves_clone.lock().unwrap().push(mouse_event);
-            }
+    //         if mouse_state.coords != last_mouse_state.coords {
+    //             let mouse_event = MouseEvent {
+    //                 active_modifiers: vec![],
+    //                 cursor_id: get_cursor_id(),
+    //                 process_time_ms: elapsed,
+    //                 event_type: "mouseMoved".to_string(),
+    //                 unix_time_ms: unix_time,
+    //                 x: mouse_state.coords.0 as f64,
+    //                 y: mouse_state.coords.1 as f64,
+    //             };
+    //             mouse_moves_clone.lock().unwrap().push(mouse_event);
+    //         }
 
-            if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
-                let mouse_event = MouseEvent {
-                    active_modifiers: vec![],
-                    cursor_id: get_cursor_id(),
-                    process_time_ms: elapsed,
-                    event_type: "mouseClicked".to_string(),
-                    unix_time_ms: unix_time,
-                    x: mouse_state.coords.0 as f64,
-                    y: mouse_state.coords.1 as f64,
-                };
-                mouse_clicks_clone.lock().unwrap().push(mouse_event);
-            }
+    //         if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
+    //             let mouse_event = MouseEvent {
+    //                 active_modifiers: vec![],
+    //                 cursor_id: get_cursor_id(),
+    //                 process_time_ms: elapsed,
+    //                 event_type: "mouseClicked".to_string(),
+    //                 unix_time_ms: unix_time,
+    //                 x: mouse_state.coords.0 as f64,
+    //                 y: mouse_state.coords.1 as f64,
+    //             };
+    //             mouse_clicks_clone.lock().unwrap().push(mouse_event);
+    //         }
 
-            last_mouse_state = mouse_state;
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    });
+    //         last_mouse_state = mouse_state;
+    //         tokio::time::sleep(Duration::from_millis(10)).await;
+    //     }
+    // });
 
-    InProgressRecording {
+    Ok(InProgressRecording {
         segments: vec![SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs_f64()],
+        pipeline,
         recording_dir,
-        ffmpeg_process,
-        display,
-        display_source: match recording_options.capture_target {
-            CaptureTarget::Screen { id: screen_id } => DisplaySource::Screen,
-            CaptureTarget::Window { id: window_number } => DisplaySource::Window {
-                bounds: get_window_bounds(window_number).unwrap(),
-            },
-        },
-        camera,
-        audio,
-        mouse_moves,
-        mouse_clicks,
-        stop_signal,
-    }
+        display_source: recording_options.capture_target.clone(),
+        display_output_path,
+        audio_output_path,
+        camera_output_path,
+        // mouse_moves,
+        // mouse_clicks,
+        // stop_signal,
+    })
 }
 
 fn get_cursor_id() -> String {

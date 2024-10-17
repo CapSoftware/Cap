@@ -20,15 +20,18 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
       const instance = await commands.createEditorInstance(props.videoId);
       if (instance.status !== "ok") throw new Error("Failed to start editor");
 
-      const ws = createImageDataWS(
+      const [ws, isConnected] = createImageDataWS(
         instance.data.framesSocketUrl,
         setLatestFrame
       );
-      ws.onopen = () => {
-        events.renderFrameEvent.emit({
-          frame_number: Math.floor(0),
-        });
-      };
+
+      createEffect(() => {
+        if (isConnected()) {
+          events.renderFrameEvent.emit({
+            frame_number: Math.floor(0),
+          });
+        }
+      });
 
       return instance.data;
     });

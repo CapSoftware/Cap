@@ -491,6 +491,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "bindgen"
+version = "0.70.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f49d8fed880d473ea71efb9bf597651e77201bdd4893efe54c9e5d65ae04ce6f"
+dependencies = [
+ "bitflags 2.6.0",
+ "cexpr",
+ "clang-sys",
+ "itertools",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "rustc-hash 1.1.0",
+ "shlex",
+ "syn 2.0.75",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -703,6 +721,29 @@ dependencies = [
  "nix 0.29.0",
  "tauri",
  "tauri-plugin-shell",
+]
+
+[[package]]
+name = "cap-media"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cap-project",
+ "core-foundation 0.10.0",
+ "core-graphics 0.24.0",
+ "cpal",
+ "ffmpeg-next",
+ "ffmpeg-sys-next",
+ "flume 0.11.0",
+ "indexmap 2.5.0",
+ "nokhwa 0.10.3 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "scap 0.0.5 (git+https://github.com/filleduchaos/scap?rev=8eb00ce1b9bcf)",
+ "serde",
+ "specta",
+ "tempfile",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -1201,7 +1242,7 @@ version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f01585027057ff5f0a5bf276174ae4c1594a2c5bde93d5f46a016d76270f5a9"
 dependencies = [
- "bindgen",
+ "bindgen 0.69.4",
 ]
 
 [[package]]
@@ -1448,13 +1489,14 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.0-beta.5.5"
+version = "0.3.0-beta.5.6.2"
 dependencies = [
  "anyhow",
  "axum",
  "bytemuck",
  "cap-editor",
  "cap-ffmpeg",
+ "cap-media",
  "cap-project",
  "cap-rendering",
  "cap-utils",
@@ -1475,7 +1517,7 @@ dependencies = [
  "indexmap 2.5.0",
  "mp4",
  "nix 0.29.0",
- "nokhwa",
+ "nokhwa 0.10.3 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
  "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
  "num-traits",
  "objc",
@@ -1483,7 +1525,7 @@ dependencies = [
  "png",
  "reqwest",
  "rodio",
- "scap",
+ "scap 0.0.5 (git+https://github.com/CapSoftware/scap?rev=691bd88798d3)",
  "serde",
  "serde_json",
  "specta",
@@ -1848,8 +1890,8 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-next"
-version = "7.0.4"
-source = "git+https://github.com/CapSoftware/rust-ffmpeg?rev=11f8d264bbc0#11f8d264bbc0dd7f4956d16c827b94ffc05191a8"
+version = "7.1.0"
+source = "git+https://github.com/CapSoftware/rust-ffmpeg?rev=91b29d09a8c7cb4f5659c38f1f0924b980a30cba#91b29d09a8c7cb4f5659c38f1f0924b980a30cba"
 dependencies = [
  "bitflags 2.6.0",
  "ffmpeg-sys-next",
@@ -1875,11 +1917,11 @@ dependencies = [
 
 [[package]]
 name = "ffmpeg-sys-next"
-version = "7.0.2"
+version = "7.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db1b7546e70609ead8c06b2b4c618a1ba352364675f81608f431dd4f321fe3f1"
+checksum = "2bc3234d0a4b2f7d083699d0860c6c9dd83713908771b60f94a96f8704adfe45"
 dependencies = [
- "bindgen",
+ "bindgen 0.70.1",
  "cc",
  "libc",
  "num_cpus",
@@ -1938,6 +1980,9 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55ac459de2512911e4b674ce33cf20befaba382d05b62b008afc1c8b57cbf181"
 dependencies = [
+ "futures-core",
+ "futures-sink",
+ "nanorand",
  "spin",
 ]
 
@@ -3247,7 +3292,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf0d9716420364790e85cbb9d3ac2c950bde16a7dd36f3209b7dfdfc4a24d01f"
 dependencies = [
- "bindgen",
+ "bindgen 0.69.4",
  "cc",
  "system-deps",
 ]
@@ -3725,6 +3770,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nokhwa"
+version = "0.10.3"
+source = "git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1#2de5a760d5f1abfc062bf7d7fec155e8a0eafdcd"
+dependencies = [
+ "flume 0.10.14",
+ "image 0.24.9",
+ "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "nokhwa-core 0.1.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "paste",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "nokhwa-bindings-macos"
 version = "0.2.0"
 source = "git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork#523b6d9b6266da8d1d9495a64506953961b748be"
@@ -3773,6 +3832,8 @@ source = "git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1#2de5a760d5
 dependencies = [
  "bytes",
  "image 0.24.9",
+ "mozjpeg",
+ "serde",
  "thiserror",
 ]
 
@@ -4489,7 +4550,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "849e188f90b1dda88fe2bfe1ad31fe5f158af2c98f80fb5d13726c44f3f01112"
 dependencies = [
- "bindgen",
+ "bindgen 0.69.4",
  "libspa-sys",
  "system-deps",
 ]
@@ -5205,6 +5266,25 @@ dependencies = [
 name = "scap"
 version = "0.0.5"
 source = "git+https://github.com/CapSoftware/scap?rev=691bd88798d3#691bd88798d39478e09afb04d460e113097bb855"
+dependencies = [
+ "cocoa 0.25.0",
+ "core-graphics-helmer-fork",
+ "dbus",
+ "objc",
+ "pipewire",
+ "rand 0.8.5",
+ "screencapturekit",
+ "screencapturekit-sys",
+ "sysinfo",
+ "tao-core-video-sys",
+ "windows 0.52.0",
+ "windows-capture",
+]
+
+[[package]]
+name = "scap"
+version = "0.0.5"
+source = "git+https://github.com/filleduchaos/scap?rev=8eb00ce1b9bcf#8eb00ce1b9bcfa22d38f7c2857539f2c5139dfe3"
 dependencies = [
  "cocoa 0.25.0",
  "core-graphics-helmer-fork",
