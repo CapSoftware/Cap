@@ -534,11 +534,22 @@ async fn create_screenshot(
                         e.to_string()
                     })?;
 
-                    // Use image crate to save the frame as an image file
-                    let width = rgb_frame.width() as u32;
-                    let height = rgb_frame.height() as u32;
-                    let data = rgb_frame.data(0);
-                    let img = image::RgbImage::from_raw(width, height, data.to_vec())
+                    let width = rgb_frame.width() as usize;
+                    let height = rgb_frame.height() as usize;
+                    let bytes_per_pixel = 3;
+                    let src_stride = rgb_frame.stride(0) as usize;
+                    let dst_stride = width * bytes_per_pixel;
+
+                    let mut img_buffer = vec![0u8; height * dst_stride];
+
+                    for y in 0..height {
+                        let src_slice =
+                            &rgb_frame.data(0)[y * src_stride..y * src_stride + dst_stride];
+                        let dst_slice = &mut img_buffer[y * dst_stride..(y + 1) * dst_stride];
+                        dst_slice.copy_from_slice(src_slice);
+                    }
+
+                    let img = image::RgbImage::from_raw(width as u32, height as u32, img_buffer)
                         .ok_or("Failed to create image from frame data")?;
                     println!("Saving image to {:?}", output);
 
@@ -575,7 +586,33 @@ async fn create_thumbnail(input: PathBuf, output: PathBuf, size: (u32, u32)) -> 
             e.to_string()
         })?;
 
-        let thumbnail = img.thumbnail(size.0, size.1);
+        let width = img.width() as usize;
+        let height = img.height() as usize;
+        let bytes_per_pixel = 3;
+        let src_stride = width * bytes_per_pixel;
+
+        let rgb_img = img.to_rgb8();
+        let img_buffer = rgb_img.as_raw();
+
+        let mut corrected_buffer = vec![0u8; height * src_stride];
+
+        for y in 0..height {
+            let src_slice = &img_buffer[y * src_stride..(y + 1) * src_stride];
+            let dst_slice = &mut corrected_buffer[y * src_stride..(y + 1) * src_stride];
+            dst_slice.copy_from_slice(src_slice);
+        }
+
+        let corrected_img =
+            image::RgbImage::from_raw(width as u32, height as u32, corrected_buffer)
+                .ok_or("Failed to create corrected image")?;
+
+        let thumbnail = image::imageops::resize(
+            &corrected_img,
+            size.0,
+            size.1,
+            image::imageops::FilterType::Lanczos3,
+        );
+
         thumbnail
             .save_with_format(&output, image::ImageFormat::Png)
             .map_err(|e| {
@@ -1022,6 +1059,7 @@ struct SerializedEditorInstance {
     saved_project_config: ProjectConfiguration,
     recordings: ProjectRecordings,
     path: PathBuf,
+    pretty_name: String,
 }
 
 #[tauri::command]
@@ -1032,6 +1070,12 @@ async fn create_editor_instance(
 ) -> Result<SerializedEditorInstance, String> {
     let editor_instance = upsert_editor_instance(&app, video_id).await;
 
+    // Load the RecordingMeta to get the pretty name
+    let meta = RecordingMeta::load_for_project(&editor_instance.project_path)
+        .map_err(|e| format!("Failed to load recording meta: {}", e))?;
+
+    println!("Pretty name: {}", meta.pretty_name);
+
     Ok(SerializedEditorInstance {
         frames_socket_url: format!("ws://localhost:{}{FRAMES_WS_PATH}", editor_instance.ws_port),
         recording_duration: editor_instance.recordings.duration(),
@@ -1041,6 +1085,7 @@ async fn create_editor_instance(
         },
         recordings: editor_instance.recordings,
         path: editor_instance.project_path.clone(),
+        pretty_name: meta.pretty_name,
     })
 }
 

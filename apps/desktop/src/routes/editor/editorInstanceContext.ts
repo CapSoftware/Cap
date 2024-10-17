@@ -41,5 +41,6 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
       videoId: props.videoId,
       latestFrame,
       presets: createPresets(),
+      prettyName: () => editorInstance()?.prettyName ?? "Cap Recording",
     };
   }, null!);

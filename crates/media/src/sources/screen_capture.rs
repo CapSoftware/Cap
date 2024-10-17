@@ -184,10 +184,14 @@ impl PipelineSourceTask for ScreenCaptureSource {
 
                     match capturer.get_next_frame() {
                         Ok(Frame::BGRA(frame)) => {
+                            if frame.height == 0 || frame.width == 0 {
+                                continue;
+                            }
+
                             let raw_timestamp = RawNanoseconds(frame.display_time);
                             match clock.timestamp_for(raw_timestamp) {
                                 None => {
-                                    eprintln!("Clock is currently stopped. Dropping frames.")
+                                    eprintln!("Clock is currently stopped. Dropping frames.");
                                 }
                                 Some(timestamp) => {
                                     let mut buffer = FFVideo::new(
@@ -197,32 +201,44 @@ impl PipelineSourceTask for ScreenCaptureSource {
                                     );
                                     buffer.set_pts(Some(timestamp));
 
-                                    let bytes_per_pixel = 4; // For BGRA format
+                                    let bytes_per_pixel = 4;
                                     let width_in_bytes = frame.width as usize * bytes_per_pixel;
-                                    let src_stride = width_in_bytes;
-                                    let dst_stride = buffer.stride(0) as usize;
                                     let height = frame.height as usize;
 
                                     let src_data = &frame.data;
-                                    let dst_data = buffer.data_mut(0);
 
-                                    // Ensure we don't go out of bounds
-                                    if src_data.len() < src_stride * height
-                                        || dst_data.len() < dst_stride * height
-                                    {
+                                    let src_stride = src_data.len() / height;
+                                    let dst_stride = buffer.stride(0) as usize;
+
+                                    if src_data.len() < src_stride * height {
                                         eprintln!("Frame data size mismatch.");
-                                        break;
+                                        continue;
                                     }
 
-                                    // Copy data line by line considering strides
-                                    for y in 0..height {
-                                        let src_offset = y * src_stride;
-                                        let dst_offset = y * dst_stride;
-                                        // Copy only the width_in_bytes to avoid overwriting
-                                        dst_data[dst_offset..dst_offset + width_in_bytes]
-                                            .copy_from_slice(
-                                                &src_data[src_offset..src_offset + width_in_bytes],
-                                            );
+                                    if src_stride < width_in_bytes {
+                                        eprintln!(
+                                            "Source stride is less than expected width in bytes."
+                                        );
+                                        continue;
+                                    }
+
+                                    if buffer.data(0).len() < dst_stride * height {
+                                        eprintln!("Destination data size mismatch.");
+                                        continue;
+                                    }
+
+                                    {
+                                        let dst_data = buffer.data_mut(0);
+
+                                        for y in 0..height {
+                                            let src_offset = y * src_stride;
+                                            let dst_offset = y * dst_stride;
+                                            dst_data[dst_offset..dst_offset + width_in_bytes]
+                                                .copy_from_slice(
+                                                    &src_data
+                                                        [src_offset..src_offset + width_in_bytes],
+                                                );
+                                        }
                                     }
 
                                     if let Err(_) = output.send(buffer) {
