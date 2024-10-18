@@ -46,6 +46,7 @@ impl CapWindow {
             Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
             Self::InProgressRecording { .. } => "in-progress-recording".to_string(),
             Self::PrevRecordings => "prev-recordings".to_string(),
+            // TODO(Ilya): Windows doesn't seem to like this for a window label.
             Self::Editor { project_id } => format!("editor-{}", project_id),
             Self::Permissions => "permissions".to_string(),
             Self::Feedback => "feedback".to_string(),

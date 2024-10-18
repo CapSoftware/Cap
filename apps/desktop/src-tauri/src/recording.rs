@@ -295,33 +295,6 @@ pub async fn start(
     })
 }
 
-enum CursorId {
-    Arrow,
-    IBeam,
-    Crosshair,
-    ClosedHand,
-    OpenHand,
-    PointingHand,
-    ResizeLeft,
-    ResizeRight,
-    ResizeLeftRight,
-    ResizeUp,
-    ResizeDown,
-    ResizeUpDown,
-    DisappearingItem,
-    VerticalIBeam,
-    NotAllowed,
-    DragLink,
-    DragCopy,
-    ContextualMenu,
-    Unknown,
-}
-
-#[cfg(target_os = "windows")]
-fn get_cursor_id() -> CursorId {
-    todo!()
-}
-
 #[cfg(target_os = "macos")]
 fn get_cursor_id() -> String {
     autoreleasepool(|| {
