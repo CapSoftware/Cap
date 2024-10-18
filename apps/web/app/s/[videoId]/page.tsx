@@ -24,6 +24,10 @@ export async function generateMetadata(
 
   const video = query[0];
 
+  if (!video) {
+    return notFound();
+  }
+
   if (video.public === false) {
     return {
       title: "Cap: This video is private",
@@ -59,6 +63,10 @@ export default async function ShareVideoPage(props: Props) {
   }
 
   const video = query[0];
+
+  if (!video) {
+    return notFound();
+  }
 
   if (
     video.jobId === null &&
@@ -153,8 +161,6 @@ export default async function ShareVideoPage(props: Props) {
     const data = await res.json();
     individualFiles = data.files;
   }
-
-  console.log("individualFiles:", individualFiles);
 
   return (
     <Share

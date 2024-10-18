@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
 
   const video = await db.select().from(videos).where(eq(videos.id, videoId));
 
-  if (video.length === 0) {
+  if (video.length === 0 || !video[0]) {
     return new Response(
       JSON.stringify({ error: true, message: "Video does not exist" }),
       {
