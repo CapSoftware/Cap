@@ -1,7 +1,6 @@
 #![allow(unused_mut)]
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, Wry};
 
-#[cfg(target_os = "macos")]
 use tauri_plugin_decorum::WebviewWindowExt;
 
 pub enum CapWindow {
@@ -468,9 +467,9 @@ impl CapWindow {
 }
 
 fn apply_window_chrome(window: &WebviewWindow<Wry>) {
+    window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]
     {
-        window.create_overlay_titlebar().unwrap();
         window.set_traffic_lights_inset(14.0, 22.0).unwrap();
     }
 }

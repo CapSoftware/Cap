@@ -1164,8 +1164,8 @@ async fn get_video_metadata(
         .join("recordings")
         .join(format!("{}.cap", video_id));
 
-    let screen_video_path = video_dir.join("content/display.mp4");
-    let output_video_path = video_dir.join("output/result.mp4");
+    let screen_video_path = video_dir.join("content").join("display.mp4");
+    let output_video_path = video_dir.join("output").join("result.mp4");
 
     let video_path = match video_type {
         Some(VideoType::Screen) => {
@@ -1565,9 +1565,9 @@ async fn upload_rendered_video(
                     .join(format!("{}.cap", video_id));
 
                 let files_to_upload = vec![
-                    (video_dir.join("content/audio-input.mp3"), true),
-                    (video_dir.join("content/camera.mp4"), false),
-                    (video_dir.join("content/display.mp4"), false),
+                    (video_dir.join("content").join("audio-input.mp3"), true),
+                    (video_dir.join("content").join("camera.mp4"), false),
+                    (video_dir.join("content").join("display.mp4"), false),
                 ];
 
                 for (file_path, is_audio) in files_to_upload {
