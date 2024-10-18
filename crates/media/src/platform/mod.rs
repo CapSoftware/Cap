@@ -6,7 +6,7 @@ use specta::Type;
 mod platform_impl;
 
 #[cfg(target_os = "windows")]
-#[path = "windows.rs"]
+#[path = "win.rs"]
 mod platform_impl;
 
 pub use platform_impl::*;
