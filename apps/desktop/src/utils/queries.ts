@@ -1,10 +1,10 @@
 import { createQuery, queryOptions } from "@tanstack/solid-query";
-import { createTimer } from "@solid-primitives/timer";
 
-import { commands } from "./tauri";
+import { commands, RecordingOptions } from "./tauri";
 import { createQueryInvalidate } from "./events";
 import { createStore, reconcile } from "solid-js/store";
-import { createMemo } from "solid-js";
+import { createEffect, createMemo } from "solid-js";
+import { makePersisted } from "@solid-primitives/storage";
 
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
@@ -64,15 +64,48 @@ export const getPermissions = queryOptions({
   refetchInterval: 1000,
 });
 
+type PartialRecordingOptions = Omit<RecordingOptions, "captureTarget">;
 export function createOptionsQuery() {
-  const options = createQuery(() => getOptions);
+  const KEY = "recordingOptionsQuery";
+  const localState = localStorage.getItem(KEY);
+  const [state, setState, _init] = makePersisted(
+    createStore<PartialRecordingOptions>(
+      localState
+        ? JSON.parse(localState)
+        : {
+            cameraLabel: null,
+            audioInputName: null,
+          }
+    )
+  );
+
+  const setOptions = (newOptions: RecordingOptions) => {
+    commands.setRecordingOptions(newOptions);
+    const { captureTarget: _, ...partialOptions } = newOptions;
+    setState(partialOptions);
+  };
+
+  createEffect(() => {
+    localStorage.setItem(KEY, JSON.stringify(state));
+  });
+
+  const options = createQuery(() => ({
+    ...getOptions,
+    select: (data) => {
+      if (data && state) {
+        return { ...data, ...state };
+      }
+    },
+  }));
+
   createQueryInvalidate(options, "recordingOptionsChanged");
 
-  return options;
+  return { options, setOptions };
 }
 
 export function createCurrentRecordingQuery() {
   const currentRecording = createQuery(() => getCurrentRecording);
+
   createQueryInvalidate(currentRecording, "currentRecordingChanged");
 
   return currentRecording;
