@@ -2090,17 +2090,20 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 async fn reset_camera_permissions(app: AppHandle) -> Result<(), ()> {
-    #[cfg(debug_assertions)]
-    let bundle_id = "com.apple.Terminal";
-    #[cfg(not(debug_assertions))]
-    let bundle_id = "so.cap.desktop";
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(debug_assertions)]
+        let bundle_id = "com.apple.Terminal";
+        #[cfg(not(debug_assertions))]
+        let bundle_id = "so.cap.desktop";
 
-    Command::new("tccutil")
-        .arg("reset")
-        .arg("Camera")
-        .arg(bundle_id)
-        .output()
-        .expect("Failed to reset camera permissions");
+        Command::new("tccutil")
+            .arg("reset")
+            .arg("Camera")
+            .arg(bundle_id)
+            .output()
+            .expect("Failed to reset camera permissions");
+    }
 
     Ok(())
 }
@@ -2108,17 +2111,20 @@ async fn reset_camera_permissions(app: AppHandle) -> Result<(), ()> {
 #[tauri::command]
 #[specta::specta]
 async fn reset_microphone_permissions(app: AppHandle) -> Result<(), ()> {
-    #[cfg(debug_assertions)]
-    let bundle_id = "com.apple.Terminal";
-    #[cfg(not(debug_assertions))]
-    let bundle_id = "so.cap.desktop";
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(debug_assertions)]
+        let bundle_id = "com.apple.Terminal";
+        #[cfg(not(debug_assertions))]
+        let bundle_id = "so.cap.desktop";
 
-    Command::new("tccutil")
-        .arg("reset")
-        .arg("Microphone")
-        .arg(bundle_id)
-        .output()
-        .expect("Failed to reset microphone permissions");
+        Command::new("tccutil")
+            .arg("reset")
+            .arg("Microphone")
+            .arg(bundle_id)
+            .output()
+            .expect("Failed to reset microphone permissions");
+    }
 
     Ok(())
 }
