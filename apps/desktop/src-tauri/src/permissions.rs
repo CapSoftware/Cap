@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
+#[cfg(target_os = "macos")]
 use core_foundation::boolean::CFBoolean;
+#[cfg(target_os = "macos")]
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef}; // Import CFDictionaryRef
+#[cfg(target_os = "macos")]
 use core_foundation::string::CFString;
 #[cfg(target_os = "macos")]
 use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
@@ -161,7 +164,7 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
             microphone: OSPermissionStatus::NotNeeded,
             camera: OSPermissionStatus::NotNeeded,
             accessibility: OSPermissionStatus::NotNeeded,
-        };
+        }
     }
 }
 

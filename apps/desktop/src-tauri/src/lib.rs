@@ -6,9 +6,9 @@ mod encoder;
 mod flags;
 mod general_settings;
 mod hotkeys;
-mod macos;
 mod notifications;
 mod permissions;
+mod platform;
 mod recording;
 mod tray;
 mod upload;
@@ -50,7 +50,6 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
-use tauri_nspanel::ManagerExt;
 use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
@@ -61,6 +60,9 @@ use tokio::{
 };
 use upload::{upload_image, upload_individual_file, upload_video};
 use windows::CapWindow;
+
+#[cfg(target_os = "macos")]
+use tauri_nspanel::ManagerExt;
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -387,7 +389,8 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     std::fs::create_dir_all(current_recording.recording_dir.join("screenshots")).ok();
     let display_screenshot = current_recording
         .recording_dir
-        .join("screenshots/display.jpg");
+        .join("screenshots")
+        .join("display.jpg");
     create_screenshot(
         current_recording.display_output_path.clone(),
         display_screenshot.clone(),
@@ -1162,8 +1165,8 @@ async fn get_video_metadata(
         .join("recordings")
         .join(format!("{}.cap", video_id));
 
-    let screen_video_path = video_dir.join("content/display.mp4");
-    let output_video_path = video_dir.join("output/result.mp4");
+    let screen_video_path = video_dir.join("content").join("display.mp4");
+    let output_video_path = video_dir.join("output").join("result.mp4");
 
     let video_path = match video_type {
         Some(VideoType::Screen) => {
@@ -1340,17 +1343,23 @@ fn open_editor(app: AppHandle, id: String) {
 #[tauri::command(async)]
 #[specta::specta]
 fn close_previous_recordings_window(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
-        panel.released_when_closed(true);
-        panel.close();
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
+            panel.released_when_closed(true);
+            panel.close();
+        }
     }
 }
 
 #[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
-        panel.make_key_window();
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
+            panel.make_key_window();
+        }
     }
 }
 
@@ -1557,9 +1566,9 @@ async fn upload_rendered_video(
                     .join(format!("{}.cap", video_id));
 
                 let files_to_upload = vec![
-                    (video_dir.join("content/audio-input.mp3"), true),
-                    (video_dir.join("content/camera.mp4"), false),
-                    (video_dir.join("content/display.mp4"), false),
+                    (video_dir.join("content").join("audio-input.mp3"), true),
+                    (video_dir.join("content").join("camera.mp4"), false),
+                    (video_dir.join("content").join("display.mp4"), false),
                 ];
 
                 for (file_path, is_audio) in files_to_upload {
@@ -2082,17 +2091,20 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 async fn reset_camera_permissions(app: AppHandle) -> Result<(), ()> {
-    #[cfg(debug_assertions)]
-    let bundle_id = "com.apple.Terminal";
-    #[cfg(not(debug_assertions))]
-    let bundle_id = "so.cap.desktop";
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(debug_assertions)]
+        let bundle_id = "com.apple.Terminal";
+        #[cfg(not(debug_assertions))]
+        let bundle_id = "so.cap.desktop";
 
-    Command::new("tccutil")
-        .arg("reset")
-        .arg("Camera")
-        .arg(bundle_id)
-        .output()
-        .expect("Failed to reset camera permissions");
+        Command::new("tccutil")
+            .arg("reset")
+            .arg("Camera")
+            .arg(bundle_id)
+            .output()
+            .expect("Failed to reset camera permissions");
+    }
 
     Ok(())
 }
@@ -2100,17 +2112,20 @@ async fn reset_camera_permissions(app: AppHandle) -> Result<(), ()> {
 #[tauri::command]
 #[specta::specta]
 async fn reset_microphone_permissions(app: AppHandle) -> Result<(), ()> {
-    #[cfg(debug_assertions)]
-    let bundle_id = "com.apple.Terminal";
-    #[cfg(not(debug_assertions))]
-    let bundle_id = "so.cap.desktop";
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(debug_assertions)]
+        let bundle_id = "com.apple.Terminal";
+        #[cfg(not(debug_assertions))]
+        let bundle_id = "so.cap.desktop";
 
-    Command::new("tccutil")
-        .arg("reset")
-        .arg("Microphone")
-        .arg(bundle_id)
-        .output()
-        .expect("Failed to reset microphone permissions");
+        Command::new("tccutil")
+            .arg("reset")
+            .arg("Microphone")
+            .arg(bundle_id)
+            .output()
+            .expect("Failed to reset microphone permissions");
+    }
 
     Ok(())
 }
@@ -2206,9 +2221,16 @@ pub async fn run() {
 
     tauri::async_runtime::set(tokio::runtime::Handle::current());
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_nspanel::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_os::init())
