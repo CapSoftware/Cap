@@ -389,7 +389,8 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     std::fs::create_dir_all(current_recording.recording_dir.join("screenshots")).ok();
     let display_screenshot = current_recording
         .recording_dir
-        .join("screenshots/display.jpg");
+        .join("screenshots")
+        .join("display.jpg");
     create_screenshot(
         current_recording.display_output_path.clone(),
         display_screenshot.clone(),

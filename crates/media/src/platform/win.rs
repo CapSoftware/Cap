@@ -11,8 +11,9 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorInfo, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
     GetWindowThreadProcessId, IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO,
-    IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
-    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT,
+    IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON,
+    IDC_PIN, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW,
+    IDC_WAIT,
 };
 
 fn pid_to_name(pid: u32) -> Result<String, windows::core::Error> {
@@ -116,6 +117,8 @@ pub struct DefaultCursors {
     hand: isize,
     appstarting: isize,
     help: isize,
+    pin: isize,
+    person: isize,
 }
 
 impl Default for DefaultCursors {
@@ -141,6 +144,8 @@ impl Default for DefaultCursors {
             up_arrow: load_cursor(IDC_UPARROW),
             wait: load_cursor(IDC_WAIT),
             appstarting: load_cursor(IDC_APPSTARTING),
+            pin: load_cursor(IDC_PIN),
+            person: load_cursor(IDC_PERSON),
         }
     }
 }
@@ -165,6 +170,7 @@ pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
             ptr if ptr == cursors.no => CursorShape::NotAllowed,
             ptr if ptr == cursors.appstarting => CursorShape::Appstarting,
             ptr if ptr == cursors.help => CursorShape::Help,
+            ptr if ptr == cursors.pin || ptr == cursors.person => CursorShape::OpenHand,
             // Usually 0, meaning the cursor is hidden. On Windows 8+, a value of 2 means the cursor is supressed
             // as the user is using touch input instead.
             _ => CursorShape::Hidden,
