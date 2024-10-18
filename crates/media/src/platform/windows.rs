@@ -100,6 +100,7 @@ pub fn bring_window_to_focus(window_id: u32) {
 
 /// Keeps handles to default cursor.
 /// Read more: [MS Doc - About Cursors](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)
+// TODO(Ilya): Change to an enum and define the values here.
 pub struct DefaultCursors {
     arrow: isize,
     ibeam: isize,
