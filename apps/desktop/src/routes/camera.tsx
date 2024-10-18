@@ -19,7 +19,6 @@ import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { cx } from "cva";
 
 import { createOptionsQuery } from "~/utils/queries";
-import { commands } from "~/utils/tauri";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
 
 namespace CameraWindow {
@@ -37,7 +36,7 @@ const BAR_HEIGHT = 56;
 const { cameraWsPort } = (window as any).__CAP__;
 
 export default function () {
-  const options = createOptionsQuery();
+  const { options, setOptions } = createOptionsQuery();
 
   const [state, setState] = makePersisted(
     createStore<CameraWindow.State>({
@@ -133,7 +132,7 @@ export default function () {
                 <div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-500 border border-white-transparent-20 text-gray-400">
                   <ControlButton
                     onClick={() => {
-                      commands.setRecordingOptions({
+                      setOptions({
                         ...options(),
                         cameraLabel: null,
                       });

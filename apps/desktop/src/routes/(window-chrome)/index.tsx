@@ -4,7 +4,6 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 import { createMutation, createQuery } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
-import { Window } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
   Show,
@@ -47,7 +46,7 @@ export const route = {
 };
 
 export default function () {
-  const options = createOptionsQuery();
+  const { options, setOptions } = createOptionsQuery();
   const windows = createQuery(() => listWindows);
   const videoDevices = createVideoDevicesQuery();
   const audioDevices = createQuery(() => listAudioDevices);
@@ -179,7 +178,7 @@ export default function () {
 
     if (!item || !options.data) return;
 
-    commands.setRecordingOptions({
+    setOptions({
       ...options.data,
       audioInputName: item.name !== "No Audio" ? item.name : null,
     });
@@ -247,7 +246,7 @@ export default function () {
         value={selectedWindow() ?? null}
         onChange={(d: CaptureWindow | null) => {
           if (!d || !options.data) return;
-          commands.setRecordingOptions({
+          setOptions({
             ...options.data,
             captureTarget: { variant: "window", ...d },
           });
@@ -265,7 +264,7 @@ export default function () {
               return;
             }
             if (s === "screen") {
-              commands.setRecordingOptions({
+              setOptions({
                 ...options.data,
                 captureTarget: { variant: "screen" },
               });
@@ -330,12 +329,12 @@ export default function () {
               if (!options.data) return;
 
               if (!item || !item.isCamera) {
-                await commands.setRecordingOptions({
+                await setOptions({
                   ...options.data,
                   cameraLabel: null,
                 });
               } else {
-                await commands.setRecordingOptions({
+                await setOptions({
                   ...options.data,
                   cameraLabel: item.name,
                 });
@@ -401,7 +400,7 @@ export default function () {
                         return requestPermission("camera");
                       }
                       if (!options.data?.cameraLabel) return;
-                      commands.setRecordingOptions({
+                      setOptions({
                         ...options.data,
                         cameraLabel: null,
                       });
@@ -492,14 +491,14 @@ export default function () {
                 if (permissions?.data?.microphone !== "granted") {
                   await requestPermission("microphone");
                   if (permissions?.data?.microphone === "granted") {
-                    commands.setRecordingOptions({
+                    setOptions({
                       ...options.data!,
                       audioInputName: audioDevice().name,
                     });
                   }
                 } else {
                   if (!options.data?.audioInputName) return;
-                  commands.setRecordingOptions({
+                  setOptions({
                     ...options.data,
                     audioInputName: null,
                   });
