@@ -1,12 +1,14 @@
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
+use std::path::PathBuf;
 
 use super::{Bounds, CursorShape, Window};
 
 use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_INFORMATION,
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorInfo, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
@@ -16,80 +18,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IDC_WAIT,
 };
 
-fn pid_to_name(pid: u32) -> Result<String, windows::core::Error> {
-    unsafe {
-        tracing::debug!("Getting name for pid: {pid}");
-        let handle = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid)?;
-        if handle.is_invalid() || handle.0 == 0 {
-            println!("Invalid PID {}", pid);
-        }
-        let mut name = vec![0u16; 1024];
-        let mut size = name.len() as u32;
-
-        QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_FORMAT::default(),
-            PWSTR(name.as_mut_ptr()),
-            &mut size,
-        )?;
-
-        name.truncate(size as usize);
-        CloseHandle(handle).ok();
-        Ok(OsString::from_wide(&name).to_string_lossy().into_owned())
-    }
-}
-
-unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    if hwnd.0 == 0 {
-        return TRUE;
-    }
-    let windows = &mut *(lparam.0 as *mut Vec<Window>);
-
-    if !IsWindowVisible(hwnd).as_bool() {
-        return TRUE;
-    }
-
-    let mut rect: RECT = RECT::default();
-    if let Err(_) = GetWindowRect(hwnd, &mut rect) {
-        return TRUE;
-    }
-
-    let process_id = GetWindowThreadProcessId(hwnd, None);
-
-    let wnamelen = GetWindowTextLengthW(hwnd);
-    if wnamelen == 0 {
-        return TRUE;
-    }
-    let mut wname = vec![0u16; wnamelen as usize + 1];
-    let len = GetWindowTextW(hwnd, &mut wname);
-    wname.truncate(len as usize);
-
-    // TODO: Might need fixing
-    let owner_name = pid_to_name(process_id).unwrap_or("".into());
-
-    let window = Window {
-        window_id: hwnd.0 as u32,
-        name: OsString::from_wide(&wname).to_string_lossy().into_owned(),
-        owner_name,
-        process_id,
-        bounds: Bounds {
-            x: rect.left as f64,
-            y: rect.top as f64,
-            width: (rect.right - rect.left) as f64,
-            height: (rect.bottom - rect.top) as f64,
-        },
-    };
-
-    windows.push(window);
-    TRUE
-}
-
 pub fn get_on_screen_windows() -> Vec<Window> {
     let mut windows = Vec::<Window>::new();
     let _ = unsafe {
         EnumWindows(
             Some(enum_window_proc),
-            LPARAM(&mut windows as *mut _ as isize),
+            LPARAM(core::ptr::addr_of_mut!(windows) as isize),
         )
     };
     windows
@@ -97,6 +31,35 @@ pub fn get_on_screen_windows() -> Vec<Window> {
 
 pub fn bring_window_to_focus(window_id: u32) {
     let _ = unsafe { SetForegroundWindow(HWND(window_id as isize)) };
+}
+
+pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
+    let mut cursor_info = CURSORINFO::default();
+    cursor_info.cbSize = std::mem::size_of::<CURSORINFO>() as u32;
+
+    match unsafe { GetCursorInfo(&mut cursor_info) } {
+        Ok(_) => match cursor_info.hCursor.0 {
+            ptr if ptr == cursors.arrow => CursorShape::Arrow,
+            ptr if ptr == cursors.ibeam => CursorShape::IBeam,
+            ptr if ptr == cursors.wait => CursorShape::Wait,
+            ptr if ptr == cursors.cross => CursorShape::Crosshair,
+            ptr if ptr == cursors.up_arrow => CursorShape::ResizeUp,
+            ptr if ptr == cursors.size_we => CursorShape::ResizeLeftRight,
+            ptr if ptr == cursors.size_ns => CursorShape::ResizeUpDown,
+            ptr if ptr == cursors.size_nwse => CursorShape::ResizeUpLeftAndDownRight,
+            ptr if ptr == cursors.size_nesw => CursorShape::ResizeUpRightAndDownLeft,
+            ptr if ptr == cursors.size_all => CursorShape::ResizeAll,
+            ptr if ptr == cursors.hand => CursorShape::OpenHand,
+            ptr if ptr == cursors.no => CursorShape::NotAllowed,
+            ptr if ptr == cursors.appstarting => CursorShape::Appstarting,
+            ptr if ptr == cursors.help => CursorShape::Help,
+            ptr if ptr == cursors.pin || ptr == cursors.person => CursorShape::OpenHand,
+            // Usually 0, meaning the cursor is hidden. On Windows 8+, a value of 2 means the cursor is supressed
+            // as the user is using touch input instead.
+            _ => CursorShape::Hidden,
+        },
+        Err(_) => CursorShape::Unknown,
+    }
 }
 
 /// Keeps handles to default cursor.
@@ -150,31 +113,94 @@ impl Default for DefaultCursors {
     }
 }
 
-pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
-    let mut cursor_info = CURSORINFO::default();
-    cursor_info.cbSize = std::mem::size_of::<CURSORINFO>() as u32;
-
-    match unsafe { GetCursorInfo(&mut cursor_info) } {
-        Ok(_) => match cursor_info.hCursor.0 {
-            ptr if ptr == cursors.arrow => CursorShape::Arrow,
-            ptr if ptr == cursors.ibeam => CursorShape::IBeam,
-            ptr if ptr == cursors.wait => CursorShape::Wait,
-            ptr if ptr == cursors.cross => CursorShape::Crosshair,
-            ptr if ptr == cursors.up_arrow => CursorShape::ResizeUp,
-            ptr if ptr == cursors.size_we => CursorShape::ResizeLeftRight,
-            ptr if ptr == cursors.size_ns => CursorShape::ResizeUpDown,
-            ptr if ptr == cursors.size_nwse => CursorShape::ResizeUpLeftAndDownRight,
-            ptr if ptr == cursors.size_nesw => CursorShape::ResizeUpRightAndDownLeft,
-            ptr if ptr == cursors.size_all => CursorShape::ResizeAll,
-            ptr if ptr == cursors.hand => CursorShape::OpenHand,
-            ptr if ptr == cursors.no => CursorShape::NotAllowed,
-            ptr if ptr == cursors.appstarting => CursorShape::Appstarting,
-            ptr if ptr == cursors.help => CursorShape::Help,
-            ptr if ptr == cursors.pin || ptr == cursors.person => CursorShape::OpenHand,
-            // Usually 0, meaning the cursor is hidden. On Windows 8+, a value of 2 means the cursor is supressed
-            // as the user is using touch input instead.
-            _ => CursorShape::Hidden,
-        },
-        Err(_) => CursorShape::Unknown,
+unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
+    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)?;
+    if handle.is_invalid() || handle.0 == 0 {
+        tracing::error!("Invalid PID {}", pid);
     }
+    let mut lpexename = vec![0u16; 1024];
+    let mut lpdwsize = lpexename.len() as u32;
+
+    let query = QueryFullProcessImageNameW(
+        handle,
+        PROCESS_NAME_FORMAT::default(),
+        PWSTR(lpexename.as_mut_ptr()),
+        &mut lpdwsize,
+    );
+    CloseHandle(handle).ok();
+    query?;
+    lpexename.truncate(lpdwsize as usize);
+
+    let os_str = &OsString::from_wide(&lpexename);
+    Ok(PathBuf::from(os_str))
+}
+
+unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    if hwnd.0 == 0 {
+        return TRUE;
+    }
+    let windows = &mut *(lparam.0 as *mut Vec<Window>);
+
+    if !IsWindowVisible(hwnd).as_bool() {
+        return TRUE;
+    }
+
+    let mut pvattribute_cloaked = 0u32;
+    DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_CLOAKED,
+        &mut pvattribute_cloaked as *mut _ as *mut _,
+        std::mem::size_of::<u32>() as u32,
+    )
+    .ok();
+
+    if pvattribute_cloaked != 0 {
+        return TRUE;
+    }
+
+    let mut rect: RECT = RECT::default();
+    if let Err(_) = GetWindowRect(hwnd, &mut rect) {
+        return TRUE;
+    }
+
+    let mut process_id = 0;
+    let _thrad_id = GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+
+    let wnamelen = GetWindowTextLengthW(hwnd);
+    if wnamelen == 0 {
+        return TRUE;
+    }
+    let mut wname = vec![0u16; wnamelen as usize + 1];
+    let len = GetWindowTextW(hwnd, &mut wname);
+    wname.truncate(len as usize);
+
+    let owner_process_path = match pid_to_exe_path(process_id) {
+        Ok(path) => path,
+        Err(_) => return TRUE,
+    };
+
+    if owner_process_path.starts_with("C:\\Windows\\SystemApps") {
+        return TRUE;
+    }
+
+    let owner_name_ = match owner_process_path.file_stem() {
+        Some(exe_name) => exe_name.to_string_lossy().into_owned(),
+        None => owner_process_path.to_string_lossy().into_owned(),
+    };
+
+    let window = Window {
+        window_id: hwnd.0 as u32,
+        name: String::from_utf16_lossy(&wname),
+        owner_name: owner_name_,
+        process_id,
+        bounds: Bounds {
+            x: rect.left as f64,
+            y: rect.top as f64,
+            width: (rect.right - rect.left) as f64,
+            height: (rect.bottom - rect.top) as f64,
+        },
+    };
+
+    windows.push(window);
+    TRUE
 }
