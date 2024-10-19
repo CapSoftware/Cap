@@ -58,7 +58,7 @@ use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
 };
-use upload::{upload_image, upload_individual_file, upload_video};
+use upload::{get_s3_config, upload_image, upload_individual_file, upload_video, S3UploadMeta};
 use windows::CapWindow;
 
 #[cfg(target_os = "macos")]
@@ -95,6 +95,8 @@ pub struct App {
     handle: AppHandle,
     #[serde(skip)]
     current_recording: Option<InProgressRecording>,
+    #[serde(skip)]
+    pre_created_video: Option<PreCreatedVideo>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -110,6 +112,13 @@ enum UploadResult {
     NotAuthenticated,
     PlanCheckFailed,
     UpgradeRequired,
+}
+
+#[derive(Clone, Serialize, Deserialize, specta::Type)]
+struct PreCreatedVideo {
+    id: String,
+    link: String,
+    config: S3UploadMeta,
 }
 
 impl App {
@@ -297,6 +306,30 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         .join("recordings")
         .join(format!("{id}.cap"));
 
+    // Check if auto_create_shareable_link is true and user is upgraded
+    let general_settings = GeneralSettingsStore::get(&app)?;
+    let auto_create_shareable_link = general_settings
+        .map(|settings| settings.auto_create_shareable_link)
+        .unwrap_or(false);
+
+    if auto_create_shareable_link {
+        if let Ok(Some(auth)) = AuthStore::get(&app) {
+            if auth.is_upgraded() {
+                // Pre-create the video and get the shareable link
+                let s3_config = get_s3_config(&app, false).await?;
+                let link = web_api::make_url(format!("/s/{}", s3_config.id()));
+
+                state.pre_created_video = Some(PreCreatedVideo {
+                    id: s3_config.id().to_string(),
+                    link: link.clone(),
+                    config: s3_config,
+                });
+
+                println!("Pre-created shareable link: {}", link);
+            }
+        }
+    }
+
     match recording::start(
         recording_dir,
         &state.start_recording_options,
@@ -364,7 +397,8 @@ async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
-    let Some(mut current_recording) = state.write().await.clear_current_recording() else {
+    let mut state = state.write().await;
+    let Some(mut current_recording) = state.clear_current_recording() else {
         return Err("Recording not in progress".to_string());
     };
 
@@ -449,16 +483,74 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     AppSounds::StopRecording.play();
 
     if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
-        if settings.open_editor_after_recording {
-            let recording_id = current_recording
-                .recording_dir
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string()
-                .trim_end_matches(".cap")
-                .to_string();
-            open_editor(app.clone(), recording_id);
+        if let Ok(Some(auth)) = AuthStore::get(&app) {
+            if auth.is_upgraded() && settings.auto_create_shareable_link {
+                if let Some(pre_created_video) = state.pre_created_video.take() {
+                    // Open the pre-created shareable link
+                    open_external_link(app.clone(), pre_created_video.link.clone()).ok();
+
+                    // Start the upload process in the background with retry mechanism
+                    let app_clone = app.clone();
+                    let recording_id = current_recording
+                        .recording_dir
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string()
+                        .trim_end_matches(".cap")
+                        .to_string();
+
+                    tauri::async_runtime::spawn(async move {
+                        let max_retries = 3;
+                        let mut retry_count = 0;
+
+                        while retry_count < max_retries {
+                            match upload_rendered_video(
+                                app_clone.clone(),
+                                recording_id.clone(),
+                                ProjectConfiguration::default(),
+                                Some(pre_created_video.clone()),
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    println!("Video uploaded successfully");
+                                    break;
+                                }
+                                Err(e) => {
+                                    retry_count += 1;
+                                    println!(
+                                        "Error during auto-upload (attempt {}/{}): {}",
+                                        retry_count, max_retries, e
+                                    );
+
+                                    if retry_count < max_retries {
+                                        // Wait for a short time before retrying
+                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                    } else {
+                                        println!("Max retries reached. Upload failed.");
+                                        // Optionally, you can notify the user about the failure
+                                        notifications::send_notification(
+                                            &app_clone,
+                                            notifications::NotificationType::UploadFailed,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            } else if settings.open_editor_after_recording {
+                let recording_id = current_recording
+                    .recording_dir
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+                    .trim_end_matches(".cap")
+                    .to_string();
+                open_editor(app.clone(), recording_id);
+            }
         }
     }
 
@@ -1508,6 +1600,7 @@ async fn upload_rendered_video(
     app: AppHandle,
     video_id: String,
     project: ProjectConfiguration,
+    pre_created_video: Option<PreCreatedVideo>,
 ) -> Result<UploadResult, String> {
     let Ok(Some(mut auth)) = AuthStore::get(&app) else {
         println!("not authenticated!");
@@ -1541,6 +1634,30 @@ async fn upload_rendered_video(
 
     let share_link = if let Some(sharing) = meta.sharing {
         sharing.link
+    } else if let Some(pre_created) = pre_created_video {
+        // Use the pre-created video information
+        let output_path = match get_rendered_video_impl(editor_instance.clone(), project).await {
+            Ok(path) => path,
+            Err(e) => return Err(format!("Failed to get rendered video: {}", e)),
+        };
+
+        upload_video(
+            &app,
+            video_id.clone(),
+            output_path,
+            false,
+            Some(pre_created.config),
+        )
+        .await?;
+
+        meta.sharing = Some(SharingMeta {
+            link: pre_created.link.clone(),
+            id: pre_created.id.clone(),
+        });
+        meta.save_for_project();
+        RecordingMetaChanged { id: video_id }.emit(&app).ok();
+
+        pre_created.link
     } else {
         let output_path = match get_rendered_video_impl(editor_instance.clone(), project).await {
             Ok(path) => {
@@ -1553,7 +1670,7 @@ async fn upload_rendered_video(
             }
         };
 
-        let uploaded_video = upload_video(&app, video_id.clone(), output_path, false).await?;
+        let uploaded_video = upload_video(&app, video_id.clone(), output_path, false, None).await?;
 
         let general_settings = GeneralSettingsStore::get(&app)?;
         if let Some(settings) = general_settings {
@@ -2275,6 +2392,7 @@ pub async fn run() {
                     audio_input_name: None,
                 },
                 current_recording: None,
+                pre_created_video: None,
             })));
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
