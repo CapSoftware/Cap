@@ -2232,6 +2232,12 @@ async fn reset_microphone_permissions(app: AppHandle) -> Result<(), ()> {
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn is_camera_window_open(app: AppHandle) -> bool {
+    CapWindow::Camera { ws_port: 0 }.get(&app).is_some()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -2286,7 +2292,8 @@ pub async fn run() {
             set_general_settings,
             delete_auth_open_signin,
             reset_camera_permissions,
-            reset_microphone_permissions
+            reset_microphone_permissions,
+            is_camera_window_open
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
