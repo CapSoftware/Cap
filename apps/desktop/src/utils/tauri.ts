@@ -307,6 +307,9 @@ async resetMicrophonePermissions() : Promise<Result<null, null>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async isCameraWindowOpen() : Promise<boolean> {
+    return await TAURI_INVOKE("is_camera_window_open");
 }
 }
 

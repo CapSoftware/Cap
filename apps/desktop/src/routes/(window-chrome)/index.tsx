@@ -86,7 +86,6 @@ export default function () {
     }
   });
 
-  // important for sign in redirect, trust me
   createAsync(() => getAuth());
 
   createUpdateCheck();
@@ -183,6 +182,19 @@ export default function () {
       audioInputName: item.name !== "No Audio" ? item.name : null,
     });
   };
+
+  onMount(async () => {
+    if (options.data?.cameraLabel && options.data.cameraLabel !== "No Camera") {
+      const cameraWindowActive = await commands.isCameraWindowOpen();
+
+      if (!cameraWindowActive) {
+        console.log("cameraWindow not found");
+        setOptions({
+          ...options.data,
+        });
+      }
+    }
+  });
 
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">

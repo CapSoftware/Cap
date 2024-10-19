@@ -59,12 +59,13 @@ export default function () {
             <div>
               <Switch fallback={<IconCapLogo class="animate-spin size-4" />}>
                 <Match when={updateStatus()?.type === "done"}>
-                  Update has been installed. Restart Cap to finish updating.
-                  <div class="flex flex-row gap-4">
-                    <Button variant="secondary" onClick={() => navigate("/")}>
-                      Restart Later
-                    </Button>
-                    <Button onClick={() => relaunch()}>Restart Now</Button>
+                  <div class="flex flex-col gap-4">
+                    <p>
+                      Update has been installed. Restart Cap to finish updating.
+                    </p>
+                    <div class="flex flex-row">
+                      <Button onClick={() => relaunch()}>Restart Now</Button>
+                    </div>
                   </div>
                 </Match>
                 <Match
