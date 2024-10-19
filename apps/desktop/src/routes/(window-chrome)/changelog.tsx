@@ -33,7 +33,7 @@ export default function Page() {
           <For each={changelog()}>
             {(entry, i) => (
               <li class="border-b-2 border-gray-200 pb-8">
-                <div class="flex items-center gap-2 mb-2">
+                <div class="flex mb-2">
                   <Show when={i() === 0}>
                     <div class="bg-blue-400 text-white px-2 py-1 rounded-md uppercase font-bold">
                       <span style="color: #fff" class="text-xs">
@@ -41,10 +41,10 @@ export default function Page() {
                       </span>
                     </div>
                   </Show>
-                  <h3 class="text-xl font-semibold text-gray-800">
-                    {entry.title}
-                  </h3>
                 </div>
+                <h3 class="text-xl font-semibold text-gray-800 mb-2">
+                  {entry.title}
+                </h3>
                 <div class="text-gray-500 text-sm mb-4">
                   Version {entry.version} -{" "}
                   {new Date(entry.publishedAt).toLocaleDateString()}
