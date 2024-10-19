@@ -34,9 +34,10 @@ pub fn bring_window_to_focus(window_id: u32) {
 }
 
 pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
-    let mut cursor_info = CURSORINFO::default();
-    cursor_info.cbSize = std::mem::size_of::<CURSORINFO>() as u32;
-
+    let mut cursor_info = CURSORINFO {
+        cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+        ..Default::default()
+    };
     match unsafe { GetCursorInfo(&mut cursor_info) } {
         Ok(_) => match cursor_info.hCursor.0 {
             ptr if ptr == cursors.arrow => CursorShape::Arrow,
@@ -154,14 +155,13 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     )
     .ok();
 
+    // Window is cloaked by either the shell or the application, Windows 8+
     if pvattribute_cloaked != 0 {
         return TRUE;
     }
 
     let mut rect: RECT = RECT::default();
-    if let Err(_) = GetWindowRect(hwnd, &mut rect) {
-        return TRUE;
-    }
+    GetWindowRect(hwnd, &mut rect).ok();
 
     let mut process_id = 0;
     let _thrad_id = GetWindowThreadProcessId(hwnd, Some(&mut process_id));
