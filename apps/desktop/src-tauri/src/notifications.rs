@@ -4,6 +4,7 @@ pub enum NotificationType {
     VideoSaved,
     VideoCopiedToClipboard,
     ShareableLinkCopied,
+    UploadFailed,
 }
 
 impl NotificationType {
@@ -20,6 +21,26 @@ impl NotificationType {
                 "Link Copied",
                 "Shareable link has been copied to the clipboard.",
             ),
+            NotificationType::UploadFailed => (
+                "Upload Failed",
+                "Failed to upload your video after multiple attempts. Please try again later.",
+            ),
+        }
+    }
+
+    pub fn message(&self) -> &'static str {
+        match self {
+            NotificationType::UploadFailed => {
+                "Failed to upload your video after multiple attempts. Please try again later."
+            }
+            _ => "",
+        }
+    }
+
+    pub fn title(&self) -> &'static str {
+        match self {
+            NotificationType::UploadFailed => "Upload Failed",
+            _ => "",
         }
     }
 }
