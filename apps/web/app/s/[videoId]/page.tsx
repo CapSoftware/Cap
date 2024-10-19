@@ -96,21 +96,6 @@ export default async function ShareVideoPage(props: Props) {
     );
   }
 
-  if (
-    video.jobStatus !== "COMPLETE" &&
-    video.skipProcessing === false &&
-    video.source.type === "MediaConvert"
-  ) {
-    fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/status?videoId=${videoId}&userId=${video.ownerId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
-  }
-
   if (video.public === false && userId !== video.ownerId) {
     return <p>This video is private</p>;
   }

@@ -12,12 +12,33 @@ use crate::{
     web_api::{self, ManagerExt},
 };
 
-#[derive(serde::Deserialize, Clone)]
+use serde::{Deserialize, Serialize};
+use specta::Type;
+
+#[derive(Deserialize, Serialize, Clone, Type)]
 pub struct S3UploadMeta {
     id: String,
     user_id: String,
     aws_region: String,
     aws_bucket: String,
+}
+
+impl S3UploadMeta {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn user_id(&self) -> &str {
+        &self.user_id
+    }
+
+    pub fn aws_region(&self) -> &str {
+        &self.aws_region
+    }
+
+    pub fn aws_bucket(&self) -> &str {
+        &self.aws_bucket
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -80,6 +101,7 @@ pub async fn upload_video(
     video_id: String,
     file_path: PathBuf,
     is_individual: bool,
+    existing_config: Option<S3UploadMeta>,
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
@@ -90,24 +112,29 @@ pub async fn upload_video(
         .to_string();
 
     let client = reqwest::Client::new();
-    let s3_config = get_s3_config(&app, false).await?;
+    let s3_config = match existing_config {
+        Some(config) => config,
+        None => get_s3_config(app, false).await?,
+    };
 
     let file_key = if is_individual {
         format!(
             "{}/{}/individual/{}",
-            s3_config.user_id, s3_config.id, file_name
+            s3_config.user_id(),
+            s3_config.id(),
+            file_name
         )
     } else {
-        format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name)
+        format!("{}/{}/{}", s3_config.user_id(), s3_config.id(), file_name)
     };
 
     let body = build_video_upload_body(
         &file_path,
         S3UploadBody {
-            user_id: s3_config.user_id.clone(),
+            user_id: s3_config.user_id().to_string(),
             file_key: file_key.clone(),
-            aws_bucket: s3_config.aws_bucket.clone(),
-            aws_region: s3_config.aws_region.clone(),
+            aws_bucket: s3_config.aws_bucket().to_string(),
+            aws_region: s3_config.aws_region().to_string(),
         },
     )?;
 
@@ -336,7 +363,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     ))
 }
 
-async fn get_s3_config(app: &AppHandle, is_screenshot: bool) -> Result<S3UploadMeta, String> {
+pub async fn get_s3_config(app: &AppHandle, is_screenshot: bool) -> Result<S3UploadMeta, String> {
     let origin = "http://tauri.localhost";
     let config_url = web_api::make_url(if is_screenshot {
         format!(

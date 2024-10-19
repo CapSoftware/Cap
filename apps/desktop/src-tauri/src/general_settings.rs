@@ -11,6 +11,8 @@ pub struct GeneralSettingsStore {
     pub open_editor_after_recording: bool,
     #[serde(default)]
     pub hide_dock_icon: bool,
+    #[serde(default)]
+    pub auto_create_shareable_link: bool,
 }
 
 impl GeneralSettingsStore {
