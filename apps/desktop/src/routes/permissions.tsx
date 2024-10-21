@@ -15,7 +15,7 @@ import { Transition } from "solid-transition-group";
 
 import Header from "../components/Header";
 
-function isPermitted(status?: OSPermissionStatus): boolean {
+export function isPermitted(status?: OSPermissionStatus): boolean {
   return status === "granted" || status === "notNeeded";
 }
 

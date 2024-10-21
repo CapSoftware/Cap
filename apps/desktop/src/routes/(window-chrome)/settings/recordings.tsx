@@ -54,7 +54,8 @@ export default function Recordings() {
   };
 
   const handleOpenEditor = (id: string) => {
-    const fileName = id.split("/").pop() || "";
+    const normalizedPath = id.replace(/\\/g, "/");
+    const fileName = normalizedPath.split("/").pop() || "";
     commands.openEditor(fileName.replace(".cap", ""));
   };
 

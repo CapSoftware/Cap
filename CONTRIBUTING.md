@@ -53,3 +53,10 @@ You can run cap in "local mode", which means that no auth is required for the de
 ### How do I view the screen recording segments locally?
 
 The video segments are stored in your app data directory, under the folder `so.cap.desktop`. You should see a directory called `chunks`, which will contain both `video` and `audio` directories. You can find the relevant segments in either of those.
+
+### Notes for development on Windows:
+
+<!-- TODO: Update instructions once setupSidecar handles this -->
+
+Required dlls: `avutil`, `avformat`, `avcodec`, `avdevice`.
+Put the full version of ffmpeg for the target arch into `target/binaries`.

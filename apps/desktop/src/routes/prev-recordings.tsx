@@ -95,13 +95,14 @@ export default function () {
             <For each={allMedia()}>
               {(media) => {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
-                console.log(media);
-                const mediaId = media.path.split("/").pop()?.split(".")[0]!;
+                const normalizedPath = media.path.replace(/\\/g, "/");
+                const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
+                
                 const type = media.type ?? "recording";
                 const fileId =
                   type === "recording"
                     ? mediaId
-                    : media.path
+                    : normalizedPath
                         .split("screenshots/")[1]
                         .split("/")[0]
                         .replace(".cap", "");
