@@ -13,7 +13,7 @@ ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
 flume = "0.11.0"
 indexmap = "2.5.0"
-nokhwa = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1", features = [
+nokhwa = { git = "https://github.com/filleduchaos/nokhwa", rev = "408354f6bcdd", features = [
 	"input-avfoundation",
 	"serialize",
 ] }
@@ -25,6 +25,7 @@ thiserror = "1.0"
 tracing = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26.0"
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
-nokhwa-bindings-macos = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1" }
+nokhwa-bindings-macos = { git = "https://github.com/filleduchaos/nokhwa", rev = "408354f6bcdd" }

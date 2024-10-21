@@ -53,10 +53,6 @@ futures-intrusive = "0.5.0"
 anyhow.workspace = true
 mp4 = "0.14.0"
 futures = "0.3.30"
-nokhwa = { git = "https://github.com/CapSoftware/nokhwa", branch = "brendonovich-fork", features = [
-	"input-avfoundation",
-	"serialize",
-] }
 axum = { version = "0.7.5", features = ["ws"] }
 tracing = "0.1.40"
 cpal = "0.15.3"
@@ -83,7 +79,6 @@ global-hotkey = "0.5.5"
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
-nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", branch = "brendonovich-fork" }
 objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
 cocoa = "0.26.0"
 objc = "0.2.7"

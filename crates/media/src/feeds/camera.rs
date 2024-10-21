@@ -310,6 +310,7 @@ impl FrameConverter {
             FrameFormat::NV12 => RawVideoFormat::Nv12,
             FrameFormat::GRAY => RawVideoFormat::Gray,
             FrameFormat::RAWRGB => RawVideoFormat::RawRgb,
+            FrameFormat::BGRA => RawVideoFormat::Bgra,
         };
 
         let video_info = VideoInfo::from_raw(
