@@ -120,7 +120,8 @@ impl CapWindow {
 
                 let window = window_builder.build()?;
 
-                apply_window_chrome(&window);
+                #[cfg(target_os = "macos")]
+                setup_delegates(&window, None);
 
                 window
             }
@@ -154,7 +155,8 @@ impl CapWindow {
 
                 let window = window_builder.build()?;
 
-                apply_window_chrome(&window);
+                #[cfg(target_os = "macos")]
+                setup_delegates(&window, None);
 
                 window
             }
@@ -332,10 +334,7 @@ impl CapWindow {
                 let window = window_builder.build()?;
 
                 #[cfg(target_os = "macos")]
-                {
-                    // window.create_overlay_titlebar().unwrap();
-                    // window.set_traffic_lights_inset(20.0, 48.0).unwrap();
-                }
+                setup_delegates(&window, Some(LogicalPosition::new(20.0, 48.0)));
 
                 window
             }
@@ -359,7 +358,8 @@ impl CapWindow {
 
                 let window = window_builder.build()?;
 
-                apply_window_chrome(&window);
+                #[cfg(target_os = "macos")]
+                setup_delegates(&window, None);
 
                 window
             }
@@ -383,7 +383,8 @@ impl CapWindow {
 
                 let window = window_builder.build()?;
 
-                apply_window_chrome(&window);
+                #[cfg(target_os = "macos")]
+                setup_delegates(&window, None);
 
                 window
             }
@@ -407,7 +408,8 @@ impl CapWindow {
 
                 let window = window_builder.build()?;
 
-                apply_window_chrome(&window);
+                #[cfg(target_os = "macos")]
+                setup_delegates(&window, None);
 
                 window
             }
@@ -431,7 +433,8 @@ impl CapWindow {
 
                 let window = window_builder.build()?;
 
-                apply_window_chrome(&window);
+                #[cfg(target_os = "macos")]
+                setup_delegates(&window, None);
 
                 window
             }
@@ -439,13 +442,27 @@ impl CapWindow {
     }
 }
 
-fn apply_window_chrome(window: &WebviewWindow<Wry>) {
-    // window.create_overlay_titlebar().unwrap();
-    #[cfg(target_os = "macos")]
-    {
-        crate::platform::delegates::setup(
-            window.as_ref().window(),
-            LogicalPosition::new(14.0, 22.0),
-        );
-    }
+#[cfg(target_os = "macos")]
+fn setup_delegates(window: &WebviewWindow<Wry>, controls_inset: Option<LogicalPosition<f64>>) {
+    use crate::platform::delegates;
+
+    delegates::setup(
+        window.as_ref().window(),
+        controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+    );
+
+    let c_win = window.clone();
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::ThemeChanged(..) => {
+            delegates::position_window_controls(
+                delegates::UnsafeWindowHandle(
+                    c_win
+                        .ns_window()
+                        .expect("Failed to get native window handle"),
+                ),
+                &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+            );
+        }
+        _ => (),
+    });
 }

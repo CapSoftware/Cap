@@ -3,6 +3,7 @@ use tauri::AppHandle;
 
 #[cfg(target_os = "macos")]
 use cap_media::platform::{AVAuthorizationStatus, AVMediaType};
+#[cfg(target_os = "macos")]
 use core_foundation::boolean::CFBoolean;
 #[cfg(target_os = "macos")]
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef}; // Import CFDictionaryRef
