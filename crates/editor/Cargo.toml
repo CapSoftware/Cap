@@ -10,7 +10,7 @@ cap-rendering = { path = "../rendering" }
 
 tokio = { version = "1.39.2", features = ["macros", "process", "fs"] }
 tracing = "0.1.40"
-cpal = "0.15.3"
+cpal.workspace = true
 serde_json = "1.0.128"
 axum = { version = "0.7.5", features = ["ws"] }
 ffmpeg.workspace = true

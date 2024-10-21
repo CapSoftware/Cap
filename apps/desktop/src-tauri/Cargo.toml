@@ -55,7 +55,6 @@ mp4 = "0.14.0"
 futures = "0.3.30"
 axum = { version = "0.7.5", features = ["ws"] }
 tracing = "0.1.40"
-cpal = "0.15.3"
 indexmap = "2.5.0"
 num-traits = "0.2.19"
 tempfile = "3.12.0"

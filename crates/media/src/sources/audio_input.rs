@@ -196,6 +196,9 @@ impl PipelineSourceTask for AudioInputSource {
                                 .expect("Failed to pause audio input recording");
                         }
                         Some(Control::Shutdown) | None => {
+                            if let Err(error) = stream.pause() {
+                                eprintln!("Error while stopping audio stream: {error}");
+                            }
                             drop(stream);
                             break;
                         }

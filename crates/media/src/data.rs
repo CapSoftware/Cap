@@ -31,12 +31,52 @@ pub enum RawVideoFormat {
 impl From<RawAudioFormat> for Sample {
     fn from(value: RawAudioFormat) -> Self {
         match value {
-            RawAudioFormat::U8 => Self::U8(Type::Packed),
-            RawAudioFormat::I16 => Self::I16(Type::Packed),
-            RawAudioFormat::I32 => Self::I32(Type::Packed),
-            RawAudioFormat::I64 => Self::I64(Type::Packed),
-            RawAudioFormat::F32 => Self::F32(Type::Packed),
-            RawAudioFormat::F64 => Self::F64(Type::Packed),
+            RawAudioFormat::U8 => Self::U8(Type::Planar),
+            RawAudioFormat::I16 => Self::I16(Type::Planar),
+            RawAudioFormat::I32 => Self::I32(Type::Planar),
+            RawAudioFormat::I64 => Self::I64(Type::Planar),
+            RawAudioFormat::F32 => Self::F32(Type::Planar),
+            RawAudioFormat::F64 => Self::F64(Type::Planar),
+        }
+    }
+}
+
+pub trait PlanarData {
+    fn plane_data(&self, index: usize) -> &[u8];
+
+    fn plane_data_mut(&mut self, index: usize) -> &mut [u8];
+}
+
+// The ffmpeg crate's implementation of the `data_mut` function is wrong for audio;
+// per [the FFmpeg docs](https://www.ffmpeg.org/doxygen/7.0/structAVFrame.html]) only
+// the linesize of the first plane may be set for planar audio, and so we need to use
+// that linesize for the rest of the planes (else they will appear to be empty slices).
+impl PlanarData for FFAudio {
+    #[inline]
+    fn plane_data(&self, index: usize) -> &[u8] {
+        if index >= self.planes() {
+            panic!("out of bounds");
+        }
+
+        unsafe {
+            std::slice::from_raw_parts(
+                (*self.as_ptr()).data[index],
+                (*self.as_ptr()).linesize[0] as usize,
+            )
+        }
+    }
+
+    #[inline]
+    fn plane_data_mut(&mut self, index: usize) -> &mut [u8] {
+        if index >= self.planes() {
+            panic!("out of bounds");
+        }
+
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                (*self.as_mut_ptr()).data[index],
+                (*self.as_ptr()).linesize[0] as usize,
+            )
         }
     }
 }
@@ -45,7 +85,7 @@ impl From<RawAudioFormat> for Sample {
 pub struct AudioInfo {
     pub sample_format: Sample,
     sample_rate: u32,
-    channels: usize,
+    pub channels: usize,
     pub time_base: FFRational,
     pub buffer_size: u32,
 }
@@ -67,7 +107,7 @@ impl AudioInfo {
     }
 
     pub fn sample_size(&self) -> usize {
-        self.sample_format.bytes() * self.channels
+        self.sample_format.bytes()
     }
 
     pub fn rate(&self) -> i32 {
@@ -84,14 +124,44 @@ impl AudioInfo {
         }
     }
 
+    pub fn empty_frame(&self, sample_count: usize) -> FFAudio {
+        let mut frame = FFAudio::new(self.sample_format, sample_count, self.channel_layout());
+        frame.set_rate(self.sample_rate);
+
+        frame
+    }
+
     pub fn wrap_frame(&self, data: &[u8], timestamp: i64) -> FFAudio {
-        let samples = data.len() / self.sample_size();
+        let sample_size = self.sample_size();
+        let interleaved_chunk_size = sample_size * self.channels;
+        let samples = data.len() / interleaved_chunk_size;
 
         let mut frame = FFAudio::new(self.sample_format, samples, self.channel_layout());
-
         frame.set_pts(Some(timestamp));
         frame.set_rate(self.sample_rate);
-        frame.data_mut(0)[0..data.len()].copy_from_slice(data);
+
+        match self.channels {
+            0 => unreachable!(),
+            1 => frame.plane_data_mut(0)[0..data.len()].copy_from_slice(data),
+            // cpal *always* returns interleaved data (i.e. the first sample from every channel, followed
+            // by the second sample from every channel, et cetera). Many audio codecs work better/primarily
+            // with planar data, so we de-interleave it here if there is more than one channel.
+            channel_count => {
+                for (chunk_index, interleaved_chunk) in
+                    data.chunks(interleaved_chunk_size).enumerate()
+                {
+                    let start = chunk_index * sample_size;
+                    let end = start + sample_size;
+
+                    for channel in 0..channel_count {
+                        let channel_start = channel * sample_size;
+                        let channel_end = channel_start + sample_size;
+                        frame.plane_data_mut(channel)[start..end]
+                            .copy_from_slice(&interleaved_chunk[channel_start..channel_end]);
+                    }
+                }
+            }
+        }
 
         frame
     }

@@ -8,7 +8,7 @@ rust-version = "1.80"
 [dependencies]
 anyhow.workspace = true
 cap-project = { path = "../project" }
-cpal = "0.15.3"
+cpal.workspace = true
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
 flume = "0.11.0"
