@@ -14,6 +14,7 @@ use core_graphics::{
         kCGWindowOwnerPID, CGWindowListCopyWindowInfo,
     },
 };
+pub use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
 use std::ffi::c_void;
 
 use crate::platform::{Bounds, Window};

@@ -4,7 +4,6 @@ import { createEventListener } from "@solid-primitives/event-listener";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 import { createMutation, createQuery } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
-import { Window } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
   Show,
@@ -47,7 +46,7 @@ export const route = {
 };
 
 export default function () {
-  const options = createOptionsQuery();
+  const { options, setOptions } = createOptionsQuery();
   const windows = createQuery(() => listWindows);
   const videoDevices = createVideoDevicesQuery();
   const audioDevices = createQuery(() => listAudioDevices);
@@ -87,7 +86,6 @@ export default function () {
     }
   });
 
-  // important for sign in redirect, trust me
   createAsync(() => getAuth());
 
   createUpdateCheck();
@@ -179,11 +177,24 @@ export default function () {
 
     if (!item || !options.data) return;
 
-    commands.setRecordingOptions({
+    setOptions({
       ...options.data,
       audioInputName: item.name !== "No Audio" ? item.name : null,
     });
   };
+
+  onMount(async () => {
+    if (options.data?.cameraLabel && options.data.cameraLabel !== "No Camera") {
+      const cameraWindowActive = await commands.isCameraWindowOpen();
+
+      if (!cameraWindowActive) {
+        console.log("cameraWindow not found");
+        setOptions({
+          ...options.data,
+        });
+      }
+    }
+  });
 
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
@@ -247,7 +258,7 @@ export default function () {
         value={selectedWindow() ?? null}
         onChange={(d: CaptureWindow | null) => {
           if (!d || !options.data) return;
-          commands.setRecordingOptions({
+          setOptions({
             ...options.data,
             captureTarget: { variant: "window", ...d },
           });
@@ -265,7 +276,7 @@ export default function () {
               return;
             }
             if (s === "screen") {
-              commands.setRecordingOptions({
+              setOptions({
                 ...options.data,
                 captureTarget: { variant: "screen" },
               });
@@ -330,12 +341,12 @@ export default function () {
               if (!options.data) return;
 
               if (!item || !item.isCamera) {
-                await commands.setRecordingOptions({
+                await setOptions({
                   ...options.data,
                   cameraLabel: null,
                 });
               } else {
-                await commands.setRecordingOptions({
+                await setOptions({
                   ...options.data,
                   cameraLabel: item.name,
                 });
@@ -401,15 +412,17 @@ export default function () {
                         return requestPermission("camera");
                       }
                       if (!options.data?.cameraLabel) return;
-                      commands.setRecordingOptions({
+                      setOptions({
                         ...options.data,
                         cameraLabel: null,
                       });
                     }}
                   >
-                      {
-                        isPermitted(permissions?.data?.camera) ? (options.data?.cameraLabel ? "On" : "Off") : "Request Permission"
-                      }
+                    {isPermitted(permissions?.data?.camera)
+                      ? options.data?.cameraLabel
+                        ? "On"
+                        : "Off"
+                      : "Request Permission"}
                   </button>
                 </KSelect.Trigger>
                 <KSelect.Portal>
@@ -490,21 +503,25 @@ export default function () {
                 if (permissions?.data?.microphone !== "granted") {
                   await requestPermission("microphone");
                   if (isPermitted(permissions?.data?.microphone)) {
-                    commands.setRecordingOptions({
+                    setOptions({
                       ...options.data!,
                       audioInputName: audioDevice().name,
                     });
                   }
                 } else {
                   if (!options.data?.audioInputName) return;
-                  commands.setRecordingOptions({
+                  setOptions({
                     ...options.data,
                     audioInputName: null,
                   });
                 }
               }}
             >
-              {isPermitted(permissions?.data?.microphone) ? (options.data?.audioInputName ? "On" : "Off") : "Request Permission"}
+              {isPermitted(permissions?.data?.microphone)
+                ? options.data?.audioInputName
+                  ? "On"
+                  : "Off"
+                : "Request Permission"}
             </button>
           </KSelect.Trigger>
           <KSelect.Portal>
