@@ -6,6 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { Window } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
+  ComponentProps,
   Show,
   type ValidComponent,
   createEffect,
@@ -27,7 +28,13 @@ import {
   createVideoDevicesQuery,
   listScreens,
 } from "~/utils/queries";
-import { CaptureScreen, ScreenCaptureTarget, type CaptureWindow, commands, events } from "~/utils/tauri";
+import {
+  CaptureScreen,
+  ScreenCaptureTarget,
+  type CaptureWindow,
+  commands,
+  events,
+} from "~/utils/tauri";
 import {
   MenuItem,
   MenuItemList,
@@ -53,14 +60,6 @@ export default function () {
   const videoDevices = createVideoDevicesQuery();
   const audioDevices = createQuery(() => listAudioDevices);
   const currentRecording = createCurrentRecordingQuery();
-
-  const [selectedTab, setSelectedTab] = createSignal<ScreenCaptureTarget['variant']>("screen");
-  const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
-  const [screenSelectOpen, setScreenSelectOpen] = createSignal(false);
-  const [selectedTarget, setSelectedTarget] = createSignal<CaptureScreen | CaptureWindow | null>();
-  
-  const screenLabel = createMemo(() => options.data?.captureTarget?.variant === "screen" && selectedTarget()?.name ? selectedTarget()?.name : "Screen");
-  const windowLabel = createMemo(() => options.data?.captureTarget?.variant === "window" && selectedTarget()?.name ? selectedTarget()?.name : "Window")
 
   const permissions = createQuery(() => getPermissions);
 
@@ -217,116 +216,57 @@ export default function () {
           <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
         </button>
       </div>
-      <KSelect<CaptureScreen | CaptureWindow | null>
-        options={(screenSelectOpen() ? screens.data : windows.data) ?? []}
-        optionValue="id"
-        optionTextValue="name"
-        gutter={8}
-        open={screenSelectOpen() || windowSelectOpen()}
-        itemComponent={(props: { item: any }) => {
-          return (
-          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item} 
-            onClick={() => {
-              setSelectedTarget(props.item.rawValue)
-              setScreenSelectOpen(false);
-              setWindowSelectOpen(false)
-            }}
-          >
-            	<KSelect.ItemLabel class="flex-1">
-              	{props.item.rawValue?.name}
-            	</KSelect.ItemLabel>
-          	</MenuItem>
-        	)}
-        }
-        value={selectedTarget() ?? null}
-        placement="bottom"
-      >
-        <SwitchTab
-          disabled={isRecording()}
-          onChange={(s) => {
+      <div class="flex flex-row items-center rounded-[0.5rem] relative border">
+        <div
+          class="w-1/2 absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden"
+          style={{
+            transform:
+              options.data?.captureTarget.variant === "window"
+                ? "translateX(100%)"
+                : undefined,
+          }}
+        >
+          <div class="bg-gray-100 flex-1" />
+        </div>
+        <TargetSelect<CaptureScreen>
+          options={screens.data ?? []}
+          onChange={(value) => {
+            if (!value || !options.data) return;
+
+            commands.setRecordingOptions({
+              ...options.data,
+              captureTarget: { ...value, variant: "screen" },
+            });
+          }}
+          value={
+            options.data?.captureTarget.variant === "screen"
+              ? options.data.captureTarget
+              : null
+          }
+          placeholder="Screen"
+          optionsEmptyText="No screens found"
+          selected={options.data?.captureTarget.variant === "screen"}
+        />
+        <TargetSelect<CaptureWindow>
+          options={windows.data ?? []}
+          onChange={(value) => {
             if (!options.data) return;
 
             commands.setRecordingOptions({
               ...options.data,
-              captureTarget: { ...options.data.captureTarget, variant: s as ScreenCaptureTarget['variant'] },
+              captureTarget: { ...value, variant: "window" },
             });
-
-            if (selectedTab() !== s) {
-              setSelectedTarget(null)
-            }
-
-            setSelectedTab(s as ScreenCaptureTarget['variant'])
-
-            if (windows.data && windows.data.length > 0) {
-              setWindowSelectOpen(s === "window");
-            }
-
-            if (screens.data && screens.data.length > 1) {
-              setScreenSelectOpen(s === "screen");
-            }
           }}
-        >
-          <SwitchTab.List>
-            <SwitchTab.Trigger<ValidComponent>
-              as={(p) => <KSelect.Trigger<ValidComponent> {...p} />}
-              value="screen"
-              id="screen"
-              class="w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
-            >
-              <p class="truncate">{screenLabel()}</p>
-              {screens.data && screens.data.length > 1 && <IconCapChevronDown class={`size-4 shrink-0 transform transition-transform ${screenSelectOpen() && "-rotate-180"}`} />}
-            </SwitchTab.Trigger>
-            <SwitchTab.Trigger<ValidComponent>
-              as={(p) => <KSelect.Trigger<ValidComponent> {...p} />}
-              value="window"
-              id="window"
-              class="w-full text-nowrap overflow-hidden px-2 group flex gap-2 items-center justify-center"
-              disabled={!windows.data || windows.data.length === 0}
-            >
-              <p class="truncate">{windowLabel()}</p>
-              <IconCapChevronDown  class={`size-4 shrink-0 transform transition-transform ${windowSelectOpen() && "-rotate-180"}`}  />
-            </SwitchTab.Trigger>
-          </SwitchTab.List>
-        </SwitchTab>
-        <KSelect.Portal>
-          {screenSelectOpen() && (
-            <PopperContent<typeof KSelect.Content>
-              as={KSelect.Content}
-              class={topRightAnimateClasses}
-              onPointerDownOutside={() => {
-                setScreenSelectOpen(false);
-            }}
-            >
-              <Show
-                when={(screens.data ?? []).length > 0}
-                fallback={
-                  <div class="p-2 text-gray-500">No screens available</div>
-                }
-              >
-                <KSelect.Listbox class="max-h-52 max-w-64" as={MenuItemList} />
-              </Show>
-            </PopperContent>
-          )}
-          {windowSelectOpen() && ( 
-            <PopperContent<typeof KSelect.Content>
-              as={KSelect.Content}
-              class={topRightAnimateClasses}
-              onPointerDownOutside={() => {
-                  setWindowSelectOpen(false);
-              }}
-            >
-              <Show
-                when={(windows.data ?? []).length > 0}
-                fallback={
-                  <div class="p-2 text-gray-500">No windows available</div>
-                }
-              >
-                <KSelect.Listbox class="max-h-52 max-w-64" as={MenuItemList} />
-              </Show>
-            </PopperContent>
-          )}
-        </KSelect.Portal>
-      </KSelect>
+          value={
+            options.data?.captureTarget.variant === "window"
+              ? options.data.captureTarget
+              : null
+          }
+          placeholder="Window"
+          optionsEmptyText="No windows found"
+          selected={options.data?.captureTarget.variant === "window"}
+        />
+      </div>
       <div class="flex flex-col gap-[0.25rem] items-stretch">
         <label class="text-gray-400 text-[0.875rem]">Camera</label>
         <Show when>
@@ -597,7 +537,65 @@ function createUpdateCheck() {
   });
 }
 
-function dbg<T>(v: T) {
-  console.log(v);
-  return v;
+function TargetSelect<T extends { id: number; name: string }>(props: {
+  options: Array<T>;
+  onChange: (value: T) => void;
+  value: T | null;
+  selected: boolean;
+  optionsEmptyText: string;
+  placeholder: string;
+}) {
+  return (
+    <KSelect<T | null>
+      options={props.options ?? []}
+      optionValue="id"
+      optionTextValue="name"
+      gutter={8}
+      itemComponent={(props) => (
+        <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
+          <KSelect.ItemLabel class="flex-1">
+            {props.item.rawValue?.name}
+          </KSelect.ItemLabel>
+        </MenuItem>
+      )}
+      placement="bottom"
+      class="max-w-[50%] w-full z-10"
+      placeholder={props.placeholder}
+      onChange={(value) => {
+        if (!value) return;
+        props.onChange(value);
+      }}
+      value={props.value}
+    >
+      <KSelect.Trigger<ValidComponent>
+        id="screen"
+        class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
+        data-selected={props.selected}
+      >
+        <KSelect.Value<CaptureScreen | undefined> class="truncate">
+          {(value) => value.selectedOption()?.name}
+        </KSelect.Value>
+        {props.options.length > 1 && (
+          <KSelect.Icon class="ui-expanded:-rotate-180 transition-transform">
+            <IconCapChevronDown class="size-4 shrink-0 transform transition-transform" />
+          </KSelect.Icon>
+        )}
+      </KSelect.Trigger>
+      <KSelect.Portal>
+        <PopperContent<typeof KSelect.Content>
+          as={KSelect.Content}
+          class={topRightAnimateClasses}
+        >
+          <Show
+            when={props.options.length > 0}
+            fallback={
+              <div class="p-2 text-gray-500">{props.optionsEmptyText}</div>
+            }
+          >
+            <KSelect.Listbox class="max-h-52 max-w-64" as={MenuItemList} />
+          </Show>
+        </PopperContent>
+      </KSelect.Portal>
+    </KSelect>
+  );
 }
