@@ -1,7 +1,5 @@
 #![allow(unused_mut)]
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, Wry};
-
-use tauri_plugin_decorum::WebviewWindowExt;
+use tauri::{AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindow, Wry};
 
 pub enum CapWindow {
     Main,
@@ -45,7 +43,6 @@ impl CapWindow {
             Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
             Self::InProgressRecording { .. } => "in-progress-recording".to_string(),
             Self::PrevRecordings => "prev-recordings".to_string(),
-            // TODO(Ilya): Windows doesn't seem to like this for a window label.
             Self::Editor { project_id } => format!("editor-{}", project_id),
             Self::Permissions => "permissions".to_string(),
             Self::Feedback => "feedback".to_string(),
@@ -139,14 +136,12 @@ impl CapWindow {
                 .min_inner_size(600.0, 450.0)
                 .resizable(true)
                 .maximized(false)
-                .accept_first_mouse(true);
+                .accept_first_mouse(true)
+                .transparent(true);
 
                 #[cfg(target_os = "windows")]
                 {
-                    window_builder = window_builder
-                        .transparent(true)
-                        .decorations(false)
-                        .shadow(false);
+                    window_builder = window_builder.decorations(false).shadow(false);
                 }
 
                 #[cfg(target_os = "macos")]
@@ -158,9 +153,6 @@ impl CapWindow {
                 }
 
                 let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
-                window.make_transparent().ok();
 
                 apply_window_chrome(&window);
 
@@ -194,17 +186,10 @@ impl CapWindow {
 			                window.__CAP__ = window.__CAP__ ?? {{}};
 			                window.__CAP__.cameraWsPort = {ws_port};
 		                ",
-                ));
-
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.transparent(true);
-                }
+                ))
+                .transparent(true);
 
                 let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
-                window.make_transparent().ok();
 
                 window
             }
@@ -227,12 +212,8 @@ impl CapWindow {
                     (monitor.size().width as f64) / monitor.scale_factor(),
                     (monitor.size().height as f64) / monitor.scale_factor(),
                 )
-                .position(0.0, 0.0);
-
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.transparent(true);
-                }
+                .position(0.0, 0.0)
+                .transparent(true);
 
                 let window = window_builder.build()?;
 
@@ -240,12 +221,10 @@ impl CapWindow {
 
                 #[cfg(target_os = "macos")]
                 {
-                    use objc2_app_kit::NSScreenSaverWindowLevel;
-
-                    window
-                        .set_window_level(NSScreenSaverWindowLevel as u32)
-                        .unwrap();
-                    window.make_transparent().ok();
+                    crate::platform::set_window_level(
+                        window.as_ref().window(),
+                        objc2_app_kit::NSScreenSaverWindowLevel as u32,
+                    );
                 }
 
                 window
@@ -298,19 +277,13 @@ impl CapWindow {
                             (monitor.size().height as f64) / monitor.scale_factor(),
                         )
                         .skip_taskbar(true)
-                        .position(0.0, 0.0);
-
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.transparent(true);
-                }
+                        .position(0.0, 0.0)
+                        .transparent(true);
 
                 let window = window_builder.build()?;
 
                 #[cfg(target_os = "macos")]
                 {
-                    window.make_transparent().ok();
-
                     app.run_on_main_thread({
 		                    let window = window.clone();
 		                    move || {
@@ -360,8 +333,8 @@ impl CapWindow {
 
                 #[cfg(target_os = "macos")]
                 {
-                    window.create_overlay_titlebar().unwrap();
-                    window.set_traffic_lights_inset(20.0, 48.0).unwrap();
+                    // window.create_overlay_titlebar().unwrap();
+                    // window.set_traffic_lights_inset(20.0, 48.0).unwrap();
                 }
 
                 window
@@ -467,9 +440,12 @@ impl CapWindow {
 }
 
 fn apply_window_chrome(window: &WebviewWindow<Wry>) {
-    window.create_overlay_titlebar().unwrap();
+    // window.create_overlay_titlebar().unwrap();
     #[cfg(target_os = "macos")]
     {
-        window.set_traffic_lights_inset(14.0, 22.0).unwrap();
+        crate::platform::delegates::setup(
+            window.as_ref().window(),
+            LogicalPosition::new(14.0, 22.0),
+        );
     }
 }
