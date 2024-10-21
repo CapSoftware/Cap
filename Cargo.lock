@@ -729,6 +729,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cap-project",
+ "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
  "cpal",
@@ -736,8 +737,8 @@ dependencies = [
  "ffmpeg-sys-next",
  "flume 0.11.0",
  "indexmap 2.5.0",
- "nokhwa 0.10.3 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
- "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "nokhwa",
+ "nokhwa-bindings-macos",
  "scap 0.0.5 (git+https://github.com/filleduchaos/scap?rev=8eb00ce1b9bcf)",
  "serde",
  "specta",
@@ -1517,8 +1518,6 @@ dependencies = [
  "indexmap 2.5.0",
  "mp4",
  "nix 0.29.0",
- "nokhwa 0.10.3 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
- "nokhwa-bindings-macos 0.2.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
  "num-traits",
  "objc",
  "objc2-app-kit",
@@ -3758,26 +3757,12 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 [[package]]
 name = "nokhwa"
 version = "0.10.3"
-source = "git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork#523b6d9b6266da8d1d9495a64506953961b748be"
+source = "git+https://github.com/filleduchaos/nokhwa?rev=408354f6bcdd#408354f6bcddb00bfc2cb4f9e62ce3854e438ade"
 dependencies = [
  "flume 0.10.14",
  "image 0.24.9",
- "nokhwa-bindings-macos 0.2.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
- "nokhwa-core 0.1.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
- "paste",
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "nokhwa"
-version = "0.10.3"
-source = "git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1#2de5a760d5f1abfc062bf7d7fec155e8a0eafdcd"
-dependencies = [
- "flume 0.10.14",
- "image 0.24.9",
- "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
- "nokhwa-core 0.1.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "nokhwa-bindings-macos",
+ "nokhwa-core",
  "paste",
  "serde",
  "thiserror",
@@ -3786,29 +3771,14 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-macos"
 version = "0.2.0"
-source = "git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork#523b6d9b6266da8d1d9495a64506953961b748be"
+source = "git+https://github.com/filleduchaos/nokhwa?rev=408354f6bcdd#408354f6bcddb00bfc2cb4f9e62ce3854e438ade"
 dependencies = [
  "block",
  "cocoa-foundation 0.1.2",
  "core-media-sys",
  "core-video-sys",
  "flume 0.10.14",
- "nokhwa-core 0.1.0 (git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork)",
- "objc",
- "once_cell",
-]
-
-[[package]]
-name = "nokhwa-bindings-macos"
-version = "0.2.0"
-source = "git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1#2de5a760d5f1abfc062bf7d7fec155e8a0eafdcd"
-dependencies = [
- "block",
- "cocoa-foundation 0.1.2",
- "core-media-sys",
- "core-video-sys",
- "flume 0.10.14",
- "nokhwa-core 0.1.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "nokhwa-core",
  "objc",
  "once_cell",
 ]
@@ -3816,19 +3786,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-core"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?branch=brendonovich-fork#523b6d9b6266da8d1d9495a64506953961b748be"
-dependencies = [
- "bytes",
- "image 0.24.9",
- "mozjpeg",
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "nokhwa-core"
-version = "0.1.0"
-source = "git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1#2de5a760d5f1abfc062bf7d7fec155e8a0eafdcd"
+source = "git+https://github.com/filleduchaos/nokhwa?rev=408354f6bcdd#408354f6bcddb00bfc2cb4f9e62ce3854e438ade"
 dependencies = [
  "bytes",
  "image 0.24.9",
