@@ -1,3 +1,4 @@
+use cocoa::{base::id, foundation::NSDictionary};
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
@@ -6,7 +7,7 @@ use scap::{
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::collections::HashMap;
+use std::{collections::HashMap, ffi::c_char};
 
 use crate::pipeline::{clock::*, control::Control, task::PipelineSourceTask};
 use crate::{
@@ -29,10 +30,16 @@ pub struct CaptureWindow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct CaptureScreen {
+    pub id: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
     Window(CaptureWindow),
-    Screen,
+    Screen(CaptureScreen),
 }
 
 impl PartialEq<Target> for ScreenCaptureTarget {
@@ -41,8 +48,11 @@ impl PartialEq<Target> for ScreenCaptureTarget {
             (Self::Window(capture_window), Target::Window(window)) => {
                 window.id == capture_window.id
             }
-            (Self::Screen, Target::Display(_)) => true,
-            _ => false,
+            (ScreenCaptureTarget::Screen(capture_screen), Target::Display(display)) => {
+                display.id == capture_screen.id
+            }
+            (&ScreenCaptureTarget::Window(_), &scap::Target::Display(_))
+            | (&ScreenCaptureTarget::Screen(_), &scap::Target::Window(_)) => todo!(),
         }
     }
 }
@@ -63,10 +73,10 @@ impl ScreenCaptureSource {
     ) -> Self {
         let fps = fps.unwrap_or(Self::DEFAULT_FPS);
         let output_resolution = resolution.unwrap_or(Resolution::Captured);
-        let targets = scap::get_all_targets();
+        let targets = dbg!(scap::get_all_targets());
 
         let excluded_targets: Vec<scap::Target> = targets
-            .into_iter()
+            .iter()
             .filter(|target| match target {
                 Target::Window(scap_window)
                     if EXCLUDED_WINDOWS.contains(&scap_window.title.as_str()) =>
@@ -75,6 +85,7 @@ impl ScreenCaptureSource {
                 }
                 _ => false,
             })
+            .map(|t| t.clone())
             .collect();
 
         let crop_area = match capture_target {
@@ -88,7 +99,18 @@ impl ScreenCaptureSource {
                     y: capture_window.bounds.y,
                 },
             }),
-            ScreenCaptureTarget::Screen => None,
+            ScreenCaptureTarget::Screen(_capture_screen) => None,
+        };
+
+        let target = match capture_target {
+            ScreenCaptureTarget::Window(w) => None,
+            ScreenCaptureTarget::Screen(capture_screen) => targets
+                .iter()
+                .find(|t| match t {
+                    Target::Display(display) => display.id == capture_screen.id,
+                    _ => false,
+                })
+                .cloned(),
         };
 
         let options = Options {
@@ -99,6 +121,7 @@ impl ScreenCaptureSource {
             output_type: FrameType::BGRAFrame,
             output_resolution,
             crop_area,
+            target,
             ..Default::default()
         };
 
@@ -109,6 +132,70 @@ impl ScreenCaptureSource {
             target: capture_target.clone(),
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps),
         }
+    }
+
+    pub fn list_screens() -> Vec<CaptureScreen> {
+        if !scap::has_permission() {
+            return vec![];
+        }
+
+        let mut targets = vec![];
+        let screens = scap::get_all_targets().into_iter().filter_map(|t| match t {
+            Target::Display(screen) => Some(screen),
+            _ => None,
+        });
+
+        #[cfg(target_os = "macos")]
+        let names = {
+            use cocoa::appkit::NSScreen;
+            use cocoa::base::nil;
+            use cocoa::foundation::{NSArray, NSString};
+            use objc::{msg_send, *};
+            use std::ffi::CStr;
+
+            unsafe {
+                let screens = NSScreen::screens(nil);
+                let screen_count = NSArray::count(screens);
+
+                let mut names = HashMap::new();
+
+                for i in 0..screen_count {
+                    let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
+
+                    let name: id = msg_send![screen, localizedName];
+                    let name = CStr::from_ptr(NSString::UTF8String(name))
+                        .to_string_lossy()
+                        .to_string();
+
+                    let device_description = NSScreen::deviceDescription(screen);
+                    let num = NSDictionary::valueForKey_(
+                        device_description,
+                        NSString::alloc(nil).init_str("NSScreenNumber"),
+                    ) as id;
+                    let num: *const objc2_foundation::NSNumber = num.cast();
+                    let num = { &*num };
+                    let num = num.as_u32();
+
+                    names.insert(num, name);
+                }
+
+                names
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
+        let names = HashMap::new();
+
+        for (idx, screen) in screens.into_iter().enumerate() {
+            // Handle Target::Screen variant (assuming this is how it's structured in scap)
+            targets.push(CaptureScreen {
+                id: screen.id as u32,
+                name: names
+                    .get(&screen.raw_handle.id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Screen {}", idx + 1)),
+            });
+        }
+        targets
     }
 
     pub fn list_targets() -> Vec<CaptureWindow> {
@@ -165,7 +252,7 @@ impl PipelineSourceTask for ScreenCaptureSource {
             ScreenCaptureTarget::Window(window) => Some(window.id),
             _ => None,
         };
-        let mut capturer = Capturer::new(self.options.clone());
+        let mut capturer = Capturer::new(dbg!(self.options.clone()));
         let mut capturing = false;
         let _ = ready_signal.send(Ok(())).unwrap();
 
