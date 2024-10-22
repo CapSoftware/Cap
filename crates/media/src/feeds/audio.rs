@@ -4,7 +4,7 @@ use ffmpeg::{
 };
 use flume::{Sender, TryRecvError};
 use ringbuf::{
-    traits::{Consumer, Producer, Split},
+    traits::{Consumer, Observer, Producer, Split},
     HeapCons, HeapProd, HeapRb,
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -15,18 +15,18 @@ use crate::{
 };
 
 enum AudioFeedControl {
-    Start(Duration),
+    Start(u32),
     Stop,
     Shutdown,
 }
 
 #[derive(Clone)]
-pub struct AudioData {
+pub struct AudioFeedData {
     pub buffer: Arc<Vec<u8>>,
     pub info: AudioInfo,
 }
 
-impl AudioData {
+impl AudioFeedData {
     pub fn from_file(_path: PathBuf) -> Result<Self, MediaError> {
         todo!()
     }
@@ -38,9 +38,9 @@ pub struct AudioFeedHandle {
 }
 
 impl AudioFeedHandle {
-    pub fn start(&self, playhead: Option<Duration>) -> Result<(), MediaError> {
+    pub fn start(&self, playhead: Option<u32>) -> Result<(), MediaError> {
         self.sender
-            .send(AudioFeedControl::Start(playhead.unwrap_or(Duration::ZERO)))
+            .send(AudioFeedControl::Start(playhead.unwrap_or(0)))
             .map_err(|_| MediaError::Any("Audio feed is unreachable!"))?;
 
         Ok(())
@@ -90,20 +90,22 @@ impl<T: FromByteSlice> AudioFeedConsumer<T> {
 
 pub struct AudioFeed {
     resampler: resampling::Context,
-    data: AudioData,
+    data: AudioFeedData,
     cursor: usize,
     resampled_buffer: HeapProd<u8>,
     resampled_frame: FFAudio,
     resampling_delay: Option<resampling::Delay>,
+    video_frame_duration: f64,
 }
 
 impl AudioFeed {
     pub const FORMAT: Sample = Sample::F64(Type::Packed);
-    const SAMPLES_COUNT: usize = 1024;
+    const SAMPLES_COUNT: usize = 2048;
 
     pub fn build<T: FromByteSlice>(
-        data: AudioData,
+        data: AudioFeedData,
         output_info: AudioInfo,
+        video_frame_duration: f64,
     ) -> (AudioFeedConsumer<T>, Self) {
         println!("Input info: {:?}", data.info);
         println!("Output info: {:?}", output_info);
@@ -121,7 +123,10 @@ impl AudioFeed {
         )
         .unwrap();
 
-        let capacity = data.buffer.len() * 10;
+        // Up to 1 second of pre-rendered audio
+        let capacity = (output_info.sample_rate as usize)
+            * (output_info.channels as usize)
+            * output_info.sample_format.bytes();
         let buffer = HeapRb::new(capacity);
         let (sample_producer, sample_consumer) = buffer.split();
 
@@ -134,63 +139,72 @@ impl AudioFeed {
                 resampled_buffer: sample_producer,
                 resampled_frame: FFAudio::empty(),
                 resampling_delay: None,
+                video_frame_duration,
             },
         )
     }
 
-    pub fn set_playhead(&mut self, playhead: Duration) {
-        let input_def = self.resampler.input();
-        let channel_count = usize::try_from(input_def.channel_layout.channels()).unwrap();
-        let bytes_per_sample = input_def.format.bytes();
+    pub fn set_playhead(&mut self, playhead: u32) {
+        let chunk_size = self.data.info.channels * self.data.info.sample_format.bytes();
+        let total_samples = self.data.buffer.len() / chunk_size;
 
-        let estimated_samples = playhead.as_nanos() * u128::from(input_def.rate) / 1_000_000_000;
-        self.cursor =
-            usize::try_from(estimated_samples).unwrap() * channel_count * bytes_per_sample;
+        let estimated_cursor =
+            (total_samples as f64) * f64::from(playhead) / self.video_frame_duration;
+        let cursor: usize = num_traits::cast(estimated_cursor).unwrap();
+        self.cursor = cursor * chunk_size;
         self.resampling_delay = None;
     }
 
     pub fn produce_samples(&mut self) -> bool {
+        let bytes_per_sample = self.data.info.sample_format.bytes();
+
+        let mut samples = Self::SAMPLES_COUNT;
+        let mut chunk_size = samples * self.data.info.channels * bytes_per_sample;
+
+        let space_available = self.resampled_buffer.vacant_len() > 2 * chunk_size;
+
         if self.cursor >= self.data.buffer.len() {
             if self.resampling_delay.is_none() {
                 return false;
             };
 
-            self.resampling_delay = self.resampler.flush(&mut self.resampled_frame).unwrap();
-            self.resampled_buffer
-                .push_slice(self.resampled_frame.data(0));
+            if space_available {
+                self.resampling_delay = self.resampler.flush(&mut self.resampled_frame).unwrap();
+                self.resampled_buffer
+                    .push_slice(self.resampled_frame.data(0));
+            }
 
             return true;
         }
 
-        let bytes_per_sample = self.data.info.sample_format.bytes();
+        if space_available {
+            let remaining_chunk = self.data.buffer.len() - self.cursor;
+            if remaining_chunk < chunk_size {
+                chunk_size = remaining_chunk;
+                samples = remaining_chunk / (self.data.info.channels * bytes_per_sample);
+            }
 
-        let mut samples = Self::SAMPLES_COUNT;
-        let mut chunk_size = samples * self.data.info.channels * bytes_per_sample;
-        let remaining_chunk = self.data.buffer.len() - self.cursor;
+            let mut raw_frame = FFAudio::new(
+                self.data.info.sample_format,
+                samples,
+                self.data.info.channel_layout(),
+            );
+            raw_frame.set_rate(self.data.info.sample_rate);
+            let start = self.cursor;
+            let end = self.cursor + chunk_size;
+            raw_frame.data_mut(0)[0..chunk_size].copy_from_slice(&self.data.buffer[start..end]);
+            self.cursor = end;
 
-        if remaining_chunk < chunk_size {
-            chunk_size = remaining_chunk;
-            samples = remaining_chunk / (self.data.info.channels * bytes_per_sample);
+            self.resampling_delay = self
+                .resampler
+                .run(&raw_frame, &mut self.resampled_frame)
+                .unwrap();
+            self.resampled_buffer
+                .push_slice(self.resampled_frame.data(0));
+        } else {
+            // TODO: remove this sleep to enable using the resampler in the same thread.
+            std::thread::sleep(Duration::from_millis(5));
         }
-
-        let mut raw_frame = FFAudio::new(
-            self.data.info.sample_format,
-            samples,
-            self.data.info.channel_layout(),
-        );
-        raw_frame.set_rate(self.data.info.sample_rate);
-        let start = self.cursor;
-        let end = self.cursor + chunk_size;
-        raw_frame.data_mut(0)[0..chunk_size].copy_from_slice(&self.data.buffer[start..end]);
-        self.cursor = end;
-
-        // let mut resampled_frame = FFAudio::empty();
-        self.resampling_delay = self
-            .resampler
-            .run(&raw_frame, &mut self.resampled_frame)
-            .unwrap();
-        self.resampled_buffer
-            .push_slice(self.resampled_frame.data(0));
 
         true
     }

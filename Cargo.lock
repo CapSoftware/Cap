@@ -740,6 +740,7 @@ dependencies = [
  "indexmap 2.5.0",
  "nokhwa",
  "nokhwa-bindings-macos",
+ "num-traits",
  "ringbuf",
  "scap 0.0.5 (git+https://github.com/filleduchaos/scap?rev=8eb00ce1b9bcf)",
  "serde",

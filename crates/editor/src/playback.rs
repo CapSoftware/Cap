@@ -1,12 +1,12 @@
 use std::{sync::Arc, sync::Mutex as StdMutex, time::Duration};
 
 use cap_media::data::{AudioInfo, FromByteSlice};
-use cap_media::feeds::{AudioData as CapAudioData, AudioFeed, AudioFeedConsumer, AudioFeedHandle};
+use cap_media::feeds::{AudioFeed, AudioFeedData, AudioFeedHandle};
 use cap_project::ProjectConfiguration;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    SampleFormat, SizedSample,
+    BufferSize, SampleFormat,
 };
 use tokio::{sync::watch, time::Instant};
 
@@ -162,20 +162,25 @@ impl AudioPlayback {
             let supported_config = device
                 .default_output_config()
                 .expect("Failed to get default output format");
-            let config = supported_config.config();
 
             let mut bytes = vec![0; audio.buffer.len() * 8];
             for (src, dest) in std::iter::zip(audio.buffer.iter(), bytes.chunks_mut(8)) {
                 dest.copy_from_slice(&src.to_le_bytes());
             }
-            let audio_data = CapAudioData {
+            let audio_data = AudioFeedData {
                 buffer: Arc::new(bytes),
                 info: AudioInfo::new(AudioFeed::FORMAT, audio.sample_rate, audio.channels),
             };
-            let mut output_info = AudioInfo::from_stream_config(&supported_config);
-            output_info.sample_format = output_info.sample_format.packed();
+            // TODO: Get fps from video (once we start supporting other frame rates)
+            let video_frame_duration = f64::from(FPS) * self.duration;
 
-            let shared_data = (&device, &config, audio_data, output_info);
+            let shared_data = (
+                &device,
+                &supported_config,
+                audio_data,
+                video_frame_duration,
+                self.start_frame_number,
+            );
             let (_feed_handle, stream) = match supported_config.sample_format() {
                 // SampleFormat::I8 => create_stream::<i8>(shared_data),
                 SampleFormat::I16 => create_stream::<i16>(shared_data),
@@ -191,31 +196,34 @@ impl AudioPlayback {
             };
 
             fn create_stream<T: FromByteSlice>(
-                (device, config, audio_data, output_info): (
+                (device, supported_config, audio_data, video_frame_duration, playhead): (
                     &cpal::Device,
-                    &cpal::StreamConfig,
-                    CapAudioData,
-                    AudioInfo,
+                    &cpal::SupportedStreamConfig,
+                    AudioFeedData,
+                    f64,
+                    u32,
                 ),
             ) -> (AudioFeedHandle, cpal::Stream) {
-                let (mut consumer, audio_feed) = AudioFeed::build(audio_data, output_info);
+                let mut output_info = AudioInfo::from_stream_config(&supported_config);
+                output_info.sample_format = output_info.sample_format.packed();
+
+                let (mut consumer, mut audio_feed) =
+                    AudioFeed::build(audio_data, output_info, video_frame_duration);
+                audio_feed.set_playhead(playhead);
                 let audio_feed_handle = audio_feed.launch();
+
+                let mut config = supported_config.config();
+                // Low-latency playback
+                config.buffer_size = BufferSize::Fixed(256);
 
                 (
                     audio_feed_handle,
                     device
                         .build_output_stream(
-                            config,
+                            &config,
                             move |buffer: &mut [T], _info| {
                                 // TODO: Clear after pause/change? Or just drop the playback/feed
                                 consumer.fill(buffer);
-                                if buffer[0..40]
-                                    .iter()
-                                    .find(|s| **s != T::EQUILIBRIUM)
-                                    .is_none()
-                                {
-                                    println!("Suddenly empty!");
-                                }
                             },
                             |_| {},
                             None,

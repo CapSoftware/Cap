@@ -17,6 +17,7 @@ nokhwa = { git = "https://github.com/filleduchaos/nokhwa", rev = "408354f6bcdd",
 	"input-avfoundation",
 	"serialize",
 ] }
+num-traits = "0.2.19"
 ringbuf = "0.4.7"
 scap = { git = "https://github.com/filleduchaos/scap", rev = "8eb00ce1b9bcf" }
 serde = { version = "1", features = ["derive"] }
