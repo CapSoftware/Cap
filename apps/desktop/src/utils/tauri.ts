@@ -200,9 +200,9 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
 async requestPermission(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("request_permission", { permission });
 },
-async uploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<Result<UploadResult, string>> {
+async uploadRenderedVideo(videoId: string, project: ProjectConfiguration, preCreatedVideo: PreCreatedVideo | null) : Promise<Result<UploadResult, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("upload_rendered_video", { videoId, project }) };
+    return { status: "ok", data: await TAURI_INVOKE("upload_rendered_video", { videoId, project, preCreatedVideo }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -310,6 +310,9 @@ async resetMicrophonePermissions() : Promise<Result<null, null>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async isCameraWindowOpen() : Promise<boolean> {
+    return await TAURI_INVOKE("is_camera_window_open");
 }
 }
 
@@ -377,7 +380,7 @@ export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: C
 export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type EditorStateChanged = { playhead_position: number }
-export type GeneralSettingsStore = { upload_individual_files: boolean; open_editor_after_recording: boolean; hide_dock_icon?: boolean }
+export type GeneralSettingsStore = { upload_individual_files: boolean; open_editor_after_recording: boolean; hide_dock_icon?: boolean; auto_create_shareable_link?: boolean }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
 export type HotkeysConfiguration = { show: boolean }
@@ -390,6 +393,7 @@ export type OSPermission = "screenRecording" | "camera" | "microphone" | "access
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type Plan = { upgraded: boolean; last_checked: number }
+export type PreCreatedVideo = { id: string; link: string; config: S3UploadMeta }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
 export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[] }
@@ -406,8 +410,9 @@ export type RequestOpenSettings = { page: string }
 export type RequestRestartRecording = null
 export type RequestStartRecording = null
 export type RequestStopRecording = null
+export type S3UploadMeta = { id: string; user_id: string; aws_region: string; aws_bucket: string }
 export type ScreenCaptureTarget = ({ variant: "window" } & CaptureWindow) | ({ variant: "screen" } & CaptureScreen)
-export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string; prettyName: string }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
 export type TimelineConfiguration = { segments: TimelineSegment[] }

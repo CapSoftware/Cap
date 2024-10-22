@@ -24,6 +24,10 @@ export async function generateMetadata(
 
   const video = query[0];
 
+  if (!video) {
+    return notFound();
+  }
+
   if (video.public === false) {
     return {
       title: "Cap: This video is private",
@@ -60,6 +64,10 @@ export default async function ShareVideoPage(props: Props) {
 
   const video = query[0];
 
+  if (!video) {
+    return notFound();
+  }
+
   if (
     video.jobId === null &&
     video.skipProcessing === false &&
@@ -80,21 +88,6 @@ export default async function ShareVideoPage(props: Props) {
   if (video.transcriptionStatus !== "COMPLETE") {
     fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/video/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      }
-    );
-  }
-
-  if (
-    video.jobStatus !== "COMPLETE" &&
-    video.skipProcessing === false &&
-    video.source.type === "MediaConvert"
-  ) {
-    fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/status?videoId=${videoId}&userId=${video.ownerId}`,
       {
         method: "GET",
         credentials: "include",
@@ -153,8 +146,6 @@ export default async function ShareVideoPage(props: Props) {
     const data = await res.json();
     individualFiles = data.files;
   }
-
-  console.log("individualFiles:", individualFiles);
 
   return (
     <Share

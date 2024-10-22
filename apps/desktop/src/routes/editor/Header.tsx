@@ -47,7 +47,7 @@ import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { createMutation } from "@tanstack/solid-query";
 
 function ExportButton() {
-  const { videoId, project } = useEditorContext();
+  const { videoId, project, prettyName } = useEditorContext();
 
   const [state, setState] = createStore<
     | { open: false; type: "idle" }
@@ -65,6 +65,7 @@ function ExportButton() {
         onClick={() => {
           save({
             filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
+            defaultPath: `~/Desktop/${prettyName()}.mp4`,
           }).then((p) => {
             if (!p) return;
 

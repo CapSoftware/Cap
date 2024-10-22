@@ -289,7 +289,15 @@ export const ShareVideo = ({
     if (data.transcriptionStatus === "COMPLETE") {
       fetchSubtitles();
     } else {
+      const startTime = Date.now();
+      const maxDuration = 2 * 60 * 1000; // 2 minutes in milliseconds
+
       const intervalId = setInterval(() => {
+        if (Date.now() - startTime > maxDuration) {
+          clearInterval(intervalId);
+          return;
+        }
+
         fetch(`/api/video/transcribe/status?videoId=${data.id}`)
           .then((response) => response.json())
           .then(({ transcriptionStatus }) => {

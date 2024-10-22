@@ -204,10 +204,15 @@ export const ShareVideo = ({
 
   const handleFullscreenClick = () => {
     const player = document.getElementById("player");
+    const video = videoRef.current;
+
+    if (!video) return;
+
     const isIOS =
       /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    const isAndroid = /Android/.test(navigator.userAgent);
 
-    if (!document.fullscreenElement && !isIOS) {
+    if (!document.fullscreenElement && !isIOS && !isAndroid) {
       player
         ?.requestFullscreen()
         .catch((err) =>
@@ -215,11 +220,24 @@ export const ShareVideo = ({
             `Error attempting to enable full-screen mode: ${err.message} (${err.name})`
           )
         );
-    } else if (isIOS && videoRef.current) {
-      const videoUrl = videoRef.current.src;
-      window.open(videoUrl, "_blank");
+    } else if (isIOS || isAndroid) {
+      if ("webkitEnterFullscreen" in video) {
+        (video as any).webkitEnterFullscreen();
+      } else if (video.requestFullscreen) {
+        video
+          .requestFullscreen()
+          .catch((err) =>
+            console.error(
+              `Error attempting to enable full-screen mode on mobile: ${err.message} (${err.name})`
+            )
+          );
+      }
     } else {
-      document.exitFullscreen();
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      } else if ("webkitExitFullscreen" in document) {
+        (document as any).webkitExitFullscreen();
+      }
     }
   };
 
