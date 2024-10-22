@@ -15,6 +15,7 @@ mod upload;
 mod web_api;
 mod windows;
 
+use cap_media::sources::CaptureScreen;
 use audio::AppSounds;
 use auth::AuthStore;
 use cap_editor::{AudioData, EditorState, ProjectRecordings};
@@ -35,7 +36,7 @@ use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use png::{ColorType, Encoder};
-use recording::{list_cameras, list_capture_windows, InProgressRecording, FPS};
+use recording::{list_cameras, list_capture_windows, list_capture_screens, InProgressRecording, FPS};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -2266,6 +2267,7 @@ pub async fn run() {
             take_screenshot,
             list_cameras,
             list_capture_windows,
+            list_capture_screens,
             list_audio_devices,
             show_previous_recordings_window,
             close_previous_recordings_window,
@@ -2394,7 +2396,7 @@ pub async fn run() {
                 camera_ws_port,
                 camera_feed: None,
                 start_recording_options: RecordingOptions {
-                    capture_target: ScreenCaptureTarget::Screen,
+                    capture_target: ScreenCaptureTarget::Screen(CaptureScreen { id: 1, name: "Default".to_string() }),
                     camera_label: None,
                     audio_input_name: None,
                 },

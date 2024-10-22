@@ -782,6 +782,9 @@ dependencies = [
  "indexmap 2.5.0",
  "nokhwa",
  "nokhwa-bindings-macos",
+ "objc",
+ "objc-foundation",
+ "objc2-foundation",
  "scap 0.0.5 (git+https://github.com/filleduchaos/scap?rev=8eb00ce1b9bcf)",
  "serde",
  "specta",
@@ -1558,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.0-beta.5.7.2"
+version = "0.3.0-beta.5.7.3"
 dependencies = [
  "anyhow",
  "axum",

@@ -13,6 +13,13 @@ export const listWindows = queryOptions({
   refetchInterval: 1000,
 });
 
+export const listScreens = queryOptions({
+  queryKey: ["capture", "screens"] as const,
+  queryFn: () => commands.listCaptureScreens(),
+  reconcile: "id",
+  refetchInterval: 1000,
+});
+
 const getOptions = queryOptions({
   queryKey: ["recordingOptions"] as const,
   queryFn: async () => {
