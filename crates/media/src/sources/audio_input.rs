@@ -7,7 +7,7 @@ use flume::Sender;
 use indexmap::IndexMap;
 
 use crate::{
-    data::{AudioInfo, FFAudio, RawAudioFormat},
+    data::{ffmpeg_sample_format_for, AudioInfo, FFAudio},
     pipeline::{
         clock::{LocalTimestamp, SynchronisedClock},
         control::Control,
@@ -50,17 +50,7 @@ impl AudioInputSource {
     }
 
     pub fn info(&self) -> AudioInfo {
-        let format = format_for(self.config.sample_format()).unwrap();
-        let buffer_size = match self.config.buffer_size() {
-            SupportedBufferSize::Range { max, .. } => *max,
-            SupportedBufferSize::Unknown => todo!("What's a decent default value for this?"),
-        };
-        AudioInfo::from_raw(
-            format,
-            self.config.sample_rate().0,
-            self.config.channels(),
-            buffer_size,
-        )
+        AudioInfo::from_stream_config(&self.config)
     }
 
     pub fn get_devices() -> AudioInputDeviceMap {
@@ -72,7 +62,9 @@ impl AudioInputSource {
                 .supported_input_configs()
                 .map_err(|error| eprintln!("Error: {error}"))
                 .ok()
-                .and_then(|mut configs| configs.find(|c| format_for(c.sample_format()).is_some()))
+                .and_then(|mut configs| {
+                    configs.find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
+                })
                 .and_then(|config| {
                     device
                         .name()
@@ -144,18 +136,6 @@ impl AudioInputSource {
                 eprintln!("Error while preparing audio capture: {error}");
                 MediaError::TaskLaunch("Failed to start audio capture".into())
             })
-    }
-}
-
-fn format_for(format: SampleFormat) -> Option<RawAudioFormat> {
-    match format {
-        SampleFormat::U8 => Some(RawAudioFormat::U8),
-        SampleFormat::I16 => Some(RawAudioFormat::I16),
-        SampleFormat::I32 => Some(RawAudioFormat::I32),
-        SampleFormat::I64 => Some(RawAudioFormat::I64),
-        SampleFormat::F32 => Some(RawAudioFormat::F32),
-        SampleFormat::F64 => Some(RawAudioFormat::F64),
-        _ => None,
     }
 }
 

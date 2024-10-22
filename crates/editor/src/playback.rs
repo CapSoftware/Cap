@@ -1,5 +1,7 @@
 use std::{sync::Arc, sync::Mutex as StdMutex, time::Duration};
 
+use cap_media::data::{AudioInfo, FromByteSlice};
+use cap_media::feeds::{AudioData as CapAudioData, AudioFeed, AudioFeedConsumer, AudioFeedHandle};
 use cap_project::ProjectConfiguration;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderVideoConstants};
 use cpal::{
@@ -156,86 +158,70 @@ impl AudioPlayback {
 
             let host = cpal::default_host();
             let device = host.default_output_device().unwrap();
+            println!("Output device: {}", device.name().unwrap());
             let supported_config = device
                 .default_output_config()
                 .expect("Failed to get default output format");
-            let mut config = supported_config.config();
-            config.channels = 1;
+            let config = supported_config.config();
 
-            let data = audio.buffer.clone();
-            let duration = data.len() as f64 / audio.sample_rate as f64;
-            let mut time = self.start_frame_number as f64 / FPS as f64;
-
-            let time_inc = 1.0 / config.sample_rate.0 as f64;
-
-            let mut clock =
-                data.len() as f64 * self.start_frame_number as f64 / (FPS as f64 * self.duration);
-
-            let resample_ratio = audio.sample_rate as f64 / config.sample_rate.0 as f64;
-
-            let next_sample = move || {
-                time += time_inc;
-                let time = self.project.borrow().timeline()?.get_recording_time(time)?;
-
-                let index = time / duration * data.len() as f64;
-
-                clock += resample_ratio;
-
-                if clock >= data.len() as f64 {
-                    return None;
-                }
-
-                // Add a check to prevent index_int from going out of bounds
-                let index_int = index as usize;
-                if index_int >= data.len() - 1 {
-                    return None;
-                }
-
-                let frac = index.fract();
-                let current = data[index_int];
-                let next = data[(index_int + 1) % data.len()];
-                Some(current * (1.0 - frac) + next * frac)
+            let mut bytes = vec![0; audio.buffer.len() * 8];
+            for (src, dest) in std::iter::zip(audio.buffer.iter(), bytes.chunks_mut(8)) {
+                dest.copy_from_slice(&src.to_le_bytes());
+            }
+            let audio_data = CapAudioData {
+                buffer: Arc::new(bytes),
+                info: AudioInfo::new(AudioFeed::FORMAT, audio.sample_rate, audio.channels),
             };
+            let mut output_info = AudioInfo::from_stream_config(&supported_config);
+            output_info.sample_format = output_info.sample_format.packed();
 
-            let shared_data = (&device, &config, next_sample);
-            let stream = match supported_config.sample_format() {
-                SampleFormat::I8 => create_stream::<i8>(shared_data),
+            let shared_data = (&device, &config, audio_data, output_info);
+            let (_feed_handle, stream) = match supported_config.sample_format() {
+                // SampleFormat::I8 => create_stream::<i8>(shared_data),
                 SampleFormat::I16 => create_stream::<i16>(shared_data),
                 SampleFormat::I32 => create_stream::<i32>(shared_data),
                 SampleFormat::I64 => create_stream::<i64>(shared_data),
                 SampleFormat::U8 => create_stream::<u8>(shared_data),
-                SampleFormat::U16 => create_stream::<u16>(shared_data),
-                SampleFormat::U32 => create_stream::<u32>(shared_data),
-                SampleFormat::U64 => create_stream::<u64>(shared_data),
+                // SampleFormat::U16 => create_stream::<u16>(shared_data),
+                // SampleFormat::U32 => create_stream::<u32>(shared_data),
+                // SampleFormat::U64 => create_stream::<u64>(shared_data),
                 SampleFormat::F32 => create_stream::<f32>(shared_data),
                 SampleFormat::F64 => create_stream::<f64>(shared_data),
                 _ => unimplemented!(),
             };
 
-            fn create_stream<T: SizedSample + cpal::FromSample<f64> + 'static>(
-                (device, config, mut next_sample): (
+            fn create_stream<T: FromByteSlice>(
+                (device, config, audio_data, output_info): (
                     &cpal::Device,
                     &cpal::StreamConfig,
-                    impl FnMut() -> Option<f64> + Send + 'static,
+                    CapAudioData,
+                    AudioInfo,
                 ),
-            ) -> cpal::Stream {
-                device
-                    .build_output_stream(
-                        config,
-                        move |buffer: &mut [T], _info| {
-                            for sample in buffer.iter_mut() {
-                                let Some(s) = next_sample() else {
-                                    *sample = T::EQUILIBRIUM;
-                                    continue;
-                                };
-                                let value = cpal::Sample::from_sample::<f64>(s);
-                                *sample = value;
-                            }
-                        },
-                        |_| {},
-                        None,
-                    )
-                    .unwrap()
+            ) -> (AudioFeedHandle, cpal::Stream) {
+                let (mut consumer, audio_feed) = AudioFeed::build(audio_data, output_info);
+                let audio_feed_handle = audio_feed.launch();
+
+                (
+                    audio_feed_handle,
+                    device
+                        .build_output_stream(
+                            config,
+                            move |buffer: &mut [T], _info| {
+                                // TODO: Clear after pause/change? Or just drop the playback/feed
+                                consumer.fill(buffer);
+                                if buffer[0..40]
+                                    .iter()
+                                    .find(|s| **s != T::EQUILIBRIUM)
+                                    .is_none()
+                                {
+                                    println!("Suddenly empty!");
+                                }
+                            },
+                            |_| {},
+                            None,
+                        )
+                        .unwrap(),
+                )
             }
 
             stream.play().unwrap();

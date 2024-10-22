@@ -17,6 +17,7 @@ nokhwa = { git = "https://github.com/filleduchaos/nokhwa", rev = "408354f6bcdd",
 	"input-avfoundation",
 	"serialize",
 ] }
+ringbuf = "0.4.7"
 scap = { git = "https://github.com/filleduchaos/scap", rev = "8eb00ce1b9bcf" }
 serde = { version = "1", features = ["derive"] }
 specta = "=2.0.0-rc.19"

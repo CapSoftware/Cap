@@ -922,7 +922,7 @@ async fn render_to_file_impl(
                     input: pipe_path.clone().into_os_string(),
                     sample_format: "f64le".to_string(),
                     sample_rate: audio_data.sample_rate,
-                    channels: 1,
+                    channels: audio_data.channels,
                 });
 
                 let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<f64>>(30);

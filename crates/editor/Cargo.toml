@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+
+cap-media = { path = "../media" }
 cap-project = { path = "../project" }
 cap-ffmpeg = { path = "../ffmpeg" }
 cap-rendering = { path = "../rendering" }

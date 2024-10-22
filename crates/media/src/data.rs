@@ -1,3 +1,4 @@
+use cpal::{Sample as CpalSample, SampleFormat, SupportedBufferSize, SupportedStreamConfig};
 pub use ffmpeg::format::{
     pixel::Pixel,
     sample::{Sample, Type},
@@ -10,15 +11,6 @@ pub use ffmpeg::util::{
 };
 pub use ffmpeg::{Error as FFError, Packet as FFPacket};
 
-pub enum RawAudioFormat {
-    U8,
-    I16,
-    I32,
-    I64,
-    F32,
-    F64,
-}
-
 pub enum RawVideoFormat {
     Bgra,
     Mjpeg,
@@ -28,16 +20,15 @@ pub enum RawVideoFormat {
     Gray,
 }
 
-impl From<RawAudioFormat> for Sample {
-    fn from(value: RawAudioFormat) -> Self {
-        match value {
-            RawAudioFormat::U8 => Self::U8(Type::Planar),
-            RawAudioFormat::I16 => Self::I16(Type::Planar),
-            RawAudioFormat::I32 => Self::I32(Type::Planar),
-            RawAudioFormat::I64 => Self::I64(Type::Planar),
-            RawAudioFormat::F32 => Self::F32(Type::Planar),
-            RawAudioFormat::F64 => Self::F64(Type::Planar),
-        }
+pub fn ffmpeg_sample_format_for(sample_format: SampleFormat) -> Option<Sample> {
+    match sample_format {
+        SampleFormat::U8 => Some(Sample::U8(Type::Planar)),
+        SampleFormat::I16 => Some(Sample::I16(Type::Planar)),
+        SampleFormat::I32 => Some(Sample::I32(Type::Planar)),
+        SampleFormat::I64 => Some(Sample::I64(Type::Planar)),
+        SampleFormat::F32 => Some(Sample::F32(Type::Planar)),
+        SampleFormat::F64 => Some(Sample::F64(Type::Planar)),
+        _ => None,
     }
 }
 
@@ -84,23 +75,35 @@ impl PlanarData for FFAudio {
 #[derive(Debug, Copy, Clone)]
 pub struct AudioInfo {
     pub sample_format: Sample,
-    sample_rate: u32,
+    pub sample_rate: u32,
     pub channels: usize,
     pub time_base: FFRational,
     pub buffer_size: u32,
 }
 
 impl AudioInfo {
-    pub fn from_raw(
-        format: RawAudioFormat,
-        sample_rate: u32,
-        channels: u16,
-        buffer_size: u32,
-    ) -> Self {
+    pub fn new(sample_format: Sample, sample_rate: u32, channel_count: u16) -> Self {
         Self {
-            sample_format: format.into(),
+            sample_format,
             sample_rate,
-            channels: channels.into(),
+            channels: channel_count.into(),
+            time_base: FFRational(1, 1_000_000),
+            buffer_size: 1024,
+        }
+    }
+
+    pub fn from_stream_config(config: &SupportedStreamConfig) -> Self {
+        let sample_format = ffmpeg_sample_format_for(config.sample_format()).unwrap();
+        let buffer_size = match config.buffer_size() {
+            SupportedBufferSize::Range { max, .. } => *max,
+            // TODO: Different buffer sizes for different contexts?
+            SupportedBufferSize::Unknown => 1024,
+        };
+
+        Self {
+            sample_format,
+            sample_rate: config.sample_rate().0,
+            channels: config.channels().into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size,
         }
@@ -232,3 +235,48 @@ impl VideoInfo {
         frame
     }
 }
+
+pub trait FromByteSlice: cpal::SizedSample + std::fmt::Debug + Send + 'static {
+    const BYTE_SIZE: usize;
+
+    fn cast_slice(in_bytes: &[u8], out: &mut [Self]) {
+        let filled = std::cmp::min(in_bytes.len() / Self::BYTE_SIZE, out.len());
+
+        for (src, dest) in std::iter::zip(in_bytes.chunks(Self::BYTE_SIZE), &mut *out) {
+            *dest = Self::from_bytes(src)
+        }
+        out[filled..].fill(Self::EQUILIBRIUM);
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self;
+}
+
+impl FromByteSlice for u8 {
+    const BYTE_SIZE: usize = 1;
+
+    fn cast_slice(in_bytes: &[u8], out: &mut [Self]) {
+        let filled = std::cmp::min(in_bytes.len() / Self::BYTE_SIZE, out.len());
+        out.copy_from_slice(in_bytes);
+        out[filled..].fill(Self::EQUILIBRIUM);
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        bytes[0]
+    }
+}
+
+macro_rules! slice_castable {
+    ( $( $num:ty, $size:literal ),* ) => (
+        $(
+            impl FromByteSlice for $num {
+                const BYTE_SIZE: usize = $size;
+
+                fn from_bytes(bytes: &[u8]) -> Self {
+                    Self::from_le_bytes(bytes.try_into().expect("Incorrect byte slice length"))
+                }
+            }
+        )*
+    )
+}
+
+slice_castable!(i16, 2, i32, 4, i64, 8, f32, 4, f64, 8);

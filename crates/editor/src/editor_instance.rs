@@ -99,6 +99,7 @@ impl EditorInstance {
                 AudioData {
                     buffer: Arc::new(buffer),
                     sample_rate: recording.sample_rate,
+                    channels: recording.channels,
                 }
             });
 
