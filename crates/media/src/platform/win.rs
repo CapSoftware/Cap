@@ -10,6 +10,7 @@ use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorInfo, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
     GetWindowThreadProcessId, IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO,
@@ -160,9 +161,6 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         return TRUE;
     }
 
-    let mut rect: RECT = RECT::default();
-    GetWindowRect(hwnd, &mut rect).ok();
-
     let mut process_id = 0;
     let _thrad_id = GetWindowThreadProcessId(hwnd, Some(&mut process_id));
 
@@ -183,21 +181,43 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         return TRUE;
     }
 
-    let owner_name_ = match owner_process_path.file_stem() {
+    let owner_name = match owner_process_path.file_stem() {
         Some(exe_name) => exe_name.to_string_lossy().into_owned(),
         None => owner_process_path.to_string_lossy().into_owned(),
     };
 
+    // Windows 10 build 1607 or later
+    // Credits: TAO src/platform_impl/windows/dpi.rs
+    const BASE_DPI: u32 = 96;
+    let dpi = match GetDpiForWindow(hwnd) {
+        0 => BASE_DPI,
+        dpi => dpi,
+    } as i32;
+
+    let scale_factor = dpi as f64 / BASE_DPI as f64;
+
+    let mut rect = RECT::default();
+    GetWindowRect(hwnd, &mut rect).ok();
+
+    let lpos_x = rect.top as f64 / scale_factor;
+    let lpos_y = rect.left as f64 / scale_factor;
+
     let window = Window {
         window_id: hwnd.0 as u32,
         name: String::from_utf16_lossy(&wname),
-        owner_name: owner_name_,
+        owner_name,
         process_id,
         bounds: Bounds {
-            x: rect.left as f64,
-            y: rect.top as f64,
-            width: (rect.right - rect.left) as f64,
-            height: (rect.bottom - rect.top) as f64,
+            x: match lpos_x {
+                x if x.is_sign_negative() => 0.0,
+                _ => lpos_x,
+            },
+            y: match lpos_y {
+                y if y.is_sign_negative() => 0.0,
+                _ => lpos_y,
+            },
+            width: (rect.right - rect.left) as f64 / scale_factor,
+            height: (rect.bottom - rect.top) as f64 / scale_factor,
         },
     };
 
