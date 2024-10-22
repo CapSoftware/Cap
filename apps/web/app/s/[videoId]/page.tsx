@@ -47,7 +47,7 @@ export async function generateMetadata(
   }
 
   return {
-    title: "Cap: " + video.name,
+    title: video.name + " | Cap Recording",
     description: "Watch this video on Cap",
     openGraph: {
       images: [
