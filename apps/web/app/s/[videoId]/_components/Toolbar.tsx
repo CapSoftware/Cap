@@ -18,27 +18,34 @@ export const Toolbar = ({
   const { refresh, push } = useRouter();
   const [commentBoxOpen, setCommentBoxOpen] = useState(false);
   const [comment, setComment] = useState("");
-  const videoElement = useRef<HTMLVideoElement | null>(null);
-  const [videoPlayerExists, setVideoPlayerExists] = useState(false);
+  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(
+    null
+  );
 
   useEffect(() => {
-    const element = document.getElementById(
-      "video-player"
-    ) as HTMLVideoElement | null;
-    if (element) {
-      videoElement.current = element;
-      setVideoPlayerExists(true);
-    } else {
-      console.warn("Video player element not found");
-      setVideoPlayerExists(false);
-    }
+    const checkForVideoElement = () => {
+      const element = document.getElementById(
+        "video-player"
+      ) as HTMLVideoElement | null;
+      if (element) {
+        setVideoElement(element);
+      } else {
+        setTimeout(checkForVideoElement, 100); // Check again after 100ms
+      }
+    };
+
+    checkForVideoElement();
+
+    return () => {
+      // Clean up any ongoing checks if component unmounts
+    };
   }, []);
 
   const [currentEmoji, setCurrentEmoji] = useState<{
     emoji: string;
     id: number;
   } | null>(null);
-  const clearEmojiTimeout = useRef<any>(null);
+  const clearEmojiTimeout = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     return () => {
@@ -49,8 +56,8 @@ export const Toolbar = ({
   }, []);
 
   const getTimestamp = (): number => {
-    if (videoElement.current) {
-      return videoElement.current.currentTime;
+    if (videoElement) {
+      return videoElement.currentTime;
     }
     console.warn("Video element not available, using default timestamp");
     return 0;
@@ -156,18 +163,18 @@ export const Toolbar = ({
   );
 
   return (
-    <>
+    <div
+      className={`${
+        !commentBoxOpen ? "max-w-[350px]" : "max-w-[500px]"
+      } mx-auto`}
+    >
       <div
         className={`bg-white border border-gray-200 rounded-full mx-auto shadow-lg transition-all ${
           commentBoxOpen === true && "w-full"
         }`}
       >
-        <div
-          className={`${
-            commentBoxOpen === true ? "flex w-full" : "grid"
-          } items-center justify-start`}
-        >
-          <div className="w-full p-2">
+        <div className="flex">
+          <div className="flex-grow p-2">
             {commentBoxOpen === true ? (
               <div className="w-full flex items-center justify-between">
                 <input
@@ -193,19 +200,19 @@ export const Toolbar = ({
                   <Button
                     className="min-w-[160px]"
                     disabled={comment.length === 0}
-                    variant="default"
+                    variant="primary"
                     size="sm"
                     onClick={() => {
                       handleCommentSubmit();
                     }}
                   >
-                    {videoPlayerExists
+                    {videoElement
                       ? `Comment at ${getTimestamp().toFixed(2)}`
                       : "Comment"}
                   </Button>
                   <Button
                     className="min-w-[100px]"
-                    variant="outline"
+                    variant="white"
                     size="sm"
                     onClick={() => {
                       setCommentBoxOpen(false);
@@ -217,7 +224,7 @@ export const Toolbar = ({
                 </div>
               </div>
             ) : (
-              <div className="grid items-center justify-start grid-flow-col">
+              <div className="grid items-center justify-center grid-flow-col">
                 {REACTIONS.map((reaction) => (
                   <Emoji
                     key={reaction.emoji}
@@ -233,8 +240,8 @@ export const Toolbar = ({
                         push(`/login?next=${window.location.pathname}`);
                         return;
                       }
-                      if (videoElement.current) {
-                        videoElement.current.pause();
+                      if (videoElement) {
+                        videoElement.pause();
                       }
                       setCommentBoxOpen(true);
                     }}
@@ -249,7 +256,7 @@ export const Toolbar = ({
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 };
 
