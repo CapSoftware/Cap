@@ -368,11 +368,11 @@ export default function () {
                       });
                     }}
                   >
-                    {permissions?.data?.camera !== "granted"
-                      ? "Request Permission"
-                      : options.data?.cameraLabel
-                      ? "On"
-                      : "Off"}
+                    {isPermitted(permissions?.data?.camera)
+                      ? options.data?.cameraLabel
+                        ? "On"
+                        : "Off"
+                      : "Request Permission"}
                   </button>
                 </KSelect.Trigger>
                 <KSelect.Portal>
@@ -452,7 +452,7 @@ export default function () {
                 e.stopPropagation();
                 if (permissions?.data?.microphone !== "granted") {
                   await requestPermission("microphone");
-                  if (permissions?.data?.microphone === "granted") {
+                  if (isPermitted(permissions?.data?.microphone)) {
                     setOptions({
                       ...options.data!,
                       audioInputName: audioDevice().name,
@@ -467,11 +467,11 @@ export default function () {
                 }
               }}
             >
-              {permissions?.data?.microphone !== "granted"
-                ? "Request Permission"
-                : options.data?.audioInputName
-                ? "On"
-                : "Off"}
+              {isPermitted(permissions?.data?.microphone)
+                ? options.data?.audioInputName
+                  ? "On"
+                  : "Off"
+                : "Request Permission"}
             </button>
           </KSelect.Trigger>
           <KSelect.Portal>
@@ -521,6 +521,7 @@ export default function () {
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
+import { isPermitted } from "../permissions";
 import { createEventListener } from "@solid-primitives/event-listener";
 
 let hasChecked = false;

@@ -7,8 +7,11 @@ use specta::Type;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, time::Duration};
 
+#[cfg(target_os = "macos")]
 use objc::rc::autoreleasepool;
+#[cfg(target_os = "macos")]
 use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
+#[cfg(target_os = "macos")]
 use objc::*;
 
 use crate::RecordingOptions;
@@ -299,6 +302,7 @@ pub async fn start(
     })
 }
 
+#[cfg(target_os = "macos")]
 fn get_cursor_id() -> String {
     autoreleasepool(|| {
         // Get the NSCursor class
