@@ -1,6 +1,5 @@
 import { Button, SwitchTab } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
-import { createEventListener } from "@solid-primitives/event-listener";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 import { createMutation, createQuery } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
@@ -25,8 +24,14 @@ import {
   listAudioDevices,
   getPermissions,
   createVideoDevicesQuery,
+  listScreens,
 } from "~/utils/queries";
-import { type CaptureWindow, commands, events } from "~/utils/tauri";
+import {
+  CaptureScreen,
+  type CaptureWindow,
+  commands,
+  events,
+} from "~/utils/tauri";
 import {
   MenuItem,
   MenuItemList,
@@ -46,13 +51,13 @@ export const route = {
 };
 
 export default function () {
+  const screens = createQuery(() => listScreens);
   const { options, setOptions } = createOptionsQuery();
   const windows = createQuery(() => listWindows);
   const videoDevices = createVideoDevicesQuery();
   const audioDevices = createQuery(() => listAudioDevices);
   const currentRecording = createCurrentRecordingQuery();
 
-  const [windowSelectOpen, setWindowSelectOpen] = createSignal(false);
   const permissions = createQuery(() => getPermissions);
 
   const [microphoneSelectOpen, setMicrophoneSelectOpen] = createSignal(false);
@@ -77,15 +82,7 @@ export default function () {
     },
   }));
 
-  createEventListener(window, "mousedown", (e: MouseEvent) => {
-    if (windowSelectOpen()) {
-      const target = e.target as HTMLElement;
-      if (!target.closest(".KSelect")) {
-        setWindowSelectOpen(false);
-      }
-    }
-  });
-
+  // important for sign in redirect, trust me
   createAsync(() => getAuth());
 
   createUpdateCheck();
@@ -140,12 +137,6 @@ export default function () {
         changelogClicked: true,
       });
     }
-  };
-
-  const selectedWindow = () => {
-    const d = options.data?.captureTarget;
-    if (d?.variant !== "window") return;
-    return windows.data?.find((data) => data.id === d.id);
   };
 
   const audioDevice = () =>
@@ -235,98 +226,57 @@ export default function () {
           <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
         </button>
       </div>
-      <KSelect<CaptureWindow | null>
-        options={windows.data ?? []}
-        optionValue="id"
-        optionTextValue="name"
-        placeholder="Window"
-        gutter={8}
-        open={windowSelectOpen()}
-        onOpenChange={(o: boolean) => {
-          // prevents tab onChange from interfering with dropdown trigger click
-          if (o === false && options.data?.captureTarget.variant === "screen")
-            return;
-          setWindowSelectOpen(o);
-        }}
-        itemComponent={(props: { item: any }) => (
-          <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-            <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue?.name}
-            </KSelect.ItemLabel>
-          </MenuItem>
-        )}
-        value={selectedWindow() ?? null}
-        onChange={(d: CaptureWindow | null) => {
-          if (!d || !options.data) return;
-          setOptions({
-            ...options.data,
-            captureTarget: { variant: "window", ...d },
-          });
-          setWindowSelectOpen(false);
-        }}
-        placement="top-end"
-      >
-        <SwitchTab
-          value={options.data?.captureTarget.variant}
-          disabled={isRecording()}
-          onChange={(s) => {
-            if (!options.data) return;
-            if (options.data?.captureTarget.variant === s) {
-              setWindowSelectOpen(false);
-              return;
-            }
-            if (s === "screen") {
-              setOptions({
-                ...options.data,
-                captureTarget: { variant: "screen" },
-              });
-              setWindowSelectOpen(false);
-            } else if (s === "window") {
-              if (windowSelectOpen()) {
-                setWindowSelectOpen(false);
-              } else {
-                setWindowSelectOpen(true);
-              }
-            }
+      <div class="flex flex-row items-center rounded-[0.5rem] relative border">
+        <div
+          class="w-1/2 absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden"
+          style={{
+            transform:
+              options.data?.captureTarget.variant === "window"
+                ? "translateX(100%)"
+                : undefined,
           }}
         >
-          <SwitchTab.List>
-            <SwitchTab.Trigger value="screen">Screen</SwitchTab.Trigger>
-            <SwitchTab.Trigger<ValidComponent>
-              as={(p) => <KSelect.Trigger<ValidComponent> {...p} />}
-              value="window"
-              class="w-full text-nowrap overflow-hidden px-2 group KSelect"
-            >
-              <KSelect.Value<CaptureWindow> class="flex flex-row items-center justify-center">
-                {(item) => (
-                  <>
-                    <span class="flex-1 truncate">
-                      {item.selectedOption()?.name ?? "Select Window"}
-                    </span>
+          <div class="bg-gray-100 flex-1" />
+        </div>
+        <TargetSelect<CaptureScreen>
+          options={screens.data ?? []}
+          onChange={(value) => {
+            if (!value || !options.data) return;
 
-                    <IconCapChevronDown class="size-4 shrink-0 ui-group-expanded:-rotate-180 transform transition-transform" />
-                  </>
-                )}
-              </KSelect.Value>
-            </SwitchTab.Trigger>
-          </SwitchTab.List>
-        </SwitchTab>
-        <KSelect.Portal>
-          <PopperContent<typeof KSelect.Content>
-            as={KSelect.Content}
-            class={topRightAnimateClasses}
-          >
-            <Show
-              when={(windows.data ?? []).length > 0}
-              fallback={
-                <div class="p-2 text-gray-500">No windows available</div>
-              }
-            >
-              <KSelect.Listbox class="max-h-52 max-w-64" as={MenuItemList} />
-            </Show>
-          </PopperContent>
-        </KSelect.Portal>
-      </KSelect>
+            commands.setRecordingOptions({
+              ...options.data,
+              captureTarget: { ...value, variant: "screen" },
+            });
+          }}
+          value={
+            options.data?.captureTarget.variant === "screen"
+              ? options.data.captureTarget
+              : null
+          }
+          placeholder="Screen"
+          optionsEmptyText="No screens found"
+          selected={options.data?.captureTarget.variant === "screen"}
+        />
+        <TargetSelect<CaptureWindow>
+          options={windows.data ?? []}
+          onChange={(value) => {
+            if (!options.data) return;
+
+            commands.setRecordingOptions({
+              ...options.data,
+              captureTarget: { ...value, variant: "window" },
+            });
+          }}
+          value={
+            options.data?.captureTarget.variant === "window"
+              ? options.data.captureTarget
+              : null
+          }
+          placeholder="Window"
+          optionsEmptyText="No windows found"
+          selected={options.data?.captureTarget.variant === "window"}
+        />
+      </div>
       <div class="flex flex-col gap-[0.25rem] items-stretch">
         <label class="text-gray-400 text-[0.875rem]">Camera</label>
         <Show when>
@@ -572,6 +522,7 @@ import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
 import { isPermitted } from "../permissions";
+import { createEventListener } from "@solid-primitives/event-listener";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -598,7 +549,85 @@ function createUpdateCheck() {
   });
 }
 
-function dbg<T>(v: T) {
-  console.log(v);
-  return v;
+function TargetSelect<T extends { id: number; name: string }>(props: {
+  options: Array<T>;
+  onChange: (value: T) => void;
+  value: T | null;
+  selected: boolean;
+  optionsEmptyText: string;
+  placeholder: string;
+}) {
+  return (
+    <KSelect<T | null>
+      options={props.options ?? []}
+      optionValue="id"
+      optionTextValue="name"
+      gutter={8}
+      itemComponent={(props) => (
+        <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
+          <KSelect.ItemLabel class="flex-1">
+            {props.item.rawValue?.name}
+          </KSelect.ItemLabel>
+        </MenuItem>
+      )}
+      placement="bottom"
+      class="max-w-[50%] w-full z-10"
+      placeholder={props.placeholder}
+      onChange={(value) => {
+        if (!value) return;
+        props.onChange(value);
+      }}
+      value={props.value}
+    >
+      <KSelect.Trigger<ValidComponent>
+        as={
+          props.options.length === 1
+            ? (p) => (
+                <button
+                  onClick={() => {
+                    props.onChange(props.options[0]);
+                  }}
+                  data-selected={props.selected}
+                  class={p.class}
+                >
+                  <span class="truncate">{props.options[0].name}</span>
+                </button>
+              )
+            : undefined
+        }
+        class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
+        data-selected={props.selected}
+        onClick={(e) => {
+          if (props.options.length === 1) {
+            e.preventDefault();
+            props.onChange(props.options[0]);
+          }
+        }}
+      >
+        <KSelect.Value<CaptureScreen | undefined> class="truncate">
+          {(value) => value.selectedOption()?.name}
+        </KSelect.Value>
+        {props.options.length > 1 && (
+          <KSelect.Icon class="ui-expanded:-rotate-180 transition-transform">
+            <IconCapChevronDown class="size-4 shrink-0 transform transition-transform" />
+          </KSelect.Icon>
+        )}
+      </KSelect.Trigger>
+      <KSelect.Portal>
+        <PopperContent<typeof KSelect.Content>
+          as={KSelect.Content}
+          class={topRightAnimateClasses}
+        >
+          <Show
+            when={props.options.length > 0}
+            fallback={
+              <div class="p-2 text-gray-500">{props.optionsEmptyText}</div>
+            }
+          >
+            <KSelect.Listbox class="max-h-52 max-w-64" as={MenuItemList} />
+          </Show>
+        </PopperContent>
+      </KSelect.Portal>
+    </KSelect>
+  );
 }
