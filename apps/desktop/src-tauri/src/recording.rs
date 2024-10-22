@@ -179,7 +179,8 @@ pub async fn start(
     let mut audio_output_path = None;
     let mut camera_output_path = None;
 
-    let screen_source = ScreenCaptureSource::init(&recording_options.capture_target, None, None);
+    let screen_source =
+        ScreenCaptureSource::init(dbg!(&recording_options.capture_target), None, None);
     let screen_config = screen_source.info();
     let output_config = screen_config.scaled(1920, 30);
     let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;

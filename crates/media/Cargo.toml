@@ -28,3 +28,7 @@ tracing = "0.1"
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
 nokhwa-bindings-macos = { git = "https://github.com/Brendonovich/nokhwa", rev = "2de5a760d5f1" }
+cocoa = "0.24"
+objc = "0.2.7"
+objc-foundation = "0.1.1"
+objc2-foundation = { version = "0.2.2", features = ["NSValue"] }

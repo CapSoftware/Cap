@@ -729,6 +729,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cap-project",
+ "cocoa 0.24.1",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
  "cpal",
@@ -738,6 +739,9 @@ dependencies = [
  "indexmap 2.5.0",
  "nokhwa 0.10.3 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
  "nokhwa-bindings-macos 0.2.0 (git+https://github.com/Brendonovich/nokhwa?rev=2de5a760d5f1)",
+ "objc",
+ "objc-foundation",
+ "objc2-foundation",
  "scap 0.0.5 (git+https://github.com/filleduchaos/scap?rev=8eb00ce1b9bcf)",
  "serde",
  "specta",
@@ -930,6 +934,22 @@ dependencies = [
  "block",
  "core-foundation 0.7.0",
  "core-graphics 0.19.2",
+ "foreign-types 0.3.2",
+ "libc",
+ "objc",
+]
+
+[[package]]
+name = "cocoa"
+version = "0.24.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f425db7937052c684daec3bd6375c8abe2d146dca4b8b143d6db777c39138f3a"
+dependencies = [
+ "bitflags 1.2.1",
+ "block",
+ "cocoa-foundation 0.1.2",
+ "core-foundation 0.9.4",
+ "core-graphics 0.22.3",
  "foreign-types 0.3.2",
  "libc",
  "objc",
@@ -1135,6 +1155,19 @@ checksum = "b3889374e6ea6ab25dba90bb5d96202f61108058361f6dc72e8b03e6f8bbe923"
 dependencies = [
  "bitflags 1.2.1",
  "core-foundation 0.7.0",
+ "foreign-types 0.3.2",
+ "libc",
+]
+
+[[package]]
+name = "core-graphics"
+version = "0.22.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2581bbab3b8ffc6fcbd550bf46c355135d16e9ff2a6ea032ad6b9bf1d7efe4fb"
+dependencies = [
+ "bitflags 1.2.1",
+ "core-foundation 0.9.4",
+ "core-graphics-types 0.1.3",
  "foreign-types 0.3.2",
  "libc",
 ]

@@ -3,10 +3,8 @@ import { Select as KSelect } from "@kobalte/core/select";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 import { createMutation, createQuery } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
-import { Window } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
-  ComponentProps,
   Show,
   type ValidComponent,
   createEffect,
@@ -30,7 +28,6 @@ import {
 } from "~/utils/queries";
 import {
   CaptureScreen,
-  ScreenCaptureTarget,
   type CaptureWindow,
   commands,
   events,
@@ -568,9 +565,29 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
       value={props.value}
     >
       <KSelect.Trigger<ValidComponent>
-        id="screen"
+        as={
+          props.options.length === 1
+            ? (p) => (
+                <button
+                  onClick={() => {
+                    props.onChange(props.options[0]);
+                  }}
+                  data-selected={props.selected}
+                  class={p.class}
+                >
+                  <span class="truncate">{props.options[0].name}</span>
+                </button>
+              )
+            : undefined
+        }
         class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
         data-selected={props.selected}
+        onClick={(e) => {
+          if (props.options.length === 1) {
+            e.preventDefault();
+            props.onChange(props.options[0]);
+          }
+        }}
       >
         <KSelect.Value<CaptureScreen | undefined> class="truncate">
           {(value) => value.selectedOption()?.name}
