@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use cocoa::{base::id, foundation::NSDictionary};
 use flume::Sender;
 use scap::{
@@ -182,11 +183,13 @@ impl ScreenCaptureSource {
                 names
             }
         };
-        #[cfg(not(target_os = "macos"))]
-        let names = HashMap::new();
+        // #[cfg(not(target_os = "macos"))]
+        // let names = HashMap::<u32, u32>::new();
+        // TODO(Ilya)
 
         for (idx, screen) in screens.into_iter().enumerate() {
             // Handle Target::Screen variant (assuming this is how it's structured in scap)
+            #[cfg(target_os = "macos")]
             targets.push(CaptureScreen {
                 id: screen.id as u32,
                 name: names

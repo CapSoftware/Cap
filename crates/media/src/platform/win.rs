@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 use super::{Bounds, CursorShape, Window};
 
-use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::System::Threading::{
@@ -126,7 +125,7 @@ unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
     let query = QueryFullProcessImageNameW(
         handle,
         PROCESS_NAME_FORMAT::default(),
-        PWSTR(lpexename.as_mut_ptr()),
+        windows::core::PWSTR(lpexename.as_mut_ptr()),
         &mut lpdwsize,
     );
     CloseHandle(handle).ok();
@@ -156,7 +155,6 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     )
     .ok();
 
-    // Window is cloaked by either the shell or the application, Windows 8+
     if pvattribute_cloaked != 0 {
         return TRUE;
     }
@@ -195,12 +193,11 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     } as i32;
 
     let scale_factor = dpi as f64 / BASE_DPI as f64;
-
-    let mut rect = RECT::default();
+    let mut rect: RECT = RECT::default();
     GetWindowRect(hwnd, &mut rect).ok();
 
-    let lpos_x = rect.top as f64 / scale_factor;
-    let lpos_y = rect.left as f64 / scale_factor;
+    let lpos_x = rect.left as f64 / scale_factor;
+    let lpos_y = rect.top as f64 / scale_factor;
 
     let window = Window {
         window_id: hwnd.0 as u32,
