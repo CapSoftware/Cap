@@ -5,7 +5,7 @@ use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::sync::Mutex;
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_store::{with_store, StoreCollection};
