@@ -2,6 +2,7 @@ use ffmpeg::software::scaling;
 use flume::{Receiver, Sender, TryRecvError};
 use nokhwa::{pixel_format::*, utils::*, Camera};
 use std::{
+    io::Write,
     thread::{self, JoinHandle},
     time::Instant,
 };
@@ -134,24 +135,28 @@ fn find_camera(selected_camera: &String) -> Result<CameraInfo, MediaError> {
 }
 
 fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
+    dbg!(info);
+
     // TODO: Make selected format more flexible
     // let format = RequestedFormat::new::<RgbAFormat>(RequestedFormatType::AbsoluteHighestResolution);
-    let format =
-        RequestedFormat::new::<RgbAFormat>(RequestedFormatType::Closest(CameraFormat::new(
-            Resolution {
-                width_x: 1920,
-                height_y: 1080,
-            },
-            FrameFormat::YUYV,
-            30,
-        )));
+    let format = RequestedFormat::new::<RgbAFormat>(RequestedFormatType::ClosestIgnoringFormat {
+        resolution: Resolution {
+            width_x: 1920,
+            height_y: 1080,
+        },
+        frame_rate: 30,
+    });
+
     let index = info.index().clone();
+
     Ok(Camera::new(index, format)?)
 }
 
 fn find_and_create_camera(selected_camera: &String) -> Result<(CameraInfo, Camera), MediaError> {
     let info = find_camera(selected_camera)?;
     let camera = create_camera(&info)?;
+
+    dbg!(camera.camera_format());
 
     Ok((info, camera))
 }
@@ -193,8 +198,6 @@ fn run_camera_feed(
         }
     };
 
-    let mut converter = FrameConverter::build(camera.camera_format());
-
     if let Err(error) = camera.open_stream() {
         error!("Failed to open camera stream: {:?}", error);
         ready_signal.send(Err(error.into())).unwrap();
@@ -202,8 +205,9 @@ fn run_camera_feed(
     }
 
     info!("Camera stream opened successfully");
-    ready_signal.send(Ok(converter.video_info)).unwrap();
-    println!("Launched camera feed");
+
+    let mut converter = None;
+    let mut ready_signal = Some(ready_signal);
 
     loop {
         match control.try_recv() {
@@ -244,7 +248,7 @@ fn run_camera_feed(
                                     .send(Ok((new_info, new_converter.video_info)))
                                     .unwrap();
                                 camera = new_camera;
-                                converter = new_converter;
+                                // converter = new_converter;
                             } else {
                                 eprintln!(
                                     "Unable to switch to {camera_name}. Still using previous camera"
@@ -262,6 +266,22 @@ fn run_camera_feed(
         // Actual data capture
         match camera.frame() {
             Ok(raw_buffer) => {
+                let converter = converter.get_or_insert_with(|| {
+                    let mut format = camera.camera_format();
+                    format.set_format(raw_buffer.source_frame_format());
+                    let converter = FrameConverter::build(format);
+                    if let Some(ready_signal) = ready_signal.take() {
+                        ready_signal.send(Ok(converter.video_info)).unwrap();
+                    }
+                    converter
+                });
+
+                if converter.format != raw_buffer.source_frame_format() {
+                    let mut format = camera.camera_format();
+                    format.set_format(raw_buffer.source_frame_format());
+                    *converter = FrameConverter::build(format);
+                }
+
                 // TODO: Merge fix in nokhwa lib to use presentation timestamps from the system, like scap does
                 let captured_at = Instant::now();
 
@@ -300,13 +320,14 @@ fn run_camera_feed(
 struct FrameConverter {
     video_info: VideoInfo,
     context: scaling::Context,
+    pub format: FrameFormat,
 }
 
 impl FrameConverter {
     fn build(camera_format: CameraFormat) -> Self {
         let format = match camera_format.format() {
             FrameFormat::MJPEG => RawVideoFormat::Mjpeg,
-            FrameFormat::YUYV => RawVideoFormat::Yuyv,
+            FrameFormat::YUYV => RawVideoFormat::Uyvy,
             FrameFormat::NV12 => RawVideoFormat::Nv12,
             FrameFormat::GRAY => RawVideoFormat::Gray,
             FrameFormat::RAWRGB => RawVideoFormat::RawRgb,
@@ -330,6 +351,7 @@ impl FrameConverter {
         Self {
             video_info,
             context,
+            format: camera_format.format(),
         }
     }
 
