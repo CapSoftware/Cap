@@ -15,11 +15,11 @@ mod upload;
 mod web_api;
 mod windows;
 
-use cap_media::sources::CaptureScreen;
 use audio::AppSounds;
 use auth::AuthStore;
 use cap_editor::{AudioData, EditorState, ProjectRecordings};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
+use cap_media::sources::CaptureScreen;
 use cap_media::{
     feeds::{CameraFeed, CameraFrameSender},
     platform::Bounds,
@@ -36,7 +36,9 @@ use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use png::{ColorType, Encoder};
-use recording::{list_cameras, list_capture_windows, list_capture_screens, InProgressRecording, FPS};
+use recording::{
+    list_cameras, list_capture_screens, list_capture_windows, InProgressRecording, FPS,
+};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -408,7 +410,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
             .as_secs_f64(),
     );
 
-    current_recording.stop().await;
+    let recording = current_recording.stop().await;
     println!("Recording stopped");
 
     if let Some(window) = (CapWindow::InProgressRecording { position: None }).get(&app) {
@@ -419,24 +421,20 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         window.unminimize().ok();
     }
 
-    std::fs::create_dir_all(current_recording.recording_dir.join("screenshots")).ok();
-    let display_screenshot = current_recording
-        .recording_dir
-        .join("screenshots/display.jpg");
+    std::fs::create_dir_all(recording.recording_dir.join("screenshots")).ok();
+    let display_screenshot = recording.recording_dir.join("screenshots/display.jpg");
     create_screenshot(
-        current_recording.display_output_path.clone(),
+        recording.display_output_path.clone(),
         display_screenshot.clone(),
         None,
     )
     .await?;
 
     // Create thumbnail
-    let thumbnail = current_recording
-        .recording_dir
-        .join("screenshots/thumbnail.png");
+    let thumbnail = recording.recording_dir.join("screenshots/thumbnail.png");
     create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
 
-    let recording_dir = current_recording.recording_dir.clone();
+    let recording_dir = recording.recording_dir.clone();
 
     ShowCapturesPanel.emit(&app).ok();
 
@@ -456,9 +454,9 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         let mut segments = vec![];
         let mut passed_duration = 0.0;
 
-        for i in (0..current_recording.segments.len()).step_by(2) {
+        for i in (0..recording.segments.len()).step_by(2) {
             let start = passed_duration;
-            passed_duration += current_recording.segments[i + 1] - current_recording.segments[i];
+            passed_duration += recording.segments[i + 1] - recording.segments[i];
             segments.push(TimelineSegment {
                 start,
                 end: passed_duration,
@@ -473,12 +471,21 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     };
 
     std::fs::write(
-        current_recording.recording_dir.join("project-config.json"),
+        recording.recording_dir.join("project-config.json"),
         serde_json::to_string_pretty(&json!(&config)).unwrap(),
     )
     .unwrap();
 
     AppSounds::StopRecording.play();
+
+    let recording_id = recording
+        .recording_dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
+        .trim_end_matches(".cap")
+        .to_string();
 
     if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
         if let Ok(Some(auth)) = AuthStore::get(&app) {
@@ -489,14 +496,6 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
 
                     // Start the upload process in the background with retry mechanism
                     let app_clone = app.clone();
-                    let recording_id = current_recording
-                        .recording_dir
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string()
-                        .trim_end_matches(".cap")
-                        .to_string();
 
                     tauri::async_runtime::spawn(async move {
                         let max_retries = 3;
@@ -539,14 +538,6 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
                     });
                 }
             } else if settings.open_editor_after_recording {
-                let recording_id = current_recording
-                    .recording_dir
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-                    .trim_end_matches(".cap")
-                    .to_string();
                 open_editor(app.clone(), recording_id);
             }
         }
@@ -1960,6 +1951,7 @@ async fn take_screenshot(app: AppHandle, state: MutableState<'_, App>) -> Result
                 camera: None,
                 audio: None,
                 segments: vec![],
+                cursor: None,
             }
             .save_for_project();
 
@@ -2374,7 +2366,10 @@ pub async fn run() {
                 camera_ws_port,
                 camera_feed: None,
                 start_recording_options: RecordingOptions {
-                    capture_target: ScreenCaptureTarget::Screen(CaptureScreen { id: 1, name: "Default".to_string() }),
+                    capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
+                        id: 1,
+                        name: "Default".to_string(),
+                    }),
                     camera_label: None,
                     audio_input_name: None,
                 },

@@ -1,10 +1,12 @@
 mod configuration;
-
-use std::path::PathBuf;
+mod cursor;
 
 pub use configuration::*;
+pub use cursor::*;
+
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Display {
@@ -48,6 +50,7 @@ pub struct RecordingMeta {
     pub audio: Option<AudioMeta>,
     #[serde(default)]
     pub segments: Vec<RecordingSegment>,
+    pub cursor: Option<PathBuf>,
 }
 
 impl RecordingMeta {
@@ -66,6 +69,7 @@ impl RecordingMeta {
                     camera: None,
                     audio: None,
                     segments: Vec::new(),
+                    cursor: None,
                 });
             }
         };
@@ -78,5 +82,20 @@ impl RecordingMeta {
         let meta_path = &self.project_path.join("recording-meta.json");
         let meta = serde_json::to_string_pretty(&self).unwrap();
         std::fs::write(meta_path, meta).unwrap();
+    }
+
+    pub fn project_config(&self) -> ProjectConfiguration {
+        std::fs::read_to_string(self.project_path.join("project-config.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn cursor_data(&self) -> CursorData {
+        self.cursor
+            .as_ref()
+            .and_then(|c| std::fs::read(self.project_path.join(c)).ok())
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
     }
 }

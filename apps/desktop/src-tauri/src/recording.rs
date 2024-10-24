@@ -1,14 +1,18 @@
 use crate::flags;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
+use cap_project::CursorEvent;
 use device_query::{DeviceQuery, DeviceState};
-use serde::Deserialize;
 use serde::Serialize;
 use specta::Type;
+use std::fs::File;
+use std::sync::Arc;
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, time::Duration};
+use tokio::sync::{oneshot, Mutex};
 
 use objc::rc::autoreleasepool;
-use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
+use objc::runtime::{Class, Object, Sel, BOOL, YES};
 use objc::*;
 
 use crate::RecordingOptions;
@@ -34,17 +38,6 @@ pub fn list_cameras() -> Vec<String> {
     CameraFeed::list_cameras()
 }
 
-#[derive(Serialize, Deserialize, Clone, Type)]
-pub struct MouseEvent {
-    pub active_modifiers: Vec<String>,
-    pub cursor_id: String,
-    pub process_time_ms: f64,
-    pub event_type: String,
-    pub unix_time_ms: f64,
-    pub x: f64,
-    pub y: f64,
-}
-
 #[derive(Type, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InProgressRecording {
@@ -59,18 +52,30 @@ pub struct InProgressRecording {
     pub audio_output_path: Option<PathBuf>,
     pub display_source: ScreenCaptureTarget,
     pub segments: Vec<f64>,
-    // #[serde(skip)]
-    // pub mouse_moves: Arc<Mutex<Vec<MouseEvent>>>,
-    // #[serde(skip)]
-    // pub mouse_clicks: Arc<Mutex<Vec<MouseEvent>>>,
+    #[serde(skip)]
+    pub cursor_moves: oneshot::Receiver<Vec<CursorEvent>>,
+    #[serde(skip)]
+    pub cursor_clicks: oneshot::Receiver<Vec<CursorEvent>>,
+    #[serde(skip)]
+    pub stop_signal: Arc<Mutex<bool>>,
 }
 
 unsafe impl Send for InProgressRecording {}
 unsafe impl Sync for InProgressRecording {}
 
+pub struct CompletedRecording {
+    pub recording_dir: PathBuf,
+    pub display_output_path: PathBuf,
+    pub camera_output_path: Option<PathBuf>,
+    pub audio_output_path: Option<PathBuf>,
+    pub display_source: ScreenCaptureTarget,
+    pub segments: Vec<f64>,
+}
+
 impl InProgressRecording {
-    pub async fn stop(&mut self) {
+    pub async fn stop(mut self) -> CompletedRecording {
         use cap_project::*;
+
         let meta = RecordingMeta {
             project_path: self.recording_dir.clone(),
             sharing: None,
@@ -115,6 +120,7 @@ impl InProgressRecording {
 
                 segments
             },
+            cursor: Some(PathBuf::from("cursor.json")),
         };
 
         // Signal the mouse event tracking to stop
@@ -122,22 +128,32 @@ impl InProgressRecording {
             eprintln!("Error while stopping recording: {error}");
         }
 
-        // if flags::RECORD_MOUSE {
-        //     // Save mouse events to files
-        //     let mouse_moves_path = self.recording_dir.join("mousemoves.json");
-        //     let mouse_clicks_path = self.recording_dir.join("mouseclicks.json");
+        *self.stop_signal.lock().await = true;
 
-        //     let mouse_moves = self.mouse_moves.lock().unwrap();
-        //     let mouse_clicks = self.mouse_clicks.lock().unwrap();
+        if flags::RECORD_MOUSE {
+            // Save mouse events to files
 
-        //     let mut mouse_moves_file = File::create(mouse_moves_path).unwrap();
-        //     let mut mouse_clicks_file = File::create(mouse_clicks_path).unwrap();
-
-        //     serde_json::to_writer(&mut mouse_moves_file, &*mouse_moves).unwrap();
-        //     serde_json::to_writer(&mut mouse_clicks_file, &*mouse_clicks).unwrap();
-        // }
+            let mut file = File::create(self.recording_dir.join("cursor.json")).unwrap();
+            serde_json::to_writer(
+                &mut file,
+                &CursorData {
+                    clicks: self.cursor_moves.await.unwrap(),
+                    moves: self.cursor_clicks.await.unwrap(),
+                },
+            )
+            .unwrap();
+        }
 
         meta.save_for_project();
+
+        CompletedRecording {
+            recording_dir: self.recording_dir,
+            display_output_path: self.display_output_path,
+            camera_output_path: self.camera_output_path,
+            audio_output_path: self.audio_output_path,
+            display_source: self.display_source,
+            segments: self.segments,
+        }
     }
 
     pub async fn stop_and_discard(&mut self) {
@@ -232,55 +248,60 @@ pub async fn start(
     let mut pipeline = pipeline_builder.build().await?;
     pipeline.play().await?;
 
-    // Initialize mouse event tracking
-    // let mouse_moves = Arc::new(Mutex::new(Vec::new()));
-    // let mouse_clicks = Arc::new(Mutex::new(Vec::new()));
-    // let stop_signal = Arc::new(Mutex::new(false));
+    let stop_signal = Arc::new(Mutex::new(false));
 
-    // Start mouse event tracking
-    // let mouse_moves_clone = Arc::clone(&mouse_moves);
-    // let mouse_clicks_clone = Arc::clone(&mouse_clicks);
-    // let stop_signal_clone = Arc::clone(&stop_signal);
-    // tokio::spawn(async move {
-    //     let device_state = DeviceState::new();
-    //     let mut last_mouse_state = device_state.get_mouse();
-    //     let start_time = Instant::now();
+    let (mouse_moves, mouse_clicks) = {
+        let (move_tx, move_rx) = oneshot::channel();
+        let (click_tx, click_rx) = oneshot::channel();
 
-    //     while !*stop_signal_clone.lock().unwrap() {
-    //         let mouse_state = device_state.get_mouse();
-    //         let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
-    //         let unix_time = chrono::Utc::now().timestamp_millis() as f64;
+        let stop_signal = stop_signal.clone();
+        tokio::spawn(async move {
+            let device_state = DeviceState::new();
+            let mut last_mouse_state = device_state.get_mouse();
+            let start_time = Instant::now();
 
-    //         if mouse_state.coords != last_mouse_state.coords {
-    //             let mouse_event = MouseEvent {
-    //                 active_modifiers: vec![],
-    //                 cursor_id: get_cursor_id(),
-    //                 process_time_ms: elapsed,
-    //                 event_type: "mouseMoved".to_string(),
-    //                 unix_time_ms: unix_time,
-    //                 x: mouse_state.coords.0 as f64,
-    //                 y: mouse_state.coords.1 as f64,
-    //             };
-    //             mouse_moves_clone.lock().unwrap().push(mouse_event);
-    //         }
+            let mut moves = vec![];
+            let mut clicks = vec![];
 
-    //         if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
-    //             let mouse_event = MouseEvent {
-    //                 active_modifiers: vec![],
-    //                 cursor_id: get_cursor_id(),
-    //                 process_time_ms: elapsed,
-    //                 event_type: "mouseClicked".to_string(),
-    //                 unix_time_ms: unix_time,
-    //                 x: mouse_state.coords.0 as f64,
-    //                 y: mouse_state.coords.1 as f64,
-    //             };
-    //             mouse_clicks_clone.lock().unwrap().push(mouse_event);
-    //         }
+            while !*stop_signal.lock().await {
+                let mouse_state = device_state.get_mouse();
+                let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+                let unix_time = chrono::Utc::now().timestamp_millis() as f64;
 
-    //         last_mouse_state = mouse_state;
-    //         tokio::time::sleep(Duration::from_millis(10)).await;
-    //     }
-    // });
+                if mouse_state.coords != last_mouse_state.coords {
+                    let mouse_event = CursorEvent {
+                        active_modifiers: vec![],
+                        cursor_id: get_cursor_id(),
+                        process_time_ms: elapsed,
+                        unix_time_ms: unix_time,
+                        x: mouse_state.coords.0 as f64,
+                        y: mouse_state.coords.1 as f64,
+                    };
+                    moves.push(mouse_event);
+                }
+
+                if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
+                    let mouse_event = CursorEvent {
+                        active_modifiers: vec![],
+                        cursor_id: get_cursor_id(),
+                        process_time_ms: elapsed,
+                        unix_time_ms: unix_time,
+                        x: mouse_state.coords.0 as f64,
+                        y: mouse_state.coords.1 as f64,
+                    };
+                    clicks.push(mouse_event);
+                }
+
+                last_mouse_state = mouse_state;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+
+            move_tx.send(moves).unwrap();
+            click_tx.send(clicks).unwrap();
+        });
+
+        (move_rx, click_rx)
+    };
 
     Ok(InProgressRecording {
         segments: vec![SystemTime::now()
@@ -293,9 +314,9 @@ pub async fn start(
         display_output_path,
         audio_output_path,
         camera_output_path,
-        // mouse_moves,
-        // mouse_clicks,
-        // stop_signal,
+        cursor_moves: mouse_moves,
+        cursor_clicks: mouse_clicks,
+        stop_signal,
     })
 }
 

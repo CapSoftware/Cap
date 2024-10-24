@@ -5,12 +5,13 @@ use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use cap_project::{
-    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, ProjectConfiguration, XY,
+    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorData,
+    ProjectConfiguration, XY,
 };
 
 use std::time::Instant;
@@ -343,14 +344,39 @@ impl ProjectUniforms {
                 [padding, target_offset[1]]
             };
 
+            // pre-zoom
             let target_bounds = [
                 target_start[0],
                 target_start[1],
                 output_size[0] - target_start[0],
                 output_size[1] - target_start[1],
             ];
+            let target_size = [
+                target_bounds[2] - target_bounds[0],
+                target_bounds[3] - target_bounds[1],
+            ];
 
-            let target_size = [target_bounds[2] - target_bounds[0], target_size[1]];
+            let scale = 1.0;
+            let scale_origin = (0.0, 0.0);
+
+            let screen_scale_origin = (
+                target_bounds[0] + target_size[0] * (scale_origin.0 / size[0]),
+                target_bounds[1] + target_size[1] * (scale_origin.1 / size[1]),
+            );
+
+            let apply_scale = |val, offset| (val - offset) * scale as f32 + offset;
+
+            // post-zoom
+            let target_bounds = [
+                apply_scale(target_bounds[0], screen_scale_origin.0),
+                apply_scale(target_bounds[1], screen_scale_origin.1),
+                apply_scale(target_bounds[2], screen_scale_origin.0),
+                apply_scale(target_bounds[3], screen_scale_origin.1),
+            ];
+            let target_size = [
+                target_bounds[2] - target_bounds[0],
+                target_bounds[3] - target_bounds[1],
+            ];
             let min_target_axis = target_size[0].min(target_size[1]);
 
             CompositeVideoFrameUniforms {
@@ -484,6 +510,7 @@ pub async fn produce_frame(
 
     let mut output_is_left = true;
 
+    // background
     {
         do_render_pass(
             &mut encoder,
@@ -498,6 +525,7 @@ pub async fn produce_frame(
         output_is_left = !output_is_left;
     }
 
+    // display
     {
         let frame_size = options.screen_size;
 
@@ -557,6 +585,7 @@ pub async fn produce_frame(
         output_is_left = !output_is_left;
     }
 
+    // camera
     if let (Some(camera_size), Some(camera_frame), Some(uniforms)) =
         (options.camera_size, camera_frame, &uniforms.camera)
     {
