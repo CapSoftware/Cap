@@ -103,7 +103,8 @@ impl CapWindow {
                         .maximized(false)
                         .accept_first_mouse(true)
                         .transparent(true)
-                        .theme(Some(tauri::Theme::Light));
+                        .theme(Some(tauri::Theme::Light))
+                        .shadow(true);
 
                 #[cfg(target_os = "macos")]
                 {
@@ -179,6 +180,7 @@ impl CapWindow {
                 .visible_on_all_workspaces(true)
                 .min_inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
                 .inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
+                .skip_taskbar(true)
                 .position(
                     100.0,
                     (monitor.size().height as f64) / monitor.scale_factor() - WINDOW_SIZE - 100.0,
@@ -210,6 +212,7 @@ impl CapWindow {
                 .always_on_top(true)
                 .visible_on_all_workspaces(true)
                 .content_protected(true)
+                .skip_taskbar(true)
                 .inner_size(
                     (monitor.size().width as f64) / monitor.scale_factor(),
                     (monitor.size().height as f64) / monitor.scale_factor(),
@@ -220,6 +223,7 @@ impl CapWindow {
                 let window = window_builder.build()?;
 
                 window.set_ignore_cursor_events(true).unwrap();
+                window.open_devtools();
 
                 #[cfg(target_os = "macos")]
                 {
@@ -235,7 +239,7 @@ impl CapWindow {
                 let width = 160.0;
                 let height = 40.0;
 
-                let window = WebviewWindow::builder(
+                let mut window_builder = WebviewWindow::builder(
                     app,
                     label,
                     tauri::WebviewUrl::App("/in-progress-recording".into()),
@@ -245,19 +249,25 @@ impl CapWindow {
                 .resizable(false)
                 .fullscreen(false)
                 .decorations(false)
-                .shadow(true)
                 .always_on_top(true)
                 .transparent(true)
                 .visible_on_all_workspaces(true)
                 .content_protected(true)
                 .accept_first_mouse(true)
                 .inner_size(width, height)
+                .skip_taskbar(true)
                 .position(
                     ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
                     (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                 )
-                .visible(false)
-                .build()?;
+                .visible(false);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder.shadow(true);
+                }
+
+                let window = window_builder.build()?;
 
                 window
             }
@@ -314,6 +324,8 @@ impl CapWindow {
                 window
             }
             Self::Editor { project_id } => {
+                println!("Trying to open editor for ProjectID: {project_id}");
+
                 let mut window_builder = WebviewWindow::builder(
                     app,
                     label,
@@ -356,6 +368,11 @@ impl CapWindow {
                         .title_bar_style(tauri::TitleBarStyle::Overlay);
                 }
 
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.decorations(false);
+                }
+
                 let window = window_builder.build()?;
 
                 #[cfg(target_os = "macos")]
@@ -379,6 +396,11 @@ impl CapWindow {
                     window_builder = window_builder
                         .hidden_title(true)
                         .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.decorations(false);
                 }
 
                 let window = window_builder.build()?;
@@ -429,6 +451,11 @@ impl CapWindow {
                     window_builder = window_builder
                         .hidden_title(true)
                         .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.decorations(false);
                 }
 
                 let window = window_builder.build()?;

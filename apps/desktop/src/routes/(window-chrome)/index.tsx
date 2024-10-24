@@ -42,7 +42,7 @@ import {
 
 const getAuth = cache(async () => {
   const value = await authStore.get();
-  if (!value) return redirect("/signin");
+  if (!value && !import.meta.env.VITE_LOCAL_MODE) return redirect("/signin");
   return value;
 }, "getAuth");
 

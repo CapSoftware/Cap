@@ -15,11 +15,11 @@ mod upload;
 mod web_api;
 mod windows;
 
-use cap_media::sources::CaptureScreen;
 use audio::AppSounds;
 use auth::AuthStore;
 use cap_editor::{AudioData, EditorState, ProjectRecordings};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
+use cap_media::sources::CaptureScreen;
 use cap_media::{
     feeds::{CameraFeed, CameraFrameSender},
     platform::Bounds,
@@ -36,7 +36,9 @@ use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use png::{ColorType, Encoder};
-use recording::{list_cameras, list_capture_windows, list_capture_screens, InProgressRecording, FPS};
+use recording::{
+    list_cameras, list_capture_screens, list_capture_windows, InProgressRecording, FPS,
+};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -436,7 +438,8 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     // Create thumbnail
     let thumbnail = current_recording
         .recording_dir
-        .join("screenshots/thumbnail.png");
+        .join("screenshots")
+        .join("thumbnail.png");
     create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
 
     let recording_dir = current_recording.recording_dir.clone();
@@ -742,7 +745,10 @@ async fn get_rendered_video_impl(
     editor_instance: Arc<EditorInstance>,
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
-    let output_path = editor_instance.project_path.join("output/result.mp4");
+    let output_path = editor_instance
+        .project_path
+        .join("output")
+        .join("result.mp4");
 
     if !output_path.exists() {
         render_to_file_impl(&editor_instance, project, output_path.clone(), |_| {}).await?;
@@ -1067,7 +1073,7 @@ async fn render_to_file_impl(
     ffmpeg_handle.await.ok();
 
     println!("Copying file to {:?}", recording_dir);
-    let result_path = recording_dir.join("output/result.mp4");
+    let result_path = recording_dir.join("output").join("result.mp4");
     // Function to check if the file is a valid MP4
     fn is_valid_mp4(path: &std::path::Path) -> bool {
         if let Ok(file) = std::fs::File::open(path) {
@@ -1261,6 +1267,8 @@ async fn get_video_metadata(
     let screen_video_path = video_dir.join("content").join("display.mp4");
     let output_video_path = video_dir.join("output").join("result.mp4");
 
+    println!("video_dir: {:?} \n video_id: {:?}", video_dir, video_id);
+
     let video_path = match video_type {
         Some(VideoType::Screen) => {
             println!("Using screen video path: {:?}", screen_video_path);
@@ -1273,8 +1281,8 @@ async fn get_video_metadata(
             screen_video_path
         }
         Some(VideoType::Output) | None => {
+            println!("Using output video path: {:?}", output_video_path);
             if output_video_path.exists() {
-                println!("Using output video path: {:?}", output_video_path);
                 output_video_path
             } else {
                 println!(
@@ -1394,7 +1402,7 @@ fn show_previous_recordings_window(app: AppHandle) {
             };
 
             let window_position = window.outer_position().unwrap();
-            let mouse_position = window.cursor_position().unwrap();
+            let mouse_position = window.cursor_position().unwrap(); // TODO(Ilya): Panics on Windows
             let scale_factor = window.scale_factor().unwrap();
 
             let mut ignore = true;
@@ -2396,7 +2404,10 @@ pub async fn run() {
                 camera_ws_port,
                 camera_feed: None,
                 start_recording_options: RecordingOptions {
-                    capture_target: ScreenCaptureTarget::Screen(CaptureScreen { id: 1, name: "Default".to_string() }),
+                    capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
+                        id: 1,
+                        name: "Default".to_string(),
+                    }),
                     camera_label: None,
                     audio_input_name: None,
                 },
