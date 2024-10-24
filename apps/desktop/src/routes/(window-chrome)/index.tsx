@@ -1,4 +1,4 @@
-import { Button, SwitchTab } from "@cap/ui-solid";
+import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 import { createMutation, createQuery } from "@tanstack/solid-query";
