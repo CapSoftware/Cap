@@ -149,6 +149,13 @@ fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
 
     let index = info.index().clone();
 
+    #[cfg(target_os = "macos")]
+    {
+        let device = nokhwa_bindings_macos::AVCaptureDevice::new(&index).unwrap();
+        let formats = device.supported_formats()?;
+        dbg!(formats);
+    }
+
     Ok(Camera::new(index, format)?)
 }
 
