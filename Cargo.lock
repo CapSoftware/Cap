@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.0-beta.5.7.4"
+version = "0.3.0-beta.5.8"
 dependencies = [
  "anyhow",
  "axum",
