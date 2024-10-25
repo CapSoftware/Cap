@@ -54,7 +54,6 @@ use std::{
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
 use tauri_nspanel::ManagerExt;
-use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::task;
@@ -235,6 +234,12 @@ pub struct RequestStopRecording;
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenSettings {
     page: String,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct NewNotification {
+    title: String,
+    body: String,
 }
 
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
@@ -1201,6 +1206,11 @@ async fn copy_rendered_video_to_clipboard(
 
     println!("Copying to clipboard: {:?}", output_path_str);
 
+    notifications::send_notification(
+        &app,
+        notifications::NotificationType::VideoCopiedToClipboard,
+    );
+
     #[cfg(target_os = "macos")]
     {
         use cocoa::appkit::NSPasteboard;
@@ -1357,6 +1367,17 @@ async fn remove_fake_window(
     }
 
     Ok(())
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+fn show_notifications_window(app: AppHandle) {
+    if app.get_webview_window("notifications").is_some() {
+        println!("notifications window already exists");
+        return;
+    }
+
+    CapWindow::Notifications.show(&app).unwrap();
 }
 
 #[tauri::command(async)]
@@ -2247,6 +2268,7 @@ pub async fn run() {
             list_capture_screens,
             list_audio_devices,
             show_previous_recordings_window,
+            show_notifications_window,
             close_previous_recordings_window,
             set_fake_window_bounds,
             remove_fake_window,
@@ -2305,6 +2327,7 @@ pub async fn run() {
             RequestStopRecording,
             RequestNewScreenshot,
             RequestOpenSettings,
+            NewNotification
         ])
         .ty::<ProjectConfiguration>()
         .ty::<AuthStore>()
@@ -2333,7 +2356,6 @@ pub async fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_notification::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
@@ -2341,18 +2363,6 @@ pub async fn run() {
             general_settings::init(app.handle());
 
             let app_handle = app.handle().clone();
-
-            #[cfg(target_os = "macos")]
-            {
-                use tauri_plugin_notification::NotificationExt;
-
-                let notification_permission = app.notification().permission_state().unwrap();
-                if notification_permission != PermissionState::Granted {
-                    app.notification()
-                        .request_permission()
-                        .expect("failed to request notification permission");
-                }
-            }
 
             if permissions::do_permissions_check(true).necessary_granted() {
                 open_main_window(app_handle.clone());

@@ -6,6 +6,7 @@ pub enum CapWindow {
     Editor { project_id: String },
     Permissions,
     PrevRecordings,
+    Notifications,
     WindowCaptureOccluder,
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
@@ -23,6 +24,7 @@ impl CapWindow {
             "window-capture-occluder" => Self::WindowCaptureOccluder,
             "in-progress-recording" => Self::InProgressRecording { position: None },
             "prev-recordings" => Self::PrevRecordings,
+            "notifications" => Self::Notifications,
             "permissions" => Self::Permissions,
             "feedback" => Self::Feedback,
             "upgrade" => Self::Upgrade,
@@ -42,6 +44,7 @@ impl CapWindow {
             Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
             Self::InProgressRecording { .. } => "in-progress-recording".to_string(),
             Self::PrevRecordings => "prev-recordings".to_string(),
+            Self::Notifications => "notifications".to_string(),
             Self::Editor { project_id } => format!("editor-{}", project_id),
             Self::Permissions => "permissions".to_string(),
             Self::Feedback => "feedback".to_string(),
@@ -56,6 +59,7 @@ impl CapWindow {
             Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
             Self::InProgressRecording { .. } => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
+            Self::Notifications => "Cap Notifications".to_string(),
             Self::Permissions => "Cap Permissions".to_string(),
             Self::Changelog => "Cap Changelog".to_string(),
             _ => "Cap".to_string(),
@@ -67,6 +71,7 @@ impl CapWindow {
             CapWindow::Main => true,
             CapWindow::Editor { .. } => true,
             CapWindow::Settings { .. } => true,
+            CapWindow::Notifications => true,
             CapWindow::Permissions => true,
             CapWindow::Feedback => true,
             CapWindow::Upgrade => true,
@@ -239,6 +244,31 @@ impl CapWindow {
                 )
                 .visible(false)
                 .build()?;
+
+                window
+            }
+            Self::Notifications => {
+                let window =
+                    WebviewWindow::builder(app, &label, WebviewUrl::App("/notifications".into()))
+                        .title(self.title())
+                        .maximized(false)
+                        .transparent(true)
+                        .resizable(false)
+                        .fullscreen(false)
+                        .decorations(false)
+                        .shadow(false)
+                        .always_on_top(true)
+                        .visible_on_all_workspaces(true)
+                        .content_protected(true)
+                        .inner_size(350.0, 350.0)
+                        .position(
+                            (monitor.size().width as f64) / monitor.scale_factor() - 350.0,
+                            0.0,
+                        )
+                        .build()?;
+
+                // Make window non-interactive
+                window.set_ignore_cursor_events(true)?;
 
                 window
             }

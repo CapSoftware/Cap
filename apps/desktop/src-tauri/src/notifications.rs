@@ -1,4 +1,5 @@
-use tauri_plugin_notification::NotificationExt;
+use crate::NewNotification;
+use tauri_specta::Event;
 
 pub enum NotificationType {
     VideoSaved,
@@ -50,8 +51,9 @@ pub fn send_notification(app: &tauri::AppHandle, notification_type: Notification
 
     println!("Sending notification: Title: '{}', Body: '{}'", title, body);
 
-    match app.notification().builder().title(title).body(body).show() {
-        Ok(_) => println!("Notification sent successfully"),
-        Err(e) => eprintln!("Failed to send notification: {}", e),
+    let _ = NewNotification {
+        title: title.to_string(),
+        body: body.to_string(),
     }
+    .emit(app);
 }

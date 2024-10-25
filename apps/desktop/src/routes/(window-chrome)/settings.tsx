@@ -1,6 +1,6 @@
 import { A, type RouteSectionProps, useLocation } from "@solidjs/router";
 import { cx } from "cva";
-import { createResource, For } from "solid-js";
+import { createResource, For, createSignal } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { commands } from "~/utils/tauri";
 import { getVersion } from "@tauri-apps/api/app";
@@ -14,6 +14,17 @@ export default function (props: RouteSectionProps) {
 
   const [version] = createResource(async () => getVersion());
   const versionString = () => version() ?? "0";
+
+  const [enableTooltipNotifications, setEnableTooltipNotifications] =
+    createSignal(false);
+
+  const handleToggleNotifications = () => {
+    setEnableTooltipNotifications(!enableTooltipNotifications());
+    commands.setGeneralSettings({
+      ...options.data,
+      enableTooltipNotifications: !enableTooltipNotifications(),
+    });
+  };
 
   return (
     <div class="h-[calc(100vh-3rem)] flex flex-row divide-x divide-gray-200 text-[0.875rem] leading-[1.25rem]">
@@ -63,6 +74,16 @@ export default function (props: RouteSectionProps) {
           <Button onClick={handleSignOut} variant="secondary" class="w-full">
             Sign Out
           </Button>
+          <div>
+            <label>
+              <input
+                type="checkbox"
+                checked={enableTooltipNotifications()}
+                onChange={handleToggleNotifications}
+              />
+              Enable Tooltip Notifications
+            </label>
+          </div>
         </div>
       </div>
       <div class="flex-1 bg-gray-50">{props.children}</div>

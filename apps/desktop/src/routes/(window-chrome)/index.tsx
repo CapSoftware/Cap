@@ -68,6 +68,7 @@ export default function () {
 
   onMount(async () => {
     await commands.showPreviousRecordingsWindow();
+    await commands.showNotificationsWindow();
   });
 
   const isRecording = () => !!currentRecording.data;
@@ -82,7 +83,6 @@ export default function () {
     },
   }));
 
-  // important for sign in redirect, trust me
   createAsync(() => getAuth());
 
   createUpdateCheck();

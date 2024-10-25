@@ -356,7 +356,7 @@ impl ProjectUniforms {
                 target_bounds[3] - target_bounds[1],
             ];
 
-            let scale = 1.0;
+            let scale = 2.0;
             let scale_origin = (0.0, 0.0);
 
             let screen_scale_origin = (

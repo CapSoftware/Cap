@@ -27,7 +27,6 @@
     "store:default",
     "process:default",
     "oauth:allow-start",
-    "updater:default",
-    "notification:default"
+    "updater:default"
   ]
 }
