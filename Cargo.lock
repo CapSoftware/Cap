@@ -1473,6 +1473,7 @@ version = "0.3.0-beta.5.8"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "bytemuck",
  "cap-editor",
  "cap-ffmpeg",

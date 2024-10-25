@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Clone, Type, Debug)]
 pub struct CursorEvent {
@@ -15,4 +16,5 @@ pub struct CursorEvent {
 pub struct CursorData {
     pub clicks: Vec<CursorEvent>,
     pub moves: Vec<CursorEvent>,
+    pub cursor_images: HashMap<String, String>,
 }

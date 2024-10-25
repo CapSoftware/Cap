@@ -367,10 +367,7 @@ impl ProjectUniforms {
             ];
 
             let (zoom, zoom_origin_uv) = if let Some(cursor_position) = cursor_position {
-                (
-                    1.0,
-                    (cursor_position.0 as f32, cursor_position.1 as f32),
-                )
+                (1.5, (cursor_position.0 as f32, cursor_position.1 as f32))
             } else {
                 (1.0, (0.0, 0.0))
             };
@@ -1098,8 +1095,8 @@ impl AsyncVideoDecoderHandle {
     }
 }
 
-fn interpolate_cursor_position(cursor: &CursorData, time_secs: f32) -> Option<(f64, d64)> {
-	let time_ms = (time_secs * 1000.0) as f64;
+fn interpolate_cursor_position(cursor: &CursorData, time_secs: f32) -> Option<(f64, f64)> {
+    let time_ms = (time_secs * 1000.0) as f64;
 
     let cursor_position = if cursor.moves.len() == 0 {
         None
@@ -1129,5 +1126,7 @@ fn interpolate_cursor_position(cursor: &CursorData, time_secs: f32) -> Option<(f
         };
 
         Some((x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
-    }
+    };
+
+    cursor_position
 }
