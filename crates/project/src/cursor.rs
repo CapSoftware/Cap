@@ -11,7 +11,7 @@ pub struct CursorEvent {
     pub y: f64,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, Debug)]
 pub struct CursorData {
     pub clicks: Vec<CursorEvent>,
     pub moves: Vec<CursorEvent>,

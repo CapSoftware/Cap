@@ -111,8 +111,9 @@ pub async fn render_video_to_channel(
     project: ProjectConfiguration,
     sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     decoders: RecordingDecoders,
+    cursor: Arc<CursorData>,
 ) -> Result<(), String> {
-    let constants = RenderVideoConstants::new(options).await?;
+    let constants = RenderVideoConstants::new(options, cursor).await?;
 
     println!("Setting up FFmpeg input for screen recording...");
 
@@ -125,7 +126,6 @@ pub async fn render_video_to_channel(
     let render_handle: tokio::task::JoinHandle<Result<u32, String>> = tokio::spawn(async move {
         let mut frame_number = 0;
 
-        let uniforms = ProjectUniforms::new(&constants, &project);
         let background = Background::from(project.background.source.clone());
 
         loop {
@@ -141,6 +141,8 @@ pub async fn render_video_to_channel(
             } else {
                 frame_number as f64 / 30_f64
             };
+
+            let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
 
             let Some((screen_frame, camera_frame)) =
                 decoders.get_frames((time * 30.0) as u32).await
@@ -205,10 +207,11 @@ pub struct RenderVideoConstants {
     pub options: RenderOptions,
     composite_video_frame_pipeline: CompositeVideoFramePipeline,
     gradient_or_color_pipeline: GradientOrColorPipeline,
+    pub cursor: Arc<CursorData>,
 }
 
 impl RenderVideoConstants {
-    pub async fn new(options: RenderOptions) -> Result<Self, String> {
+    pub async fn new(options: RenderOptions, cursor: Arc<CursorData>) -> Result<Self, String> {
         println!("Initializing wgpu...");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let adapter = instance
@@ -228,6 +231,7 @@ impl RenderVideoConstants {
             queue,
             device,
             options,
+            cursor,
         })
     }
 }
@@ -295,10 +299,16 @@ impl ProjectUniforms {
         ((width + 1) & !1, (height + 1) & !1)
     }
 
-    pub fn new(constants: &RenderVideoConstants, project: &ProjectConfiguration) -> Self {
+    pub fn new(
+        constants: &RenderVideoConstants,
+        project: &ProjectConfiguration,
+        time: f32,
+    ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project);
         let output_aspect = output_size.0 as f32 / output_size.1 as f32;
+
+        let cursor_position = interpolate_cursor_position(&constants.cursor, time);
 
         let display = {
             let output_size = [output_size.0 as f32, output_size.1 as f32];
@@ -356,15 +366,21 @@ impl ProjectUniforms {
                 target_bounds[3] - target_bounds[1],
             ];
 
-            let scale = 2.0;
-            let scale_origin = (0.0, 0.0);
+            let (zoom, zoom_origin_uv) = if let Some(cursor_position) = cursor_position {
+                (
+                    1.0,
+                    (cursor_position.0 as f32, cursor_position.1 as f32),
+                )
+            } else {
+                (1.0, (0.0, 0.0))
+            };
 
             let screen_scale_origin = (
-                target_bounds[0] + target_size[0] * (scale_origin.0 / size[0]),
-                target_bounds[1] + target_size[1] * (scale_origin.1 / size[1]),
+                target_bounds[0] + target_size[0] * zoom_origin_uv.0,
+                target_bounds[1] + target_size[1] * zoom_origin_uv.1,
             );
 
-            let apply_scale = |val, offset| (val - offset) * scale as f32 + offset;
+            let apply_scale = |val, offset| (val - offset) * zoom as f32 + offset;
 
             // post-zoom
             let target_bounds = [
@@ -1079,5 +1095,39 @@ impl AsyncVideoDecoderHandle {
         // This might involve sending a stop signal to a running task
         // or cleaning up resources
         println!("Video decoder stopped");
+    }
+}
+
+fn interpolate_cursor_position(cursor: &CursorData, time_secs: f32) -> Option<(f64, d64)> {
+	let time_ms = (time_secs * 1000.0) as f64;
+
+    let cursor_position = if cursor.moves.len() == 0 {
+        None
+    } else {
+        let moves = &cursor.moves;
+
+        let mut position = 0;
+
+        for (i, m) in moves.iter().enumerate() {
+            if m.process_time_ms < time_ms && m.process_time_ms > moves[position].process_time_ms {
+                position = i;
+            }
+        }
+
+        let m = &moves[position];
+        let next = moves.get(position + 1);
+
+        let (x, y) = if let Some(next) = next {
+            let delta = next.process_time_ms - m.process_time_ms;
+            let progress = (time_ms - m.process_time_ms) / delta;
+            (
+                m.x + (next.x - m.x) * progress,
+                m.y + (next.y - m.y) * progress,
+            )
+        } else {
+            (m.x, m.y)
+        };
+
+        Some((x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
     }
 }

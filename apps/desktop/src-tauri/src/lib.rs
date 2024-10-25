@@ -1055,7 +1055,14 @@ async fn render_to_file_impl(
 
     println!("Rendering video to channel");
 
-    cap_rendering::render_video_to_channel(options, project, tx_image_data, decoders).await?;
+    cap_rendering::render_video_to_channel(
+        options,
+        project,
+        tx_image_data,
+        decoders,
+        editor_instance.cursor.clone(),
+    )
+    .await?;
 
     ffmpeg_handle.await.ok();
 

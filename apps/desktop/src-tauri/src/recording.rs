@@ -137,8 +137,8 @@ impl InProgressRecording {
             serde_json::to_writer(
                 &mut file,
                 &CursorData {
-                    clicks: self.cursor_moves.await.unwrap(),
-                    moves: self.cursor_clicks.await.unwrap(),
+                    clicks: self.cursor_clicks.await.unwrap(),
+                    moves: self.cursor_moves.await.unwrap(),
                 },
             )
             .unwrap();
@@ -198,6 +198,8 @@ pub async fn start(
     let screen_source =
         ScreenCaptureSource::init(dbg!(&recording_options.capture_target), None, None);
     let screen_config = screen_source.info();
+    let screen_bounds = screen_source.bounds.clone();
+
     let output_config = screen_config.scaled(1920, 30);
     let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
     let screen_encoder = H264Encoder::init(
@@ -274,8 +276,8 @@ pub async fn start(
                         cursor_id: get_cursor_id(),
                         process_time_ms: elapsed,
                         unix_time_ms: unix_time,
-                        x: mouse_state.coords.0 as f64,
-                        y: mouse_state.coords.1 as f64,
+                        x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,
+                        y: (mouse_state.coords.1 as f64 - screen_bounds.y) / screen_bounds.height,
                     };
                     moves.push(mouse_event);
                 }
@@ -286,8 +288,8 @@ pub async fn start(
                         cursor_id: get_cursor_id(),
                         process_time_ms: elapsed,
                         unix_time_ms: unix_time,
-                        x: mouse_state.coords.0 as f64,
-                        y: mouse_state.coords.1 as f64,
+                        x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,
+                        y: (mouse_state.coords.1 as f64 - screen_bounds.y) / screen_bounds.height,
                     };
                     clicks.push(mouse_event);
                 }

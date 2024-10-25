@@ -107,7 +107,13 @@ impl EditorInstance {
 
         let (ws_port, ws_shutdown) = create_frames_ws(frame_rx).await;
 
-        let render_constants = Arc::new(RenderVideoConstants::new(render_options).await.unwrap());
+        let cursor = Arc::new(meta.cursor_data());
+
+        let render_constants = Arc::new(
+            RenderVideoConstants::new(render_options, cursor.clone())
+                .await
+                .unwrap(),
+        );
 
         let renderer = Arc::new(editor::Renderer::spawn(render_constants.clone(), frame_tx));
 
@@ -122,7 +128,7 @@ impl EditorInstance {
             renderer,
             render_constants,
             audio: Arc::new(StdMutex::new(audio)),
-            cursor: Arc::new(meta.cursor_data()),
+            cursor,
             state: Arc::new(Mutex::new(EditorState {
                 playhead_position: 0,
                 playback_task: None,
@@ -279,7 +285,7 @@ impl EditorInstance {
                         screen_frame,
                         camera_frame,
                         project.background.source.clone(),
-                        ProjectUniforms::new(&self.render_constants, &project),
+                        ProjectUniforms::new(&self.render_constants, &project, time as f32),
                     )
                     .await;
             }
