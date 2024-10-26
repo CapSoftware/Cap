@@ -482,7 +482,7 @@ impl ProjectUniforms {
             ];
 
             let (zoom, zoom_origin_uv) = if let Some(cursor_position) = cursor_position {
-                (1.5, (cursor_position.0 as f32, cursor_position.1 as f32))
+                (1.0, (cursor_position.0 as f32, cursor_position.1 as f32))
             } else {
                 (1.0, (0.0, 0.0))
             };
