@@ -503,23 +503,26 @@ impl CapWindow {
 fn setup_delegates(window: &WebviewWindow<Wry>, controls_inset: Option<LogicalPosition<f64>>) {
     use crate::platform::delegates;
 
-    delegates::setup(
-        window.as_ref().window(),
-        controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
-    );
+    let target_window = window.clone();
+    window.run_on_main_thread(move || {
+        delegates::setup(
+            target_window.as_ref().window(),
+            controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+        );
 
-    let c_win = window.clone();
-    window.on_window_event(move |event| match event {
-        tauri::WindowEvent::ThemeChanged(..) => {
-            delegates::position_window_controls(
-                delegates::UnsafeWindowHandle(
-                    c_win
-                        .ns_window()
-                        .expect("Failed to get native window handle"),
-                ),
-                &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
-            );
-        }
-        _ => (),
-    });
+        let c_win = target_window.clone();
+        target_window.on_window_event(move |event| match event {
+            tauri::WindowEvent::ThemeChanged(..) => {
+                delegates::position_window_controls(
+                    delegates::UnsafeWindowHandle(
+                        c_win
+                            .ns_window()
+                            .expect("Failed to get native window handle"),
+                    ),
+                    &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+                );
+            }
+            _ => (),
+        });
+    }).ok();
 }

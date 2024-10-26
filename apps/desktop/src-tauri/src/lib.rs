@@ -52,8 +52,6 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
-use tauri_nspanel::ManagerExt;
-use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::task;
@@ -442,9 +440,10 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     .await?;
 
     // Create thumbnail
-    let thumbnail = current_recording
+    let thumbnail = recording
         .recording_dir
-        .join("screenshots/thumbnail.png");
+        .join("screenshots")
+        .join("thumbnail.png");
     create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
 
     let recording_dir = recording.recording_dir.clone();
@@ -927,7 +926,7 @@ async fn render_to_file_impl(
                 let pipe_path = audio_dir.path().join("audio.pipe");
 
                 #[cfg(target_os = "macos")]
-                create_named_pipe(&pipe_path).unwrap();
+                cap_utils::create_named_pipe(&pipe_path).unwrap();
 
                 ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
                     input: pipe_path.clone().into_os_string(),
