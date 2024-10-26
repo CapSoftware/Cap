@@ -119,7 +119,7 @@ unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
     if handle.is_invalid() || handle.0 == 0 {
         tracing::error!("Invalid PID {}", pid);
     }
-    let mut lpexename = vec![0u16; 1024];
+    let mut lpexename = [0u16; 1024];
     let mut lpdwsize = lpexename.len() as u32;
 
     let query = QueryFullProcessImageNameW(
@@ -130,9 +130,8 @@ unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
     );
     CloseHandle(handle).ok();
     query?;
-    lpexename.truncate(lpdwsize as usize);
 
-    let os_str = &OsString::from_wide(&lpexename);
+    let os_str = &OsString::from_wide(&lpexename[..lpdwsize as usize]);
     Ok(PathBuf::from(os_str))
 }
 
@@ -166,9 +165,8 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if wnamelen == 0 {
         return TRUE;
     }
-    let mut wname = vec![0u16; wnamelen as usize + 1];
+    let mut wname = [0u16; 512];
     let len = GetWindowTextW(hwnd, &mut wname);
-    wname.truncate(len as usize);
 
     let owner_process_path = match pid_to_exe_path(process_id) {
         Ok(path) => path,
@@ -201,7 +199,7 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
 
     let window = Window {
         window_id: hwnd.0 as u32,
-        name: String::from_utf16_lossy(&wname),
+        name: String::from_utf16_lossy(&wname[..len as usize]),
         owner_name,
         process_id,
         bounds: Bounds {

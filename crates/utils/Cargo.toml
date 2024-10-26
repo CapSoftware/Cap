@@ -6,5 +6,13 @@ edition = "2021"
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-winapi = "0.3.9"
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58.0", features = [
+  "Win32_Foundation",
+  "Win32_System",
+  "Win32_System_WindowsProgramming",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Pipes",
+  "Win32_System_Diagnostics_Debug",
+] }

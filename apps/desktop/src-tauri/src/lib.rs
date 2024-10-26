@@ -29,7 +29,6 @@ use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
 };
 use cap_rendering::ProjectUniforms;
-use cap_utils::create_named_pipe;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
@@ -899,7 +898,8 @@ async fn render_to_file_impl(
 
             let video_tx = {
                 let pipe_path = video_dir.path().join("video.pipe");
-                create_named_pipe(&pipe_path).unwrap();
+                #[cfg(target_os = "macos")]
+                cap_utils::create_named_pipe(&pipe_path).unwrap();
 
                 ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
                     width: output_size.0,
@@ -926,6 +926,8 @@ async fn render_to_file_impl(
             };
             let audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
                 let pipe_path = audio_dir.path().join("audio.pipe");
+
+                #[cfg(target_os = "macos")]
                 create_named_pipe(&pipe_path).unwrap();
 
                 ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
