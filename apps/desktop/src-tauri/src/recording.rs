@@ -1,8 +1,6 @@
 use crate::flags;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
 use cap_project::CursorEvent;
-use cocoa::base::{id, nil};
-use cocoa::foundation::{NSData, NSUInteger};
 use device_query::{DeviceQuery, DeviceState};
 use serde::Serialize;
 use specta::Type;
@@ -14,6 +12,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, time::Duration};
 use tokio::sync::{oneshot, Mutex};
 
+#[cfg(target_os = "macos")]
+use cocoa::base::{id, nil};
+#[cfg(target_os = "macos")]
+use cocoa::foundation::{NSData, NSUInteger};
 #[cfg(target_os = "macos")]
 use objc::rc::autoreleasepool;
 #[cfg(target_os = "macos")]
@@ -390,6 +392,11 @@ pub async fn start(
         cursor_clicks: mouse_clicks,
         stop_signal,
     })
+}
+
+#[cfg(windows)]
+fn get_cursor_image_data() -> Option<Vec<u8>> {
+    todo!()
 }
 
 #[cfg(target_os = "macos")]

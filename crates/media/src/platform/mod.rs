@@ -19,6 +19,17 @@ pub struct Bounds {
     pub height: f64,
 }
 
+impl Default for Bounds {
+    fn default() -> Self {
+        Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Window {
     pub window_id: u32,
