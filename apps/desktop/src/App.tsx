@@ -12,8 +12,6 @@ export default function App() {
   return (
     <ErrorBoundary
       fallback={(e: Error) => {
-        console.log("An error was caught by the root error boundary");
-        console.log(e);
         return (
           <>
             <p>{e.toString()}</p>

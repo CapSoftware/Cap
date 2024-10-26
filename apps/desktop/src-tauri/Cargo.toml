@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.0-beta.5.7.3"
+version = "0.3.0-beta.5.8"
 description = "Beautiful, shareable screen recordings."
 authors = ["you"]
 edition = "2021"
@@ -29,7 +29,6 @@ tauri-plugin-store = "2.0.0-rc.0"
 tauri-plugin-os = "2.0.0-rc.0"
 tauri-plugin-process = "2.0.0-rc.0"
 tauri-plugin-dialog = "2.0.0-rc.0"
-tauri-plugin-notification = "2.0.0-rc.0"
 tauri-plugin-updater = "2.0.0-rc.0"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
 tauri-plugin-global-shortcut = "2.0.0-rc.0"
@@ -63,6 +62,7 @@ rodio = "0.19.0"
 fast_image_resize = "4.2.1"
 png = "0.17.13"
 device_query = "2.1.0"
+base64 = "0.22.1"
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }

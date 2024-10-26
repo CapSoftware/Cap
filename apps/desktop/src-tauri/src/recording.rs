@@ -1,16 +1,23 @@
 use crate::flags;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
+use cap_project::CursorEvent;
+use cocoa::base::{id, nil};
+use cocoa::foundation::{NSData, NSUInteger};
 use device_query::{DeviceQuery, DeviceState};
-use serde::Deserialize;
 use serde::Serialize;
 use specta::Type;
+use std::collections::HashMap;
+use std::fs::File;
+use std::sync::Arc;
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, time::Duration};
+use tokio::sync::{oneshot, Mutex};
 
 #[cfg(target_os = "macos")]
 use objc::rc::autoreleasepool;
 #[cfg(target_os = "macos")]
-use objc::runtime::{Class, Object, Sel, BOOL, NO, YES};
+use objc::runtime::{Class, Object, Sel, BOOL, YES};
 #[cfg(target_os = "macos")]
 use objc::*;
 
@@ -18,6 +25,13 @@ use crate::RecordingOptions;
 
 // TODO: Hacky, please fix
 pub const FPS: u32 = 30;
+
+#[derive(Serialize)]
+struct CursorData {
+    moves: Vec<CursorEvent>,
+    clicks: Vec<CursorEvent>,
+    cursor_images: HashMap<String, String>, // Maps cursor ID to filename
+}
 
 #[tauri::command(async)]
 #[specta::specta]
@@ -37,17 +51,6 @@ pub fn list_cameras() -> Vec<String> {
     CameraFeed::list_cameras()
 }
 
-#[derive(Serialize, Deserialize, Clone, Type)]
-pub struct MouseEvent {
-    pub active_modifiers: Vec<String>,
-    pub cursor_id: String,
-    pub process_time_ms: f64,
-    pub event_type: String,
-    pub unix_time_ms: f64,
-    pub x: f64,
-    pub y: f64,
-}
-
 #[derive(Type, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InProgressRecording {
@@ -62,18 +65,30 @@ pub struct InProgressRecording {
     pub audio_output_path: Option<PathBuf>,
     pub display_source: ScreenCaptureTarget,
     pub segments: Vec<f64>,
-    // #[serde(skip)]
-    // pub mouse_moves: Arc<Mutex<Vec<MouseEvent>>>,
-    // #[serde(skip)]
-    // pub mouse_clicks: Arc<Mutex<Vec<MouseEvent>>>,
+    #[serde(skip)]
+    pub cursor_moves: oneshot::Receiver<Vec<CursorEvent>>,
+    #[serde(skip)]
+    pub cursor_clicks: oneshot::Receiver<Vec<CursorEvent>>,
+    #[serde(skip)]
+    pub stop_signal: Arc<Mutex<bool>>,
 }
 
 unsafe impl Send for InProgressRecording {}
 unsafe impl Sync for InProgressRecording {}
 
+pub struct CompletedRecording {
+    pub recording_dir: PathBuf,
+    pub display_output_path: PathBuf,
+    pub camera_output_path: Option<PathBuf>,
+    pub audio_output_path: Option<PathBuf>,
+    pub display_source: ScreenCaptureTarget,
+    pub segments: Vec<f64>,
+}
+
 impl InProgressRecording {
-    pub async fn stop(&mut self) {
+    pub async fn stop(mut self) -> CompletedRecording {
         use cap_project::*;
+
         let meta = RecordingMeta {
             project_path: self.recording_dir.clone(),
             sharing: None,
@@ -118,6 +133,7 @@ impl InProgressRecording {
 
                 segments
             },
+            cursor: Some(PathBuf::from("cursor.json")),
         };
 
         // Signal the mouse event tracking to stop
@@ -125,22 +141,32 @@ impl InProgressRecording {
             eprintln!("Error while stopping recording: {error}");
         }
 
-        // if flags::RECORD_MOUSE {
-        //     // Save mouse events to files
-        //     let mouse_moves_path = self.recording_dir.join("mousemoves.json");
-        //     let mouse_clicks_path = self.recording_dir.join("mouseclicks.json");
+        *self.stop_signal.lock().await = true;
 
-        //     let mouse_moves = self.mouse_moves.lock().unwrap();
-        //     let mouse_clicks = self.mouse_clicks.lock().unwrap();
-
-        //     let mut mouse_moves_file = File::create(mouse_moves_path).unwrap();
-        //     let mut mouse_clicks_file = File::create(mouse_clicks_path).unwrap();
-
-        //     serde_json::to_writer(&mut mouse_moves_file, &*mouse_moves).unwrap();
-        //     serde_json::to_writer(&mut mouse_clicks_file, &*mouse_clicks).unwrap();
-        // }
+        if flags::RECORD_MOUSE {
+            // Save mouse events to files
+            let mut file = File::create(self.recording_dir.join("cursor.json")).unwrap();
+            serde_json::to_writer(
+                &mut file,
+                &CursorData {
+                    clicks: self.cursor_clicks.await.unwrap(),
+                    moves: self.cursor_moves.await.unwrap(),
+                    cursor_images: HashMap::new(), // This will be populated during recording
+                },
+            )
+            .unwrap();
+        }
 
         meta.save_for_project();
+
+        CompletedRecording {
+            recording_dir: self.recording_dir,
+            display_output_path: self.display_output_path,
+            camera_output_path: self.camera_output_path,
+            audio_output_path: self.audio_output_path,
+            display_source: self.display_source,
+            segments: self.segments,
+        }
     }
 
     pub async fn stop_and_discard(&mut self) {
@@ -172,8 +198,10 @@ pub async fn start(
     camera_feed: Option<&CameraFeed>,
 ) -> Result<InProgressRecording, MediaError> {
     let content_dir = recording_dir.join("content");
+    let cursors_dir = content_dir.join("cursors");
 
     std::fs::create_dir_all(&content_dir).unwrap();
+    std::fs::create_dir_all(&cursors_dir).unwrap();
 
     let clock = SynchronisedClock::<()>::new();
     let mut pipeline_builder = Pipeline::builder(clock);
@@ -185,6 +213,8 @@ pub async fn start(
     let screen_source =
         ScreenCaptureSource::init(dbg!(&recording_options.capture_target), None, None);
     let screen_config = screen_source.info();
+    let screen_bounds = screen_source.bounds.clone();
+
     let output_config = screen_config.scaled(1920, 30);
     let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
     let screen_encoder = H264Encoder::init(
@@ -235,55 +265,115 @@ pub async fn start(
     let mut pipeline = pipeline_builder.build().await?;
     pipeline.play().await?;
 
-    // Initialize mouse event tracking
-    // let mouse_moves = Arc::new(Mutex::new(Vec::new()));
-    // let mouse_clicks = Arc::new(Mutex::new(Vec::new()));
-    // let stop_signal = Arc::new(Mutex::new(false));
+    let stop_signal = Arc::new(Mutex::new(false));
 
-    // Start mouse event tracking
-    // let mouse_moves_clone = Arc::clone(&mouse_moves);
-    // let mouse_clicks_clone = Arc::clone(&mouse_clicks);
-    // let stop_signal_clone = Arc::clone(&stop_signal);
-    // tokio::spawn(async move {
-    //     let device_state = DeviceState::new();
-    //     let mut last_mouse_state = device_state.get_mouse();
-    //     let start_time = Instant::now();
+    let (mouse_moves, mouse_clicks) = {
+        let (move_tx, move_rx) = oneshot::channel();
+        let (click_tx, click_rx) = oneshot::channel();
 
-    //     while !*stop_signal_clone.lock().unwrap() {
-    //         let mouse_state = device_state.get_mouse();
-    //         let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
-    //         let unix_time = chrono::Utc::now().timestamp_millis() as f64;
+        let stop_signal = stop_signal.clone();
+        let cursors_dir = cursors_dir.clone();
+        tokio::spawn(async move {
+            let device_state = DeviceState::new();
+            let mut last_mouse_state = device_state.get_mouse();
+            let start_time = Instant::now();
 
-    //         if mouse_state.coords != last_mouse_state.coords {
-    //             let mouse_event = MouseEvent {
-    //                 active_modifiers: vec![],
-    //                 cursor_id: get_cursor_id(),
-    //                 process_time_ms: elapsed,
-    //                 event_type: "mouseMoved".to_string(),
-    //                 unix_time_ms: unix_time,
-    //                 x: mouse_state.coords.0 as f64,
-    //                 y: mouse_state.coords.1 as f64,
-    //             };
-    //             mouse_moves_clone.lock().unwrap().push(mouse_event);
-    //         }
+            let mut moves = vec![];
+            let mut clicks = vec![];
+            let mut cursor_images = HashMap::new();
+            let mut seen_cursor_data: HashMap<Vec<u8>, String> = HashMap::new();
+            let mut next_cursor_id = 0;
 
-    //         if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
-    //             let mouse_event = MouseEvent {
-    //                 active_modifiers: vec![],
-    //                 cursor_id: get_cursor_id(),
-    //                 process_time_ms: elapsed,
-    //                 event_type: "mouseClicked".to_string(),
-    //                 unix_time_ms: unix_time,
-    //                 x: mouse_state.coords.0 as f64,
-    //                 y: mouse_state.coords.1 as f64,
-    //             };
-    //             mouse_clicks_clone.lock().unwrap().push(mouse_event);
-    //         }
+            // Create cursors directory if it doesn't exist
+            std::fs::create_dir_all(&cursors_dir).unwrap();
 
-    //         last_mouse_state = mouse_state;
-    //         tokio::time::sleep(Duration::from_millis(10)).await;
-    //     }
-    // });
+            while !*stop_signal.lock().await {
+                let mouse_state = device_state.get_mouse();
+                let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+                let unix_time = chrono::Utc::now().timestamp_millis() as f64;
+
+                let cursor_data = get_cursor_image_data();
+                let cursor_id = if let Some(data) = cursor_data {
+                    // Check if we've seen this cursor data before
+                    if let Some(existing_id) = seen_cursor_data.get(&data) {
+                        existing_id.clone()
+                    } else {
+                        // New cursor data - save it
+                        let cursor_id = next_cursor_id.to_string();
+                        let filename = format!("cursor_{}.png", cursor_id);
+                        let cursor_path = cursors_dir.join(&filename);
+
+                        println!("Saving new cursor image to: {:?}", cursor_path);
+
+                        if let Ok(image) = image::load_from_memory(&data) {
+                            // Convert to RGBA
+                            let rgba_image = image.into_rgba8();
+                            if let Err(e) = rgba_image.save(&cursor_path) {
+                                eprintln!("Failed to save cursor image: {}", e);
+                            } else {
+                                println!("Successfully saved cursor image {}", cursor_id);
+                                cursor_images.insert(cursor_id.clone(), filename.clone());
+                                seen_cursor_data.insert(data, cursor_id.clone());
+                                next_cursor_id += 1;
+                            }
+                        }
+                        cursor_id
+                    }
+                } else {
+                    "default".to_string()
+                };
+
+                if mouse_state.coords != last_mouse_state.coords {
+                    let mouse_event = CursorEvent {
+                        active_modifiers: vec![],
+                        cursor_id: cursor_id.clone(),
+                        process_time_ms: elapsed,
+                        unix_time_ms: unix_time,
+                        x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,
+                        y: (mouse_state.coords.1 as f64 - screen_bounds.y) / screen_bounds.height,
+                    };
+                    moves.push(mouse_event);
+                }
+
+                if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
+                    let mouse_event = CursorEvent {
+                        active_modifiers: vec![],
+                        cursor_id: cursor_id,
+                        process_time_ms: elapsed,
+                        unix_time_ms: unix_time,
+                        x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,
+                        y: (mouse_state.coords.1 as f64 - screen_bounds.y) / screen_bounds.height,
+                    };
+                    clicks.push(mouse_event);
+                }
+
+                last_mouse_state = mouse_state;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+
+            // Save cursor data to cursor.json
+            let cursor_data = CursorData {
+                clicks: clicks.clone(),
+                moves: moves.clone(),
+                cursor_images,
+            };
+
+            let cursor_json_path = content_dir.join("cursor.json");
+            println!("Saving cursor data to: {:?}", cursor_json_path);
+            if let Ok(mut file) = File::create(&cursor_json_path) {
+                if let Err(e) = serde_json::to_writer(&mut file, &cursor_data) {
+                    eprintln!("Failed to save cursor data: {}", e);
+                } else {
+                    println!("Successfully saved cursor data");
+                }
+            }
+
+            move_tx.send(moves).unwrap();
+            click_tx.send(clicks).unwrap();
+        });
+
+        (move_rx, click_rx)
+    };
 
     Ok(InProgressRecording {
         segments: vec![SystemTime::now()
@@ -296,64 +386,50 @@ pub async fn start(
         display_output_path,
         audio_output_path,
         camera_output_path,
-        // mouse_moves,
-        // mouse_clicks,
-        // stop_signal,
+        cursor_moves: mouse_moves,
+        cursor_clicks: mouse_clicks,
+        stop_signal,
     })
 }
 
 #[cfg(target_os = "macos")]
-fn get_cursor_id() -> String {
+fn get_cursor_image_data() -> Option<Vec<u8>> {
     autoreleasepool(|| {
-        // Get the NSCursor class
         let nscursor_class = match Class::get("NSCursor") {
             Some(cls) => cls,
-            None => return "Unknown".to_string(),
+            None => return None,
         };
 
         unsafe {
-            // Get the current cursor
-            let current_cursor: *mut Object = msg_send![nscursor_class, currentSystemCursor];
-            if current_cursor.is_null() {
-                return "Unknown".to_string();
+            // Get the current system cursor
+            let current_cursor: id = msg_send![nscursor_class, currentSystemCursor];
+            if current_cursor == nil {
+                return None;
             }
 
-            // Define an array of known cursor names
-            let cursor_names = [
-                "arrowCursor",
-                "IBeamCursor",
-                "crosshairCursor",
-                "closedHandCursor",
-                "openHandCursor",
-                "pointingHandCursor",
-                "resizeLeftCursor",
-                "resizeRightCursor",
-                "resizeLeftRightCursor",
-                "resizeUpCursor",
-                "resizeDownCursor",
-                "resizeUpDownCursor",
-                "disappearingItemCursor",
-                "IBeamCursorForVerticalLayout",
-                "operationNotAllowedCursor",
-                "dragLinkCursor",
-                "dragCopyCursor",
-                "contextualMenuCursor",
-            ];
-
-            // Iterate through known cursor names
-            for cursor_name in cursor_names.iter() {
-                let sel = Sel::register(cursor_name);
-                let cursor: *mut Object = msg_send![nscursor_class, performSelector:sel];
-                if !cursor.is_null() {
-                    let is_equal: BOOL = msg_send![current_cursor, isEqual:cursor];
-                    if is_equal == YES {
-                        return cursor_name.to_string();
-                    }
-                }
+            // Get the image of the cursor
+            let cursor_image: id = msg_send![current_cursor, image];
+            if cursor_image == nil {
+                return None;
             }
 
-            // If no match is found, return "Unknown"
-            "Unknown".to_string()
+            // Get the TIFF representation of the image
+            let image_data: id = msg_send![cursor_image, TIFFRepresentation];
+            if image_data == nil {
+                return None;
+            }
+
+            // Get the length of the data
+            let length: NSUInteger = msg_send![image_data, length];
+
+            // Get the bytes of the data
+            let bytes: *const u8 = msg_send![image_data, bytes];
+
+            // Copy the data into a Vec<u8>
+            let slice = std::slice::from_raw_parts(bytes, length as usize);
+            let data = slice.to_vec();
+
+            Some(data)
         }
     })
 }

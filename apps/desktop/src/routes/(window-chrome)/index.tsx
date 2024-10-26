@@ -1,4 +1,4 @@
-import { Button, SwitchTab } from "@cap/ui-solid";
+import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 import { createMutation, createQuery } from "@tanstack/solid-query";
@@ -68,6 +68,7 @@ export default function () {
 
   onMount(async () => {
     await commands.showPreviousRecordingsWindow();
+    await commands.showNotificationsWindow();
   });
 
   const isRecording = () => !!currentRecording.data;
@@ -82,7 +83,6 @@ export default function () {
     },
   }));
 
-  // important for sign in redirect, trust me
   createAsync(() => getAuth());
 
   createUpdateCheck();

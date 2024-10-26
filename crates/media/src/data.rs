@@ -22,7 +22,7 @@ pub enum RawAudioFormat {
 pub enum RawVideoFormat {
     Bgra,
     Mjpeg,
-    Yuyv,
+    Uyvy,
     RawRgb,
     Nv12,
     Gray,
@@ -112,7 +112,7 @@ impl VideoInfo {
             pixel_format: match format {
                 RawVideoFormat::Bgra => Pixel::BGRA,
                 RawVideoFormat::Mjpeg => Pixel::YUVJ422P,
-                RawVideoFormat::Yuyv => Pixel::UYVY422,
+                RawVideoFormat::Uyvy => Pixel::UYVY422,
                 RawVideoFormat::RawRgb => Pixel::RGB24,
                 RawVideoFormat::Nv12 => Pixel::NV12,
                 RawVideoFormat::Gray => Pixel::GRAY8,

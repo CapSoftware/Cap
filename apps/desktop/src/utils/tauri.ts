@@ -81,6 +81,9 @@ async listAudioDevices() : Promise<Result<string[], null>> {
 async showPreviousRecordingsWindow() : Promise<void> {
     await TAURI_INVOKE("show_previous_recordings_window");
 },
+async showNotificationsWindow() : Promise<void> {
+    await TAURI_INVOKE("show_notifications_window");
+},
 async closePreviousRecordingsWindow() : Promise<void> {
     await TAURI_INVOKE("close_previous_recordings_window");
 },
@@ -322,6 +325,7 @@ async isCameraWindowOpen() : Promise<boolean> {
 export const events = __makeEvents__<{
 currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
+newNotification: NewNotification,
 newRecordingAdded: NewRecordingAdded,
 newScreenshotAdded: NewScreenshotAdded,
 recordingMetaChanged: RecordingMetaChanged,
@@ -338,6 +342,7 @@ showCapturesPanel: ShowCapturesPanel
 }>({
 currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
+newNotification: "new-notification",
 newRecordingAdded: "new-recording-added",
 newScreenshotAdded: "new-screenshot-added",
 recordingMetaChanged: "recording-meta-changed",
@@ -380,13 +385,14 @@ export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: C
 export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type EditorStateChanged = { playhead_position: number }
-export type GeneralSettingsStore = { upload_individual_files: boolean; open_editor_after_recording: boolean; hide_dock_icon?: boolean; auto_create_shareable_link?: boolean }
+export type GeneralSettingsStore = { upload_individual_files: boolean; open_editor_after_recording: boolean; hide_dock_icon?: boolean; auto_create_shareable_link?: boolean; enable_tooltip_notifications?: boolean }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InProgressRecording = { recordingDir: string; displaySource: ScreenCaptureTarget; segments: number[] }
 export type JsonValue<T> = [T]
+export type NewNotification = { title: string; body: string }
 export type NewRecordingAdded = { path: string }
 export type NewScreenshotAdded = { path: string }
 export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
@@ -396,7 +402,7 @@ export type Plan = { upgraded: boolean; last_checked: number }
 export type PreCreatedVideo = { id: string; link: string; config: S3UploadMeta }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
-export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[] }
+export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[]; cursor: string | null }
 export type RecordingMetaChanged = { id: string }
 export type RecordingOptions = { captureTarget: ScreenCaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null

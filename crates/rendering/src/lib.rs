@@ -5,18 +5,28 @@ use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use cap_project::{
-    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, ProjectConfiguration, XY,
+    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorData, CursorEvent,
+    ProjectConfiguration, XY,
 };
 
 use std::time::Instant;
 
+// Add this import at the top with the other imports
+use std::path::PathBuf;
+
+// Add this import at the top
+use image::GenericImageView;
+
 pub mod decoder;
 pub use decoder::DecodedFrame;
+
+// Add this constant at the top of the file
+const STANDARD_CURSOR_HEIGHT: f32 = 100.0; // Standard height for all cursors
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RenderOptions {
@@ -110,8 +120,10 @@ pub async fn render_video_to_channel(
     project: ProjectConfiguration,
     sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
     decoders: RecordingDecoders,
+    cursor: Arc<CursorData>,
+    project_path: PathBuf, // Add project_path parameter
 ) -> Result<(), String> {
-    let constants = RenderVideoConstants::new(options).await?;
+    let constants = RenderVideoConstants::new(options, cursor, project_path).await?;
 
     println!("Setting up FFmpeg input for screen recording...");
 
@@ -124,7 +136,6 @@ pub async fn render_video_to_channel(
     let render_handle: tokio::task::JoinHandle<Result<u32, String>> = tokio::spawn(async move {
         let mut frame_number = 0;
 
-        let uniforms = ProjectUniforms::new(&constants, &project);
         let background = Background::from(project.background.source.clone());
 
         loop {
@@ -141,6 +152,8 @@ pub async fn render_video_to_channel(
                 frame_number as f64 / 30_f64
             };
 
+            let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
+
             let Some((screen_frame, camera_frame)) =
                 decoders.get_frames((time * 30.0) as u32).await
             else {
@@ -153,6 +166,7 @@ pub async fn render_video_to_channel(
                 &camera_frame,
                 background,
                 &uniforms,
+                time as f32,
             )
             .await
             {
@@ -204,10 +218,17 @@ pub struct RenderVideoConstants {
     pub options: RenderOptions,
     composite_video_frame_pipeline: CompositeVideoFramePipeline,
     gradient_or_color_pipeline: GradientOrColorPipeline,
+    pub cursor: Arc<CursorData>,
+    pub cursor_textures: HashMap<String, wgpu::Texture>,
+    cursor_pipeline: CursorPipeline,
 }
 
 impl RenderVideoConstants {
-    pub async fn new(options: RenderOptions) -> Result<Self, String> {
+    pub async fn new(
+        options: RenderOptions,
+        cursor: Arc<CursorData>,
+        project_path: PathBuf, // Add project_path parameter
+    ) -> Result<Self, String> {
         println!("Initializing wgpu...");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let adapter = instance
@@ -219,6 +240,11 @@ impl RenderVideoConstants {
             .await
             .map_err(|e| e.to_string())?;
 
+        // Pass project_path to load_cursor_textures
+        let cursor_textures = Self::load_cursor_textures(&device, &queue, &cursor, &project_path)?;
+
+        let cursor_pipeline = CursorPipeline::new(&device);
+
         Ok(Self {
             composite_video_frame_pipeline: CompositeVideoFramePipeline::new(&device),
             gradient_or_color_pipeline: GradientOrColorPipeline::new(&device),
@@ -227,7 +253,101 @@ impl RenderVideoConstants {
             queue,
             device,
             options,
+            cursor,
+            cursor_textures,
+            cursor_pipeline,
         })
+    }
+
+    fn load_cursor_textures(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cursor: &CursorData,
+        project_path: &PathBuf, // Add project_path parameter
+    ) -> Result<HashMap<String, wgpu::Texture>, String> {
+        println!("Starting to load cursor textures");
+        println!("Project path: {:?}", project_path);
+        println!("Cursor images to load: {:?}", cursor.cursor_images);
+
+        let mut textures = HashMap::new();
+
+        // Create the full path to the cursors directory
+        let cursors_dir = project_path.join("content").join("cursors");
+        println!("Cursors directory: {:?}", cursors_dir);
+
+        for (cursor_id, filename) in &cursor.cursor_images {
+            println!("Loading cursor image: {} -> {}", cursor_id, filename);
+
+            let cursor_path = cursors_dir.join(filename);
+            println!("Full cursor path: {:?}", cursor_path);
+
+            if !cursor_path.exists() {
+                println!("Cursor image file does not exist: {:?}", cursor_path);
+                continue;
+            }
+
+            match image::open(&cursor_path) {
+                Ok(img) => {
+                    let dimensions = img.dimensions();
+                    println!(
+                        "Loaded cursor image dimensions: {}x{}",
+                        dimensions.0, dimensions.1
+                    );
+
+                    let rgba = img.into_rgba8();
+
+                    // Create the texture
+                    let texture = device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some(&format!("Cursor Texture {}", cursor_id)),
+                        size: wgpu::Extent3d {
+                            width: dimensions.0,
+                            height: dimensions.1,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+
+                    queue.write_texture(
+                        wgpu::ImageCopyTexture {
+                            texture: &texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &rgba,
+                        wgpu::ImageDataLayout {
+                            offset: 0,
+                            bytes_per_row: Some(4 * dimensions.0),
+                            rows_per_image: None,
+                        },
+                        wgpu::Extent3d {
+                            width: dimensions.0,
+                            height: dimensions.1,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+
+                    textures.insert(cursor_id.clone(), texture);
+                    println!("Successfully loaded cursor texture: {}", cursor_id);
+                }
+                Err(e) => {
+                    println!("Failed to load cursor image {}: {}", filename, e);
+                    // Don't return error, just skip this cursor image
+                    continue;
+                }
+            }
+        }
+
+        println!(
+            "Completed loading cursor textures. Total loaded: {}",
+            textures.len()
+        );
+        Ok(textures)
     }
 }
 
@@ -294,10 +414,16 @@ impl ProjectUniforms {
         ((width + 1) & !1, (height + 1) & !1)
     }
 
-    pub fn new(constants: &RenderVideoConstants, project: &ProjectConfiguration) -> Self {
+    pub fn new(
+        constants: &RenderVideoConstants,
+        project: &ProjectConfiguration,
+        time: f32,
+    ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project);
         let output_aspect = output_size.0 as f32 / output_size.1 as f32;
+
+        let cursor_position = interpolate_cursor_position(&constants.cursor, time);
 
         let display = {
             let output_size = [output_size.0 as f32, output_size.1 as f32];
@@ -343,14 +469,42 @@ impl ProjectUniforms {
                 [padding, target_offset[1]]
             };
 
+            // pre-zoom
             let target_bounds = [
                 target_start[0],
                 target_start[1],
                 output_size[0] - target_start[0],
                 output_size[1] - target_start[1],
             ];
+            let target_size = [
+                target_bounds[2] - target_bounds[0],
+                target_bounds[3] - target_bounds[1],
+            ];
 
-            let target_size = [target_bounds[2] - target_bounds[0], target_size[1]];
+            let (zoom, zoom_origin_uv) = if let Some(cursor_position) = cursor_position {
+                (1.0, (cursor_position.0 as f32, cursor_position.1 as f32))
+            } else {
+                (1.0, (0.0, 0.0))
+            };
+
+            let screen_scale_origin = (
+                target_bounds[0] + target_size[0] * zoom_origin_uv.0,
+                target_bounds[1] + target_size[1] * zoom_origin_uv.1,
+            );
+
+            let apply_scale = |val, offset| (val - offset) * zoom as f32 + offset;
+
+            // post-zoom
+            let target_bounds = [
+                apply_scale(target_bounds[0], screen_scale_origin.0),
+                apply_scale(target_bounds[1], screen_scale_origin.1),
+                apply_scale(target_bounds[2], screen_scale_origin.0),
+                apply_scale(target_bounds[3], screen_scale_origin.1),
+            ];
+            let target_size = [
+                target_bounds[2] - target_bounds[0],
+                target_bounds[3] - target_bounds[1],
+            ];
             let min_target_axis = target_size[0].min(target_size[1]);
 
             CompositeVideoFrameUniforms {
@@ -428,20 +582,14 @@ impl ProjectUniforms {
 }
 
 pub async fn produce_frame(
-    RenderVideoConstants {
-        device,
-        options,
-        composite_video_frame_pipeline,
-        gradient_or_color_pipeline,
-        queue,
-        ..
-    }: &RenderVideoConstants,
+    constants: &RenderVideoConstants,
     screen_frame: &Vec<u8>,
     camera_frame: &Option<DecodedFrame>,
     background: Background,
     uniforms: &ProjectUniforms,
+    time: f32,
 ) -> Result<Vec<u8>, String> {
-    let mut encoder = device.create_command_encoder(
+    let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         }),
@@ -465,8 +613,8 @@ pub async fn produce_frame(
     };
 
     let textures = (
-        device.create_texture(&output_texture_desc),
-        device.create_texture(&output_texture_desc),
+        constants.device.create_texture(&output_texture_desc),
+        constants.device.create_texture(&output_texture_desc),
     );
 
     let textures = (&textures.0, &textures.1);
@@ -484,28 +632,31 @@ pub async fn produce_frame(
 
     let mut output_is_left = true;
 
+    // First, clear the background
     {
         do_render_pass(
             &mut encoder,
             get_either(texture_views, output_is_left),
-            &gradient_or_color_pipeline.render_pipeline,
-            gradient_or_color_pipeline.bind_group(
-                device,
-                &GradientOrColorUniforms::from(background).to_buffer(device),
+            &constants.gradient_or_color_pipeline.render_pipeline,
+            constants.gradient_or_color_pipeline.bind_group(
+                &constants.device,
+                &GradientOrColorUniforms::from(background).to_buffer(&constants.device),
             ),
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK), // Clear on first pass
         );
 
         output_is_left = !output_is_left;
     }
 
+    // Then render the screen frame
     {
-        let frame_size = options.screen_size;
+        let frame_size = constants.options.screen_size;
 
-        let texture = device.create_texture(
+        let texture = constants.device.create_texture(
             &(wgpu::TextureDescriptor {
                 size: wgpu::Extent3d {
-                    width: options.screen_size.0,
-                    height: options.screen_size.1,
+                    width: constants.options.screen_size.0,
+                    height: constants.options.screen_size.1,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -522,7 +673,7 @@ pub async fn produce_frame(
 
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        queue.write_texture(
+        constants.queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &texture,
                 mip_level: 0,
@@ -532,7 +683,7 @@ pub async fn produce_frame(
             screen_frame,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(options.screen_size.0 * 4),
+                bytes_per_row: Some(constants.options.screen_size.0 * 4),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
@@ -545,22 +696,26 @@ pub async fn produce_frame(
         do_render_pass(
             &mut encoder,
             get_either(texture_views, output_is_left),
-            &composite_video_frame_pipeline.render_pipeline,
-            composite_video_frame_pipeline.bind_group(
-                device,
-                &uniforms.display.to_buffer(device),
+            &constants.composite_video_frame_pipeline.render_pipeline,
+            constants.composite_video_frame_pipeline.bind_group(
+                &constants.device,
+                &uniforms.display.to_buffer(&constants.device),
                 &texture_view,
                 get_either(texture_views, !output_is_left),
             ),
+            wgpu::LoadOp::Load, // Load existing content
         );
 
         output_is_left = !output_is_left;
     }
 
-    if let (Some(camera_size), Some(camera_frame), Some(uniforms)) =
-        (options.camera_size, camera_frame, &uniforms.camera)
-    {
-        let texture = device.create_texture(
+    // camera
+    if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (
+        constants.options.camera_size,
+        camera_frame,
+        &uniforms.camera,
+    ) {
+        let texture = constants.device.create_texture(
             &(wgpu::TextureDescriptor {
                 size: wgpu::Extent3d {
                     width: camera_size.0,
@@ -581,7 +736,7 @@ pub async fn produce_frame(
 
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        queue.write_texture(
+        constants.queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &texture,
                 mip_level: 0,
@@ -604,19 +759,127 @@ pub async fn produce_frame(
         do_render_pass(
             &mut encoder,
             get_either(texture_views, output_is_left),
-            &composite_video_frame_pipeline.render_pipeline,
-            composite_video_frame_pipeline.bind_group(
-                device,
-                &uniforms.to_buffer(device),
+            &constants.composite_video_frame_pipeline.render_pipeline,
+            constants.composite_video_frame_pipeline.bind_group(
+                &constants.device,
+                &uniforms.to_buffer(&constants.device),
                 &texture_view,
                 get_either(texture_views, !output_is_left),
             ),
+            wgpu::LoadOp::Load, // Load existing content
         );
 
         output_is_left = !output_is_left;
     }
 
-    queue.submit(std::iter::once(encoder.finish()));
+    // Finally, render the cursor directly to the output texture
+    {
+        if let Some(cursor_position) = interpolate_cursor_position(&constants.cursor, time) {
+            println!(
+                "Raw cursor position: ({}, {})",
+                cursor_position.0, cursor_position.1
+            );
+
+            let cursor_event = find_cursor_event(&constants.cursor, time);
+            println!("Found cursor event with ID: {}", cursor_event.cursor_id);
+
+            if let Some(cursor_texture) = constants.cursor_textures.get(&cursor_event.cursor_id) {
+                let cursor_size = cursor_texture.size();
+                let aspect_ratio = cursor_size.width as f32 / cursor_size.height as f32;
+
+                // Calculate normalized size maintaining aspect ratio
+                let normalized_size = [
+                    STANDARD_CURSOR_HEIGHT * aspect_ratio,
+                    STANDARD_CURSOR_HEIGHT,
+                ];
+
+                println!(
+                    "Original cursor size: {}x{}, Normalized size: {}x{}",
+                    cursor_size.width, cursor_size.height, normalized_size[0], normalized_size[1]
+                );
+
+                // Convert normalized cursor position to screen space
+                let screen_x = cursor_position.0 * uniforms.output_size.0 as f64;
+                let screen_y = cursor_position.1 * uniforms.output_size.1 as f64;
+
+                println!("Screen position: ({}, {})", screen_x, screen_y);
+
+                let cursor_uniforms = CursorUniforms {
+                    position: [screen_x as f32, screen_y as f32],
+                    padding1: [0.0; 2],
+                    size: normalized_size, // Use normalized size instead of original size
+                    padding2: [0.0; 2],
+                    output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
+                    padding3: [0.0; 2],
+                    screen_bounds: uniforms.display.target_bounds,
+                };
+
+                println!("Cursor uniforms: {:?}", cursor_uniforms);
+
+                let cursor_uniform_buffer =
+                    constants
+                        .device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Cursor Uniform Buffer"),
+                            contents: bytemuck::cast_slice(&[cursor_uniforms]),
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        });
+
+                let cursor_bind_group =
+                    constants
+                        .device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            layout: &constants.cursor_pipeline.bind_group_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: cursor_uniform_buffer.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::TextureView(
+                                        &cursor_texture
+                                            .create_view(&wgpu::TextureViewDescriptor::default()),
+                                    ),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: wgpu::BindingResource::Sampler(
+                                        &constants
+                                            .device
+                                            .create_sampler(&wgpu::SamplerDescriptor::default()),
+                                    ),
+                                },
+                            ],
+                            label: Some("Cursor Bind Group"),
+                        });
+
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Cursor Render Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: get_either(texture_views, !output_is_left),
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                render_pass.set_pipeline(&constants.cursor_pipeline.render_pipeline);
+                render_pass.set_bind_group(0, &cursor_bind_group, &[]);
+                render_pass.draw(0..4, 0..1);
+
+                println!("Drew cursor");
+            }
+        }
+    }
+
+    // Now submit the encoder
+    constants.queue.submit(std::iter::once(encoder.finish()));
 
     let output_texture_size = wgpu::Extent3d {
         width: uniforms.output_size.0,
@@ -635,17 +898,15 @@ pub async fn produce_frame(
 
     let output_buffer_size = (padded_bytes_per_row * uniforms.output_size.1) as u64;
 
-    let output_buffer = device.create_buffer(
-        &(wgpu::BufferDescriptor {
-            size: output_buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            label: Some("Output Buffer"),
-            mapped_at_creation: false,
-        }),
-    );
+    let output_buffer = constants.device.create_buffer(&wgpu::BufferDescriptor {
+        size: output_buffer_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        label: Some("Output Buffer"),
+        mapped_at_creation: false,
+    });
 
     {
-        let mut encoder = device.create_command_encoder(
+        let mut encoder = constants.device.create_command_encoder(
             &(wgpu::CommandEncoderDescriptor {
                 label: Some("Copy Encoder"),
             }),
@@ -669,7 +930,7 @@ pub async fn produce_frame(
             output_texture_size,
         );
 
-        queue.submit(std::iter::once(encoder.finish()));
+        constants.queue.submit(std::iter::once(encoder.finish()));
     }
 
     let buffer_slice = output_buffer.slice(..);
@@ -677,7 +938,7 @@ pub async fn produce_frame(
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
         tx.send(result).ok();
     });
-    device.poll(wgpu::Maintain::Wait);
+    constants.device.poll(wgpu::Maintain::Wait);
 
     let Some(frame_result) = rx.receive().await else {
         return Err("2: Channel closed unexpectedly".to_string());
@@ -934,11 +1195,13 @@ impl GradientOrColorPipeline {
     }
 }
 
+// Update the do_render_pass function to accept a LoadOp parameter
 fn do_render_pass(
     encoder: &mut wgpu::CommandEncoder,
     output_view: &wgpu::TextureView,
     render_pipeline: &wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
+    load_op: wgpu::LoadOp<wgpu::Color>,
 ) {
     let mut render_pass = encoder.begin_render_pass(
         &(wgpu::RenderPassDescriptor {
@@ -947,7 +1210,7 @@ fn do_render_pass(
                 view: output_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: load_op,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -972,26 +1235,26 @@ fn create_shader_render_pipeline(
         source: wgpu::ShaderSource::Wgsl(wgsl_shader.into()),
     });
 
-    let compilation_options = wgpu::PipelineCompilationOptions {
-        constants: &HashMap::new(),
-        zero_initialize_workgroup_memory: false,
-        vertex_pulling_transform: false,
-    };
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Render Pipeline Layout"),
+        bind_group_layouts: &[bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    let empty_constants: HashMap<String, f64> = HashMap::new();
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
-        layout: Some(&device.create_pipeline_layout(
-            &(wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[bind_group_layout],
-                push_constant_ranges: &[],
-            }),
-        )),
+        layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: "vs_main",
             buffers: &[],
-            compilation_options: compilation_options.clone(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &empty_constants,
+                zero_initialize_workgroup_memory: false,
+                vertex_pulling_transform: false,
+            },
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
@@ -1001,7 +1264,11 @@ fn create_shader_render_pipeline(
                 blend: Some(wgpu::BlendState::REPLACE),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
-            compilation_options,
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &empty_constants,
+                zero_initialize_workgroup_memory: false,
+                vertex_pulling_transform: false,
+            },
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -1050,5 +1317,189 @@ impl AsyncVideoDecoderHandle {
         // This might involve sending a stop signal to a running task
         // or cleaning up resources
         println!("Video decoder stopped");
+    }
+}
+
+fn interpolate_cursor_position(cursor: &CursorData, time_secs: f32) -> Option<(f64, f64)> {
+    let time_ms = (time_secs * 1000.0) as f64;
+
+    let cursor_position = if cursor.moves.len() == 0 {
+        None
+    } else {
+        let moves = &cursor.moves;
+
+        let mut position = 0;
+
+        for (i, m) in moves.iter().enumerate() {
+            if m.process_time_ms < time_ms && m.process_time_ms > moves[position].process_time_ms {
+                position = i;
+            }
+        }
+
+        let m = &moves[position];
+        let next = moves.get(position + 1);
+
+        let (x, y) = if let Some(next) = next {
+            let delta = next.process_time_ms - m.process_time_ms;
+            let progress = (time_ms - m.process_time_ms) / delta;
+            (
+                m.x + (next.x - m.x) * progress,
+                m.y + (next.y - m.y) * progress,
+            )
+        } else {
+            (m.x, m.y)
+        };
+
+        Some((x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
+    };
+
+    cursor_position
+}
+
+struct CursorPipeline {
+    bind_group_layout: wgpu::BindGroupLayout,
+    render_pipeline: wgpu::RenderPipeline,
+}
+
+// Add this before the CursorPipeline struct definition
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct CursorUniforms {
+    position: [f32; 2],      // 8 bytes
+    padding1: [f32; 2],      // 8 bytes padding to align next field
+    size: [f32; 2],          // 8 bytes
+    padding2: [f32; 2],      // 8 bytes padding to align next field
+    output_size: [f32; 2],   // 8 bytes
+    padding3: [f32; 2],      // 8 bytes padding to align next field
+    screen_bounds: [f32; 4], // 16 bytes
+}
+
+// Add this function near the other cursor-related functions
+fn find_cursor_event<'a>(cursor: &'a CursorData, time: f32) -> &'a CursorEvent {
+    let time_ms = time * 1000.0;
+    println!("Finding cursor event for time: {}ms", time_ms);
+    println!("Total cursor moves: {}", cursor.moves.len());
+
+    // Find the last cursor event before or at the current time
+    let event = cursor
+        .moves
+        .iter()
+        .rev()
+        .find(|event| {
+            println!("Checking event at time: {}ms", event.process_time_ms);
+            event.process_time_ms <= time_ms.into()
+        })
+        .unwrap_or(&cursor.moves[0]);
+
+    println!("Found cursor event: {:?}", event);
+    event
+}
+
+// Add the implementation for CursorPipeline
+impl CursorPipeline {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Cursor Pipeline Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(std::num::NonZeroU64::new(64).unwrap()),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Cursor Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/cursor.wgsl").into()),
+        });
+
+        let empty_constants: HashMap<String, f64> = HashMap::new();
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Cursor Pipeline"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Cursor Pipeline Layout"),
+                    bind_group_layouts: &[&bind_group_layout],
+                    push_constant_ranges: &[],
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &empty_constants,
+                    zero_initialize_workgroup_memory: false,
+                    vertex_pulling_transform: false,
+                },
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &empty_constants,
+                    zero_initialize_workgroup_memory: false,
+                    vertex_pulling_transform: false,
+                },
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Self {
+            bind_group_layout,
+            render_pipeline,
+        }
     }
 }

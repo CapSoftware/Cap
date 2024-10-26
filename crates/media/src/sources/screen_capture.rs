@@ -1,5 +1,3 @@
-#[cfg(target_os = "macos")]
-use cocoa::{base::id, foundation::NSDictionary};
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
@@ -8,12 +6,15 @@ use scap::{
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{collections::HashMap, ffi::c_char};
+use std::collections::HashMap;
 
-use crate::pipeline::{clock::*, control::Control, task::PipelineSourceTask};
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
     platform::{Bounds, Window},
+};
+use crate::{
+    pipeline::{clock::*, control::Control, task::PipelineSourceTask},
+    platform,
 };
 
 static EXCLUDED_WINDOWS: [&'static str; 4] = [
@@ -62,6 +63,7 @@ pub struct ScreenCaptureSource {
     options: Options,
     video_info: VideoInfo,
     target: ScreenCaptureTarget,
+    pub bounds: Bounds,
 }
 
 impl ScreenCaptureSource {
@@ -89,18 +91,23 @@ impl ScreenCaptureSource {
             .map(|t| t.clone())
             .collect();
 
-        let crop_area = match capture_target {
-            ScreenCaptureTarget::Window(capture_window) => Some(Area {
-                size: Size {
-                    width: capture_window.bounds.width,
-                    height: capture_window.bounds.height,
-                },
-                origin: Point {
-                    x: capture_window.bounds.x,
-                    y: capture_window.bounds.y,
-                },
-            }),
-            ScreenCaptureTarget::Screen(_capture_screen) => None,
+        let (crop_area, bounds) = match capture_target {
+            ScreenCaptureTarget::Window(capture_window) => (
+                Some(Area {
+                    size: Size {
+                        width: capture_window.bounds.width,
+                        height: capture_window.bounds.height,
+                    },
+                    origin: Point {
+                        x: capture_window.bounds.x,
+                        y: capture_window.bounds.y,
+                    },
+                }),
+                capture_window.bounds,
+            ),
+            ScreenCaptureTarget::Screen(capture_screen) => {
+                (None, platform::monitor_bounds(capture_screen.id))
+            }
         };
 
         let target = match capture_target {
@@ -116,7 +123,7 @@ impl ScreenCaptureSource {
 
         let options = Options {
             fps,
-            show_cursor: true,
+            show_cursor: false,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
             output_type: FrameType::BGRAFrame,
@@ -131,6 +138,7 @@ impl ScreenCaptureSource {
         Self {
             options,
             target: capture_target.clone(),
+            bounds,
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps),
         }
     }
@@ -146,46 +154,7 @@ impl ScreenCaptureSource {
             _ => None,
         });
 
-        #[cfg(target_os = "macos")]
-        let names = {
-            use cocoa::appkit::NSScreen;
-            use cocoa::base::nil;
-            use cocoa::foundation::{NSArray, NSString};
-            use objc::{msg_send, *};
-            use std::ffi::CStr;
-
-            unsafe {
-                let screens = NSScreen::screens(nil);
-                let screen_count = NSArray::count(screens);
-
-                let mut names = HashMap::new();
-
-                for i in 0..screen_count {
-                    let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
-
-                    let name: id = msg_send![screen, localizedName];
-                    let name = CStr::from_ptr(NSString::UTF8String(name))
-                        .to_string_lossy()
-                        .to_string();
-
-                    let device_description = NSScreen::deviceDescription(screen);
-                    let num = NSDictionary::valueForKey_(
-                        device_description,
-                        NSString::alloc(nil).init_str("NSScreenNumber"),
-                    ) as id;
-                    let num: *const objc2_foundation::NSNumber = num.cast();
-                    let num = { &*num };
-                    let num = num.as_u32();
-
-                    names.insert(num, name);
-                }
-
-                names
-            }
-        };
-        // #[cfg(not(target_os = "macos"))]
-        // let names = HashMap::<u32, u32>::new();
-        // TODO(Ilya)
+        let names = crate::platform::window_names();
 
         for (idx, screen) in screens.into_iter().enumerate() {
             // Handle Target::Screen variant (assuming this is how it's structured in scap)

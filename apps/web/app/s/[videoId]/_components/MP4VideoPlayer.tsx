@@ -10,6 +10,7 @@ interface MP4VideoPlayerProps {
   videoSrc: string;
 }
 
+// million-ignore
 export const MP4VideoPlayer = memo(
   forwardRef<HTMLVideoElement, MP4VideoPlayerProps>(({ videoSrc }, ref) => {
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -45,7 +46,7 @@ export const MP4VideoPlayer = memo(
       <video
         id="video-player"
         ref={videoRef}
-        className="absolute top-0 left-0 rounded-lg w-full h-full object-contain"
+        className="w-full h-full object-contain"
         preload="metadata"
         playsInline
         controls={false}

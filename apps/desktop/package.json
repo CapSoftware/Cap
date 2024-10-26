@@ -44,6 +44,7 @@
     "solid-js": "^1.7.8",
     "solid-markdown": "^2.0.13",
     "solid-presence": "^0.1.8",
+    "solid-toast": "^0.5.0",
     "solid-transition-group": "^0.2.3",
     "unplugin-auto-import": "^0.18.2",
     "unplugin-icons": "^0.19.2",

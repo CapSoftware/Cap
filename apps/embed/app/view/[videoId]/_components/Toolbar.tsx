@@ -62,6 +62,8 @@ export const Toolbar = ({
     console.log("videoElement", videoElement.currentTime);
     const timestamp = videoElement ? videoElement.currentTime : 0;
 
+    console.log("timestamp", timestamp);
+
     const response = await fetch(
       `${process.env.NEXT_PUBLIC_URL}/api/video/comment`,
       {

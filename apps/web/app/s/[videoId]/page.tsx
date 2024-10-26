@@ -2,13 +2,19 @@
 import { Share } from "./Share";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
-import { videos, comments } from "@cap/database/schema";
+import { videos, comments, users } from "@cap/database/schema";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
 import { ImageViewer } from "./_components/ImageViewer";
+
 type Props = {
   params: { [key: string]: string | string[] | undefined };
+};
+
+// Add this type definition at the top of the file
+type CommentWithAuthor = typeof comments.$inferSelect & {
+  authorName: string | null;
 };
 
 export async function generateMetadata(
@@ -41,7 +47,7 @@ export async function generateMetadata(
   }
 
   return {
-    title: "Cap: " + video.name,
+    title: video.name + " | Cap Recording",
     description: "Watch this video on Cap",
     openGraph: {
       images: [
@@ -100,9 +106,21 @@ export default async function ShareVideoPage(props: Props) {
     return <p>This video is private</p>;
   }
 
-  const commentsQuery = await db
-    .select()
+  const commentsQuery: CommentWithAuthor[] = await db
+    .select({
+      id: comments.id,
+      content: comments.content,
+      timestamp: comments.timestamp,
+      type: comments.type,
+      authorId: comments.authorId,
+      videoId: comments.videoId,
+      createdAt: comments.createdAt,
+      updatedAt: comments.updatedAt,
+      parentCommentId: comments.parentCommentId,
+      authorName: users.name,
+    })
     .from(comments)
+    .leftJoin(users, eq(comments.authorId, users.id))
     .where(eq(comments.videoId, videoId));
 
   let screenshotUrl;

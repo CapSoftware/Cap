@@ -94,7 +94,7 @@ impl Playback {
                     },
                     Some((screen_frame, camera_frame)) = self.decoders.get_frames((time * FPS as f64) as u32) => {
                         // println!("decoded frame in {:?}", debug.elapsed());
-                        let uniforms = ProjectUniforms::new(&self.render_constants, &project);
+                        let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32);
 
                         self
                             .renderer
@@ -102,7 +102,8 @@ impl Playback {
                                 screen_frame,
                                 camera_frame,
                                 project.background.source.clone(),
-                                uniforms.clone()
+                                uniforms.clone(),
+                                time as f32  // Add the time parameter
                             )
                             .await;
 

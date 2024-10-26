@@ -24,6 +24,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
 
   if (
     pathname === "/login" ||
+    pathname === "/s" ||
     pathname.includes("/dashboard") ||
     pathname.includes("/invite") ||
     pathname.includes("/s/") ||

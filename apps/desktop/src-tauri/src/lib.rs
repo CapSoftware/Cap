@@ -52,6 +52,7 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
+use tauri_nspanel::ManagerExt;
 use tauri_plugin_notification::PermissionState;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
@@ -238,6 +239,12 @@ pub struct RequestOpenSettings {
     page: String,
 }
 
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct NewNotification {
+    title: String,
+    body: String,
+}
+
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
 #[tauri::command]
@@ -411,7 +418,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
             .as_secs_f64(),
     );
 
-    current_recording.stop().await;
+    let recording = current_recording.stop().await;
     println!("Recording stopped");
 
     if let Some(window) = (CapWindow::InProgressRecording { position: None }).get(&app) {
@@ -422,13 +429,13 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         window.unminimize().ok();
     }
 
-    std::fs::create_dir_all(current_recording.recording_dir.join("screenshots")).ok();
-    let display_screenshot = current_recording
+    std::fs::create_dir_all(recording.recording_dir.join("screenshots")).ok();
+    let display_screenshot = recording
         .recording_dir
         .join("screenshots")
         .join("display.jpg");
     create_screenshot(
-        current_recording.display_output_path.clone(),
+        recording.display_output_path.clone(),
         display_screenshot.clone(),
         None,
     )
@@ -437,11 +444,10 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     // Create thumbnail
     let thumbnail = current_recording
         .recording_dir
-        .join("screenshots")
-        .join("thumbnail.png");
+        .join("screenshots/thumbnail.png");
     create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
 
-    let recording_dir = current_recording.recording_dir.clone();
+    let recording_dir = recording.recording_dir.clone();
 
     ShowCapturesPanel.emit(&app).ok();
 
@@ -461,9 +467,9 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         let mut segments = vec![];
         let mut passed_duration = 0.0;
 
-        for i in (0..current_recording.segments.len()).step_by(2) {
+        for i in (0..recording.segments.len()).step_by(2) {
             let start = passed_duration;
-            passed_duration += current_recording.segments[i + 1] - current_recording.segments[i];
+            passed_duration += recording.segments[i + 1] - recording.segments[i];
             segments.push(TimelineSegment {
                 start,
                 end: passed_duration,
@@ -478,12 +484,21 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     };
 
     std::fs::write(
-        current_recording.recording_dir.join("project-config.json"),
+        recording.recording_dir.join("project-config.json"),
         serde_json::to_string_pretty(&json!(&config)).unwrap(),
     )
     .unwrap();
 
     AppSounds::StopRecording.play();
+
+    let recording_id = recording
+        .recording_dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
+        .trim_end_matches(".cap")
+        .to_string();
 
     if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
         if let Ok(Some(auth)) = AuthStore::get(&app) {
@@ -494,14 +509,6 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
 
                     // Start the upload process in the background with retry mechanism
                     let app_clone = app.clone();
-                    let recording_id = current_recording
-                        .recording_dir
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string()
-                        .trim_end_matches(".cap")
-                        .to_string();
 
                     tauri::async_runtime::spawn(async move {
                         let max_retries = 3;
@@ -544,14 +551,6 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
                     });
                 }
             } else if settings.open_editor_after_recording {
-                let recording_id = current_recording
-                    .recording_dir
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-                    .trim_end_matches(".cap")
-                    .to_string();
                 open_editor(app.clone(), recording_id);
             }
         }
@@ -1070,7 +1069,15 @@ async fn render_to_file_impl(
 
     println!("Rendering video to channel");
 
-    cap_rendering::render_video_to_channel(options, project, tx_image_data, decoders).await?;
+    cap_rendering::render_video_to_channel(
+        options,
+        project,
+        tx_image_data,
+        decoders,
+        editor_instance.cursor.clone(),
+        editor_instance.project_path.clone(),
+    )
+    .await?;
 
     ffmpeg_handle.await.ok();
 
@@ -1220,6 +1227,11 @@ async fn copy_rendered_video_to_clipboard(
     let output_path_str = output_path.to_str().unwrap();
 
     println!("Copying to clipboard: {:?}", output_path_str);
+
+    notifications::send_notification(
+        &app,
+        notifications::NotificationType::VideoCopiedToClipboard,
+    );
 
     #[cfg(target_os = "macos")]
     {
@@ -1379,6 +1391,17 @@ async fn remove_fake_window(
     }
 
     Ok(())
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+fn show_notifications_window(app: AppHandle) {
+    if app.get_webview_window("notifications").is_some() {
+        println!("notifications window already exists");
+        return;
+    }
+
+    CapWindow::Notifications.show(&app).unwrap();
 }
 
 #[tauri::command(async)]
@@ -1979,6 +2002,7 @@ async fn take_screenshot(app: AppHandle, state: MutableState<'_, App>) -> Result
                 camera: None,
                 audio: None,
                 segments: vec![],
+                cursor: None,
             }
             .save_for_project();
 
@@ -2280,6 +2304,7 @@ pub async fn run() {
             list_capture_screens,
             list_audio_devices,
             show_previous_recordings_window,
+            show_notifications_window,
             close_previous_recordings_window,
             set_fake_window_bounds,
             remove_fake_window,
@@ -2338,6 +2363,7 @@ pub async fn run() {
             RequestStopRecording,
             RequestNewScreenshot,
             RequestOpenSettings,
+            NewNotification
         ])
         .ty::<ProjectConfiguration>()
         .ty::<AuthStore>()
@@ -2373,7 +2399,6 @@ pub async fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_notification::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);
@@ -2381,18 +2406,6 @@ pub async fn run() {
             general_settings::init(app.handle());
 
             let app_handle = app.handle().clone();
-
-            #[cfg(target_os = "macos")]
-            {
-                use tauri_plugin_notification::NotificationExt;
-
-                let notification_permission = app.notification().permission_state().unwrap();
-                if notification_permission != PermissionState::Granted {
-                    app.notification()
-                        .request_permission()
-                        .expect("failed to request notification permission");
-                }
-            }
 
             if permissions::do_permissions_check(true).necessary_granted() {
                 open_main_window(app_handle.clone());
