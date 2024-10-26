@@ -1061,6 +1061,7 @@ async fn render_to_file_impl(
         tx_image_data,
         decoders,
         editor_instance.cursor.clone(),
+        editor_instance.project_path.clone(),
     )
     .await?;
 

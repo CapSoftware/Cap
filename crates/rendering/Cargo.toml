@@ -10,6 +10,7 @@ futures-intrusive = "0.5.0"
 serde = "1.0.209"
 specta = "2.0.0-rc.19"
 wgpu = "22.1.0"
+image = "0.25.2"
 
 cap-ffmpeg = { path = "../ffmpeg" }
 cap-project = { path = "../project" }

@@ -747,6 +747,7 @@ dependencies = [
  "ffmpeg-sys-next",
  "futures",
  "futures-intrusive",
+ "image 0.25.2",
  "lru",
  "nix 0.29.0",
  "serde",

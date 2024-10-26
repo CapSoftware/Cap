@@ -123,7 +123,7 @@ impl ScreenCaptureSource {
 
         let options = Options {
             fps,
-            show_cursor: true,
+            show_cursor: false,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
             output_type: FrameType::BGRAFrame,

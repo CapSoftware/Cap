@@ -102,7 +102,8 @@ impl Playback {
                                 screen_frame,
                                 camera_frame,
                                 project.background.source.clone(),
-                                uniforms.clone()
+                                uniforms.clone(),
+                                time as f32  // Add the time parameter
                             )
                             .await;
 

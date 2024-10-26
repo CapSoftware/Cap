@@ -280,6 +280,10 @@ pub async fn start(
             let mut cursor_images = HashMap::new();
             let mut seen_cursor_data: HashMap<Vec<u8>, String> = HashMap::new();
             let mut next_cursor_id = 0;
+
+            // Create cursors directory if it doesn't exist
+            std::fs::create_dir_all(&cursors_dir).unwrap();
+
             while !*stop_signal.lock().await {
                 let mouse_state = device_state.get_mouse();
                 let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
@@ -296,11 +300,16 @@ pub async fn start(
                         let filename = format!("cursor_{}.png", cursor_id);
                         let cursor_path = cursors_dir.join(&filename);
 
+                        println!("Saving new cursor image to: {:?}", cursor_path);
+
                         if let Ok(image) = image::load_from_memory(&data) {
-                            if let Err(e) = image.save(&cursor_path) {
+                            // Convert to RGBA
+                            let rgba_image = image.into_rgba8();
+                            if let Err(e) = rgba_image.save(&cursor_path) {
                                 eprintln!("Failed to save cursor image: {}", e);
                             } else {
-                                cursor_images.insert(cursor_id.clone(), filename);
+                                println!("Successfully saved cursor image {}", cursor_id);
+                                cursor_images.insert(cursor_id.clone(), filename.clone());
                                 seen_cursor_data.insert(data, cursor_id.clone());
                                 next_cursor_id += 1;
                             }
@@ -339,14 +348,22 @@ pub async fn start(
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
 
-            // Save cursor data along with events
-            let mut file = File::create(content_dir.join("cursor.json")).unwrap();
+            // Save cursor data to cursor.json
             let cursor_data = CursorData {
                 clicks: clicks.clone(),
                 moves: moves.clone(),
                 cursor_images,
             };
-            serde_json::to_writer(&mut file, &cursor_data).unwrap();
+
+            let cursor_json_path = content_dir.join("cursor.json");
+            println!("Saving cursor data to: {:?}", cursor_json_path);
+            if let Ok(mut file) = File::create(&cursor_json_path) {
+                if let Err(e) = serde_json::to_writer(&mut file, &cursor_data) {
+                    eprintln!("Failed to save cursor data: {}", e);
+                } else {
+                    println!("Successfully saved cursor data");
+                }
+            }
 
             move_tx.send(moves).unwrap();
             click_tx.send(clicks).unwrap();

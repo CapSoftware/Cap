@@ -110,9 +110,13 @@ impl EditorInstance {
         let cursor = Arc::new(meta.cursor_data());
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(render_options, cursor.clone())
-                .await
-                .unwrap(),
+            RenderVideoConstants::new(
+                render_options,
+                cursor.clone(),
+                project_path.clone(), // Add project path argument
+            )
+            .await
+            .unwrap(),
         );
 
         let renderer = Arc::new(editor::Renderer::spawn(render_constants.clone(), frame_tx));
@@ -286,6 +290,7 @@ impl EditorInstance {
                         camera_frame,
                         project.background.source.clone(),
                         ProjectUniforms::new(&self.render_constants, &project, time as f32),
+                        time as f32, // Add the time parameter
                     )
                     .await;
             }

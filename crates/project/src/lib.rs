@@ -92,10 +92,56 @@ impl RecordingMeta {
     }
 
     pub fn cursor_data(&self) -> CursorData {
-        self.cursor
-            .as_ref()
-            .and_then(|c| std::fs::read(self.project_path.join(c)).ok())
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        if let Some(cursor_path) = &self.cursor {
+            let full_path = self.project_path.join(cursor_path);
+            println!("Loading cursor data from: {:?}", full_path);
+
+            // Try to load the cursor data
+            match CursorData::load_from_file(&full_path) {
+                Ok(mut data) => {
+                    // If cursor_images is empty but cursor files exist, populate it
+                    if data.cursor_images.is_empty() {
+                        let cursors_dir = self.project_path.join("content").join("cursors");
+                        if cursors_dir.exists() {
+                            println!("Scanning cursors directory: {:?}", cursors_dir);
+                            if let Ok(entries) = std::fs::read_dir(&cursors_dir) {
+                                for entry in entries {
+                                    if let Ok(entry) = entry {
+                                        let filename = entry.file_name();
+                                        let filename_str = filename.to_string_lossy();
+                                        if filename_str.starts_with("cursor_")
+                                            && filename_str.ends_with(".png")
+                                        {
+                                            // Extract cursor ID from filename (cursor_X.png -> X)
+                                            if let Some(id) = filename_str
+                                                .strip_prefix("cursor_")
+                                                .and_then(|s| s.strip_suffix(".png"))
+                                            {
+                                                println!(
+                                                    "Found cursor image: {} -> {}",
+                                                    id, filename_str
+                                                );
+                                                data.cursor_images.insert(
+                                                    id.to_string(),
+                                                    filename.to_string_lossy().into_owned(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            println!("Found {} cursor images", data.cursor_images.len());
+                        }
+                    }
+                    data
+                }
+                Err(e) => {
+                    eprintln!("Failed to load cursor data: {}", e);
+                    CursorData::default()
+                }
+            }
+        } else {
+            CursorData::default()
+        }
     }
 }
