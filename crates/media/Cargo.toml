@@ -13,7 +13,7 @@ ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
 flume = "0.11.0"
 indexmap = "2.5.0"
-nokhwa = { git = "https://github.com/capsoftware/nokhwa", rev = "3f7e33a7f49c", features = [
+nokhwa = { git = "https://github.com/capsoftware/nokhwa", rev = "6ce1e8270d57", features = [
 	"input-avfoundation",
 	"serialize",
 ] }
@@ -31,4 +31,4 @@ core-foundation = "0.10.0"
 objc = "0.2.7"
 objc-foundation = "0.1.1"
 objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
-nokhwa-bindings-macos = { git = "https://github.com/capsoftware/nokhwa", rev = "3f7e33a7f49c" }
+nokhwa-bindings-macos = { git = "https://github.com/capsoftware/nokhwa", rev = "6ce1e8270d57" }
