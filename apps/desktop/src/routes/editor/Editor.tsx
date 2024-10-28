@@ -148,7 +148,7 @@ function Inner() {
 
   return (
     <div
-      class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg leading-5 animate-in fade-in"
+      class="p-5 flex flex-col gap-4 w-screen h-screen bg-gray-50 rounded-lg leading-5 animate-in fade-in"
       data-tauri-drag-region
     >
       <Header />

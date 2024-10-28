@@ -421,12 +421,13 @@ export type ScreenCaptureTarget = ({ variant: "window" } & CaptureWindow) | ({ v
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string; prettyName: string }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
-export type TimelineConfiguration = { segments: TimelineSegment[] }
+export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments?: ZoomSegment[] }
 export type TimelineSegment = { timescale: number; start: number; end: number }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
 export type Video = { duration: number; width: number; height: number; fps: number }
 export type VideoType = "screen" | "output"
 export type XY<T> = { x: T; y: T }
+export type ZoomSegment = { start: number; end: number; amount: number }
 
 /** tauri-specta globals **/
 
