@@ -72,6 +72,7 @@ cap-rendering = { path = "../../../crates/rendering" }
 cap-ffmpeg = { path = "../../../crates/ffmpeg" }
 cap-editor = { path = "../../../crates/editor" }
 cap-media = { path = "../../../crates/media" }
+cap-flags = { path = "../../../crates/flags" }
 reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
 dotenvy_macro = "0.15.7"
 global-hotkey = "0.5.5"

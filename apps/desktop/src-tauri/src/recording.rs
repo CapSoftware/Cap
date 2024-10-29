@@ -1,4 +1,4 @@
-use crate::flags;
+use cap_flags::FLAGS;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
 use cap_project::CursorEvent;
 use cocoa::base::{id, nil};
@@ -140,7 +140,7 @@ impl InProgressRecording {
 
         *self.stop_signal.lock().await = true;
 
-        if flags::RECORD_MOUSE {
+        if FLAGS.record_mouse {
             // Save mouse events to files
             let mut file = File::create(self.recording_dir.join("cursor.json")).unwrap();
             serde_json::to_writer(

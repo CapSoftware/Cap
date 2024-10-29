@@ -7,7 +7,7 @@ members = [
 	"crates/media",
 	"crates/utils",
 	"crates/project",
-	"crates/editor",
+	"crates/editor", "crates/flags",
 ]
 
 [workspace.dependencies]

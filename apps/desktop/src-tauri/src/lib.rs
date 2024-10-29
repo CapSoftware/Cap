@@ -2343,7 +2343,8 @@ pub async fn run() {
         .ty::<ProjectConfiguration>()
         .ty::<AuthStore>()
         .ty::<hotkeys::HotkeysStore>()
-        .ty::<general_settings::GeneralSettingsStore>();
+        .ty::<general_settings::GeneralSettingsStore>()
+        .ty::<cap_flags::Flags>();
 
     #[cfg(debug_assertions)]
     specta_builder
@@ -2367,6 +2368,7 @@ pub async fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(flags::plugin::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
             specta_builder.mount_events(app);

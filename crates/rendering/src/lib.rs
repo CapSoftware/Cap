@@ -1,5 +1,6 @@
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
+use cap_flags::FLAGS;
 use decoder::AsyncVideoDecoderHandle;
 use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
@@ -485,7 +486,7 @@ impl ProjectUniforms {
 
             let (zoom, zoom_origin_uv) = if let Some(cursor_position) = cursor_position {
                 (
-                    dbg!(zoom_keyframes.get_amount(time as f64)),
+                    zoom_keyframes.get_amount(time as f64),
                     (cursor_position.0 as f32, cursor_position.1 as f32),
                 )
             } else {
@@ -627,12 +628,14 @@ impl ZoomKeyframes {
             });
         }
 
-        dbg!(&keyframes);
-
         Self(keyframes)
     }
 
     pub fn get_amount(&self, time: f64) -> f64 {
+        if !FLAGS.zoom {
+            return 1.0;
+        }
+
         let prev_index = self
             .0
             .iter()

@@ -385,6 +385,7 @@ export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: C
 export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type EditorStateChanged = { playhead_position: number }
+export type Flags = { recordMouse: boolean; split: boolean; pauseResume: boolean; zoom: boolean }
 export type GeneralSettingsStore = { upload_individual_files: boolean; open_editor_after_recording: boolean; hide_dock_icon?: boolean; auto_create_shareable_link?: boolean; enable_tooltip_notifications?: boolean }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"

@@ -20,7 +20,6 @@ import {
   topLeftAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
-import { flags } from "~/flags";
 
 export function Player() {
   const {
@@ -52,7 +51,7 @@ export function Player() {
 
   const splitButton = () => (
     <EditorButton<typeof KToggleButton>
-      disabled={!flags.split}
+      disabled={!window.FLAGS.split}
       pressed={split()}
       onChange={setSplit}
       as={KToggleButton}
@@ -209,7 +208,7 @@ export function Player() {
           </span>
         </div>
         <div class="flex-1 flex flex-row justify-end">
-          {flags.split ? (
+          {window.FLAGS.split ? (
             splitButton()
           ) : (
             <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>
