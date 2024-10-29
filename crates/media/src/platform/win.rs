@@ -1,16 +1,16 @@
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
 use super::{Bounds, CursorShape, Window};
 
-use windows::core::{PCSTR, PCWSTR};
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW, HDC, HMONITOR,
-    MONITORINFO, MONITORINFOEXA, MONITORINFOEXW,
+    MONITORINFO, MONITORINFOEXW,
 };
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -24,6 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IDC_WAIT,
 };
 
+#[inline]
 pub fn bring_window_to_focus(window_id: u32) {
     let _ = unsafe { SetForegroundWindow(HWND(window_id as isize)) };
 }
@@ -60,7 +61,6 @@ pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
 
 /// Keeps handles to default cursor.
 /// Read more: [MS Doc - About Cursors](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)
-// TODO(Ilya): Change to an enum and define the values here.
 pub struct DefaultCursors {
     arrow: isize,
     ibeam: isize,
@@ -82,11 +82,12 @@ pub struct DefaultCursors {
 
 impl Default for DefaultCursors {
     fn default() -> Self {
-        let load_cursor = |lpcursorname| {
+        #[inline]
+        fn load_cursor(lpcursorname: PCWSTR) -> isize {
             unsafe { LoadCursorW(None, lpcursorname) }
                 .expect("Failed to load default system cursors")
                 .0
-        };
+        }
 
         DefaultCursors {
             arrow: load_cursor(IDC_ARROW),
@@ -147,7 +148,7 @@ pub fn get_on_screen_windows() -> Vec<Window> {
         DwmGetWindowAttribute(
             hwnd,
             DWMWA_CLOAKED,
-            &mut pvattribute_cloaked as *mut _ as *mut _,
+            &mut pvattribute_cloaked as *mut _ as *mut std::ffi::c_void,
             std::mem::size_of::<u32>() as u32,
         )
         .ok();
@@ -189,7 +190,7 @@ pub fn get_on_screen_windows() -> Vec<Window> {
         } as i32;
 
         let scale_factor = dpi as f64 / BASE_DPI as f64;
-        let mut rect: RECT = RECT::default();
+        let mut rect = RECT::default();
         GetWindowRect(hwnd, &mut rect).ok();
 
         let lpos_x = rect.left as f64 / scale_factor;
@@ -228,15 +229,16 @@ pub fn get_on_screen_windows() -> Vec<Window> {
 }
 
 pub fn monitor_bounds(id: u32) -> Bounds {
-    let mut bounds = Bounds::default();
-    let mut params = (id, bounds);
+    let bounds = Bounds::default();
+    let idx = 0u32;
+    let lparams = (id, idx, bounds);
     unsafe extern "system" fn enum_monitor_proc(
         hmonitor: HMONITOR,
         _hdc: HDC,
         _lprc_clip: *mut RECT,
         lparam: LPARAM,
     ) -> BOOL {
-        let params = &mut *(lparam.0 as *mut (u32, Bounds));
+        let (target_id, idx, bounds) = &mut *(lparam.0 as *mut (u32, u32, Bounds));
 
         let mut minfo = MONITORINFOEXW::default();
         minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
@@ -249,11 +251,20 @@ pub fn monitor_bounds(id: u32) -> Bounds {
             return TRUE;
         };
 
-        let device_name = OsString::from_wide(&minfo.szDevice)
-            .to_string_lossy()
-            .into_owned();
+        *idx += 1;
+        if idx != target_id {
+            return TRUE;
+        }
 
-        TRUE
+        let mi = minfo.monitorInfo;
+        *bounds = Bounds {
+            x: mi.rcMonitor.left as f64,
+            y: mi.rcMonitor.top as f64,
+            width: (mi.rcMonitor.right - mi.rcMonitor.left) as f64,
+            height: (mi.rcMonitor.bottom - mi.rcMonitor.top) as f64,
+        };
+
+        FALSE
     }
 
     let _ = unsafe {
@@ -261,7 +272,7 @@ pub fn monitor_bounds(id: u32) -> Bounds {
             None,
             None,
             Some(enum_monitor_proc),
-            LPARAM(std::ptr::addr_of!(params) as isize),
+            LPARAM(std::ptr::addr_of!(lparams) as isize),
         );
     };
     bounds

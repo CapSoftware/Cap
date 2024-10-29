@@ -3804,7 +3804,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-linux"
 version = "0.1.0"
-source = "git+https://github.com/capsoftware/nokhwa?rev=3f7e33a7f49c#3f7e33a7f49c037690b11a2e2463777c36389350"
+source = "git+https://github.com/capsoftware/nokhwa?rev=6ce1e8270d57#6ce1e8270d57436e6caa6776247dab70aed13b65"
 dependencies = [
  "nokhwa-core",
  "v4l",
@@ -3829,7 +3829,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-windows"
 version = "0.4.0"
-source = "git+https://github.com/capsoftware/nokhwa?rev=3f7e33a7f49c#3f7e33a7f49c037690b11a2e2463777c36389350"
+source = "git+https://github.com/capsoftware/nokhwa?rev=6ce1e8270d57#6ce1e8270d57436e6caa6776247dab70aed13b65"
 dependencies = [
  "nokhwa-core",
  "once_cell",
