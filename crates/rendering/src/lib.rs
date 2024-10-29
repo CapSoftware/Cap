@@ -425,6 +425,8 @@ impl ProjectUniforms {
 
         let cursor_position = interpolate_cursor_position(&constants.cursor, time);
 
+        let zoom_keyframes = ZoomKeyframes::new(project);
+
         let display = {
             let output_size = [output_size.0 as f32, output_size.1 as f32];
             let size = [options.screen_size.0 as f32, options.screen_size.1 as f32];
@@ -482,7 +484,10 @@ impl ProjectUniforms {
             ];
 
             let (zoom, zoom_origin_uv) = if let Some(cursor_position) = cursor_position {
-                (1.0, (cursor_position.0 as f32, cursor_position.1 as f32))
+                (
+                    dbg!(zoom_keyframes.get_amount(time as f64)),
+                    (cursor_position.0 as f32, cursor_position.1 as f32),
+                )
             } else {
                 (1.0, (0.0, 0.0))
             };
@@ -578,6 +583,82 @@ impl ProjectUniforms {
             display,
             camera,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct ZoomKeyframe {
+    time: f64,
+    amount: f64,
+}
+#[derive(Debug)]
+pub struct ZoomKeyframes(Vec<ZoomKeyframe>);
+
+const ZOOM_DURATION: f64 = 0.3;
+
+impl ZoomKeyframes {
+    pub fn new(config: &ProjectConfiguration) -> Self {
+        let Some(zoom_segments) = config.timeline().map(|t| &t.zoom_segments) else {
+            return Self(vec![]);
+        };
+
+        if zoom_segments.is_empty() {
+            return Self(vec![]);
+        }
+
+        let mut keyframes = vec![];
+
+        for segment in zoom_segments {
+            keyframes.push(ZoomKeyframe {
+                time: segment.start,
+                amount: 1.0,
+            });
+            keyframes.push(ZoomKeyframe {
+                time: segment.start + ZOOM_DURATION,
+                amount: segment.amount,
+            });
+            keyframes.push(ZoomKeyframe {
+                time: segment.end,
+                amount: segment.amount,
+            });
+            keyframes.push(ZoomKeyframe {
+                time: segment.end + ZOOM_DURATION,
+                amount: 1.0,
+            });
+        }
+
+        dbg!(&keyframes);
+
+        Self(keyframes)
+    }
+
+    pub fn get_amount(&self, time: f64) -> f64 {
+        let prev_index = self
+            .0
+            .iter()
+            .rev()
+            .position(|k| time >= k.time)
+            .map(|p| self.0.len() - 1 - p);
+
+        let Some(prev_index) = prev_index else {
+            return 1.0;
+        };
+
+        let next_index = prev_index + 1;
+
+        let Some((prev, next)) = self.0.get(prev_index).zip(self.0.get(next_index)) else {
+            return 1.0;
+        };
+
+        let keyframe_length = next.time - prev.time;
+        let delta_time = time - prev.time;
+
+        let t = delta_time / keyframe_length;
+        let t = t.powf(0.5);
+
+        let amount = prev.amount + (next.amount - prev.amount) * t;
+
+        amount
     }
 }
 
@@ -1387,7 +1468,7 @@ fn find_cursor_event<'a>(cursor: &'a CursorData, time: f32) -> &'a CursorEvent {
         .iter()
         .rev()
         .find(|event| {
-            println!("Checking event at time: {}ms", event.process_time_ms);
+            // println!("Checking event at time: {}ms", event.process_time_ms);
             event.process_time_ms <= time_ms.into()
         })
         .unwrap_or(&cursor.moves[0]);

@@ -188,8 +188,19 @@ impl TimelineSegment {
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct ZoomSegment {
+    pub start: f64,
+    pub end: f64,
+    pub amount: f64,
+    // pub mode: Z
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
+    #[serde(default)]
+    pub zoom_segments: Vec<ZoomSegment>,
 }
 
 impl TimelineConfiguration {

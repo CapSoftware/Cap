@@ -477,7 +477,10 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         }
 
         ProjectConfiguration {
-            timeline: Some(TimelineConfiguration { segments }),
+            timeline: Some(TimelineConfiguration {
+                segments,
+                zoom_segments: vec![],
+            }),
             ..Default::default()
         }
     };
