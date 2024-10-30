@@ -1276,20 +1276,29 @@ async fn copy_rendered_video_to_clipboard(
                 let pasteboard: id = NSPasteboard::generalPasteboard(nil);
                 NSPasteboard::clearContents(pasteboard);
 
-                let url =
-                    NSURL::fileURLWithPath_(nil, NSString::alloc(nil).init_str(output_path_str));
+                let url_str = NSString::alloc(nil).init_str(output_path_str);
+                let url = NSURL::fileURLWithPath_(nil, url_str);
 
-                let objects: id = NSArray::arrayWithObject(nil, url);
-
-                if !NSPasteboard::writeObjects(pasteboard, objects) {
-                    Err("Failed to write to clipboard".to_string())
-                } else {
-                    Ok(())
+                if url == nil {
+                    return Err("Failed to create NSURL".to_string());
                 }
+
+                let objects = NSArray::arrayWithObject(nil, url);
+                if objects == nil {
+                    return Err("Failed to create NSArray".to_string());
+                }
+
+                let success = NSPasteboard::writeObjects(pasteboard, objects);
+                if !success {
+                    return Err("Failed to write to pasteboard".to_string());
+                }
+
+                Ok(())
             })
         };
 
         if let Err(e) = result {
+            println!("Failed to copy to clipboard: {}", e);
             notifications::send_notification(
                 &app,
                 notifications::NotificationType::VideoCopyFailed,
