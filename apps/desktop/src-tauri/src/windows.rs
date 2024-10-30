@@ -290,6 +290,7 @@ impl CapWindow {
                         .visible_on_all_workspaces(true)
                         .content_protected(true)
                         .inner_size(350.0, 350.0)
+                        .skip_taskbar(true)
                         .position(
                             (monitor.size().width as f64) / monitor.scale_factor() - 350.0,
                             0.0,
@@ -504,25 +505,27 @@ fn setup_delegates(window: &WebviewWindow<Wry>, controls_inset: Option<LogicalPo
     use crate::platform::delegates;
 
     let target_window = window.clone();
-    window.run_on_main_thread(move || {
-        delegates::setup(
-            target_window.as_ref().window(),
-            controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
-        );
+    window
+        .run_on_main_thread(move || {
+            delegates::setup(
+                target_window.as_ref().window(),
+                controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+            );
 
-        let c_win = target_window.clone();
-        target_window.on_window_event(move |event| match event {
-            tauri::WindowEvent::ThemeChanged(..) => {
-                delegates::position_window_controls(
-                    delegates::UnsafeWindowHandle(
-                        c_win
-                            .ns_window()
-                            .expect("Failed to get native window handle"),
-                    ),
-                    &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
-                );
-            }
-            _ => (),
-        });
-    }).ok();
+            let c_win = target_window.clone();
+            target_window.on_window_event(move |event| match event {
+                tauri::WindowEvent::ThemeChanged(..) => {
+                    delegates::position_window_controls(
+                        delegates::UnsafeWindowHandle(
+                            c_win
+                                .ns_window()
+                                .expect("Failed to get native window handle"),
+                        ),
+                        &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+                    );
+                }
+                _ => (),
+            });
+        })
+        .ok();
 }

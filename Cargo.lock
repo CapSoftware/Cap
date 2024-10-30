@@ -806,6 +806,7 @@ name = "cap-utils"
 version = "0.1.0"
 dependencies = [
  "nix 0.29.0",
+ "tokio",
  "windows 0.58.0",
 ]
 

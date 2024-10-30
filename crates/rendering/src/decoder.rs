@@ -20,6 +20,11 @@ use ffmpeg_sys_next::{
 
 pub type DecodedFrame = Arc<Vec<u8>>;
 
+#[cfg(target_os = "windows")]
+const TARGET_HWDEVICE: AVHWDeviceType = AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA;
+#[cfg(target_os = "macos")]
+const TARGET_HWDEVICE: AVHWDeviceType = AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
+
 enum VideoDecoderMessage {
     GetFrame(u32, tokio::sync::oneshot::Sender<Option<Arc<Vec<u8>>>>),
 }
@@ -53,6 +58,8 @@ impl AsyncVideoDecoder {
             let mut context = codec::context::Context::new_with_codec(decoder_codec);
             context.set_parameters(input_stream.parameters()).unwrap();
 
+            context.print_supported_hw_modes();
+
             let hw_device: Option<HwDevice> = {
                 #[cfg(target_os = "macos")]
                 {
@@ -63,10 +70,21 @@ impl AsyncVideoDecoder {
                         )
                         .ok()
                 }
+                #[cfg(target_os = "windows")]
+                {
+                    context
+                        .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA, Pixel::NV12)
+                        .ok()
+                }
 
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                 None
             };
+
+            println!(
+                "-t HW Device: {:?}",
+                hw_device.as_ref().and_then(|hwd| Some(hwd.device_type))
+            );
 
             let input_stream_index = input_stream.index();
             let time_base = input_stream.time_base();
@@ -82,6 +100,11 @@ impl AsyncVideoDecoder {
                 .as_ref()
                 .map(|d| d.pix_fmt)
                 .unwrap_or(decoder.format());
+
+            println!("-t Scalar input pixel format");
+            dbg!(scaler_input_format);
+            println!("-t HWDevice input pixel format");
+            dbg!(hw_device.as_ref().map(|d| d.pix_fmt));
 
             let mut scaler = Context::get(
                 scaler_input_format,
@@ -121,10 +144,10 @@ impl AsyncVideoDecoder {
             while let Ok(r) = peekable_requests.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(frame_number, sender) => {
-                        // println!("retrieving frame {frame_number}");
+                        println!("retrieving frame {frame_number}");
 
                         let mut sender = if let Some(cached) = cache.get(&frame_number) {
-                            // println!("sending frame {frame_number} from cache");
+                            println!("sending frame {frame_number} from cache");
                             sender.send(Some(cached.clone())).ok();
                             continue;
                         } else {
@@ -172,7 +195,7 @@ impl AsyncVideoDecoder {
                                 let start_offset = stream.start_time();
                                 let packet_frame =
                                     ts_to_frame(packet.pts().unwrap(), time_base, frame_rate);
-                                // println!("sending frame {packet_frame} packet");
+                                println!("sending frame {packet_frame} packet");
 
                                 decoder.send_packet(&packet).ok(); // decode failures are ok, we just fail to return a frame
 
@@ -184,7 +207,7 @@ impl AsyncVideoDecoder {
                                         time_base,
                                         frame_rate,
                                     );
-                                    // println!("processing frame {current_frame}");
+                                    println!("processing frame {current_frame}");
                                     last_decoded_frame = Some(current_frame);
 
                                     let exceeds_cache_bounds = current_frame > cache_max;
@@ -426,6 +449,8 @@ trait CodecContextExt {
         device_type: AVHWDeviceType,
         pix_fmt: Pixel,
     ) -> Result<HwDevice, &'static str>;
+
+    fn print_supported_hw_modes(&mut self);
 }
 
 impl CodecContextExt for codec::context::Context {
@@ -437,16 +462,22 @@ impl CodecContextExt for codec::context::Context {
         let codec = self.codec().ok_or("no codec")?;
 
         unsafe {
+            println!("Codec is: {}", codec.name());
             let mut i = 0;
             loop {
                 let config = avcodec_get_hw_config(codec.as_ptr(), i);
+                println!("-t AVCodecHWConfig: ");
+
                 if config.is_null() {
+                    dbg!(*config);
                     return Err("no hw config");
                 }
 
                 if (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1
-                    && (*config).device_type == AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
+                    && (*config).device_type == TARGET_HWDEVICE
                 {
+                    println!("Setting PIX_FMT to ");
+                    dbg!((*config).pix_fmt);
                     HW_PIX_FMT.set((*config).pix_fmt);
                     break;
                 }
@@ -472,5 +503,34 @@ impl CodecContextExt for codec::context::Context {
                 pix_fmt,
             })
         }
+    }
+
+    fn print_supported_hw_modes(&mut self) {
+        println!("Checking supported hardware acceleration modes:");
+
+        let codec = self.codec().ok_or("no codec").unwrap();
+        println!("T---- Context Codec is: {}", codec.name());
+        unsafe {
+            for i in 0.. {
+                let config = avcodec_get_hw_config(codec.as_ptr(), i);
+                if config.is_null() {
+                    break;
+                }
+
+                println!("Got AVCodecHWConfig: ");
+                dbg!(*config);
+
+                if (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1
+                    && (*config).device_type == TARGET_HWDEVICE
+                {
+                    println!("Can set PIX_FMT for config: ");
+                    dbg!((*config).pix_fmt);
+                    // break;
+                }
+                println!("T--");
+            }
+        }
+
+        println!("T---- End of HW devices");
     }
 }
