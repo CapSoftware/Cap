@@ -500,6 +500,32 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         if let Ok(Some(auth)) = AuthStore::get(&app) {
             if auth.is_upgraded() && settings.auto_create_shareable_link {
                 if let Some(pre_created_video) = state.pre_created_video.take() {
+                    // Copy link to clipboard
+                    #[cfg(target_os = "macos")]
+                    {
+                        use cocoa::appkit::NSPasteboard;
+                        use cocoa::base::{id, nil};
+                        use cocoa::foundation::{NSArray, NSString};
+                        use objc::rc::autoreleasepool;
+
+                        unsafe {
+                            autoreleasepool(|| {
+                                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
+                                NSPasteboard::clearContents(pasteboard);
+                                let ns_string =
+                                    NSString::alloc(nil).init_str(&pre_created_video.link);
+                                let objects: id = NSArray::arrayWithObject(nil, ns_string);
+                                NSPasteboard::writeObjects(pasteboard, objects);
+                            });
+                        }
+                    }
+
+                    // Send notification for shareable link
+                    notifications::send_notification(
+                        &app,
+                        notifications::NotificationType::ShareableLinkCopied,
+                    );
+
                     // Open the pre-created shareable link
                     open_external_link(app.clone(), pre_created_video.link.clone()).ok();
 
@@ -521,6 +547,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
                             {
                                 Ok(_) => {
                                     println!("Video uploaded successfully");
+                                    // Don't send notification here since we already did it above
                                     break;
                                 }
                                 Err(e) => {
@@ -531,11 +558,9 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
                                     );
 
                                     if retry_count < max_retries {
-                                        // Wait for a short time before retrying
                                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                                     } else {
                                         println!("Max retries reached. Upload failed.");
-                                        // Optionally, you can notify the user about the failure
                                         notifications::send_notification(
                                             &app_clone,
                                             notifications::NotificationType::UploadFailed,
@@ -1697,24 +1722,40 @@ async fn upload_rendered_video(
     pre_created_video: Option<PreCreatedVideo>,
 ) -> Result<UploadResult, String> {
     let Ok(Some(mut auth)) = AuthStore::get(&app) else {
-        println!("not authenticated!");
+        // Sign out and redirect to sign in
+        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+        delete_auth_open_signin(app).await?;
         return Ok(UploadResult::NotAuthenticated);
     };
 
     // Check if user has an upgraded plan
     if !auth.is_upgraded() {
         // Fetch and update plan information
-        if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
-            println!("Failed to update plan information: {}", e);
-            return Ok(UploadResult::PlanCheckFailed);
+        match AuthStore::fetch_and_update_plan(&app).await {
+            Ok(_) => {
+                // Refresh auth information after update
+                match AuthStore::get(&app) {
+                    Ok(Some(updated_auth)) => {
+                        auth = updated_auth;
+                    }
+                    Ok(None) => {
+                        // Auth was invalidated during plan check
+                        delete_auth_open_signin(app).await?;
+                        return Ok(UploadResult::NotAuthenticated);
+                    }
+                    Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
+                }
+            }
+            Err(e) => {
+                if e.contains("Authentication expired") {
+                    delete_auth_open_signin(app).await?;
+                    return Ok(UploadResult::NotAuthenticated);
+                }
+                return Ok(UploadResult::PlanCheckFailed);
+            }
         }
 
-        // Refresh auth information after update
-        auth = AuthStore::get(&app).unwrap().unwrap();
-
-        // Re-check upgraded status after refresh
         if !auth.is_upgraded() {
-            println!("User plan still not upgraded after refresh.");
             open_upgrade_window(app).await;
             return Ok(UploadResult::UpgradeRequired);
         }
@@ -1724,6 +1765,10 @@ async fn upload_rendered_video(
     let mut meta = editor_instance.meta();
 
     let share_link = if let Some(sharing) = meta.sharing {
+        notifications::send_notification(
+            &app,
+            notifications::NotificationType::ShareableLinkCopied,
+        );
         sharing.link
     } else if let Some(pre_created) = pre_created_video {
         // Use the pre-created video information
@@ -1749,6 +1794,17 @@ async fn upload_rendered_video(
                 meta.save_for_project();
                 RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
+                // Don't send notification here if it was pre-created
+                let general_settings = GeneralSettingsStore::get(&app)?;
+                if !general_settings
+                    .map(|settings| settings.auto_create_shareable_link)
+                    .unwrap_or(false)
+                {
+                    notifications::send_notification(
+                        &app,
+                        notifications::NotificationType::ShareableLinkCopied,
+                    );
+                }
                 pre_created.link
             }
             Err(e) => {
@@ -1780,6 +1836,10 @@ async fn upload_rendered_video(
                 meta.save_for_project();
                 RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
+                notifications::send_notification(
+                    &app,
+                    notifications::NotificationType::ShareableLinkCopied,
+                );
                 uploaded_video.link
             }
             Err(e) => {
@@ -1791,9 +1851,6 @@ async fn upload_rendered_video(
             }
         }
     };
-
-    // Only send success notification if we actually got here
-    notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
 
     #[cfg(target_os = "macos")]
     {
@@ -1823,44 +1880,37 @@ async fn upload_screenshot(
     screenshot_path: PathBuf,
 ) -> Result<UploadResult, String> {
     let Ok(Some(mut auth)) = AuthStore::get(&app) else {
-        println!("not authenticated!");
+        // Sign out and redirect to sign in
+        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+        delete_auth_open_signin(app).await?;
         return Ok(UploadResult::NotAuthenticated);
     };
 
     if !auth.is_upgraded() {
-        println!("User plan not upgraded. Fetching and updating plan information.");
-        // Fetch and update plan information
-        if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
-            println!("Failed to update plan information: {}", e);
-            return Ok(UploadResult::PlanCheckFailed);
+        match AuthStore::fetch_and_update_plan(&app).await {
+            Ok(_) => match AuthStore::get(&app) {
+                Ok(Some(updated_auth)) => {
+                    auth = updated_auth;
+                }
+                Ok(None) => {
+                    delete_auth_open_signin(app).await?;
+                    return Ok(UploadResult::NotAuthenticated);
+                }
+                Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
+            },
+            Err(e) => {
+                if e.contains("Authentication expired") {
+                    delete_auth_open_signin(app).await?;
+                    return Ok(UploadResult::NotAuthenticated);
+                }
+                return Ok(UploadResult::PlanCheckFailed);
+            }
         }
 
-        println!("Plan information updated. Refreshing auth information.");
-        // Refresh auth information after update
-        auth = match AuthStore::get(&app) {
-            Ok(Some(updated_auth)) => {
-                println!("Auth information refreshed successfully.");
-                updated_auth
-            }
-            Ok(None) => {
-                println!("Error: No auth information found after refresh.");
-                return Err("Authentication information not found".to_string());
-            }
-            Err(e) => {
-                println!("Error refreshing auth information: {}", e);
-                return Err("Failed to refresh authentication information".to_string());
-            }
-        };
-
-        // Re-check upgraded status after refresh
         if !auth.is_upgraded() {
-            println!("User plan still not upgraded after refresh.");
             open_upgrade_window(app).await;
             return Ok(UploadResult::UpgradeRequired);
         }
-        println!("User plan is now upgraded.");
-    } else {
-        println!("User plan is already upgraded.");
     }
 
     println!("Uploading screenshot: {:?}", screenshot_path);

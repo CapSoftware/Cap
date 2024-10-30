@@ -35,6 +35,15 @@ impl AuthStore {
         .map_err(|e| e.to_string())
     }
 
+    pub async fn handle_auth_error(app: &AppHandle, error: &str) -> Result<(), String> {
+        if error.contains("Authentication expired") || error.contains("Unauthorized") {
+            // Clear auth and redirect to sign in
+            Self::set(app, None)?;
+            crate::delete_auth_open_signin(app.clone()).await?;
+        }
+        Ok(())
+    }
+
     pub async fn fetch_and_update_plan(app: &AppHandle) -> Result<(), String> {
         let auth = Self::get(app)?;
         let Some(mut auth) = auth else {
@@ -47,8 +56,7 @@ impl AuthStore {
             .map_err(|e| e.to_string())?;
 
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            println!("Authentication expired. Please log in again.");
-            Self::set(app, None)?;
+            Self::handle_auth_error(app, "Authentication expired").await?;
             return Err("Authentication expired. Please log in again.".to_string());
         }
 
