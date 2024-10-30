@@ -1288,9 +1288,20 @@ async fn copy_rendered_video_to_clipboard(
                     return Err("Failed to create NSArray".to_string());
                 }
 
-                let success = NSPasteboard::writeObjects(pasteboard, objects);
-                if !success {
-                    return Err("Failed to write to pasteboard".to_string());
+                #[cfg(target_arch = "x86_64")]
+                {
+                    let write_result: i8 = NSPasteboard::writeObjects(pasteboard, objects);
+                    if write_result == 0 {
+                        return Err("Failed to write to pasteboard".to_string());
+                    }
+                }
+
+                #[cfg(target_arch = "aarch64")]
+                {
+                    let write_result: bool = NSPasteboard::writeObjects(pasteboard, objects);
+                    if !write_result {
+                        return Err("Failed to write to pasteboard".to_string());
+                    }
                 }
 
                 Ok(())
@@ -1918,7 +1929,7 @@ async fn upload_screenshot(
 
 #[tauri::command]
 #[specta::specta]
-async fn take_screenshot(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Result<(), String> {
     let id = uuid::Uuid::new_v4().to_string();
 
     let recording_dir = app
