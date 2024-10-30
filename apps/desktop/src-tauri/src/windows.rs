@@ -217,7 +217,9 @@ impl CapWindow {
 
                 window
             }
-            Self::InProgressRecording { position } => {
+            Self::InProgressRecording {
+                position: _position,
+            } => {
                 let width = 160.0;
                 let height = 40.0;
 

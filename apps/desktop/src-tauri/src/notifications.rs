@@ -1,4 +1,4 @@
-use crate::NewNotification;
+use crate::{AppSounds, NewNotification};
 use tauri_specta::Event;
 
 pub enum NotificationType {
@@ -6,25 +6,60 @@ pub enum NotificationType {
     VideoCopiedToClipboard,
     ShareableLinkCopied,
     UploadFailed,
+    VideoSaveFailed,
+    VideoCopyFailed,
+    ShareableLinkFailed,
+    ScreenshotSaved,
+    ScreenshotCopiedToClipboard,
+    ScreenshotSaveFailed,
+    ScreenshotCopyFailed,
 }
 
 impl NotificationType {
-    fn details(&self) -> (&'static str, &'static str) {
+    fn details(&self) -> (&'static str, &'static str, bool) {
         match self {
-            NotificationType::VideoSaved => {
-                ("Video Saved", "Your video has been successfully saved.")
+            NotificationType::VideoSaved => ("Video Saved", "Video saved successfully", false),
+            NotificationType::VideoCopiedToClipboard => {
+                ("Video Copied", "Video copied to clipboard", false)
             }
-            NotificationType::VideoCopiedToClipboard => (
-                "Video Copied",
-                "Your video has been copied to the clipboard.",
-            ),
-            NotificationType::ShareableLinkCopied => (
-                "Link Copied",
-                "Shareable link has been copied to the clipboard.",
-            ),
+            NotificationType::ShareableLinkCopied => {
+                ("Link Copied", "Link copied to clipboard", false)
+            }
             NotificationType::UploadFailed => (
                 "Upload Failed",
-                "Failed to upload your video after multiple attempts. Please try again later.",
+                "Unable to upload media. Please try again",
+                true,
+            ),
+            NotificationType::VideoSaveFailed => (
+                "Save Failed",
+                "Unable to save video. Please try again",
+                true,
+            ),
+            NotificationType::VideoCopyFailed => (
+                "Copy Failed",
+                "Unable to copy video to clipboard. Please try again",
+                true,
+            ),
+            NotificationType::ShareableLinkFailed => (
+                "Share Failed",
+                "Unable to create shareable link. Please try again",
+                true,
+            ),
+            NotificationType::ScreenshotSaved => {
+                ("Screenshot Saved", "Screenshot saved successfully", false)
+            }
+            NotificationType::ScreenshotCopiedToClipboard => {
+                ("Screenshot Copied", "Screenshot copied to clipboard", false)
+            }
+            NotificationType::ScreenshotSaveFailed => (
+                "Save Failed",
+                "Unable to save screenshot. Please try again",
+                true,
+            ),
+            NotificationType::ScreenshotCopyFailed => (
+                "Copy Failed",
+                "Unable to copy screenshot to clipboard. Please try again",
+                true,
             ),
         }
     }
@@ -47,13 +82,19 @@ impl NotificationType {
 }
 
 pub fn send_notification(app: &tauri::AppHandle, notification_type: NotificationType) {
-    let (title, body) = notification_type.details();
+    let (title, body, is_error) = notification_type.details();
 
-    println!("Sending notification: Title: '{}', Body: '{}'", title, body);
+    println!(
+        "Sending notification: Title: '{}', Body: '{}', Error: {}",
+        title, body, is_error
+    );
+
+    AppSounds::Notification.play();
 
     let _ = NewNotification {
         title: title.to_string(),
         body: body.to_string(),
+        is_error,
     }
     .emit(app);
 }

@@ -712,6 +712,7 @@ name = "cap-media"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cap-flags",
  "cap-project",
  "cocoa 0.26.0",
  "core-foundation 0.10.0",

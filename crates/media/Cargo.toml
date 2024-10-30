@@ -23,6 +23,7 @@ specta = "=2.0.0-rc.19"
 tempfile = "3.12.0"
 thiserror = "1.0"
 tracing = "0.1"
+cap-flags = { path = "../flags" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26.0"

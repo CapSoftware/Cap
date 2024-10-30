@@ -1,3 +1,4 @@
+use cap_flags::FLAGS;
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
@@ -123,7 +124,7 @@ impl ScreenCaptureSource {
 
         let options = Options {
             fps,
-            show_cursor: false,
+            show_cursor: !FLAGS.zoom,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
             output_type: FrameType::BGRAFrame,

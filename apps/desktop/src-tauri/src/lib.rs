@@ -240,6 +240,7 @@ pub struct RequestOpenSettings {
 pub struct NewNotification {
     title: String,
     body: String,
+    is_error: bool,
 }
 
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
@@ -749,18 +750,39 @@ async fn get_rendered_video_impl(
 
 #[tauri::command]
 #[specta::specta]
-async fn copy_file_to_path(src: String, dst: String) -> Result<(), String> {
+async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(), String> {
     println!("Attempting to copy file from {} to {}", src, dst);
+
+    // Determine if this is a screenshot based on the path
+    let is_screenshot = src.contains("screenshots/");
+
     match tokio::fs::copy(&src, &dst).await {
         Ok(bytes) => {
             println!(
                 "Successfully copied {} bytes from {} to {}",
                 bytes, src, dst
             );
+            // Send appropriate success notification
+            notifications::send_notification(
+                &app,
+                if is_screenshot {
+                    notifications::NotificationType::ScreenshotSaved
+                } else {
+                    notifications::NotificationType::VideoSaved
+                },
+            );
             Ok(())
         }
         Err(e) => {
             eprintln!("Failed to copy file from {} to {}: {}", src, dst, e);
+            notifications::send_notification(
+                &app,
+                if is_screenshot {
+                    notifications::NotificationType::ScreenshotSaveFailed
+                } else {
+                    notifications::NotificationType::VideoSaveFailed
+                },
+            );
             Err(e.to_string())
         }
     }
@@ -775,6 +797,10 @@ async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(
         Ok(data) => data,
         Err(e) => {
             println!("Failed to read screenshot file: {}", e);
+            notifications::send_notification(
+                &app,
+                notifications::NotificationType::ScreenshotCopyFailed,
+            );
             return Err(format!("Failed to read screenshot file: {}", e));
         }
     };
@@ -786,7 +812,7 @@ async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(
         use cocoa::foundation::{NSArray, NSData};
         use objc::rc::autoreleasepool;
 
-        unsafe {
+        let result = unsafe {
             autoreleasepool(|| {
                 let pasteboard: id = NSPasteboard::generalPasteboard(nil);
                 NSPasteboard::clearContents(pasteboard);
@@ -805,13 +831,32 @@ async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(
                     Err("Failed to create NSImage from data".to_string())
                 }
             })
+        };
+
+        if let Err(e) = result {
+            notifications::send_notification(
+                &app,
+                notifications::NotificationType::ScreenshotCopyFailed,
+            );
+            return Err(e);
         }
+
+        notifications::send_notification(
+            &app,
+            notifications::NotificationType::ScreenshotCopiedToClipboard,
+        );
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        Err("Clipboard operations are only supported on macOS".to_string())
+        notifications::send_notification(
+            &app,
+            notifications::NotificationType::ScreenshotCopyFailed,
+        );
+        return Err("Clipboard operations are only supported on macOS".to_string());
     }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1209,18 +1254,15 @@ async fn copy_rendered_video_to_clipboard(
         }
         Err(e) => {
             println!("Failed to get rendered video: {}", e);
+            notifications::send_notification(
+                &app,
+                notifications::NotificationType::VideoCopyFailed,
+            );
             return Err(format!("Failed to get rendered video: {}", e));
         }
     };
 
     let output_path_str = output_path.to_str().unwrap();
-
-    println!("Copying to clipboard: {:?}", output_path_str);
-
-    notifications::send_notification(
-        &app,
-        notifications::NotificationType::VideoCopiedToClipboard,
-    );
 
     #[cfg(target_os = "macos")]
     {
@@ -1229,7 +1271,7 @@ async fn copy_rendered_video_to_clipboard(
         use cocoa::foundation::{NSArray, NSString, NSURL};
         use objc::rc::autoreleasepool;
 
-        unsafe {
+        let result: Result<(), String> = unsafe {
             autoreleasepool(|| {
                 let pasteboard: id = NSPasteboard::generalPasteboard(nil);
                 NSPasteboard::clearContents(pasteboard);
@@ -1239,10 +1281,27 @@ async fn copy_rendered_video_to_clipboard(
 
                 let objects: id = NSArray::arrayWithObject(nil, url);
 
-                NSPasteboard::writeObjects(pasteboard, objects);
-            });
+                if !NSPasteboard::writeObjects(pasteboard, objects) {
+                    Err("Failed to write to clipboard".to_string())
+                } else {
+                    Ok(())
+                }
+            })
+        };
+
+        if let Err(e) = result {
+            notifications::send_notification(
+                &app,
+                notifications::NotificationType::VideoCopyFailed,
+            );
+            return Err(e);
         }
     }
+
+    notifications::send_notification(
+        &app,
+        notifications::NotificationType::VideoCopiedToClipboard,
+    );
 
     Ok(())
 }
@@ -1622,8 +1681,6 @@ async fn upload_rendered_video(
         return Ok(UploadResult::NotAuthenticated);
     };
 
-    notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
-
     // Check if user has an upgraded plan
     if !auth.is_upgraded() {
         // Fetch and update plan information
@@ -1637,14 +1694,13 @@ async fn upload_rendered_video(
 
         // Re-check upgraded status after refresh
         if !auth.is_upgraded() {
-            // Open upgrade window instead of returning an error
+            println!("User plan still not upgraded after refresh.");
             open_upgrade_window(app).await;
             return Ok(UploadResult::UpgradeRequired);
         }
     }
 
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-
     let mut meta = editor_instance.meta();
 
     let share_link = if let Some(sharing) = meta.sharing {
@@ -1656,98 +1712,68 @@ async fn upload_rendered_video(
             Err(e) => return Err(format!("Failed to get rendered video: {}", e)),
         };
 
-        upload_video(
+        match upload_video(
             &app,
             video_id.clone(),
             output_path,
             false,
             Some(pre_created.config),
         )
-        .await?;
+        .await
+        {
+            Ok(_) => {
+                meta.sharing = Some(SharingMeta {
+                    link: pre_created.link.clone(),
+                    id: pre_created.id.clone(),
+                });
+                meta.save_for_project();
+                RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
-        meta.sharing = Some(SharingMeta {
-            link: pre_created.link.clone(),
-            id: pre_created.id.clone(),
-        });
-        meta.save_for_project();
-        RecordingMetaChanged { id: video_id }.emit(&app).ok();
-
-        pre_created.link
-    } else {
-        let output_path = match get_rendered_video_impl(editor_instance.clone(), project).await {
-            Ok(path) => {
-                println!("Successfully retrieved rendered video path: {:?}", path);
-                path
+                pre_created.link
             }
             Err(e) => {
-                println!("Failed to get rendered video: {}", e);
+                notifications::send_notification(
+                    &app,
+                    notifications::NotificationType::UploadFailed,
+                );
+                return Err(e);
+            }
+        }
+    } else {
+        let output_path = match get_rendered_video_impl(editor_instance.clone(), project).await {
+            Ok(path) => path,
+            Err(e) => {
+                notifications::send_notification(
+                    &app,
+                    notifications::NotificationType::UploadFailed,
+                );
                 return Err(format!("Failed to get rendered video: {}", e));
             }
         };
 
-        let uploaded_video = upload_video(&app, video_id.clone(), output_path, false, None).await?;
+        match upload_video(&app, video_id.clone(), output_path, false, None).await {
+            Ok(uploaded_video) => {
+                meta.sharing = Some(SharingMeta {
+                    link: uploaded_video.link.clone(),
+                    id: uploaded_video.id.clone(),
+                });
+                meta.save_for_project();
+                RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
-        let general_settings = GeneralSettingsStore::get(&app)?;
-        if let Some(settings) = general_settings {
-            if settings.upload_individual_files {
-                let video_dir = app
-                    .path()
-                    .app_data_dir()
-                    .unwrap()
-                    .join("recordings")
-                    .join(format!("{}.cap", video_id));
-
-                let files_to_upload = vec![
-                    (video_dir.join("content/audio-input.mp3"), true),
-                    (video_dir.join("content/camera.mp4"), false),
-                    (video_dir.join("content/display.mp4"), false),
-                ];
-
-                for (file_path, is_audio) in files_to_upload {
-                    if file_path.exists() {
-                        let file_name = file_path.file_name().unwrap().to_str().unwrap();
-                        let result = if is_audio {
-                            upload_individual_file(
-                                &app,
-                                file_path.clone(),
-                                uploaded_video.config.clone(),
-                                file_name,
-                                true,
-                            )
-                            .await
-                        } else {
-                            upload_individual_file(
-                                &app,
-                                file_path.clone(),
-                                uploaded_video.config.clone(),
-                                file_name,
-                                false,
-                            )
-                            .await
-                        };
-
-                        match result {
-                            Ok(()) => println!("Successfully uploaded {}", file_name),
-                            Err(e) => println!("Failed to upload {}: {}", file_name, e),
-                        }
-                    }
-                }
+                uploaded_video.link
             }
-        } else {
-            println!("General settings not found");
+            Err(e) => {
+                notifications::send_notification(
+                    &app,
+                    notifications::NotificationType::UploadFailed,
+                );
+                return Err(e);
+            }
         }
-
-        meta.sharing = Some(SharingMeta {
-            link: uploaded_video.link.clone(),
-            id: uploaded_video.id.clone(),
-        });
-        meta.save_for_project();
-        RecordingMetaChanged { id: video_id }.emit(&app).ok();
-
-        uploaded_video.link
     };
 
-    println!("Copying to clipboard: {:?}", share_link);
+    // Only send success notification if we actually got here
+    notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
 
     #[cfg(target_os = "macos")]
     {
@@ -1760,11 +1786,8 @@ async fn upload_rendered_video(
             autoreleasepool(|| {
                 let pasteboard: id = NSPasteboard::generalPasteboard(nil);
                 NSPasteboard::clearContents(pasteboard);
-
                 let ns_string = NSString::alloc(nil).init_str(&share_link);
-
                 let objects: id = NSArray::arrayWithObject(nil, ns_string);
-
                 NSPasteboard::writeObjects(pasteboard, objects);
             });
         }
@@ -1877,6 +1900,9 @@ async fn upload_screenshot(
             });
         }
     }
+
+    // Send notification after successful upload and clipboard copy
+    notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
 
     Ok(UploadResult::Success(share_link))
 }
@@ -2062,14 +2088,21 @@ async fn save_file_dialog(
         });
 
     println!("Waiting for user selection");
-    let result = rx.recv().map_err(|e| {
-        println!("Error receiving result: {}", e);
-        e.to_string()
-    })?;
-
-    println!("Save dialog result: {:?}", result);
-
-    Ok(result)
+    match rx.recv() {
+        Ok(result) => {
+            println!("Save dialog result: {:?}", result);
+            // Don't send any notifications here - we'll do it after the file is actually copied
+            Ok(result)
+        }
+        Err(e) => {
+            println!("Error receiving result: {}", e);
+            notifications::send_notification(
+                &app,
+                notifications::NotificationType::VideoSaveFailed,
+            );
+            Err(e.to_string())
+        }
+    }
 }
 
 #[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
@@ -2223,7 +2256,7 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-async fn reset_camera_permissions(app: AppHandle) -> Result<(), ()> {
+async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
     #[cfg(debug_assertions)]
     let bundle_id = "com.apple.Terminal";
     #[cfg(not(debug_assertions))]
@@ -2241,7 +2274,7 @@ async fn reset_camera_permissions(app: AppHandle) -> Result<(), ()> {
 
 #[tauri::command]
 #[specta::specta]
-async fn reset_microphone_permissions(app: AppHandle) -> Result<(), ()> {
+async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
     #[cfg(debug_assertions)]
     let bundle_id = "com.apple.Terminal";
     #[cfg(not(debug_assertions))]

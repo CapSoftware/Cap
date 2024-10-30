@@ -26,8 +26,8 @@ use image::GenericImageView;
 pub mod decoder;
 pub use decoder::DecodedFrame;
 
-// Add this constant at the top of the file
-const STANDARD_CURSOR_HEIGHT: f32 = 100.0; // Standard height for all cursors
+// Change this constant from 100.0 to 50.0
+const STANDARD_CURSOR_HEIGHT: f32 = 50.0; // Standard height for all cursors
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RenderOptions {
@@ -860,117 +860,125 @@ pub async fn produce_frame(
 
     // Finally, render the cursor directly to the output texture
     {
-        if let Some(cursor_position) = interpolate_cursor_position(&constants.cursor, time) {
-            println!(
-                "Raw cursor position: ({}, {})",
-                cursor_position.0, cursor_position.1
-            );
-
-            let cursor_event = find_cursor_event(&constants.cursor, time);
-            println!("Found cursor event with ID: {}", cursor_event.cursor_id);
-
-            if let Some(cursor_texture) = constants.cursor_textures.get(&cursor_event.cursor_id) {
-                let cursor_size = cursor_texture.size();
-                let aspect_ratio = cursor_size.width as f32 / cursor_size.height as f32;
-
-                // Use a default cursor size if the uniform value is 0
-                let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
-                    100.0
-                } else {
-                    uniforms.cursor_size
-                };
-                let scale_factor = cursor_size_percentage / 100.0;
-
-                let normalized_size = [
-                    STANDARD_CURSOR_HEIGHT * aspect_ratio * scale_factor,
-                    STANDARD_CURSOR_HEIGHT * scale_factor,
-                ];
-
+        if FLAGS.zoom {
+            if let Some(cursor_position) = interpolate_cursor_position(&constants.cursor, time) {
                 println!(
-                    "Original cursor size: {}x{}, Normalized size: {}x{}",
-                    cursor_size.width, cursor_size.height, normalized_size[0], normalized_size[1]
+                    "Raw cursor position: ({}, {})",
+                    cursor_position.0, cursor_position.1
                 );
 
-                // Convert normalized cursor position to screen space
-                let screen_x = cursor_position.0 * uniforms.output_size.0 as f64;
-                let screen_y = cursor_position.1 * uniforms.output_size.1 as f64;
+                let cursor_event = find_cursor_event(&constants.cursor, time);
+                println!("Found cursor event with ID: {}", cursor_event.cursor_id);
 
-                println!("Screen position: ({}, {})", screen_x, screen_y);
+                if let Some(cursor_texture) = constants.cursor_textures.get(&cursor_event.cursor_id)
+                {
+                    let cursor_size = cursor_texture.size();
+                    let aspect_ratio = cursor_size.width as f32 / cursor_size.height as f32;
 
-                let cursor_uniforms = CursorUniforms {
-                    position: [screen_x as f32, screen_y as f32, 0.0, 0.0],
-                    size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
-                    output_size: [
-                        uniforms.output_size.0 as f32,
-                        uniforms.output_size.1 as f32,
-                        0.0,
-                        0.0,
-                    ],
-                    screen_bounds: uniforms.display.target_bounds,
-                    cursor_size: cursor_size_percentage,
-                    padding: [0.0; 3],
-                    _alignment: [0.0; 4],
-                };
+                    // Use a default cursor size if the uniform value is 0
+                    let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
+                        100.0
+                    } else {
+                        uniforms.cursor_size
+                    };
+                    let scale_factor = cursor_size_percentage / 100.0;
 
-                println!("Cursor uniforms: {:?}", cursor_uniforms);
+                    let normalized_size = [
+                        STANDARD_CURSOR_HEIGHT * aspect_ratio * scale_factor,
+                        STANDARD_CURSOR_HEIGHT * scale_factor,
+                    ];
 
-                // Create the uniform buffer with the correct size
-                let cursor_uniform_buffer =
-                    constants
-                        .device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("Cursor Uniform Buffer"),
-                            contents: bytemuck::cast_slice(&[cursor_uniforms]), // This ensures proper size
-                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        });
+                    println!(
+                        "Original cursor size: {}x{}, Normalized size: {}x{}",
+                        cursor_size.width,
+                        cursor_size.height,
+                        normalized_size[0],
+                        normalized_size[1]
+                    );
 
-                let cursor_bind_group =
-                    constants
-                        .device
-                        .create_bind_group(&wgpu::BindGroupDescriptor {
-                            layout: &constants.cursor_pipeline.bind_group_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource: cursor_uniform_buffer.as_entire_binding(),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource: wgpu::BindingResource::TextureView(
-                                        &cursor_texture
-                                            .create_view(&wgpu::TextureViewDescriptor::default()),
-                                    ),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 2,
-                                    resource: wgpu::BindingResource::Sampler(
-                                        &constants
-                                            .device
-                                            .create_sampler(&wgpu::SamplerDescriptor::default()),
-                                    ),
-                                },
-                            ],
-                            label: Some("Cursor Bind Group"),
-                        });
+                    // Convert normalized cursor position to screen space
+                    let screen_x = cursor_position.0 * uniforms.output_size.0 as f64;
+                    let screen_y = cursor_position.1 * uniforms.output_size.1 as f64;
 
-                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Cursor Render Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: get_either(texture_views, !output_is_left),
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
+                    println!("Screen position: ({}, {})", screen_x, screen_y);
 
-                render_pass.set_pipeline(&constants.cursor_pipeline.render_pipeline);
-                render_pass.set_bind_group(0, &cursor_bind_group, &[]);
-                render_pass.draw(0..4, 0..1);
+                    let cursor_uniforms = CursorUniforms {
+                        position: [screen_x as f32, screen_y as f32, 0.0, 0.0],
+                        size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
+                        output_size: [
+                            uniforms.output_size.0 as f32,
+                            uniforms.output_size.1 as f32,
+                            0.0,
+                            0.0,
+                        ],
+                        screen_bounds: uniforms.display.target_bounds,
+                        cursor_size: cursor_size_percentage,
+                        padding: [0.0; 3],
+                        _alignment: [0.0; 4],
+                    };
+
+                    println!("Cursor uniforms: {:?}", cursor_uniforms);
+
+                    // Create the uniform buffer with the correct size
+                    let cursor_uniform_buffer =
+                        constants
+                            .device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Cursor Uniform Buffer"),
+                                contents: bytemuck::cast_slice(&[cursor_uniforms]), // This ensures proper size
+                                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                            });
+
+                    let cursor_bind_group =
+                        constants
+                            .device
+                            .create_bind_group(&wgpu::BindGroupDescriptor {
+                                layout: &constants.cursor_pipeline.bind_group_layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: cursor_uniform_buffer.as_entire_binding(),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::TextureView(
+                                            &cursor_texture.create_view(
+                                                &wgpu::TextureViewDescriptor::default(),
+                                            ),
+                                        ),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 2,
+                                        resource:
+                                            wgpu::BindingResource::Sampler(
+                                                &constants.device.create_sampler(
+                                                    &wgpu::SamplerDescriptor::default(),
+                                                ),
+                                            ),
+                                    },
+                                ],
+                                label: Some("Cursor Bind Group"),
+                            });
+
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Cursor Render Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: get_either(texture_views, !output_is_left),
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                    render_pass.set_pipeline(&constants.cursor_pipeline.render_pipeline);
+                    render_pass.set_bind_group(0, &cursor_bind_group, &[]);
+                    render_pass.draw(0..4, 0..1);
+                }
             }
         }
     }

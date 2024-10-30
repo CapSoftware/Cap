@@ -508,7 +508,7 @@ export function ConfigSidebar() {
             <Slider
               value={[project.cursor.size]}
               onChange={(v) => setProject("cursor", "size", v[0])}
-              minValue={100}
+              minValue={500}
               maxValue={300}
             />
           </Field>
