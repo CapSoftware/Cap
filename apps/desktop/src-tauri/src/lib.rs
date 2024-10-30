@@ -2263,6 +2263,18 @@ async fn is_camera_window_open(app: AppHandle) -> bool {
     CapWindow::Camera { ws_port: 0 }.get(&app).is_some()
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn seek_to(app: AppHandle, video_id: String, frame_number: u32) {
+    let editor_instance = upsert_editor_instance(&app, video_id).await;
+
+    editor_instance
+        .modify_and_emit_state(|state| {
+            state.playhead_position = frame_number;
+        })
+        .await;
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -2320,7 +2332,8 @@ pub async fn run() {
             delete_auth_open_signin,
             reset_camera_permissions,
             reset_microphone_permissions,
-            is_camera_window_open
+            is_camera_window_open,
+            seek_to
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

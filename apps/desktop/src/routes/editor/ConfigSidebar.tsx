@@ -16,9 +16,9 @@ import {
   ComingSoonTooltip,
   EditorButton,
   Field,
-  Slider,
   Subfield,
   Toggle,
+  Slider,
 } from "./ui";
 import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
 
@@ -504,17 +504,14 @@ export function ConfigSidebar() {
               </Subfield>
             </ComingSoonTooltip>
           </Field>
-          <ComingSoonTooltip>
-            <Field name="Size" icon={<IconCapEnlarge />}>
-              <Slider
-                disabled
-                value={[project.cursor.size]}
-                onChange={(v) => setProject("cursor", "size", v[0])}
-                minValue={0}
-                maxValue={100}
-              />
-            </Field>
-          </ComingSoonTooltip>
+          <Field name="Size" icon={<IconCapEnlarge />}>
+            <Slider
+              value={[project.cursor.size]}
+              onChange={(v) => setProject("cursor", "size", v[0])}
+              minValue={100}
+              maxValue={300}
+            />
+          </Field>
           <ComingSoonTooltip>
             <Field name="Type" icon={<IconCapCursor />}>
               <ul class="flex flex-row gap-2 text-gray-400">

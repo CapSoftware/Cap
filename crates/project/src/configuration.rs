@@ -150,12 +150,22 @@ pub enum CursorType {
     Circle,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorConfiguration {
     hide_when_idle: bool,
-    size: u32,
+    pub size: u32,
     r#type: CursorType,
+}
+
+impl Default for CursorConfiguration {
+    fn default() -> Self {
+        Self {
+            hide_when_idle: false,
+            size: 100,
+            r#type: CursorType::default(),
+        }
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]

@@ -355,6 +355,7 @@ impl RenderVideoConstants {
 #[derive(Clone, Debug)]
 pub struct ProjectUniforms {
     pub output_size: (u32, u32),
+    pub cursor_size: f32,
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
 }
@@ -581,6 +582,7 @@ impl ProjectUniforms {
 
         Self {
             output_size,
+            cursor_size: project.cursor.size as f32,
             display,
             camera,
         }
@@ -726,7 +728,7 @@ pub async fn produce_frame(
                 &constants.device,
                 &GradientOrColorUniforms::from(background).to_buffer(&constants.device),
             ),
-            wgpu::LoadOp::Clear(wgpu::Color::BLACK), // Clear on first pass
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
         );
 
         output_is_left = !output_is_left;
@@ -871,10 +873,17 @@ pub async fn produce_frame(
                 let cursor_size = cursor_texture.size();
                 let aspect_ratio = cursor_size.width as f32 / cursor_size.height as f32;
 
-                // Calculate normalized size maintaining aspect ratio
+                // Use a default cursor size if the uniform value is 0
+                let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
+                    100.0
+                } else {
+                    uniforms.cursor_size
+                };
+                let scale_factor = cursor_size_percentage / 100.0;
+
                 let normalized_size = [
-                    STANDARD_CURSOR_HEIGHT * aspect_ratio,
-                    STANDARD_CURSOR_HEIGHT,
+                    STANDARD_CURSOR_HEIGHT * aspect_ratio * scale_factor,
+                    STANDARD_CURSOR_HEIGHT * scale_factor,
                 ];
 
                 println!(
@@ -889,23 +898,29 @@ pub async fn produce_frame(
                 println!("Screen position: ({}, {})", screen_x, screen_y);
 
                 let cursor_uniforms = CursorUniforms {
-                    position: [screen_x as f32, screen_y as f32],
-                    padding1: [0.0; 2],
-                    size: normalized_size, // Use normalized size instead of original size
-                    padding2: [0.0; 2],
-                    output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
-                    padding3: [0.0; 2],
+                    position: [screen_x as f32, screen_y as f32, 0.0, 0.0],
+                    size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
+                    output_size: [
+                        uniforms.output_size.0 as f32,
+                        uniforms.output_size.1 as f32,
+                        0.0,
+                        0.0,
+                    ],
                     screen_bounds: uniforms.display.target_bounds,
+                    cursor_size: cursor_size_percentage,
+                    padding: [0.0; 3],
+                    _alignment: [0.0; 4],
                 };
 
                 println!("Cursor uniforms: {:?}", cursor_uniforms);
 
+                // Create the uniform buffer with the correct size
                 let cursor_uniform_buffer =
                     constants
                         .device
                         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                             label: Some("Cursor Uniform Buffer"),
-                            contents: bytemuck::cast_slice(&[cursor_uniforms]),
+                            contents: bytemuck::cast_slice(&[cursor_uniforms]), // This ensures proper size
                             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                         });
 
@@ -956,8 +971,6 @@ pub async fn produce_frame(
                 render_pass.set_pipeline(&constants.cursor_pipeline.render_pipeline);
                 render_pass.set_bind_group(0, &cursor_bind_group, &[]);
                 render_pass.draw(0..4, 0..1);
-
-                println!("Drew cursor");
             }
         }
     }
@@ -1447,16 +1460,16 @@ struct CursorPipeline {
 
 // Add this before the CursorPipeline struct definition
 
-#[repr(C)]
+#[repr(C, align(16))] // Add align(16) to ensure proper alignment
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct CursorUniforms {
-    position: [f32; 2],      // 8 bytes
-    padding1: [f32; 2],      // 8 bytes padding to align next field
-    size: [f32; 2],          // 8 bytes
-    padding2: [f32; 2],      // 8 bytes padding to align next field
-    output_size: [f32; 2],   // 8 bytes
-    padding3: [f32; 2],      // 8 bytes padding to align next field
-    screen_bounds: [f32; 4], // 16 bytes
+    position: [f32; 4],
+    size: [f32; 4],
+    output_size: [f32; 4],
+    screen_bounds: [f32; 4],
+    cursor_size: f32,
+    padding: [f32; 3],
+    _alignment: [f32; 4], // Add extra padding to ensure 16-byte alignment
 }
 
 // Add this function near the other cursor-related functions
@@ -1492,7 +1505,7 @@ impl CursorPipeline {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: Some(std::num::NonZeroU64::new(64).unwrap()),
+                        min_binding_size: Some(std::num::NonZeroU64::new(96).unwrap()),
                     },
                     count: None,
                 },

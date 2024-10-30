@@ -316,6 +316,9 @@ async resetMicrophonePermissions() : Promise<Result<null, null>> {
 },
 async isCameraWindowOpen() : Promise<boolean> {
     return await TAURI_INVOKE("is_camera_window_open");
+},
+async seekTo(videoId: string, frameNumber: number) : Promise<void> {
+    await TAURI_INVOKE("seek_to", { videoId, frameNumber });
 }
 }
 

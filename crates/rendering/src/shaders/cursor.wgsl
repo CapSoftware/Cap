@@ -1,11 +1,10 @@
 struct Uniforms {
-    position: vec2<f32>,
-    padding1: vec2<f32>,
-    size: vec2<f32>,
-    padding2: vec2<f32>,
-    output_size: vec2<f32>,
-    padding3: vec2<f32>,
+    position: vec4<f32>,
+    size: vec4<f32>,
+    output_size: vec4<f32>,
     screen_bounds: vec4<f32>,
+    cursor_size: f32,
+    padding: vec3<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -21,14 +20,11 @@ struct VertexOutput {
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var out: VertexOutput;
     
-    // Create a quad from two triangles using triangle strip
     let x = f32(vertex_index & 1u);
     let y = f32((vertex_index >> 1u) & 1u);
     
-    // Calculate position in screen space
-    let pos = uniforms.position + vec2<f32>(x * uniforms.size.x, y * uniforms.size.y);
+    let pos = uniforms.position.xy + vec2<f32>(x * uniforms.size.x, y * uniforms.size.y);
     
-    // Convert to clip space (-1 to 1)
     let clip_pos = vec2<f32>(
         (pos.x / uniforms.output_size.x) * 2.0 - 1.0,
         -((pos.y / uniforms.output_size.y) * 2.0 - 1.0)
