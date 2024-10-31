@@ -523,6 +523,8 @@ export default function () {
   );
 }
 
+export const searchParams = "hello!!!";
+
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";

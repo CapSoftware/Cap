@@ -2262,11 +2262,11 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
         window.close().ok();
     }
 
-    if let Some(window) = CapWindow::Main.get(&app) {
+    if let Some(window) = CapWindowId::Main.get(&app) {
         window.close().ok();
     }
 
-    while CapWindow::Main.get(&app).is_some() {
+    while CapWindowId::Main.get(&app).is_some() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
@@ -2472,10 +2472,6 @@ pub async fn run() {
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
 
             tray::create_tray(&app_handle).unwrap();
-
-            CapWindow::InProgressRecording { position: None }
-                .show(app.app_handle())
-                .ok();
 
             let app_handle_clone = app_handle.clone();
             RequestStartRecording::listen_any(app, move |_| {

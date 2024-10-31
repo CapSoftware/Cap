@@ -1,7 +1,14 @@
 import type { RouteSectionProps } from "@solidjs/router";
-import { Suspense } from "solid-js";
+import { onMount, ParentProps, Suspense } from "solid-js";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import Header from "../components/Header";
+
+export const route = {
+  info: {
+    AUTO_SHOW_WINDOW: false,
+  },
+};
 
 export default function (props: RouteSectionProps) {
   return (
@@ -23,9 +30,17 @@ export default function (props: RouteSectionProps) {
           </div>
         }
       >
-        {props.children}
+        <Inner>{props.children}</Inner>
       </Suspense>
       {/* </Transition> */}
     </div>
   );
+}
+
+function Inner(props: ParentProps) {
+  onMount(() => {
+    getCurrentWindow().show();
+  });
+
+  return <>{props.children}</>;
 }

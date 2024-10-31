@@ -1,4 +1,7 @@
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, Wry};
+use std::path::PathBuf;
+
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
+use wgpu::StencilOperation;
 
 pub enum CapWindow {
     Main,
@@ -172,8 +175,6 @@ impl CapWindow {
     }
 
     pub fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
-        let label = self.label();
-
         if let Some(window) = self.get(app) {
             window.show().ok();
             window.set_focus().ok();
@@ -185,8 +186,8 @@ impl CapWindow {
 
         Ok(match self {
             Self::Main => {
-                let window = WebviewWindow::builder(app, label, WebviewUrl::App("/".into()))
-                    .title(self.title())
+                let window = self
+                    .window_builder(app, "/")
                     .inner_size(300.0, 375.0)
                     .resizable(false)
                     .maximized(false)
@@ -203,23 +204,20 @@ impl CapWindow {
                 window
             }
             Self::Settings { page } => {
-                let window = WebviewWindow::builder(
-                    app,
-                    label,
-                    WebviewUrl::App(
-                        format!("/settings/{}", page.clone().unwrap_or_default()).into(),
-                    ),
-                )
-                .title(self.title())
-                .min_inner_size(600.0, 450.0)
-                .resizable(true)
-                .maximized(false)
-                .shadow(true)
-                .accept_first_mouse(true)
-                .transparent(true)
-                .hidden_title(true)
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .build()?;
+                let window = self
+                    .window_builder(
+                        app,
+                        format!("/settings/{}", page.clone().unwrap_or_default()),
+                    )
+                    .min_inner_size(600.0, 450.0)
+                    .resizable(true)
+                    .maximized(false)
+                    .shadow(true)
+                    .accept_first_mouse(true)
+                    .transparent(true)
+                    .hidden_title(true)
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .build()?;
 
                 apply_window_chrome(&window);
 
@@ -228,33 +226,31 @@ impl CapWindow {
             Self::Camera { ws_port } => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
-                let window = tauri::webview::WebviewWindow::builder(
-                    app,
-                    label,
-                    WebviewUrl::App("/camera".into()),
-                )
-                .title("Cap")
-                .maximized(false)
-                .resizable(false)
-                .shadow(false)
-                .fullscreen(false)
-                .decorations(false)
-                .always_on_top(true)
-                .content_protected(true)
-                .visible_on_all_workspaces(true)
-                .min_inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
-                .inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
-                .position(
-                    100.0,
-                    (monitor.size().height as f64) / monitor.scale_factor() - WINDOW_SIZE - 100.0,
-                )
-                .initialization_script(&format!(
-                    "
+                let window = self
+                    .window_builder(app, "/camera")
+                    .maximized(false)
+                    .resizable(false)
+                    .shadow(false)
+                    .fullscreen(false)
+                    .decorations(false)
+                    .always_on_top(true)
+                    .content_protected(true)
+                    .visible_on_all_workspaces(true)
+                    .min_inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
+                    .inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
+                    .position(
+                        100.0,
+                        (monitor.size().height as f64) / monitor.scale_factor()
+                            - WINDOW_SIZE
+                            - 100.0,
+                    )
+                    .initialization_script(&format!(
+                        "
 			                window.__CAP__ = window.__CAP__ ?? {{}};
 			                window.__CAP__.cameraWsPort = {ws_port};
 		                ",
-                ))
-                .build()?;
+                    ))
+                    .build()?;
 
                 #[cfg(target_os = "macos")]
                 {
@@ -266,27 +262,23 @@ impl CapWindow {
                 window
             }
             Self::WindowCaptureOccluder => {
-                let window = WebviewWindow::builder(
-                    app,
-                    label,
-                    WebviewUrl::App("/window-capture-occluder".into()),
-                )
-                .title(self.title())
-                .maximized(false)
-                .resizable(false)
-                .fullscreen(false)
-                .decorations(false)
-                .shadow(false)
-                .always_on_top(true)
-                .visible_on_all_workspaces(true)
-                .content_protected(true)
-                .inner_size(
-                    (monitor.size().width as f64) / monitor.scale_factor(),
-                    (monitor.size().height as f64) / monitor.scale_factor(),
-                )
-                .position(0.0, 0.0)
-                .build()
-                .unwrap();
+                let window = self
+                    .window_builder(app, "/window-capture-occluder")
+                    .maximized(false)
+                    .resizable(false)
+                    .fullscreen(false)
+                    .decorations(false)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .visible_on_all_workspaces(true)
+                    .content_protected(true)
+                    .inner_size(
+                        (monitor.size().width as f64) / monitor.scale_factor(),
+                        (monitor.size().height as f64) / monitor.scale_factor(),
+                    )
+                    .position(0.0, 0.0)
+                    .build()
+                    .unwrap();
 
                 window.set_ignore_cursor_events(true).unwrap();
 
@@ -309,51 +301,47 @@ impl CapWindow {
                 let width = 160.0;
                 let height = 40.0;
 
-                let window = WebviewWindow::builder(
-                    app,
-                    label,
-                    tauri::WebviewUrl::App("/in-progress-recording".into()),
-                )
-                .title("Cap In Progress Recording")
-                .maximized(false)
-                .resizable(false)
-                .fullscreen(false)
-                .decorations(false)
-                .shadow(true)
-                .always_on_top(true)
-                .transparent(true)
-                .visible_on_all_workspaces(true)
-                .content_protected(true)
-                .accept_first_mouse(true)
-                .inner_size(width, height)
-                .position(
-                    ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
-                    (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
-                )
-                .visible(false)
-                .build()?;
+                let window = self
+                    .window_builder(app, "/in-progress-recording")
+                    .title(self.title())
+                    .maximized(false)
+                    .resizable(false)
+                    .fullscreen(false)
+                    .decorations(false)
+                    .shadow(true)
+                    .always_on_top(true)
+                    .transparent(true)
+                    .visible_on_all_workspaces(true)
+                    .content_protected(true)
+                    .accept_first_mouse(true)
+                    .inner_size(width, height)
+                    .position(
+                        ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
+                        (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
+                    )
+                    .visible(false)
+                    .build()?;
 
                 window
             }
             Self::Notifications => {
-                let window =
-                    WebviewWindow::builder(app, &label, WebviewUrl::App("/notifications".into()))
-                        .title(self.title())
-                        .maximized(false)
-                        .transparent(true)
-                        .resizable(false)
-                        .fullscreen(false)
-                        .decorations(false)
-                        .shadow(false)
-                        .always_on_top(true)
-                        .visible_on_all_workspaces(true)
-                        .content_protected(true)
-                        .inner_size(350.0, 350.0)
-                        .position(
-                            (monitor.size().width as f64) / monitor.scale_factor() - 350.0,
-                            0.0,
-                        )
-                        .build()?;
+                let window = self
+                    .window_builder(app, "/notifications")
+                    .maximized(false)
+                    .transparent(true)
+                    .resizable(false)
+                    .fullscreen(false)
+                    .decorations(false)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .visible_on_all_workspaces(true)
+                    .content_protected(true)
+                    .inner_size(350.0, 350.0)
+                    .position(
+                        (monitor.size().width as f64) / monitor.scale_factor() - 350.0,
+                        0.0,
+                    )
+                    .build()?;
 
                 // Make window non-interactive
                 window.set_ignore_cursor_events(true)?;
@@ -361,24 +349,23 @@ impl CapWindow {
                 window
             }
             Self::PrevRecordings => {
-                let window =
-                    WebviewWindow::builder(app, &label, WebviewUrl::App("/prev-recordings".into()))
-                        .title(self.title())
-                        .maximized(false)
-                        .resizable(false)
-                        .fullscreen(false)
-                        .decorations(false)
-                        .shadow(false)
-                        .always_on_top(true)
-                        .visible_on_all_workspaces(true)
-                        .accept_first_mouse(true)
-                        .content_protected(true)
-                        .inner_size(
-                            350.0,
-                            (monitor.size().height as f64) / monitor.scale_factor(),
-                        )
-                        .position(0.0, 0.0)
-                        .build()?;
+                let window = self
+                    .window_builder(app, "/prev-recordings")
+                    .maximized(false)
+                    .resizable(false)
+                    .fullscreen(false)
+                    .decorations(false)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .visible_on_all_workspaces(true)
+                    .accept_first_mouse(true)
+                    .content_protected(true)
+                    .inner_size(
+                        350.0,
+                        (monitor.size().height as f64) / monitor.scale_factor(),
+                    )
+                    .position(0.0, 0.0)
+                    .build()?;
 
                 #[cfg(target_os = "macos")]
                 {
@@ -413,18 +400,14 @@ impl CapWindow {
                 window
             }
             Self::Editor { project_id } => {
-                let window = WebviewWindow::builder(
-                    app,
-                    label,
-                    WebviewUrl::App(format!("/editor?id={project_id}").into()),
-                )
-                .inner_size(1150.0, 800.0)
-                .title(self.title())
-                .hidden_title(true)
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .accept_first_mouse(true)
-                .theme(Some(tauri::Theme::Light))
-                .build()?;
+                let window = self
+                    .window_builder(app, format!("/editor?id={project_id}"))
+                    .inner_size(1150.0, 800.0)
+                    .hidden_title(true)
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .accept_first_mouse(true)
+                    .theme(Some(tauri::Theme::Light))
+                    .build()?;
 
                 #[cfg(target_os = "macos")]
                 {
@@ -436,78 +419,84 @@ impl CapWindow {
                 window
             }
             Self::Permissions => {
-                let window =
-                    WebviewWindow::builder(app, label, WebviewUrl::App("/permissions".into()))
-                        .title(self.title())
-                        .inner_size(300.0, 350.0)
-                        .resizable(false)
-                        .maximized(false)
-                        .shadow(true)
-                        .accept_first_mouse(true)
-                        .transparent(true)
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                let window = self
+                    .window_builder(app, "/permissions")
+                    .inner_size(300.0, 350.0)
+                    .resizable(false)
+                    .maximized(false)
+                    .shadow(true)
+                    .accept_first_mouse(true)
+                    .transparent(true)
+                    .hidden_title(true)
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Feedback => {
-                let window =
-                    WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/feedback".into()))
-                        .title(self.title())
-                        .inner_size(400.0, 400.0)
-                        .resizable(false)
-                        .maximized(false)
-                        .shadow(true)
-                        .accept_first_mouse(true)
-                        .transparent(true)
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                let window = self
+                    .window_builder(app, "/feedback")
+                    .inner_size(400.0, 400.0)
+                    .resizable(false)
+                    .maximized(false)
+                    .shadow(true)
+                    .accept_first_mouse(true)
+                    .transparent(true)
+                    .hidden_title(true)
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Upgrade => {
-                let window =
-                    WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/upgrade".into()))
-                        .title(self.title())
-                        .inner_size(800.0, 850.0)
-                        .resizable(false)
-                        .maximized(false)
-                        .shadow(true)
-                        .accept_first_mouse(true)
-                        .transparent(true)
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                let window = self
+                    .window_builder(app, "/upgrade")
+                    .inner_size(800.0, 850.0)
+                    .resizable(false)
+                    .maximized(false)
+                    .shadow(true)
+                    .accept_first_mouse(true)
+                    .transparent(true)
+                    .hidden_title(true)
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
             Self::Changelog => {
-                let window =
-                    WebviewWindow::builder(app, label, tauri::WebviewUrl::App("/changelog".into()))
-                        .title(self.title())
-                        .inner_size(600.0, 450.0)
-                        .resizable(true)
-                        .maximized(false)
-                        .shadow(true)
-                        .accept_first_mouse(true)
-                        .transparent(true)
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .build()?;
+                let window = self
+                    .window_builder(app, "/changelog")
+                    .inner_size(600.0, 450.0)
+                    .resizable(true)
+                    .maximized(false)
+                    .shadow(true)
+                    .accept_first_mouse(true)
+                    .transparent(true)
+                    .hidden_title(true)
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .build()?;
 
                 apply_window_chrome(&window);
 
                 window
             }
         })
+    }
+
+    fn window_builder<'a>(
+        &'a self,
+        app: &'a AppHandle<Wry>,
+        url: impl Into<PathBuf>,
+    ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
+        WebviewWindow::builder(app, self.label(), WebviewUrl::App(url.into()))
+            .title(self.title())
+            .visible(false)
     }
 }
 
