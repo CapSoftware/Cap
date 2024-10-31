@@ -11,6 +11,10 @@ export const route = {
 };
 
 export default function (props: RouteSectionProps) {
+  onMount(() => {
+    if (location.pathname === "/") getCurrentWindow().show();
+  });
+
   return (
     <div class="rounded-[1.5rem] bg-gray-100 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden">
       <Header />
@@ -39,7 +43,7 @@ export default function (props: RouteSectionProps) {
 
 function Inner(props: ParentProps) {
   onMount(() => {
-    getCurrentWindow().show();
+    if (location.pathname !== "/") getCurrentWindow().show();
   });
 
   return <>{props.children}</>;

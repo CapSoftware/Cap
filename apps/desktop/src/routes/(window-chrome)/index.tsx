@@ -73,7 +73,7 @@ export default function () {
 
   onMount(async () => {
     await commands.showPreviousRecordingsWindow();
-    await commands.showNotificationsWindow();
+    // await commands.showNotificationsWindow();
   });
 
   const isRecording = () => !!currentRecording.data;

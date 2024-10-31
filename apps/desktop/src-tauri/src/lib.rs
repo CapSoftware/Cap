@@ -55,6 +55,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
 use tauri_nspanel::ManagerExt;
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::task;
@@ -360,6 +361,10 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
     if let Some(window) = (CapWindow::InProgressRecording { position: None }).get(&app) {
         window.eval("window.location.reload()").unwrap();
         window.show().unwrap();
+    } else {
+        CapWindow::InProgressRecording { position: None }
+            .show(&app)
+            .ok();
     }
 
     AppSounds::StartRecording.play();
@@ -1470,16 +1475,16 @@ async fn remove_fake_window(
     Ok(())
 }
 
-#[tauri::command(async)]
-#[specta::specta]
-fn show_notifications_window(app: AppHandle) {
-    if app.get_webview_window("notifications").is_some() {
-        println!("notifications window already exists");
-        return;
-    }
+// #[tauri::command(async)]
+// #[specta::specta]
+// fn show_notifications_window(app: AppHandle) {
+//     if app.get_webview_window("notifications").is_some() {
+//         println!("notifications window already exists");
+//         return;
+//     }
 
-    CapWindow::Notifications.show(&app).unwrap();
-}
+//     CapWindow::Notifications.show(&app).unwrap();
+// }
 
 #[tauri::command(async)]
 #[specta::specta]
@@ -2345,7 +2350,7 @@ pub async fn run() {
             list_capture_screens,
             list_audio_devices,
             show_previous_recordings_window,
-            show_notifications_window,
+            // show_notifications_window,
             close_previous_recordings_window,
             set_fake_window_bounds,
             remove_fake_window,
@@ -2437,6 +2442,7 @@ pub async fn run() {
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .plugin(flags::plugin::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
@@ -2550,12 +2556,6 @@ pub async fn run() {
                 tauri::async_runtime::spawn(async move {
                     open_settings_window(app_handle, e.payload.page).await;
                 });
-            });
-
-            let app_handle_clone = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                AuthenticationInvalid.emit(&app_handle_clone).ok();
             });
 
             let app_handle_clone = app_handle.clone();

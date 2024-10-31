@@ -81,9 +81,6 @@ async listAudioDevices() : Promise<Result<string[], null>> {
 async showPreviousRecordingsWindow() : Promise<void> {
     await TAURI_INVOKE("show_previous_recordings_window");
 },
-async showNotificationsWindow() : Promise<void> {
-    await TAURI_INVOKE("show_notifications_window");
-},
 async closePreviousRecordingsWindow() : Promise<void> {
     await TAURI_INVOKE("close_previous_recordings_window");
 },

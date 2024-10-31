@@ -1,4 +1,5 @@
 use crate::{AppSounds, NewNotification};
+use tauri_plugin_notification::NotificationExt;
 use tauri_specta::Event;
 
 pub enum NotificationType {
@@ -84,6 +85,13 @@ impl NotificationType {
 pub fn send_notification(app: &tauri::AppHandle, notification_type: NotificationType) {
     let (title, body, is_error) = notification_type.details();
 
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .ok();
+
     println!(
         "Sending notification: Title: '{}', Body: '{}', Error: {}",
         title, body, is_error
@@ -91,10 +99,10 @@ pub fn send_notification(app: &tauri::AppHandle, notification_type: Notification
 
     AppSounds::Notification.play();
 
-    let _ = NewNotification {
-        title: title.to_string(),
-        body: body.to_string(),
-        is_error,
-    }
-    .emit(app);
+    // let _ = NewNotification {
+    //     title: title.to_string(),
+    //     body: body.to_string(),
+    //     is_error,
+    // }
+    // .emit(app);
 }
