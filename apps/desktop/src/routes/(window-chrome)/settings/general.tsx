@@ -36,7 +36,7 @@ const settingsList = [
     key: "enable_notifications",
     label: "Enable System Notifications",
     description:
-      "Show system notifications for events like copying to clipboard, saving files, and more.",
+      "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
     requiresPermission: true,
   },
 ];
