@@ -43,7 +43,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         let Some(auth) = AuthStore::get(self.app_handle())? else {
             println!("Not logged in");
 
-            AuthenticationInvalid.emit(self);
+            AuthenticationInvalid.emit(self).ok();
 
             return Err("Unauthorized".to_string());
         };
@@ -55,7 +55,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         if response.status() == StatusCode::UNAUTHORIZED {
             println!("Authentication expired. Please log in again.");
 
-            AuthenticationInvalid.emit(self);
+            AuthenticationInvalid.emit(self).ok();
 
             return Err("Unauthorized".to_string());
         }

@@ -326,6 +326,7 @@ async seekTo(videoId: string, frameNumber: number) : Promise<void> {
 
 
 export const events = __makeEvents__<{
+authenticationInvalid: AuthenticationInvalid,
 currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
 newNotification: NewNotification,
@@ -343,6 +344,7 @@ requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
 showCapturesPanel: ShowCapturesPanel
 }>({
+authenticationInvalid: "authentication-invalid",
 currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
 newNotification: "new-notification",
@@ -372,6 +374,7 @@ export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
 export type AudioMeta = { path: string }
 export type AuthStore = { token: string; expires: number; plan: Plan | null }
+export type AuthenticationInvalid = null
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
 export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -449,7 +452,7 @@ type __EventObj__<T> = {
 	once: (
 		cb: TAURI_API_EVENT.EventCallback<T>,
 	) => ReturnType<typeof TAURI_API_EVENT.once<T>>;
-	emit: T extends null
+	emit: null extends T
 		? (payload?: T) => ReturnType<typeof TAURI_API_EVENT.emit>
 		: (payload: T) => ReturnType<typeof TAURI_API_EVENT.emit>;
 };

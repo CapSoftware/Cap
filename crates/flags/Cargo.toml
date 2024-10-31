@@ -5,4 +5,4 @@ edition = "2021"
 
 [dependencies]
 serde = "1.0.214"
-specta = "=2.0.0-rc.19"
+specta.workspace = true

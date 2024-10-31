@@ -15,6 +15,92 @@ pub enum CapWindow {
     Changelog,
 }
 
+pub enum CapWindowId {
+    Main,
+    Settings,
+    Editor { project_id: String },
+    Permissions,
+    PrevRecordings,
+    Notifications,
+    WindowCaptureOccluder,
+    Camera,
+    InProgressRecording,
+    Feedback,
+    Upgrade,
+    Changelog,
+}
+
+impl CapWindowId {
+    pub fn from_label(label: &str) -> Self {
+        match label {
+            "main" => Self::Main,
+            "settings" => Self::Settings,
+            "camera" => Self::Camera,
+            "window-capture-occluder" => Self::WindowCaptureOccluder,
+            "in-progress-recording" => Self::InProgressRecording,
+            "prev-recordings" => Self::PrevRecordings,
+            "notifications" => Self::Notifications,
+            "permissions" => Self::Permissions,
+            "feedback" => Self::Feedback,
+            "upgrade" => Self::Upgrade,
+            "changelog" => Self::Changelog,
+            s if s.starts_with("editor-") => Self::Editor {
+                project_id: s.replace("editor-", ""),
+            },
+            _ => unreachable!("unknown window label: {}", label),
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::Main => "main".to_string(),
+            Self::Settings => "settings".to_string(),
+            Self::Camera => "camera".to_string(),
+            Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
+            Self::InProgressRecording => "in-progress-recording".to_string(),
+            Self::PrevRecordings => "prev-recordings".to_string(),
+            Self::Notifications => "notifications".to_string(),
+            Self::Editor { project_id } => format!("editor-{}", project_id),
+            Self::Permissions => "permissions".to_string(),
+            Self::Feedback => "feedback".to_string(),
+            Self::Upgrade => "upgrade".to_string(),
+            Self::Changelog => "changelog".to_string(),
+        }
+    }
+
+    pub fn title(&self) -> String {
+        match self {
+            Self::Settings => "Cap Settings".to_string(),
+            Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
+            Self::InProgressRecording => "Cap In Progress Recording".to_string(),
+            Self::Editor { .. } => "Cap Editor".to_string(),
+            Self::Notifications => "Cap Notifications".to_string(),
+            Self::Permissions => "Cap Permissions".to_string(),
+            Self::Changelog => "Cap Changelog".to_string(),
+            _ => "Cap".to_string(),
+        }
+    }
+
+    pub fn activates_dock(&self) -> bool {
+        match self {
+            Self::Main => true,
+            Self::Editor { .. } => true,
+            Self::Settings => true,
+            Self::Notifications => true,
+            Self::Permissions => true,
+            Self::Feedback => true,
+            Self::Upgrade => true,
+            Self::Changelog => true,
+            _ => false,
+        }
+    }
+
+    pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
+        let label = self.label();
+        app.get_webview_window(&label)
+    }
+}
+
 impl CapWindow {
     pub fn from_label(label: &str) -> Self {
         match label {

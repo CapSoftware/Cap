@@ -6,9 +6,10 @@ use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::ops::Add;
 use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
-use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
 use cap_project::{
     AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorData, CursorEvent,
@@ -26,7 +27,6 @@ use image::GenericImageView;
 pub mod decoder;
 pub use decoder::DecodedFrame;
 
-// Change this constant from 100.0 to 50.0
 const STANDARD_CURSOR_HEIGHT: f32 = 50.0; // Standard height for all cursors
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -358,6 +358,22 @@ pub struct ProjectUniforms {
     pub cursor_size: f32,
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
+    pub zoom: Zoom,
+}
+
+#[derive(Debug, Clone)]
+pub struct Zoom {
+    pub amount: f32,
+    pub zoom_origin: (f32, f32),
+}
+
+impl Zoom {
+    pub fn apply_scale(&self, screen_position: (f32, f32)) -> (f32, f32) {
+        (
+            (screen_position.0 - self.zoom_origin.0) * self.amount + self.zoom_origin.0,
+            (screen_position.1 - self.zoom_origin.1) * self.amount + self.zoom_origin.1,
+        )
+    }
 }
 
 const CAMERA_PADDING: f32 = 50.0;
@@ -429,7 +445,16 @@ impl ProjectUniforms {
 
         let zoom_keyframes = ZoomKeyframes::new(project);
 
-        let display = {
+        let (zoom, zoom_origin_uv) = if let Some(cursor_position) = cursor_position {
+            (
+                zoom_keyframes.get_amount(time as f64),
+                (cursor_position.0 as f32, cursor_position.1 as f32),
+            )
+        } else {
+            (1.0, (0.0, 0.0))
+        };
+
+        let (display, zoom) = {
             let output_size = [output_size.0 as f32, output_size.1 as f32];
             let size = [options.screen_size.0 as f32, options.screen_size.1 as f32];
 
@@ -485,44 +510,42 @@ impl ProjectUniforms {
                 target_bounds[3] - target_bounds[1],
             ];
 
-            let (zoom, zoom_origin_uv) = if let Some(cursor_position) = cursor_position {
-                (
-                    zoom_keyframes.get_amount(time as f64),
-                    (cursor_position.0 as f32, cursor_position.1 as f32),
-                )
-            } else {
-                (1.0, (0.0, 0.0))
-            };
-
             let screen_scale_origin = (
                 target_bounds[0] + target_size[0] * zoom_origin_uv.0,
                 target_bounds[1] + target_size[1] * zoom_origin_uv.1,
             );
 
-            let apply_scale = |val, offset| (val - offset) * zoom as f32 + offset;
+            let zoom = Zoom {
+                amount: zoom as f32,
+                zoom_origin: screen_scale_origin,
+                // padding: screen_scale_origin,
+            };
 
             // post-zoom
-            let target_bounds = [
-                apply_scale(target_bounds[0], screen_scale_origin.0),
-                apply_scale(target_bounds[1], screen_scale_origin.1),
-                apply_scale(target_bounds[2], screen_scale_origin.0),
-                apply_scale(target_bounds[3], screen_scale_origin.1),
-            ];
+            let target_bounds = {
+                let start = zoom.apply_scale((target_bounds[0], target_bounds[1]));
+                let end = zoom.apply_scale((target_bounds[2], target_bounds[3]));
+
+                [start.0, start.1, end.0, end.1]
+            };
             let target_size = [
                 target_bounds[2] - target_bounds[0],
                 target_bounds[3] - target_bounds[1],
             ];
             let min_target_axis = target_size[0].min(target_size[1]);
 
-            CompositeVideoFrameUniforms {
-                output_size,
-                frame_size: size,
-                crop_bounds,
-                target_bounds,
-                target_size,
-                rounding_px: project.background.rounding / 100.0 * 0.5 * min_target_axis,
-                ..Default::default()
-            }
+            (
+                CompositeVideoFrameUniforms {
+                    output_size,
+                    frame_size: size,
+                    crop_bounds,
+                    target_bounds,
+                    target_size,
+                    rounding_px: project.background.rounding / 100.0 * 0.5 * min_target_axis,
+                    ..Default::default()
+                },
+                zoom,
+            )
         };
 
         let camera = options
@@ -585,6 +608,7 @@ impl ProjectUniforms {
             cursor_size: project.cursor.size as f32,
             display,
             camera,
+            zoom,
         }
     }
 }
@@ -795,6 +819,17 @@ pub async fn produce_frame(
         output_is_left = !output_is_left;
     }
 
+    if FLAGS.zoom {
+        // Then render the cursor
+        draw_cursor(
+            constants,
+            uniforms,
+            time,
+            &mut encoder,
+            get_either(texture_views, !output_is_left),
+        );
+    }
+
     // camera
     if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (
         constants.options.camera_size,
@@ -856,131 +891,6 @@ pub async fn produce_frame(
         );
 
         output_is_left = !output_is_left;
-    }
-
-    // Finally, render the cursor directly to the output texture
-    {
-        if FLAGS.zoom {
-            if let Some(cursor_position) = interpolate_cursor_position(&constants.cursor, time) {
-                println!(
-                    "Raw cursor position: ({}, {})",
-                    cursor_position.0, cursor_position.1
-                );
-
-                let cursor_event = find_cursor_event(&constants.cursor, time);
-                println!("Found cursor event with ID: {}", cursor_event.cursor_id);
-
-                if let Some(cursor_texture) = constants.cursor_textures.get(&cursor_event.cursor_id)
-                {
-                    let cursor_size = cursor_texture.size();
-                    let aspect_ratio = cursor_size.width as f32 / cursor_size.height as f32;
-
-                    // Use a default cursor size if the uniform value is 0
-                    let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
-                        100.0
-                    } else {
-                        uniforms.cursor_size
-                    };
-                    let scale_factor = cursor_size_percentage / 100.0;
-
-                    let normalized_size = [
-                        STANDARD_CURSOR_HEIGHT * aspect_ratio * scale_factor,
-                        STANDARD_CURSOR_HEIGHT * scale_factor,
-                    ];
-
-                    println!(
-                        "Original cursor size: {}x{}, Normalized size: {}x{}",
-                        cursor_size.width,
-                        cursor_size.height,
-                        normalized_size[0],
-                        normalized_size[1]
-                    );
-
-                    // Convert normalized cursor position to screen space
-                    let screen_x = cursor_position.0 * uniforms.output_size.0 as f64;
-                    let screen_y = cursor_position.1 * uniforms.output_size.1 as f64;
-
-                    println!("Screen position: ({}, {})", screen_x, screen_y);
-
-                    let cursor_uniforms = CursorUniforms {
-                        position: [screen_x as f32, screen_y as f32, 0.0, 0.0],
-                        size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
-                        output_size: [
-                            uniforms.output_size.0 as f32,
-                            uniforms.output_size.1 as f32,
-                            0.0,
-                            0.0,
-                        ],
-                        screen_bounds: uniforms.display.target_bounds,
-                        cursor_size: cursor_size_percentage,
-                        padding: [0.0; 3],
-                        _alignment: [0.0; 4],
-                    };
-
-                    println!("Cursor uniforms: {:?}", cursor_uniforms);
-
-                    // Create the uniform buffer with the correct size
-                    let cursor_uniform_buffer =
-                        constants
-                            .device
-                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                label: Some("Cursor Uniform Buffer"),
-                                contents: bytemuck::cast_slice(&[cursor_uniforms]), // This ensures proper size
-                                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                            });
-
-                    let cursor_bind_group =
-                        constants
-                            .device
-                            .create_bind_group(&wgpu::BindGroupDescriptor {
-                                layout: &constants.cursor_pipeline.bind_group_layout,
-                                entries: &[
-                                    wgpu::BindGroupEntry {
-                                        binding: 0,
-                                        resource: cursor_uniform_buffer.as_entire_binding(),
-                                    },
-                                    wgpu::BindGroupEntry {
-                                        binding: 1,
-                                        resource: wgpu::BindingResource::TextureView(
-                                            &cursor_texture.create_view(
-                                                &wgpu::TextureViewDescriptor::default(),
-                                            ),
-                                        ),
-                                    },
-                                    wgpu::BindGroupEntry {
-                                        binding: 2,
-                                        resource:
-                                            wgpu::BindingResource::Sampler(
-                                                &constants.device.create_sampler(
-                                                    &wgpu::SamplerDescriptor::default(),
-                                                ),
-                                            ),
-                                    },
-                                ],
-                                label: Some("Cursor Bind Group"),
-                            });
-
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Cursor Render Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: get_either(texture_views, !output_is_left),
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                    });
-
-                    render_pass.set_pipeline(&constants.cursor_pipeline.render_pipeline);
-                    render_pass.set_bind_group(0, &cursor_bind_group, &[]);
-                    render_pass.draw(0..4, 0..1);
-                }
-            }
-        }
     }
 
     // Now submit the encoder
@@ -1066,6 +976,134 @@ pub async fn produce_frame(
     output_buffer.unmap();
 
     Ok(image_data)
+}
+
+fn draw_cursor(
+    constants: &RenderVideoConstants,
+    uniforms: &ProjectUniforms,
+    time: f32,
+    encoder: &mut CommandEncoder,
+    view: &wgpu::TextureView,
+) {
+    let Some(cursor_position) = interpolate_cursor_position(&constants.cursor, time) else {
+        return;
+    };
+
+    println!(
+        "Raw cursor position: ({}, {})",
+        cursor_position.0, cursor_position.1
+    );
+
+    let cursor_event = find_cursor_event(&constants.cursor, time);
+    println!("Found cursor event with ID: {}", cursor_event.cursor_id);
+
+    let Some(cursor_texture) = constants.cursor_textures.get(&cursor_event.cursor_id) else {
+        return;
+    };
+
+    let cursor_size = cursor_texture.size();
+    let aspect_ratio = cursor_size.width as f32 / cursor_size.height as f32;
+
+    let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
+        100.0
+    } else {
+        uniforms.cursor_size
+    };
+    let scale_factor = cursor_size_percentage / 100.0;
+
+    // Calculate normalized size maintaining aspect ratio
+    let normalized_size = [
+        STANDARD_CURSOR_HEIGHT * aspect_ratio,
+        STANDARD_CURSOR_HEIGHT,
+    ];
+
+    println!(
+        "Original cursor size: {}x{}, Normalized size: {}x{}",
+        cursor_size.width, cursor_size.height, normalized_size[0], normalized_size[1]
+    );
+
+    let position = uniforms.zoom.apply_scale((
+        uniforms.display.target_bounds[0]
+            + cursor_position.0 as f32 * uniforms.display.target_size[0],
+        uniforms.display.target_bounds[1]
+            + cursor_position.1 as f32 * uniforms.display.target_size[1],
+    ));
+
+    println!("Screen position: ({}, {})", position.0, position.1);
+
+    let cursor_uniforms = CursorUniforms {
+        position: [position.0, position.1, 0.0, 0.0],
+        size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
+        output_size: [
+            uniforms.output_size.0 as f32,
+            uniforms.output_size.1 as f32,
+            0.0,
+            0.0,
+        ],
+        screen_bounds: uniforms.display.target_bounds,
+        cursor_size: cursor_size_percentage,
+        padding: [0.0; 3],
+        _alignment: [0.0; 4],
+    };
+
+    println!("Cursor uniforms: {:?}", cursor_uniforms);
+
+    let cursor_uniform_buffer =
+        constants
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Cursor Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[cursor_uniforms]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+    let cursor_bind_group = constants
+        .device
+        .create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &constants.cursor_pipeline.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: cursor_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &cursor_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(
+                        &constants
+                            .device
+                            .create_sampler(&wgpu::SamplerDescriptor::default()),
+                    ),
+                },
+            ],
+            label: Some("Cursor Bind Group"),
+        });
+
+    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Cursor Render Pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    });
+
+    render_pass.set_pipeline(&constants.cursor_pipeline.render_pipeline);
+    render_pass.set_bind_group(0, &cursor_bind_group, &[]);
+    render_pass.draw(0..4, 0..1);
+
+    println!("Drew cursor");
 }
 
 struct CompositeVideoFramePipeline {
@@ -1466,9 +1504,7 @@ struct CursorPipeline {
     render_pipeline: wgpu::RenderPipeline,
 }
 
-// Add this before the CursorPipeline struct definition
-
-#[repr(C, align(16))] // Add align(16) to ensure proper alignment
+#[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct CursorUniforms {
     position: [f32; 4],
@@ -1477,11 +1513,10 @@ struct CursorUniforms {
     screen_bounds: [f32; 4],
     cursor_size: f32,
     padding: [f32; 3],
-    _alignment: [f32; 4], // Add extra padding to ensure 16-byte alignment
+    _alignment: [f32; 4],
 }
 
-// Add this function near the other cursor-related functions
-fn find_cursor_event<'a>(cursor: &'a CursorData, time: f32) -> &'a CursorEvent {
+fn find_cursor_event(cursor: &CursorData, time: f32) -> &CursorEvent {
     let time_ms = time * 1000.0;
     println!("Finding cursor event for time: {}ms", time_ms);
     println!("Total cursor moves: {}", cursor.moves.len());
@@ -1605,6 +1640,76 @@ impl CursorPipeline {
         Self {
             bind_group_layout,
             render_pipeline,
+        }
+    }
+}
+
+struct Coordinate<Space> {
+    pub space: Space,
+    pub x: f64,
+    pub y: f64,
+}
+
+impl<T> Add for Coordinate<T> {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Coordinate {
+            space: self.space,
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+        }
+    }
+}
+
+impl<T> std::ops::Sub for Coordinate<T> {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Coordinate {
+            space: self.space,
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+        }
+    }
+}
+
+impl<T> std::ops::Mul<f64> for Coordinate<T> {
+    type Output = Self;
+
+    fn mul(self, rhs: f64) -> Self::Output {
+        Coordinate {
+            space: self.space,
+            x: self.x * rhs,
+            y: self.y * rhs,
+        }
+    }
+}
+
+impl<T> std::ops::Div<f64> for Coordinate<T> {
+    type Output = Self;
+
+    fn div(self, rhs: f64) -> Self::Output {
+        Coordinate {
+            space: self.space,
+            x: self.x / rhs,
+            y: self.y / rhs,
+        }
+    }
+}
+
+struct FrameSpace;
+struct DisplaySpace {
+    offset: Coordinate<FrameSpace>,
+    scale: f64,
+}
+
+impl From<Coordinate<DisplaySpace>> for Coordinate<FrameSpace> {
+    fn from(value: Coordinate<DisplaySpace>) -> Self {
+        Coordinate {
+            space: FrameSpace,
+            x: value.x * value.space.scale + value.space.offset.x,
+            y: value.y * value.space.scale + value.space.offset.y,
         }
     }
 }

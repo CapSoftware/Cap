@@ -10,13 +10,14 @@ mod macos;
 mod notifications;
 mod permissions;
 mod recording;
+// mod resource;
 mod tray;
 mod upload;
 mod web_api;
 mod windows;
 
 use audio::AppSounds;
-use auth::AuthStore;
+use auth::{AuthStore, AuthenticationInvalid};
 use cap_editor::{AudioData, EditorState, ProjectRecordings};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_media::sources::CaptureScreen;
@@ -62,7 +63,7 @@ use tokio::{
     time::sleep,
 };
 use upload::{get_s3_config, upload_image, upload_individual_file, upload_video, S3UploadMeta};
-use windows::CapWindow;
+use windows::{CapWindow, CapWindowId};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -323,16 +324,17 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         if let Ok(Some(auth)) = AuthStore::get(&app) {
             if auth.is_upgraded() {
                 // Pre-create the video and get the shareable link
-                let s3_config = get_s3_config(&app, false).await?;
-                let link = web_api::make_url(format!("/s/{}", s3_config.id()));
+                if let Ok(s3_config) = get_s3_config(&app, false).await {
+                    let link = web_api::make_url(format!("/s/{}", s3_config.id()));
 
-                state.pre_created_video = Some(PreCreatedVideo {
-                    id: s3_config.id().to_string(),
-                    link: link.clone(),
-                    config: s3_config,
-                });
+                    state.pre_created_video = Some(PreCreatedVideo {
+                        id: s3_config.id().to_string(),
+                        link: link.clone(),
+                        config: s3_config,
+                    });
 
-                println!("Pre-created shareable link: {}", link);
+                    println!("Pre-created shareable link: {}", link);
+                };
             }
         }
     }
@@ -502,23 +504,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
                 if let Some(pre_created_video) = state.pre_created_video.take() {
                     // Copy link to clipboard
                     #[cfg(target_os = "macos")]
-                    {
-                        use cocoa::appkit::NSPasteboard;
-                        use cocoa::base::{id, nil};
-                        use cocoa::foundation::{NSArray, NSString};
-                        use objc::rc::autoreleasepool;
-
-                        unsafe {
-                            autoreleasepool(|| {
-                                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
-                                NSPasteboard::clearContents(pasteboard);
-                                let ns_string =
-                                    NSString::alloc(nil).init_str(&pre_created_video.link);
-                                let objects: id = NSArray::arrayWithObject(nil, ns_string);
-                                NSPasteboard::writeObjects(pasteboard, objects);
-                            });
-                        }
-                    }
+                    macos::write_string_to_pasteboard(&pre_created_video.link);
 
                     // Send notification for shareable link
                     notifications::send_notification(
@@ -1724,7 +1710,6 @@ async fn upload_rendered_video(
     let Ok(Some(mut auth)) = AuthStore::get(&app) else {
         // Sign out and redirect to sign in
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
-        delete_auth_open_signin(app).await?;
         return Ok(UploadResult::NotAuthenticated);
     };
 
@@ -1740,7 +1725,6 @@ async fn upload_rendered_video(
                     }
                     Ok(None) => {
                         // Auth was invalidated during plan check
-                        delete_auth_open_signin(app).await?;
                         return Ok(UploadResult::NotAuthenticated);
                     }
                     Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
@@ -1748,7 +1732,6 @@ async fn upload_rendered_video(
             }
             Err(e) => {
                 if e.contains("Authentication expired") {
-                    delete_auth_open_signin(app).await?;
                     return Ok(UploadResult::NotAuthenticated);
                 }
                 return Ok(UploadResult::PlanCheckFailed);
@@ -1853,22 +1836,7 @@ async fn upload_rendered_video(
     };
 
     #[cfg(target_os = "macos")]
-    {
-        use cocoa::appkit::NSPasteboard;
-        use cocoa::base::{id, nil};
-        use cocoa::foundation::{NSArray, NSString};
-        use objc::rc::autoreleasepool;
-
-        unsafe {
-            autoreleasepool(|| {
-                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
-                NSPasteboard::clearContents(pasteboard);
-                let ns_string = NSString::alloc(nil).init_str(&share_link);
-                let objects: id = NSArray::arrayWithObject(nil, ns_string);
-                NSPasteboard::writeObjects(pasteboard, objects);
-            });
-        }
-    }
+    macos::write_string_to_pasteboard(&share_link);
 
     Ok(UploadResult::Success(share_link))
 }
@@ -1882,7 +1850,6 @@ async fn upload_screenshot(
     let Ok(Some(mut auth)) = AuthStore::get(&app) else {
         // Sign out and redirect to sign in
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
-        delete_auth_open_signin(app).await?;
         return Ok(UploadResult::NotAuthenticated);
     };
 
@@ -1893,14 +1860,12 @@ async fn upload_screenshot(
                     auth = updated_auth;
                 }
                 Ok(None) => {
-                    delete_auth_open_signin(app).await?;
                     return Ok(UploadResult::NotAuthenticated);
                 }
                 Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
             },
             Err(e) => {
                 if e.contains("Authentication expired") {
-                    delete_auth_open_signin(app).await?;
                     return Ok(UploadResult::NotAuthenticated);
                 }
                 return Ok(UploadResult::PlanCheckFailed);
@@ -1951,25 +1916,7 @@ async fn upload_screenshot(
     println!("Copying to clipboard: {:?}", share_link);
 
     #[cfg(target_os = "macos")]
-    {
-        use cocoa::appkit::NSPasteboard;
-        use cocoa::base::{id, nil};
-        use cocoa::foundation::{NSArray, NSString};
-        use objc::rc::autoreleasepool;
-
-        unsafe {
-            autoreleasepool(|| {
-                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
-                NSPasteboard::clearContents(pasteboard);
-
-                let ns_string = NSString::alloc(nil).init_str(&share_link);
-
-                let objects: id = NSArray::arrayWithObject(nil, ns_string);
-
-                NSPasteboard::writeObjects(pasteboard, objects);
-            });
-        }
-    }
+    macos::write_string_to_pasteboard(&share_link);
 
     // Send notification after successful upload and clipboard copy
     notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
@@ -2154,7 +2101,11 @@ async fn save_file_dialog(
         .add_filter(name, &[extension])
         .save_file(move |path| {
             println!("Save file callback triggered");
-            let _ = tx.send(path.map(|p| p.to_string_lossy().to_string()));
+            let _ = tx.send(
+                path.as_ref()
+                    .and_then(|p| p.as_path())
+                    .map(|p| p.to_string_lossy().to_string()),
+            );
         });
 
     println!("Waiting for user selection");
@@ -2303,11 +2254,11 @@ async fn set_general_settings(
 async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
     AuthStore::set(&app, None).map_err(|e| e.to_string())?;
 
-    if let Some(window) = app.get_webview_window("settings") {
+    if let Some(window) = (CapWindowId::Settings).get(&app) {
         window.close().ok();
     }
 
-    if let Some(window) = app.get_webview_window("camera") {
+    if let Some(window) = (CapWindowId::Camera).get(&app) {
         window.close().ok();
     }
 
@@ -2454,13 +2405,14 @@ pub async fn run() {
             RequestStopRecording,
             RequestNewScreenshot,
             RequestOpenSettings,
-            NewNotification
+            NewNotification,
+            AuthenticationInvalid
         ])
-        .ty::<ProjectConfiguration>()
-        .ty::<AuthStore>()
-        .ty::<hotkeys::HotkeysStore>()
-        .ty::<general_settings::GeneralSettingsStore>()
-        .ty::<cap_flags::Flags>();
+        .typ::<ProjectConfiguration>()
+        .typ::<AuthStore>()
+        .typ::<hotkeys::HotkeysStore>()
+        .typ::<general_settings::GeneralSettingsStore>()
+        .typ::<cap_flags::Flags>();
 
     #[cfg(debug_assertions)]
     specta_builder
@@ -2483,6 +2435,7 @@ pub async fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_oauth::init())
+        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(flags::plugin::init())
         .invoke_handler(specta_builder.invoke_handler())
@@ -2600,6 +2553,20 @@ pub async fn run() {
                 let app_handle = app_handle_clone.clone();
                 tauri::async_runtime::spawn(async move {
                     open_settings_window(app_handle, e.payload.page).await;
+                });
+            });
+
+            let app_handle_clone = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                AuthenticationInvalid.emit(&app_handle_clone).ok();
+            });
+
+            let app_handle_clone = app_handle.clone();
+            AuthenticationInvalid::listen_any(app, move |_| {
+                let app_handle = app_handle_clone.clone();
+                tauri::async_runtime::spawn(async move {
+                    delete_auth_open_signin(app_handle).await.ok();
                 });
             });
 

@@ -7,7 +7,14 @@ import type {
   GeneralSettingsStore,
 } from "~/utils/tauri";
 
-const store = new Store("store");
+let _store: Promise<Store> | undefined;
+const store = () => {
+  if (!_store) {
+    _store = Store.load("store");
+  }
+
+  return _store;
+};
 
 export type PresetsStore = {
   presets: Array<{
@@ -18,37 +25,42 @@ export type PresetsStore = {
 };
 
 export const presetsStore = {
-  get: () => store.get<PresetsStore>("presets"),
+  get: () => store().then((s) => s.get<PresetsStore>("presets")),
   set: async (value: PresetsStore) => {
-    await store.set("presets", value);
-    await store.save();
+    const s = await store();
+    await s.set("presets", value);
+    await s.save();
   },
-  listen: (fn: (data: PresetsStore | null) => void) =>
-    store.onKeyChange<PresetsStore>("presets", fn),
+  listen: (fn: (data: PresetsStore | undefined) => void) =>
+    store().then((s) => s.onKeyChange<PresetsStore>("presets", fn)),
 };
 
 export const authStore = {
-  get: () => store.get<AuthStore>("auth"),
-  set: async (value: AuthStore | null) => {
-    await store.set("auth", value);
-    await store.save();
+  get: () => store().then((s) => s.get<AuthStore>("auth")),
+  set: async (value: AuthStore | undefined) => {
+    const s = await store();
+    await s.set("auth", value);
+    await s.save();
   },
-  listen: (fn: (data: AuthStore | null) => void) =>
-    store.onKeyChange<AuthStore>("presets", fn),
+  listen: (fn: (data: AuthStore | undefined) => void) =>
+    store().then((s) => s.onKeyChange<AuthStore>("presets", fn)),
 };
 
 export const hotkeysStore = {
-  get: () => store.get<HotkeysStore>("hotkeys"),
+  get: () => store().then((s) => s.get<HotkeysStore>("hotkeys")),
   set: async (value: HotkeysStore) => {
-    await store.set("hotkeys", value);
-    await store.save();
+    const s = await store();
+    await s.set("hotkeys", value);
+    await s.save();
   },
 };
 
 export const generalSettingsStore = {
-  get: () => store.get<GeneralSettingsStore>("general_settings"),
+  get: () =>
+    store().then((s) => s.get<GeneralSettingsStore>("general_settings")),
   set: async (value: GeneralSettingsStore) => {
-    await store.set("general_settings", value);
-    await store.save();
+    const s = await store();
+    await s.set("general_settings", value);
+    await s.save();
   },
 };
