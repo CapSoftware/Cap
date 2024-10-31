@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, Runtime, Wry};
+use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::StoreExt;
 
 #[derive(Serialize, Deserialize, Type, Default)]
@@ -27,7 +27,7 @@ impl GeneralSettingsStore {
             return Ok(None);
         };
 
-        Ok(serde_json::from_value(store).map_err(|e| e.to_string())?)
+        serde_json::from_value(store).map_err(|e| e.to_string())
     }
 
     pub fn set(app: &AppHandle, settings: Self) -> Result<(), String> {

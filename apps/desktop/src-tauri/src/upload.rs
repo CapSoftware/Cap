@@ -2,15 +2,12 @@
 
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
-use reqwest::{multipart::Form, Client, StatusCode};
+use reqwest::{multipart::Form, StatusCode};
 use std::path::PathBuf;
 use tauri::AppHandle;
 use tokio::task;
 
-use crate::{
-    auth::AuthStore,
-    web_api::{self, ManagerExt},
-};
+use crate::web_api::{self, ManagerExt};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -159,7 +156,7 @@ pub async fn upload_video(
         .join("display.jpg");
 
     let screenshot_upload = if screenshot_path.exists() {
-        Some(prepare_screenshot_upload(&app, &s3_config, screenshot_path).await?)
+        Some(prepare_screenshot_upload(app, &s3_config, screenshot_path).await?)
     } else {
         None
     };
@@ -297,7 +294,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
 
     let client = reqwest::Client::new();
 
-    let s3_config = get_s3_config(&app, false).await?;
+    let s3_config = get_s3_config(app, false).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -313,7 +310,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         },
     )?;
 
-    let (upload_url, mut form) = presigned_s3_url_audio(&app, body).await?;
+    let (upload_url, mut form) = presigned_s3_url_audio(app, body).await?;
 
     let file_content = tokio::fs::read(&file_path)
         .await

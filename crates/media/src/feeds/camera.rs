@@ -61,7 +61,7 @@ impl CameraFeed {
     ) -> Result<CameraFeed, MediaError> {
         println!("Selected camera: {:?}", selected_camera);
 
-        let camera_info = find_camera(&selected_camera)?;
+        let camera_info = find_camera(selected_camera)?;
         let (control, control_receiver) = flume::bounded(1);
 
         let (video_info, join_handle) =

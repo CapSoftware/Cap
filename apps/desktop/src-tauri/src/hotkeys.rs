@@ -62,7 +62,7 @@ impl HotkeysStore {
             return Ok(None);
         };
 
-        Ok(serde_json::from_value(store).map_err(|e| e.to_string())?)
+        serde_json::from_value(store).map_err(|e| e.to_string())
     }
 }
 

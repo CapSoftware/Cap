@@ -1,6 +1,5 @@
-use crate::{general_settings::GeneralSettingsStore, AppSounds, NewNotification};
+use crate::{general_settings::GeneralSettingsStore, AppSounds};
 use tauri_plugin_notification::NotificationExt;
-use tauri_specta::Event;
 
 pub enum NotificationType {
     VideoSaved,

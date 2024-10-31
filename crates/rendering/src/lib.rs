@@ -380,7 +380,7 @@ const SCREEN_MAX_PADDING: f64 = 0.4;
 
 impl ProjectUniforms {
     fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
-        project.background.crop.clone().unwrap_or(Crop {
+        project.background.crop.unwrap_or(Crop {
             position: XY { x: 0, y: 0 },
             size: XY {
                 x: options.screen_size.0,
@@ -393,7 +393,7 @@ impl ProjectUniforms {
         let crop = Self::get_crop(options, project);
 
         let basis = u32::max(crop.size.x, crop.size.y);
-        let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING as f64;
+        let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
 
         basis as f64 * padding_factor
     }
@@ -488,9 +488,9 @@ impl ProjectUniforms {
             let target_offset = (output_size - target_size) / 2.0;
 
             let start = Coord::new(if is_height_constrained {
-                XY::new(target_offset.x as f64, padding as f64)
+                XY::new(target_offset.x, padding)
             } else {
-                XY::new(padding as f64, target_offset.y as f64)
+                XY::new(padding, target_offset.y)
             });
 
             let end = Coord::new(output_size) - start;
@@ -669,9 +669,9 @@ impl ZoomKeyframes {
         let t = delta_time / keyframe_length;
         let t = t.powf(0.5);
 
-        let amount = prev.amount + (next.amount - prev.amount) * t;
+        
 
-        amount
+        prev.amount + (next.amount - prev.amount) * t
     }
 }
 
@@ -1462,7 +1462,7 @@ fn interpolate_cursor_position(
 ) -> Option<Coord<RawDisplayUVSpace>> {
     let time_ms = (time_secs * 1000.0) as f64;
 
-    if cursor.moves.len() == 0 {
+    if cursor.moves.is_empty() {
         None
     } else {
         let moves = &cursor.moves;

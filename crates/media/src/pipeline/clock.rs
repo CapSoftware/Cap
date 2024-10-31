@@ -85,6 +85,12 @@ impl<Source: LocalTimestamp, Target: LocalTimestamp> CloneInto<SynchronisedClock
     }
 }
 
+impl<T: LocalTimestamp> Default for SynchronisedClock<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: LocalTimestamp> SynchronisedClock<T> {
     pub fn init() -> SynchronisedClock<()> {
         SynchronisedClock::<()>::new()

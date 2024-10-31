@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use serde_json;
 use specta::Type;
 use std::collections::HashMap;
 use std::fs::File;

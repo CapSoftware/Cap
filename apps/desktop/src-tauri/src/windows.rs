@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
-use wgpu::StencilOperation;
 
 pub enum CapWindow {
     Main,
@@ -301,7 +300,9 @@ impl CapWindow {
                 let width = 160.0;
                 let height = 40.0;
 
-                let window = self
+                
+
+                self
                     .window_builder(app, "/in-progress-recording")
                     .title(self.title())
                     .maximized(false)
@@ -320,9 +321,7 @@ impl CapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .visible(false)
-                    .build()?;
-
-                window
+                    .build()?
             }
             Self::Notifications => {
                 let window = self

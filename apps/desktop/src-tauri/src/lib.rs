@@ -1,8 +1,6 @@
 mod audio;
 mod auth;
 mod camera;
-mod capture;
-mod encoder;
 mod flags;
 mod general_settings;
 mod hotkeys;
@@ -63,7 +61,7 @@ use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
 };
-use upload::{get_s3_config, upload_image, upload_individual_file, upload_video, S3UploadMeta};
+use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use windows::{CapWindow, CapWindowId};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -148,13 +146,13 @@ impl App {
     }
 
     fn close_occluder_window(&self) {
-        if let Some(window) = CapWindow::WindowCaptureOccluder.get(&self.handle) {
+        if let Some(window) = CapWindowId::WindowCaptureOccluder.get(&self.handle) {
             window.close().ok();
         }
     }
 
     async fn set_start_recording_options(&mut self, new_options: RecordingOptions) {
-        match (CapWindow::Camera { ws_port: 0 }).get(&self.handle) {
+        match CapWindowId::Camera.get(&self.handle) {
             Some(window) if new_options.camera_label.is_none() => {
                 println!("closing camera window");
                 window.close().ok();
@@ -173,13 +171,13 @@ impl App {
         match &new_options.camera_label {
             Some(camera_label) => {
                 if self.camera_feed.is_none() {
-                    self.camera_feed = CameraFeed::init(&camera_label, self.camera_tx.clone())
+                    self.camera_feed = CameraFeed::init(camera_label, self.camera_tx.clone())
                         .await
                         .map_err(|error| eprintln!("{error}"))
                         .ok();
                 } else if let Some(camera_feed) = self.camera_feed.as_mut() {
                     camera_feed
-                        .switch_cameras(&camera_label)
+                        .switch_cameras(camera_label)
                         .await
                         .map_err(|error| eprintln!("{error}"))
                         .ok();
@@ -354,11 +352,11 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         }
     };
 
-    if let Some(window) = CapWindow::Main.get(&app) {
+    if let Some(window) = CapWindowId::Main.get(&app) {
         window.minimize().ok();
     }
 
-    if let Some(window) = (CapWindow::InProgressRecording { position: None }).get(&app) {
+    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
         window.eval("window.location.reload()").unwrap();
         window.show().unwrap();
     } else {
@@ -426,11 +424,11 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     let recording = current_recording.stop().await;
     println!("Recording stopped");
 
-    if let Some(window) = (CapWindow::InProgressRecording { position: None }).get(&app) {
+    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
         window.hide().unwrap();
     }
 
-    if let Some(window) = CapWindow::Main.get(&app) {
+    if let Some(window) = CapWindowId::Main.get(&app) {
         window.unminimize().ok();
     }
 
@@ -649,7 +647,7 @@ async fn create_screenshot(
                     let width = rgb_frame.width() as usize;
                     let height = rgb_frame.height() as usize;
                     let bytes_per_pixel = 3;
-                    let src_stride = rgb_frame.stride(0) as usize;
+                    let src_stride = rgb_frame.stride(0);
                     let dst_stride = width * bytes_per_pixel;
 
                     let mut img_buffer = vec![0u8; height * dst_stride];
@@ -1514,7 +1512,7 @@ fn show_previous_recordings_window(app: AppHandle) {
 
             let mut ignore = true;
 
-            for (_, bounds) in windows {
+            for bounds in windows.values() {
                 let x_min = (window_position.x as f64) + bounds.x * scale_factor;
                 let x_max = (window_position.x as f64) + (bounds.x + bounds.width) * scale_factor;
                 let y_min = (window_position.y as f64) + bounds.y * scale_factor;
@@ -1551,7 +1549,7 @@ fn open_editor(app: AppHandle, id: String) {
 #[tauri::command(async)]
 #[specta::specta]
 fn close_previous_recordings_window(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
+    if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
         panel.released_when_closed(true);
         panel.close();
     }
@@ -1560,7 +1558,7 @@ fn close_previous_recordings_window(app: AppHandle) {
 #[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
+    if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
         panel.make_key_window();
     }
 }
@@ -1951,7 +1949,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
         ..Default::default()
     };
 
-    if let Some(window) = CapWindow::Main.get(&app) {
+    if let Some(window) = CapWindowId::Main.get(&app) {
         window.hide().ok();
     }
 
@@ -1995,7 +1993,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
 
             // Create file and PNG encoder
             let file = File::create(&screenshot_path).map_err(|e| e.to_string())?;
-            let ref mut w = BufWriter::new(file);
+            let w = &mut BufWriter::new(file);
 
             let mut encoder = Encoder::new(w, width, height);
             encoder.set_color(ColorType::Rgba);
@@ -2009,7 +2007,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
 
             AppSounds::Screenshot.play();
 
-            if let Some(window) = CapWindow::Main.get(&app) {
+            if let Some(window) = CapWindowId::Main.get(&app) {
                 window.show().ok();
             }
 
@@ -2171,11 +2169,11 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta
     result.sort_by(|a, b| {
         b.1.metadata()
             .and_then(|m| m.created())
-            .unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
             .cmp(
                 &a.1.metadata()
                     .and_then(|m| m.created())
-                    .unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH),
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
             )
     });
 
@@ -2213,11 +2211,11 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
     result.sort_by(|a, b| {
         b.1.metadata()
             .and_then(|m| m.created())
-            .unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
             .cmp(
                 &a.1.metadata()
                     .and_then(|m| m.created())
-                    .unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH),
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
             )
     });
 
@@ -2319,7 +2317,7 @@ async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
 #[tauri::command]
 #[specta::specta]
 async fn is_camera_window_open(app: AppHandle) -> bool {
-    CapWindow::Camera { ws_port: 0 }.get(&app).is_some()
+    CapWindowId::Camera.get(&app).is_some()
 }
 
 #[tauri::command]
@@ -2530,12 +2528,10 @@ pub async fn run() {
                         {
                             eprintln!("Failed to stop recording: {}", e);
                         }
-                    } else {
-                        if let Err(e) =
-                            start_recording(app_handle.clone(), app_handle.state()).await
-                        {
-                            eprintln!("Failed to start recording: {}", e);
-                        }
+                    } else if let Err(e) =
+                        start_recording(app_handle.clone(), app_handle.state()).await
+                    {
+                        eprintln!("Failed to start recording: {}", e);
                     }
                 });
             });
@@ -2610,13 +2606,13 @@ pub async fn run() {
 
             match event {
                 WindowEvent::Destroyed => {
-                    match CapWindow::from_label(label) {
-                        CapWindow::Main => {
+                    match CapWindowId::from_label(label) {
+                        CapWindowId::Main => {
                             if let Some(w) = (CapWindow::Camera { ws_port: 0 }).get(app) {
                                 w.close().ok();
                             }
                         }
-                        CapWindow::Editor { project_id } => {
+                        CapWindowId::Editor { project_id } => {
                             let app_handle = app.clone();
                             tokio::spawn(async move {
                                 let _ = remove_editor_instance(&app_handle, project_id).await;
@@ -2632,7 +2628,7 @@ pub async fn run() {
                             && app
                                 .webview_windows()
                                 .keys()
-                                .all(|label| !CapWindow::from_label(label).activates_dock())
+                                .all(|label| !CapWindowId::from_label(label).activates_dock())
                         {
                             #[cfg(target_os = "macos")]
                             app.set_activation_policy(tauri::ActivationPolicy::Accessory)
@@ -2641,7 +2637,7 @@ pub async fn run() {
                     }
                 }
                 WindowEvent::Focused(focused) if *focused => {
-                    if CapWindow::from_label(label).activates_dock() {
+                    if CapWindowId::from_label(label).activates_dock() {
                         #[cfg(target_os = "macos")]
                         app.set_activation_policy(tauri::ActivationPolicy::Regular)
                             .ok();
@@ -2672,14 +2668,14 @@ pub async fn remove_editor_instance(
 
     let mut map = map.lock().await;
 
-    let result = if let Some(editor) = map.remove(&video_id) {
+    
+
+    if let Some(editor) = map.remove(&video_id) {
         editor.dispose().await;
         Some(editor)
     } else {
         None
-    };
-
-    result
+    }
 }
 
 pub async fn upsert_editor_instance(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {

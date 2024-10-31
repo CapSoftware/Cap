@@ -18,7 +18,7 @@ use crate::{
     platform,
 };
 
-static EXCLUDED_WINDOWS: [&'static str; 4] = [
+static EXCLUDED_WINDOWS: [&str; 4] = [
     "Cap",
     "Cap Camera",
     "Cap Recordings",
@@ -88,8 +88,7 @@ impl ScreenCaptureSource {
                     true
                 }
                 _ => false,
-            })
-            .map(|t| t.clone())
+            }).cloned()
             .collect();
 
         let (crop_area, bounds) = match capture_target {
@@ -163,7 +162,7 @@ impl ScreenCaptureSource {
         for (idx, screen) in screens.into_iter().enumerate() {
             // Handle Target::Screen variant (assuming this is how it's structured in scap)
             targets.push(CaptureScreen {
-                id: screen.id as u32,
+                id: screen.id,
                 name: names
                     .get(&screen.raw_handle.id)
                     .cloned()
@@ -229,7 +228,7 @@ impl PipelineSourceTask for ScreenCaptureSource {
         };
         let mut capturer = Capturer::new(dbg!(self.options.clone()));
         let mut capturing = false;
-        let _ = ready_signal.send(Ok(())).unwrap();
+        ready_signal.send(Ok(())).unwrap();
 
         loop {
             match control_signal.last() {
@@ -270,7 +269,7 @@ impl PipelineSourceTask for ScreenCaptureSource {
                                     let src_data = &frame.data;
 
                                     let src_stride = src_data.len() / height;
-                                    let dst_stride = buffer.stride(0) as usize;
+                                    let dst_stride = buffer.stride(0);
 
                                     if src_data.len() < src_stride * height {
                                         eprintln!("Frame data size mismatch.");

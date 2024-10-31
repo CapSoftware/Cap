@@ -88,7 +88,7 @@ impl<T: PipelineClock> PipelineBuilder<T> {
         // TODO: Shut down tasks if launch failed.
         for (name, task) in tasks.into_iter() {
             // TODO: Wait for these in parallel?
-            let _ = task
+            task
                 .ready_signal
                 .recv_async()
                 .await
@@ -117,7 +117,7 @@ impl<Clock: PipelineClock, PreviousOutput: Send + 'static>
     pub fn pipe<Output: Send + 'static>(
         self,
         name: impl Into<String>,
-        mut task: impl PipelinePipeTask<Input = PreviousOutput, Output = Output> + Send + 'static,
+        mut task: impl PipelinePipeTask<Input = PreviousOutput, Output = Output> + 'static,
     ) -> PipelinePathBuilder<Clock, Output> {
         let Self {
             mut pipeline,
@@ -139,7 +139,7 @@ impl<Clock: PipelineClock, PreviousOutput: Send + 'static>
     pub fn sink(
         self,
         name: impl Into<String>,
-        mut task: impl PipelineSinkTask<Input = PreviousOutput> + Send + 'static,
+        mut task: impl PipelineSinkTask<Input = PreviousOutput> + 'static,
     ) -> PipelineBuilder<Clock> {
         let Self {
             mut pipeline,

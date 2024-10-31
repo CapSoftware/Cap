@@ -2,7 +2,7 @@ use cap_flags::FLAGS;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
 use cap_project::CursorEvent;
 use cocoa::base::{id, nil};
-use cocoa::foundation::{NSData, NSUInteger};
+use cocoa::foundation::NSUInteger;
 use device_query::{DeviceQuery, DeviceState};
 use serde::Serialize;
 use specta::Type;
@@ -15,7 +15,7 @@ use std::{path::PathBuf, time::Duration};
 use tokio::sync::{oneshot, Mutex};
 
 use objc::rc::autoreleasepool;
-use objc::runtime::{Class, Object, Sel, BOOL, YES};
+use objc::runtime::Class;
 use objc::*;
 
 use crate::RecordingOptions;
@@ -210,7 +210,7 @@ pub async fn start(
     let screen_source =
         ScreenCaptureSource::init(dbg!(&recording_options.capture_target), None, None);
     let screen_config = screen_source.info();
-    let screen_bounds = screen_source.bounds.clone();
+    let screen_bounds = screen_source.bounds;
 
     let output_config = screen_config.scaled(1920, 30);
     let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
@@ -335,7 +335,7 @@ pub async fn start(
                 if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
                     let mouse_event = CursorEvent {
                         active_modifiers: vec![],
-                        cursor_id: cursor_id,
+                        cursor_id,
                         process_time_ms: elapsed,
                         unix_time_ms: unix_time,
                         x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,

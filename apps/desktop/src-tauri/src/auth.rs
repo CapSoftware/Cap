@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use tauri::{AppHandle, Manager, Runtime, Wry};
+use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
 
 use web_api::ManagerExt;
@@ -27,7 +27,7 @@ impl AuthStore {
             return Ok(None);
         };
 
-        Ok(serde_json::from_value(store).map_err(|e| e.to_string())?)
+        serde_json::from_value(store).map_err(|e| e.to_string())
     }
 
     pub async fn fetch_and_update_plan(app: &AppHandle) -> Result<(), String> {
@@ -58,7 +58,7 @@ impl AuthStore {
             last_checked: chrono::Utc::now().timestamp() as i32,
         });
 
-        let _ = Self::set(app, Some(auth))?;
+        Self::set(app, Some(auth))?;
 
         Ok(())
     }
