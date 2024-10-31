@@ -1,3 +1,5 @@
+use std::ops::{Add, Div, Mul, Sub};
+
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -46,14 +48,93 @@ impl Default for BackgroundSource {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct XY<T> {
     pub x: T,
     pub y: T,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+impl<T> XY<T> {
+    pub fn new(x: T, y: T) -> Self {
+        Self { x, y }
+    }
+
+    pub fn map<U, F: Fn(T) -> U>(self, f: F) -> XY<U> {
+        XY {
+            x: f(self.x),
+            y: f(self.y),
+        }
+    }
+}
+
+impl<T: Add<Output = T>> Add for XY<T> {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}
+
+impl<T: Sub<Output = T>> Sub for XY<T> {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self {
+        Self {
+            x: self.x - other.x,
+            y: self.y - other.y,
+        }
+    }
+}
+
+impl<T: Sub<Output = T> + Copy> Sub<T> for XY<T> {
+    type Output = Self;
+
+    fn sub(self, other: T) -> Self {
+        Self {
+            x: self.x - other,
+            y: self.y - other,
+        }
+    }
+}
+
+impl<T: Mul<Output = T> + Copy> Mul<T> for XY<T> {
+    type Output = Self;
+
+    fn mul(self, other: T) -> Self {
+        Self {
+            x: self.x * other,
+            y: self.y * other,
+        }
+    }
+}
+
+impl<T: Mul<Output = T> + Copy> Mul<XY<T>> for XY<T> {
+    type Output = Self;
+
+    fn mul(self, other: Self) -> Self {
+        Self {
+            x: self.x * other.x,
+            y: self.y * other.y,
+        }
+    }
+}
+
+impl<T: Div<Output = T> + Copy> Div<T> for XY<T> {
+    type Output = Self;
+
+    fn div(self, other: T) -> Self {
+        Self {
+            x: self.x / other,
+            y: self.y / other,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
     pub position: XY<u32>,
@@ -71,8 +152,8 @@ impl Crop {
 pub struct BackgroundConfiguration {
     pub source: BackgroundSource,
     pub blur: u32,
-    pub padding: f32,
-    pub rounding: f32,
+    pub padding: f64,
+    pub rounding: f64,
     pub inset: u32,
     pub crop: Option<Crop>,
 }

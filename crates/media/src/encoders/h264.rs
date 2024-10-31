@@ -1,6 +1,6 @@
 use ffmpeg::{
     codec::{codec::Codec, context, encoder},
-    format::{self, pixel::Pixel},
+    format::{self},
     threading::Config,
     Dictionary,
 };

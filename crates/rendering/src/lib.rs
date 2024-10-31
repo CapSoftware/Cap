@@ -6,7 +6,7 @@ use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::ops::Add;
+use std::ops::{Add, Deref, Mul, Sub};
 use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
 use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
@@ -359,26 +359,24 @@ pub struct ProjectUniforms {
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
     pub zoom: Zoom,
+    pub project: ProjectConfiguration,
 }
 
 #[derive(Debug, Clone)]
 pub struct Zoom {
-    pub amount: f32,
-    pub zoom_origin: (f32, f32),
+    pub amount: f64,
+    pub zoom_origin: Coord<FrameSpace>,
 }
 
 impl Zoom {
-    pub fn apply_scale(&self, screen_position: (f32, f32)) -> (f32, f32) {
-        (
-            (screen_position.0 - self.zoom_origin.0) * self.amount + self.zoom_origin.0,
-            (screen_position.1 - self.zoom_origin.1) * self.amount + self.zoom_origin.1,
-        )
+    pub fn apply_scale(&self, screen_position: Coord<FrameSpace>) -> Coord<FrameSpace> {
+        (screen_position - self.zoom_origin) * self.amount + self.zoom_origin
     }
 }
 
 const CAMERA_PADDING: f32 = 50.0;
 
-const SCREEN_MAX_PADDING: f32 = 0.4;
+const SCREEN_MAX_PADDING: f64 = 0.4;
 
 impl ProjectUniforms {
     fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
@@ -391,13 +389,13 @@ impl ProjectUniforms {
         })
     }
 
-    fn get_padding(options: &RenderOptions, project: &ProjectConfiguration) -> f32 {
+    fn get_padding(options: &RenderOptions, project: &ProjectConfiguration) -> f64 {
         let crop = Self::get_crop(options, project);
 
         let basis = u32::max(crop.size.x, crop.size.y);
-        let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
+        let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING as f64;
 
-        basis as f32 * padding_factor
+        basis as f64 * padding_factor
     }
 
     pub fn get_output_size(options: &RenderOptions, project: &ProjectConfiguration) -> (u32, u32) {
@@ -409,8 +407,8 @@ impl ProjectUniforms {
 
         let aspect = match &project.aspect_ratio {
             None => {
-                let width = ((crop.size.x as f32 + padding) as u32 + 1) & !1;
-                let height = ((crop.size.y as f32 + padding) as u32 + 1) & !1;
+                let width = ((crop.size.x as f64 + padding) as u32 + 1) & !1;
+                let height = ((crop.size.y as f64 + padding) as u32 + 1) & !1;
                 return (width, height);
             }
             Some(AspectRatio::Square) => 1.0,
@@ -439,109 +437,94 @@ impl ProjectUniforms {
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project);
-        let output_aspect = output_size.0 as f32 / output_size.1 as f32;
+        let output_aspect = output_size.0 as f64 / output_size.1 as f64;
 
         let cursor_position = interpolate_cursor_position(&constants.cursor, time);
 
         let zoom_keyframes = ZoomKeyframes::new(project);
 
         let (zoom, zoom_origin_uv) = if let Some(cursor_position) = cursor_position {
-            (
-                zoom_keyframes.get_amount(time as f64),
-                (cursor_position.0 as f32, cursor_position.1 as f32),
-            )
+            (zoom_keyframes.get_amount(time as f64), cursor_position)
         } else {
-            (1.0, (0.0, 0.0))
+            (1.0, Coord::new(XY { x: 0.0, y: 0.0 }))
         };
 
+        let crop = Self::get_crop(options, project);
+
+        let zoom_origin = zoom_origin_uv.to_raw_display_space(XY {
+            x: options.screen_size.0 as f64,
+            y: options.screen_size.1 as f64,
+        });
+        let zoom_origin = zoom_origin.to_cropped_display_space(crop);
+
         let (display, zoom) = {
-            let output_size = [output_size.0 as f32, output_size.1 as f32];
+            let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
             let size = [options.screen_size.0 as f32, options.screen_size.1 as f32];
 
-            let crop = Self::get_crop(options, project);
+            let crop_start = Coord::<RawDisplaySpace>::new(XY::new(
+                crop.position.x as f64,
+                crop.position.y as f64,
+            ));
+            let crop_end = Coord::<RawDisplaySpace>::new(XY::new(
+                (crop.position.x + crop.size.x) as f64,
+                (crop.position.y + crop.size.y) as f64,
+            ));
 
-            let crop_bounds = [
-                crop.position.x as f32,
-                crop.position.y as f32,
-                (crop.position.x + crop.size.x) as f32,
-                (crop.position.y + crop.size.y) as f32,
-            ];
+            let cropped_size = crop_end.coord - crop_start.coord;
 
-            let cropped_size = [
-                crop_bounds[2] - crop_bounds[0],
-                crop_bounds[3] - crop_bounds[1],
-            ];
-            let cropped_aspect = cropped_size[0] / cropped_size[1];
+            let cropped_aspect = cropped_size.x / cropped_size.y;
 
             let padding = Self::get_padding(options, project);
             let is_height_constrained = cropped_aspect <= output_aspect;
 
-            let available_size = [
-                output_size[0] - 2.0 * padding,
-                output_size[1] - 2.0 * padding,
-            ];
+            let available_size = output_size - 2.0 * padding;
 
             let target_size = if is_height_constrained {
-                [available_size[1] * cropped_aspect, available_size[1]]
+                XY::new(available_size.y * cropped_aspect, available_size.y)
             } else {
-                [available_size[0], available_size[0] / cropped_aspect]
+                XY::new(available_size.x, available_size.x / cropped_aspect)
             };
 
-            let target_offset = [
-                (output_size[0] - target_size[0]) / 2.0,
-                (output_size[1] - target_size[1]) / 2.0,
-            ];
+            let target_offset = (output_size - target_size) / 2.0;
 
-            let target_start = if is_height_constrained {
-                [target_offset[0], padding]
+            let start = Coord::new(if is_height_constrained {
+                XY::new(target_offset.x as f64, padding as f64)
             } else {
-                [padding, target_offset[1]]
-            };
+                XY::new(padding as f64, target_offset.y as f64)
+            });
 
-            // pre-zoom
-            let target_bounds = [
-                target_start[0],
-                target_start[1],
-                output_size[0] - target_start[0],
-                output_size[1] - target_start[1],
-            ];
-            let target_size = [
-                target_bounds[2] - target_bounds[0],
-                target_bounds[3] - target_bounds[1],
-            ];
+            let end = Coord::new(output_size) - start;
 
-            let screen_scale_origin = (
-                target_bounds[0] + target_size[0] * zoom_origin_uv.0,
-                target_bounds[1] + target_size[1] * zoom_origin_uv.1,
-            );
+            let screen_scale_origin = zoom_origin
+                .to_frame_space(start.coord)
+                .clamp(start.coord, end.coord);
 
             let zoom = Zoom {
-                amount: zoom as f32,
+                amount: zoom,
                 zoom_origin: screen_scale_origin,
                 // padding: screen_scale_origin,
             };
 
-            // post-zoom
-            let target_bounds = {
-                let start = zoom.apply_scale((target_bounds[0], target_bounds[1]));
-                let end = zoom.apply_scale((target_bounds[2], target_bounds[3]));
+            let start = zoom.apply_scale(start);
+            let end = zoom.apply_scale(end);
 
-                [start.0, start.1, end.0, end.1]
-            };
-            let target_size = [
-                target_bounds[2] - target_bounds[0],
-                target_bounds[3] - target_bounds[1],
-            ];
-            let min_target_axis = target_size[0].min(target_size[1]);
+            let target_size = end - start;
+            let min_target_axis = target_size.x.min(target_size.y);
 
             (
                 CompositeVideoFrameUniforms {
-                    output_size,
+                    output_size: [output_size.x as f32, output_size.y as f32],
                     frame_size: size,
-                    crop_bounds,
-                    target_bounds,
-                    target_size,
-                    rounding_px: project.background.rounding / 100.0 * 0.5 * min_target_axis,
+                    crop_bounds: [
+                        crop_start.x as f32,
+                        crop_start.y as f32,
+                        crop_end.x as f32,
+                        crop_end.y as f32,
+                    ],
+                    target_bounds: [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
+                    target_size: [target_size.x as f32, target_size.y as f32],
+                    rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis)
+                        as f32,
                     ..Default::default()
                 },
                 zoom,
@@ -609,6 +592,7 @@ impl ProjectUniforms {
             display,
             camera,
             zoom,
+            project: project.clone(),
         }
     }
 }
@@ -989,10 +973,10 @@ fn draw_cursor(
         return;
     };
 
-    println!(
-        "Raw cursor position: ({}, {})",
-        cursor_position.0, cursor_position.1
-    );
+    // println!(
+    //     "Raw cursor position: ({}, {})",
+    //     cursor_position.0, cursor_position.1
+    // );
 
     let cursor_event = find_cursor_event(&constants.cursor, time);
     println!("Found cursor event with ID: {}", cursor_event.cursor_id);
@@ -1022,17 +1006,26 @@ fn draw_cursor(
         cursor_size.width, cursor_size.height, normalized_size[0], normalized_size[1]
     );
 
-    let position = uniforms.zoom.apply_scale((
-        uniforms.display.target_bounds[0]
-            + cursor_position.0 as f32 * uniforms.display.target_size[0],
-        uniforms.display.target_bounds[1]
-            + cursor_position.1 as f32 * uniforms.display.target_size[1],
-    ));
+    let position = uniforms.zoom.apply_scale(
+        cursor_position
+            .to_raw_display_space(XY::new(
+                constants.options.screen_size.0 as f64,
+                constants.options.screen_size.1 as f64,
+            ))
+            .to_cropped_display_space(ProjectUniforms::get_crop(
+                &constants.options,
+                &uniforms.project,
+            ))
+            .to_frame_space(XY::new(
+                uniforms.display.target_bounds[0] as f64,
+                uniforms.display.target_bounds[1] as f64,
+            )),
+    );
 
-    println!("Screen position: ({}, {})", position.0, position.1);
+    // println!("Screen position: ({}, {})", position.0, position.1);
 
     let cursor_uniforms = CursorUniforms {
-        position: [position.0, position.1, 0.0, 0.0],
+        position: [position.x as f32, position.y as f32, 0.0, 0.0],
         size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
         output_size: [
             uniforms.output_size.0 as f32,
@@ -1463,10 +1456,13 @@ impl AsyncVideoDecoderHandle {
     }
 }
 
-fn interpolate_cursor_position(cursor: &CursorData, time_secs: f32) -> Option<(f64, f64)> {
+fn interpolate_cursor_position(
+    cursor: &CursorData,
+    time_secs: f32,
+) -> Option<Coord<RawDisplayUVSpace>> {
     let time_ms = (time_secs * 1000.0) as f64;
 
-    let cursor_position = if cursor.moves.len() == 0 {
+    if cursor.moves.len() == 0 {
         None
     } else {
         let moves = &cursor.moves;
@@ -1493,10 +1489,11 @@ fn interpolate_cursor_position(cursor: &CursorData, time_secs: f32) -> Option<(f
             (m.x, m.y)
         };
 
-        Some((x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
-    };
-
-    cursor_position
+        Some(Coord::new(XY {
+            x: x.clamp(0.0, 1.0),
+            y: y.clamp(0.0, 1.0),
+        }))
+    }
 }
 
 struct CursorPipeline {
@@ -1521,7 +1518,6 @@ fn find_cursor_event(cursor: &CursorData, time: f32) -> &CursorEvent {
     println!("Finding cursor event for time: {}ms", time_ms);
     println!("Total cursor moves: {}", cursor.moves.len());
 
-    // Find the last cursor event before or at the current time
     let event = cursor
         .moves
         .iter()
@@ -1536,7 +1532,6 @@ fn find_cursor_event(cursor: &CursorData, time: f32) -> &CursorEvent {
     event
 }
 
-// Add the implementation for CursorPipeline
 impl CursorPipeline {
     pub fn new(device: &wgpu::Device) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1644,72 +1639,102 @@ impl CursorPipeline {
     }
 }
 
-struct Coordinate<Space> {
-    pub space: Space,
-    pub x: f64,
-    pub y: f64,
-}
+#[derive(Default, Clone, Copy, Debug)]
+struct RawDisplaySpace;
 
-impl<T> Add for Coordinate<T> {
-    type Output = Self;
+// raw cursor data
+#[derive(Default, Clone, Copy, Debug)]
+struct RawDisplayUVSpace;
 
-    fn add(self, rhs: Self) -> Self::Output {
-        Coordinate {
-            space: self.space,
-            x: self.x + rhs.x,
-            y: self.y + rhs.y,
-        }
-    }
-}
+#[derive(Default, Clone, Copy, Debug)]
+struct CroppedDisplaySpace;
 
-impl<T> std::ops::Sub for Coordinate<T> {
-    type Output = Self;
-
-    fn sub(self, rhs: Self) -> Self::Output {
-        Coordinate {
-            space: self.space,
-            x: self.x - rhs.x,
-            y: self.y - rhs.y,
-        }
-    }
-}
-
-impl<T> std::ops::Mul<f64> for Coordinate<T> {
-    type Output = Self;
-
-    fn mul(self, rhs: f64) -> Self::Output {
-        Coordinate {
-            space: self.space,
-            x: self.x * rhs,
-            y: self.y * rhs,
-        }
-    }
-}
-
-impl<T> std::ops::Div<f64> for Coordinate<T> {
-    type Output = Self;
-
-    fn div(self, rhs: f64) -> Self::Output {
-        Coordinate {
-            space: self.space,
-            x: self.x / rhs,
-            y: self.y / rhs,
-        }
-    }
-}
-
+#[derive(Default, Clone, Copy, Debug)]
 struct FrameSpace;
-struct DisplaySpace {
-    offset: Coordinate<FrameSpace>,
-    scale: f64,
+
+#[derive(Default, Clone, Copy, Debug)]
+struct TransformedDisplaySpace;
+
+#[derive(Clone, Copy, Debug)]
+struct Coord<TSpace> {
+    coord: XY<f64>,
+    space: TSpace,
 }
 
-impl From<Coordinate<DisplaySpace>> for Coordinate<FrameSpace> {
-    fn from(value: Coordinate<DisplaySpace>) -> Self {
-        Coordinate {
-            space: FrameSpace,
-            x: value.x * value.space.scale + value.space.offset.x,
-            y: value.y * value.space.scale + value.space.offset.y,
+impl<TSpace: Default> Coord<TSpace> {
+    pub fn new(coord: XY<f64>) -> Self {
+        Self {
+            coord,
+            space: TSpace::default(),
+        }
+    }
+
+    pub fn clamp(self, min: XY<f64>, max: XY<f64>) -> Self {
+        Self {
+            coord: XY {
+                x: self.coord.x.clamp(min.x, max.x),
+                y: self.coord.y.clamp(min.y, max.y),
+            },
+            space: self.space,
+        }
+    }
+}
+
+impl<T> Deref for Coord<T> {
+    type Target = XY<f64>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.coord
+    }
+}
+
+impl Coord<RawDisplayUVSpace> {
+    fn to_raw_display_space(&self, size: XY<f64>) -> Coord<RawDisplaySpace> {
+        Coord::new(self.coord * size)
+    }
+}
+
+impl Coord<RawDisplaySpace> {
+    fn to_cropped_display_space(&self, crop: Crop) -> Coord<CroppedDisplaySpace> {
+        Coord::new(self.coord - crop.position.map(|v| v as f64))
+    }
+}
+
+impl Coord<CroppedDisplaySpace> {
+    fn to_frame_space(&self, padding: XY<f64>) -> Coord<FrameSpace> {
+        Coord::new(self.coord + padding)
+    }
+}
+
+impl<T> Add for Coord<T> {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        Coord {
+            coord: self.coord + rhs.coord,
+            space: self.space,
+        }
+    }
+}
+
+impl<T> Sub for Coord<T> {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self {
+        Coord {
+            coord: self.coord - rhs.coord,
+            space: self.space,
+        }
+    }
+}
+
+impl<T> Mul<f64> for Coord<T> {
+    type Output = Self;
+
+    fn mul(self, rhs: f64) -> Self {
+        Coord {
+            coord: self.coord * rhs,
+            space: self.space,
         }
     }
 }

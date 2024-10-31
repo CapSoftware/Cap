@@ -1,4 +1,4 @@
-use ffmpeg::{filter, format::pixel::Pixel};
+use ffmpeg::filter;
 
 use crate::{
     data::{FFVideo, VideoInfo},

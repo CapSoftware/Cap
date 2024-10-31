@@ -2,7 +2,6 @@ use ffmpeg::software::scaling;
 use flume::{Receiver, Sender, TryRecvError};
 use nokhwa::{pixel_format::*, utils::*, Camera};
 use std::{
-    io::Write,
     thread::{self, JoinHandle},
     time::Instant,
 };

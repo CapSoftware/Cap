@@ -4013,10 +4013,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@8.4.0-beta.5':
-    resolution: {integrity: sha512-OJ8ixXSEs03EA/49gjQxRl1AV6r1j87mB4/aDYlc2ksqI5YHBBX/igsM5N0nXAyhPpRYa2cxaZCqNG7aROug2g==}
+  '@storybook/builder-vite@8.5.0-alpha.0':
+    resolution: {integrity: sha512-IhtVC3RB2ndaGjMociYcJ2kXvL8fiATpTN0DHBgK3tJCTryT9+BwE9YkyrPy6Cu44VjSXxx8urCEsWTNuO0QXA==}
     peerDependencies:
-      storybook: ^8.4.0-beta.5
+      storybook: ^8.5.0-alpha.0
       vite: ^4.0.0 || ^5.0.0
 
   '@storybook/core@8.3.3':
@@ -4027,10 +4027,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@8.4.0-beta.5':
-    resolution: {integrity: sha512-JCC+5/y5Mh/md/tyc7sSLi9ve+8Lgr5wltzMZInPDxY5BT/s3bmLHZhE/Q+UQXhN/XfZJmVVrYHtnVDRhZI1OA==}
+  '@storybook/csf-plugin@8.5.0-alpha.0':
+    resolution: {integrity: sha512-OyaER6HaNE0gQq9Gpbs26Wx3hHH53TzFykXrqxA+MRDKkxcJ3oNwy4t/JmUiWqyRCnuiQHxanNUETfpd+aJr0A==}
     peerDependencies:
-      storybook: ^8.4.0-beta.5
+      storybook: ^8.5.0-alpha.0
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -13937,9 +13937,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@8.4.0-beta.5(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))':
+  '@storybook/builder-vite@8.5.0-alpha.0(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 8.4.0-beta.5(storybook@8.3.3)
+      '@storybook/csf-plugin': 8.5.0-alpha.0(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -13974,7 +13974,7 @@ snapshots:
     transitivePeerDependencies:
       - webpack-sources
 
-  '@storybook/csf-plugin@8.4.0-beta.5(storybook@8.3.3)':
+  '@storybook/csf-plugin@8.5.0-alpha.0(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.15.0
@@ -16586,7 +16586,7 @@ snapshots:
       doctrine: 2.1.0
       eslint: 8.57.1
       eslint-import-resolver-node: 0.3.9
-      eslint-module-utils: 2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0(eslint@8.57.1))(eslint@8.57.1))(eslint@8.57.1)
+      eslint-module-utils: 2.12.0(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-import-resolver-typescript@3.6.3(@typescript-eslint/parser@5.62.0(eslint@8.57.1)(typescript@5.6.2))(eslint-import-resolver-node@0.3.9)(eslint-plugin-import@2.30.0)(eslint@8.57.1))(eslint@8.57.1)
       hasown: 2.0.2
       is-core-module: 2.15.1
       is-glob: 4.0.3
@@ -20739,7 +20739,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 8.4.0-beta.5(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))
+      '@storybook/builder-vite': 8.5.0-alpha.0(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))
     transitivePeerDependencies:
       - storybook
       - vite

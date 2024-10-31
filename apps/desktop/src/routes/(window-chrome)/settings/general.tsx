@@ -45,21 +45,15 @@ export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
 
   return (
-    <Show
-      when={(() => {
-        const s = store();
-        if (s === undefined) return;
-        return [s];
-      })()}
-    >
-      {(store) => <Inner store={store()[0]} />}
+    <Show when={store.state === "ready" && ([store()] as const)}>
+      {(store) => <Inner initialStore={store()[0] ?? null} />}
     </Show>
   );
 }
 
-function Inner(props: { store: GeneralSettingsStore | null }) {
+function Inner(props: { initialStore: GeneralSettingsStore | null }) {
   const [settings, setSettings] = createStore<GeneralSettingsStore>(
-    props.store ?? {
+    props.initialStore ?? {
       upload_individual_files: false,
       open_editor_after_recording: false,
       hide_dock_icon: false,
