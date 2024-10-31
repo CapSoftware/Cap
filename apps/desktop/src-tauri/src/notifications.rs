@@ -1,4 +1,4 @@
-use crate::{AppSounds, NewNotification};
+use crate::{general_settings::GeneralSettingsStore, AppSounds, NewNotification};
 use tauri_plugin_notification::NotificationExt;
 use tauri_specta::Event;
 
@@ -83,6 +83,15 @@ impl NotificationType {
 }
 
 pub fn send_notification(app: &tauri::AppHandle, notification_type: NotificationType) {
+    // Check if notifications are enabled in settings
+    let enable_notifications = GeneralSettingsStore::get(app)
+        .map(|settings| settings.map_or(false, |s| s.enable_notifications))
+        .unwrap_or(false);
+
+    if !enable_notifications {
+        return;
+    }
+
     let (title, body, is_error) = notification_type.details();
 
     app.notification()

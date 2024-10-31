@@ -39,6 +39,7 @@
     "@tauri-apps/plugin-shell": ">=2.0.0-rc.0",
     "@tauri-apps/plugin-store": "2.1.0",
     "@tauri-apps/plugin-updater": "2.0.0-rc.0",
+    "@tauri-apps/plugin-notification": "2.0.0-rc.0",
     "@types/react-tooltip": "^4.2.4",
     "cva": "npm:class-variance-authority@^0.7.0",
     "effect": "^3.7.2",

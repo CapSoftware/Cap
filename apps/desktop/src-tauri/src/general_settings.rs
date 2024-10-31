@@ -13,8 +13,12 @@ pub struct GeneralSettingsStore {
     pub hide_dock_icon: bool,
     #[serde(default)]
     pub auto_create_shareable_link: bool,
-    #[serde(default)]
-    pub enable_tooltip_notifications: bool, // New field
+    #[serde(default = "default_enable_notifications")]
+    pub enable_notifications: bool,
+}
+
+fn default_enable_notifications() -> bool {
+    true
 }
 
 impl GeneralSettingsStore {

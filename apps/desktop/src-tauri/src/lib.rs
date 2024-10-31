@@ -55,7 +55,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
 use tauri_nspanel::ManagerExt;
-use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::task;
@@ -2334,6 +2334,36 @@ async fn seek_to(app: AppHandle, video_id: String, frame_number: u32) {
         .await;
 }
 
+async fn check_notification_permissions(app: &AppHandle) {
+    // Check if we've already requested permissions
+    if let Ok(Some(settings)) = GeneralSettingsStore::get(app) {
+        if settings.enable_notifications {
+            match app.notification().permission_state() {
+                Ok(state) if state != PermissionState::Granted => {
+                    println!("Requesting notification permission");
+                    match app.notification().request_permission() {
+                        Ok(PermissionState::Granted) => {
+                            println!("Notification permission granted");
+                        }
+                        Ok(_) | Err(_) => {
+                            if let Ok(Some(mut s)) = GeneralSettingsStore::get(app) {
+                                s.enable_notifications = false;
+                                GeneralSettingsStore::set(app, s).ok();
+                            }
+                        }
+                    }
+                }
+                Ok(_) => {
+                    println!("Notification permission already granted");
+                }
+                Err(e) => {
+                    eprintln!("Error checking notification permission state: {}", e);
+                }
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -2373,7 +2403,6 @@ pub async fn run() {
             open_main_window,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
-            permissions::request_permission,
             upload_rendered_video,
             upload_screenshot,
             get_recording_meta,
@@ -2451,6 +2480,13 @@ pub async fn run() {
             general_settings::init(app.handle());
 
             let app_handle = app.handle().clone();
+
+            // Add this line to check notification permissions on startup
+            // Fix: Clone the app_handle and move it into the spawned task
+            let notification_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                check_notification_permissions(&notification_handle).await;
+            });
 
             if permissions::do_permissions_check(true).necessary_granted() {
                 open_main_window(app_handle.clone());

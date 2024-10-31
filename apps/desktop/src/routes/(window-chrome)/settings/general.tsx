@@ -2,6 +2,10 @@ import { createResource, Show, For } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import { commands, type GeneralSettingsStore } from "~/utils/tauri";
+import {
+  isPermissionGranted,
+  requestPermission,
+} from "@tauri-apps/plugin-notification";
 
 const settingsList = [
   {
@@ -28,6 +32,13 @@ const settingsList = [
     description:
       "When enabled, a shareable link will be created automatically after stopping the recording. You'll be redirected to the URL while the upload continues in the background.",
   },
+  {
+    key: "enable_notifications",
+    label: "Enable System Notifications",
+    description:
+      "Show system notifications for events like copying to clipboard, saving files, and more.",
+    requiresPermission: true,
+  },
 ];
 
 export default function GeneralSettings() {
@@ -51,10 +62,36 @@ function Inner(props: { store: GeneralSettingsStore | null }) {
     props.store ?? {
       upload_individual_files: false,
       open_editor_after_recording: false,
+      hide_dock_icon: false,
+      auto_create_shareable_link: false,
+      enable_notifications: true,
     }
   );
 
   const handleChange = async (key: string, value: boolean) => {
+    console.log(`Handling settings change for ${key}: ${value}`);
+    // Special handling for notifications permission
+    if (key === "enable_notifications") {
+      if (value) {
+        // Check current permission state
+        console.log("Checking notification permission status");
+        const permissionGranted = await isPermissionGranted();
+        console.log(`Current permission status: ${permissionGranted}`);
+
+        if (!permissionGranted) {
+          // Request permission if not granted
+          console.log("Permission not granted, requesting permission");
+          const permission = await requestPermission();
+          console.log(`Permission request result: ${permission}`);
+          if (permission !== "granted") {
+            // If permission denied, don't enable the setting
+            console.log("Permission denied, aborting setting change");
+            return;
+          }
+        }
+      }
+    }
+
     setSettings(key as keyof GeneralSettingsStore, value);
     await commands.setGeneralSettings({
       ...settings,
