@@ -51,7 +51,6 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
-use tauri_nspanel::ManagerExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
@@ -515,7 +514,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
                 if let Some(pre_created_video) = state.pre_created_video.take() {
                     // Copy link to clipboard
                     #[cfg(target_os = "macos")]
-                    macos::write_string_to_pasteboard(&pre_created_video.link);
+                    platform::write_string_to_pasteboard(&pre_created_video.link);
 
                     // Send notification for shareable link
                     notifications::send_notification(
@@ -1858,7 +1857,7 @@ async fn upload_rendered_video(
     };
 
     #[cfg(target_os = "macos")]
-    macos::write_string_to_pasteboard(&share_link);
+    platform::write_string_to_pasteboard(&share_link);
 
     Ok(UploadResult::Success(share_link))
 }
@@ -1938,7 +1937,7 @@ async fn upload_screenshot(
     println!("Copying to clipboard: {:?}", share_link);
 
     #[cfg(target_os = "macos")]
-    macos::write_string_to_pasteboard(&share_link);
+    platform::write_string_to_pasteboard(&share_link);
 
     // Send notification after successful upload and clipboard copy
     notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
@@ -2321,11 +2320,12 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
 #[tauri::command]
 #[specta::specta]
 async fn reset_microphone_permissions(app: AppHandle) -> Result<(), ()> {
-    #[cfg(debug_assertions)]
-    let bundle_id = "com.apple.Terminal";
-    #[cfg(not(debug_assertions))]
-    let bundle_id = "so.cap.desktop";
-
+    #[cfg(macos)]
+    {
+        #[cfg(debug_assertions)]
+        let bundle_id = "com.apple.Terminal";
+        #[cfg(not(debug_assertions))]
+        let bundle_id = "so.cap.desktop";
         Command::new("tccutil")
             .arg("reset")
             .arg("Microphone")
@@ -2697,8 +2697,6 @@ pub async fn remove_editor_instance(
     };
 
     let mut map = map.lock().await;
-
-    
 
     if let Some(editor) = map.remove(&video_id) {
         editor.dispose().await;
