@@ -1,6 +1,6 @@
 use ffmpeg::{
     codec::{codec::Codec, context, encoder},
-    format::{self, pixel::Pixel},
+    format::{self},
     threading::Config,
     Dictionary,
 };
@@ -21,9 +21,7 @@ pub struct H264Encoder {
 
 impl H264Encoder {
     pub fn init(tag: &'static str, config: VideoInfo, output: Output) -> Result<Self, MediaError> {
-        let destination = match output {
-            Output::File(path) => path,
-        };
+        let Output::File(destination) = output;
         let mut output_ctx = format::output(&destination)?;
 
         let (codec, options) = get_codec_and_options(&config)?;

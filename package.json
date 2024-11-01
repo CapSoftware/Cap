@@ -25,7 +25,7 @@
   },
   "pnpm": {
     "patchedDependencies": {
-      "@kobalte/core@0.13.6": "patches/@kobalte__core@0.13.6.patch"
+      "@kobalte/core@0.13.7": "patches/@kobalte__core@0.13.7.patch"
     }
   }
 }

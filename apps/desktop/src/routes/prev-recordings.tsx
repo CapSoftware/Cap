@@ -137,13 +137,25 @@ export default function () {
 
                 const saveMedia = createMutation(() => ({
                   mutationFn: async () => {
-                    const newFileName = isRecording
+                    const meta = recordingMeta.data;
+                    if (!meta) {
+                      throw new Error("Recording metadata not available");
+                    }
+
+                    const defaultName = isRecording
                       ? "Cap Recording"
                       : media.path.split(".cap/")[1];
+                    const suggestedName = meta.pretty_name || defaultName;
+
                     const fileType = isRecording ? "recording" : "screenshot";
+                    const extension = isRecording ? ".mp4" : ".png";
+
+                    const fullFileName = suggestedName.endsWith(extension)
+                      ? suggestedName
+                      : `${suggestedName}${extension}`;
 
                     const savePathResult = await commands.saveFileDialog(
-                      newFileName,
+                      fullFileName,
                       fileType
                     );
 
@@ -196,7 +208,8 @@ export default function () {
                     if (isRecording) {
                       res = await commands.uploadRenderedVideo(
                         mediaId,
-                        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+                        null
                       );
                     } else {
                       res = await commands.uploadScreenshot(media.path);

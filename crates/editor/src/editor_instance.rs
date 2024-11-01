@@ -263,7 +263,7 @@ impl EditorInstance {
         tokio::spawn(async move {
             loop {
                 preview_rx.changed().await.unwrap();
-                let Some(frame_number) = preview_rx.borrow().deref().clone() else {
+                let Some(frame_number) = *preview_rx.borrow().deref() else {
                     continue;
                 };
 

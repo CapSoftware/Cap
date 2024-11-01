@@ -27,6 +27,11 @@
     "store:default",
     "process:default",
     "oauth:allow-start",
-    "updater:default"
+    "updater:default",
+    "notification:default",
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "https://cap.so" }]
+    }
   ]
 }

@@ -1,4 +1,4 @@
-use crate::flags;
+use cap_flags::FLAGS;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
 use cap_project::CursorEvent;
 use device_query::{DeviceQuery, DeviceState};
@@ -19,7 +19,7 @@ use cocoa::foundation::{NSData, NSUInteger};
 #[cfg(target_os = "macos")]
 use objc::rc::autoreleasepool;
 #[cfg(target_os = "macos")]
-use objc::runtime::{Class, Object, Sel, BOOL, YES};
+use objc::runtime::Class;
 #[cfg(target_os = "macos")]
 use objc::*;
 
@@ -145,7 +145,7 @@ impl InProgressRecording {
 
         *self.stop_signal.lock().await = true;
 
-        if flags::RECORD_MOUSE {
+        if FLAGS.record_mouse {
             // Save mouse events to files
             let mut file = File::create(self.recording_dir.join("cursor.json")).unwrap();
             serde_json::to_writer(
@@ -215,7 +215,7 @@ pub async fn start(
     let screen_source =
         ScreenCaptureSource::init(dbg!(&recording_options.capture_target), None, None);
     let screen_config = screen_source.info();
-    let screen_bounds = screen_source.bounds.clone();
+    let screen_bounds = screen_source.bounds;
 
     let output_config = screen_config.scaled(1920, 30);
     let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
@@ -340,7 +340,7 @@ pub async fn start(
                 if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
                     let mouse_event = CursorEvent {
                         active_modifiers: vec![],
-                        cursor_id: cursor_id,
+                        cursor_id,
                         process_time_ms: elapsed,
                         unix_time_ms: unix_time,
                         x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,

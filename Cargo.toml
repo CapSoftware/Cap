@@ -8,6 +8,7 @@ members = [
 	"crates/utils",
 	"crates/project",
 	"crates/editor",
+	"crates/flags",
 ]
 
 [workspace.dependencies]
@@ -23,4 +24,5 @@ tokio = { version = "1.39.3", features = [
 	"rt-multi-thread",
 	"time",
 ] }
-tauri = { version = "2.0.0-rc" }
+tauri = { version = "2.0.0" }
+specta = { version = "=2.0.0-rc.20" }

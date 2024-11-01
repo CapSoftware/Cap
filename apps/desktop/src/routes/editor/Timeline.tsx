@@ -13,11 +13,11 @@ import {
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import { produce } from "solid-js/store";
+import { mergeRefs } from "@solid-primitives/refs";
 
 import { commands } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { formatTime } from "./utils";
-import { flags } from "~/flags";
 
 const TimelineContext = createContext<{ duration: Accessor<number> }>({
   duration: () => 0,
@@ -34,6 +34,8 @@ export function Timeline() {
     setPreviewTime,
     history,
     split,
+    state,
+    setState,
   } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
@@ -56,7 +58,7 @@ export function Timeline() {
   const segments = () =>
     project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
 
-  if (flags.zoom)
+  if (window.FLAGS.zoom)
     if (
       !project.timeline?.zoomSegments ||
       project.timeline.zoomSegments.length < 1
@@ -66,9 +68,9 @@ export function Timeline() {
           project.timeline ??= {
             segments: [{ start: 0, end: duration(), timescale: 1 }],
           };
-          project.timeline.zoomSegments = [
-            { start: 0, end: duration(), amount: 1 },
-          ];
+          // project.timeline.zoomSegments = [
+          //   { start: 0, end: duration(), amount: 1 },
+          // ];
         })
       );
     }
@@ -76,7 +78,7 @@ export function Timeline() {
   return (
     <TimelineContext.Provider value={{ duration }}>
       <div
-        class="py-[2rem] relative overflow-hidden space-y-0.5"
+        class="py-[2rem] relative overflow-hidden space-y-2"
         style={{
           "padding-left": `${xPadding}px`,
           "padding-right": `${xPadding}px`,
@@ -100,6 +102,9 @@ export function Timeline() {
         }}
         onMouseLeave={() => {
           setPreviewTime(undefined);
+        }}
+        onClick={() => {
+          setState("timelineSelection", null);
         }}
       >
         <Show when={previewTime()}>
@@ -128,7 +133,7 @@ export function Timeline() {
         </Show>
         <Show when={!split()}>
           <div
-            class="w-px bg-red-300 absolute top-4 bottom-0 z-10"
+            class="w-px bg-red-300 absolute top-4 bottom-0 z-10 pointer-events-none"
             style={{
               left: `${xPadding}px`,
               transform: `translateX(${Math.min(
@@ -141,7 +146,6 @@ export function Timeline() {
             <div class="size-2 bg-red-300 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
           </div>
         </Show>
-
         <TrackRoot ref={setTimelineRef} isFreeForm={false}>
           <For each={segments()}>
             {(segment, i) => (
@@ -303,71 +307,175 @@ export function Timeline() {
             )}
           </For>
         </TrackRoot>
-        {flags.zoom && (
-          <TrackRoot isFreeForm>
-            <For each={project.timeline?.zoomSegments}>
-              {(segment, i) => (
-                <SegmentRoot
-                  class="border-red-300"
-                  innerClass="ring-red-300"
-                  segment={segment}
-                >
-                  <SegmentHandle
-                    class="bg-red-300"
-                    onMouseDown={(downEvent) => {
-                      const start = segment.start;
+        <Show when={window.FLAGS.zoom}>
+          {(_) => {
+            const [hoveringSegment, setHoveringSegment] = createSignal(false);
+            const [hoveredTime, setHoveredTime] = createSignal<number>();
 
-                      const maxDuration =
-                        editorInstance.recordingDuration -
-                        segments().reduce(
-                          (acc, segment, segmentI) =>
-                            segmentI === i()
-                              ? acc
-                              : acc +
-                                (segment.end - segment.start) /
-                                  segment.timescale,
-                          0
-                        );
+            return (
+              <TrackRoot
+                isFreeForm
+                onMouseMove={(e) => {
+                  if (hoveringSegment()) {
+                    setHoveredTime(undefined);
+                    return;
+                  }
 
-                      function update(event: MouseEvent) {
-                        const { width } = timelineBounds;
+                  const bounds = e.target.getBoundingClientRect()!;
 
-                        const newStart =
-                          start +
-                          ((event.clientX - downEvent.clientX) / width!) *
-                            duration();
+                  let time =
+                    ((e.clientX - bounds.left) / bounds.width) * duration();
 
-                        setProject(
-                          "timeline",
-                          "zoomSegments",
-                          i(),
-                          "start",
-                          Math.min(
-                            Math.max(
-                              newStart,
-                              // Math.max(newStart, 0),
-                              segment.end - maxDuration
-                            ),
-                            segment.end - 1
-                          )
-                        );
+                  const prevSegmentIndex =
+                    project.timeline?.zoomSegments?.findIndex(
+                      (s) => s.end < time
+                    );
+
+                  const nextSegmentIndex =
+                    project.timeline?.zoomSegments?.findIndex(
+                      (s) => time < s.start
+                    );
+
+                  if (nextSegmentIndex !== undefined) {
+                    const nextSegment =
+                      project.timeline?.zoomSegments?.[nextSegmentIndex];
+
+                    if (prevSegmentIndex !== undefined && nextSegment) {
+                      const prevSegment =
+                        project.timeline?.zoomSegments?.[prevSegmentIndex];
+
+                      if (prevSegment) {
+                        const availableTime =
+                          nextSegment?.start - prevSegment?.end;
+
+                        if (availableTime < 1) return;
                       }
+                    }
 
-                      const resumeHistory = history.pause();
-                      createRoot((dispose) => {
-                        createEventListenerMap(window, {
-                          mousemove: update,
-                          mouseup: (e) => {
-                            dispose();
-                            resumeHistory();
-                            update(e);
-                          },
-                        });
+                    if (nextSegment && nextSegment.start - time < 1) {
+                      time = nextSegment.start - 1;
+                    }
+                  }
+
+                  setHoveredTime(Math.min(time, duration() - 1));
+                }}
+                onMouseLeave={(e) => setHoveredTime()}
+                onClick={(e) => {
+                  const time = hoveredTime();
+                  if (time === undefined) return;
+
+                  e.stopPropagation();
+                  setProject(
+                    "timeline",
+                    "zoomSegments",
+                    produce((zoomSegments) => {
+                      zoomSegments ??= [];
+                      zoomSegments.push({
+                        start: time,
+                        end: time + 1,
+                        amount: 1.5,
                       });
-                    }}
-                  />
-                  <SegmentContent class="bg-red-50">
-                    {/*<button
+                    })
+                  );
+                }}
+              >
+                <Show when={hoveredTime()}>
+                  {(time) => (
+                    <SegmentRoot
+                      class="border-red-300 group pointer-events-none opacity-70"
+                      innerClass="ring-red-300"
+                      segment={{
+                        start: time(),
+                        end: time() + 1,
+                      }}
+                    >
+                      <SegmentHandle class="bg-red-300" />
+                      <SegmentContent class="bg-red-50" />
+                      <SegmentHandle class="bg-red-300" />
+                    </SegmentRoot>
+                  )}
+                </Show>
+                <For each={project.timeline?.zoomSegments}>
+                  {(segment, i) => (
+                    <SegmentRoot
+                      class="border-red-300 group"
+                      innerClass="ring-red-300"
+                      segment={segment}
+                      onMouseEnter={() => {
+                        setHoveringSegment(true);
+                      }}
+                      onMouseLeave={() => {
+                        setHoveringSegment(false);
+                      }}
+                    >
+                      <SegmentHandle
+                        class="bg-red-300 group-hover:bg-opacity-80 transition-colors"
+                        onMouseDown={(downEvent) => {
+                          const start = segment.start;
+
+                          const maxDuration =
+                            editorInstance.recordingDuration -
+                            segments().reduce(
+                              (acc, segment, segmentI) =>
+                                segmentI === i()
+                                  ? acc
+                                  : acc +
+                                    (segment.end - segment.start) /
+                                      segment.timescale,
+                              0
+                            );
+
+                          function update(event: MouseEvent) {
+                            const { width } = timelineBounds;
+
+                            const newStart =
+                              start +
+                              ((event.clientX - downEvent.clientX) / width!) *
+                                duration();
+
+                            setProject(
+                              "timeline",
+                              "zoomSegments",
+                              i(),
+                              "start",
+                              Math.min(
+                                Math.max(
+                                  newStart,
+                                  // Math.max(newStart, 0),
+                                  segment.end - maxDuration
+                                ),
+                                segment.end - 1
+                              )
+                            );
+                          }
+
+                          const resumeHistory = history.pause();
+                          createRoot((dispose) => {
+                            createEventListenerMap(window, {
+                              mousemove: update,
+                              mouseup: (e) => {
+                                dispose();
+                                resumeHistory();
+                                update(e);
+                              },
+                            });
+                          });
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                        }}
+                      />
+                      <SegmentContent
+                        class="bg-red-50 cursor-pointer group-hover:bg-opacity-80 transition-colors"
+                        onClick={(e) => {
+                          setState("timelineSelection", {
+                            type: "zoom",
+                            index: i(),
+                          });
+                          e.stopPropagation();
+                        }}
+                      >
+                        {/*<button
                       onClick={() => {
                         // setProject(
                         //   "timeline",
@@ -381,62 +489,67 @@ export function Timeline() {
                     >
                       <IconCapTrash class="size-4 text-gray-400 group-hover/button:text-gray-500 transition-colors" />
                     </button>*/}
-                  </SegmentContent>
-                  <SegmentHandle
-                    class="bg-red-300"
-                    onMouseDown={(downEvent) => {
-                      const end = segment.end;
+                      </SegmentContent>
+                      <SegmentHandle
+                        class="bg-red-300 group-hover:bg-opacity-80 transition-colors"
+                        onMouseDown={(downEvent) => {
+                          const end = segment.end;
 
-                      const maxDuration =
-                        editorInstance.recordingDuration -
-                        segments().reduce(
-                          (acc, segment, segmentI) =>
-                            segmentI === i()
-                              ? acc
-                              : acc +
-                                (segment.end - segment.start) /
-                                  segment.timescale,
-                          0
-                        );
+                          const maxDuration =
+                            editorInstance.recordingDuration -
+                            segments().reduce(
+                              (acc, segment, segmentI) =>
+                                segmentI === i()
+                                  ? acc
+                                  : acc +
+                                    (segment.end - segment.start) /
+                                      segment.timescale,
+                              0
+                            );
 
-                      function update(event: MouseEvent) {
-                        const { width } = timelineBounds;
+                          function update(event: MouseEvent) {
+                            const { width } = timelineBounds;
 
-                        const newEnd =
-                          end +
-                          ((event.clientX - downEvent.clientX) / width!) *
-                            duration();
+                            const newEnd =
+                              end +
+                              ((event.clientX - downEvent.clientX) / width!) *
+                                duration();
 
-                        setProject(
-                          "timeline",
-                          "zoomSegments",
-                          i(),
-                          "end",
-                          Math.max(
-                            Math.min(newEnd, segment.start + maxDuration),
-                            segment.start + 1
-                          )
-                        );
-                      }
+                            setProject(
+                              "timeline",
+                              "zoomSegments",
+                              i(),
+                              "end",
+                              Math.max(
+                                Math.min(newEnd, segment.start + maxDuration),
+                                segment.start + 1
+                              )
+                            );
+                          }
 
-                      const resumeHistory = history.pause();
-                      createRoot((dispose) => {
-                        createEventListenerMap(window, {
-                          mousemove: update,
-                          mouseup: (e) => {
-                            dispose();
-                            resumeHistory();
-                            update(e);
-                          },
-                        });
-                      });
-                    }}
-                  />
-                </SegmentRoot>
-              )}
-            </For>
-          </TrackRoot>
-        )}
+                          const resumeHistory = history.pause();
+                          createRoot((dispose) => {
+                            createEventListenerMap(window, {
+                              mousemove: update,
+                              mouseup: (e) => {
+                                dispose();
+                                resumeHistory();
+                                update(e);
+                              },
+                            });
+                          });
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                        }}
+                      />
+                    </SegmentRoot>
+                  )}
+                </For>
+              </TrackRoot>
+            );
+          }}
+        </Show>
       </div>
     </TimelineContext.Provider>
   );
@@ -447,9 +560,7 @@ const TrackContext = createContext<{
   isFreeForm: boolean;
 }>();
 
-function TrackRoot(
-  props: Omit<ComponentProps<"div">, "ref"> & { isFreeForm: boolean }
-) {
+function TrackRoot(props: ComponentProps<"div"> & { isFreeForm: boolean }) {
   const [ref, setRef] = createSignal<HTMLDivElement>();
 
   const bounds = createElementBounds(ref);
@@ -459,7 +570,7 @@ function TrackRoot(
     >
       <div
         {...props}
-        ref={setRef}
+        ref={mergeRefs(setRef, props.ref)}
         class={cx("flex flex-row relative h-[3rem]", props.class)}
       >
         {props.children}
@@ -469,10 +580,7 @@ function TrackRoot(
 }
 
 function SegmentRoot(
-  props: Pick<
-    ComponentProps<"div">,
-    "children" | "onMouseDown" | "class" | "ref"
-  > & {
+  props: ComponentProps<"div"> & {
     innerClass: string;
     segment: { start: number; end: number };
   }
@@ -482,6 +590,7 @@ function SegmentRoot(
 
   return (
     <div
+      {...props}
       class={cx(
         "absolute border rounded-[calc(0.75rem+1px)] h-[3rem] w-full",
         props.class
@@ -511,18 +620,15 @@ function SegmentRoot(
   );
 }
 
-function SegmentContent(
-  props: Pick<ComponentProps<"div">, "class" | "children">
-) {
+function SegmentContent(props: ComponentProps<"div">) {
   return (
     <div
+      {...props}
       class={cx(
         "relative w-full h-full flex flex-row items-center justify-between px-[0.5rem] py-[0.25rem]",
         props.class
       )}
-    >
-      {props.children}
-    </div>
+    />
   );
 }
 

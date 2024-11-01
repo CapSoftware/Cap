@@ -14,6 +14,7 @@ import {
   onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
+import { fetch } from "@tauri-apps/plugin-http";
 
 import { authStore } from "~/store";
 import { clientEnv } from "~/utils/env";
@@ -41,8 +42,13 @@ import {
 } from "../editor/ui";
 
 const getAuth = cache(async () => {
+  if (import.meta.env.VITE_LOCAL_MODE) return null;
   const value = await authStore.get();
-  if (!value && !import.meta.env.VITE_LOCAL_MODE) return redirect("/signin");
+  if (!value) return redirect("/signin");
+  const res = await fetch(`${clientEnv.VITE_SERVER_URL}/api/desktop/plan`, {
+    headers: { authorization: `Bearer ${value.token}` },
+  });
+  if (res.status !== 200) return redirect("/signin");
   return value;
 }, "getAuth");
 
@@ -68,7 +74,7 @@ export default function () {
 
   onMount(async () => {
     await commands.showPreviousRecordingsWindow();
-    await commands.showNotificationsWindow();
+    // await commands.showNotificationsWindow();
   });
 
   const isRecording = () => !!currentRecording.data;
@@ -291,12 +297,12 @@ export default function () {
               if (!options.data) return;
 
               if (!item || !item.isCamera) {
-                await setOptions({
+                setOptions({
                   ...options.data,
                   cameraLabel: null,
                 });
               } else {
-                await setOptions({
+                setOptions({
                   ...options.data,
                   cameraLabel: item.name,
                 });
@@ -517,6 +523,8 @@ export default function () {
     </div>
   );
 }
+
+export const searchParams = "hello!!!";
 
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";

@@ -151,8 +151,8 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
             microphone: check_av_permission(AVMediaType::Audio),
             camera: check_av_permission(AVMediaType::Video),
             accessibility: {
-                let accessibility_status = check_accessibility_permission();
-                accessibility_status
+                
+                check_accessibility_permission()
             },
         }
     }

@@ -1,5 +1,7 @@
 // https://github.com/gpac/mp4box.js/issues/233
 
+import { Flags } from "./utils/tauri";
+
 declare module "mp4box";
 
 export interface MP4MediaTrack {
@@ -1878,4 +1880,11 @@ export namespace Log {
   export function printRanges(ranges: any): any;
   export function setLogLevel(level: any): void;
   export function warn(module: any, msg: any): void;
+}
+
+declare var FLAGS: Flags;
+declare global {
+  interface Window {
+    FLAGS: Flags;
+  }
 }
