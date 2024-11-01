@@ -163,7 +163,9 @@ export const spaceInvites = mysqlTable(
   (table) => ({
     spaceIdIndex: index("space_id_idx").on(table.spaceId),
     invitedEmailIndex: index("invited_email_idx").on(table.invitedEmail),
-    invitedByUserIdIndex: index("invited_by_user_id_idx").on(table.invitedByUserId),
+    invitedByUserIdIndex: index("invited_by_user_id_idx").on(
+      table.invitedByUserId
+    ),
     statusIndex: index("status_idx").on(table.status),
   })
 );

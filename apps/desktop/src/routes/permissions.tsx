@@ -44,10 +44,11 @@ export default function (props: RouteSectionProps) {
     const neededStep = steps.findIndex((step) => !isPermitted(c?.[step.key]));
 
     if (neededStep === -1) {
-      // All permissions now granted
-      commands.openMainWindow();
-      const window = getCurrentWindow();
-      window.close();
+      // We wait for the window to open as closing immediately after seems to cause an unlabeled crash
+      commands.openMainWindow().then(() => {
+        const window = getCurrentWindow();
+        window.close();
+      });
     } else {
       setCurrentStepIndex(neededStep);
     }

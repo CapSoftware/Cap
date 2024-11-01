@@ -29,6 +29,7 @@ use cap_project::{
 };
 use cap_rendering::ProjectUniforms;
 use cap_utils::create_named_pipe;
+use cocoa::foundation::{NSBundle, NSString};
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
@@ -43,6 +44,7 @@ use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::ffi::{CStr, OsStr};
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
@@ -2300,7 +2302,7 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
 #[specta::specta]
 async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
     #[cfg(debug_assertions)]
-    let bundle_id = "com.apple.Terminal";
+    let bundle_id = "dev.warp.Warp-Stable";
     #[cfg(not(debug_assertions))]
     let bundle_id = "so.cap.desktop";
 
@@ -2401,6 +2403,7 @@ pub async fn run() {
             open_main_window,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
+            permissions::request_permission,
             upload_rendered_video,
             upload_screenshot,
             get_recording_meta,
@@ -2667,8 +2670,6 @@ pub async fn remove_editor_instance(
     };
 
     let mut map = map.lock().await;
-
-    
 
     if let Some(editor) = map.remove(&video_id) {
         editor.dispose().await;

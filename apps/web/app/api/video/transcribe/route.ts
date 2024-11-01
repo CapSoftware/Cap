@@ -122,7 +122,10 @@ export async function GET(request: NextRequest) {
   if (!awsRegion || !awsBucket) {
     console.error("AWS region or bucket information is missing");
     return new Response(
-      JSON.stringify({ error: true, message: "AWS region or bucket information is missing" }),
+      JSON.stringify({
+        error: true,
+        message: "AWS region or bucket information is missing",
+      }),
       {
         status: 500,
         headers: getHeaders(origin),
