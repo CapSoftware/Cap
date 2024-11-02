@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use crate::{
     data::{ffmpeg_sample_format_for, AudioInfo, FFAudio},
     pipeline::{
-        clock::{LocalTimestamp, SynchronisedClock},
+        clock::{LocalTimestamp, RealTimeClock},
         control::Control,
         task::PipelineSourceTask,
     },
@@ -96,7 +96,7 @@ impl AudioInputSource {
 
     pub fn build_stream(
         &self,
-        mut clock: SynchronisedClock<StreamInstant>,
+        mut clock: RealTimeClock<StreamInstant>,
         output: Sender<FFAudio>,
     ) -> Result<Stream, MediaError> {
         let audio_info = self.info();
@@ -142,7 +142,7 @@ impl AudioInputSource {
 impl PipelineSourceTask for AudioInputSource {
     type Output = FFAudio;
 
-    type Clock = SynchronisedClock<StreamInstant>;
+    type Clock = RealTimeClock<StreamInstant>;
 
     // #[tracing::instrument(skip_all)]
     fn run(

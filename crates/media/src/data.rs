@@ -109,6 +109,17 @@ impl AudioInfo {
         }
     }
 
+    pub fn from_decoder(decoder: &ffmpeg::codec::decoder::Audio) -> Self {
+        Self {
+            sample_format: decoder.format(),
+            sample_rate: decoder.rate(),
+            // TODO: Use channel layout when we support more than just mono/stereo
+            channels: usize::from(decoder.channels()),
+            time_base: decoder.time_base(),
+            buffer_size: decoder.frame_size(),
+        }
+    }
+
     pub fn sample_size(&self) -> usize {
         self.sample_format.bytes()
     }

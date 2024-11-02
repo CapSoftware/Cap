@@ -4,30 +4,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-// TODO: Move to utils mod?
-
-pub trait CloneFrom<T> {
-    fn clone_from(value: &T) -> Self;
-}
-
-pub trait CloneInto<T> {
-    fn clone_into(&self) -> T;
-}
-
-impl<S, T> CloneFrom<T> for S
-where
-    T: CloneInto<S>,
-{
-    fn clone_from(value: &T) -> Self {
-        value.clone_into()
-    }
-}
-
-pub trait PipelineClock: Clone + Send + 'static {
-    fn start(&mut self);
-
-    fn stop(&mut self);
-}
+use super::{CloneInto, PipelineClock};
 
 pub trait LocalTimestamp: Sized + Clone {
     fn elapsed_since(&self, other: &Self) -> Duration;
@@ -55,7 +32,7 @@ impl LocalTimestamp for RawNanoseconds {
 }
 
 #[derive(Debug, Clone)]
-pub struct SynchronisedClock<T: LocalTimestamp> {
+pub struct RealTimeClock<T: LocalTimestamp> {
     local_start_time: Option<Instant>,
     global_start_time: Arc<RwLock<Instant>>,
     first_local_timestamp: Option<T>,
@@ -64,18 +41,18 @@ pub struct SynchronisedClock<T: LocalTimestamp> {
     running: Arc<AtomicBool>,
 }
 
-impl<Source: LocalTimestamp, Target: LocalTimestamp> CloneInto<SynchronisedClock<Target>>
-    for SynchronisedClock<Source>
+impl<Source: LocalTimestamp, Target: LocalTimestamp> CloneInto<RealTimeClock<Target>>
+    for RealTimeClock<Source>
 {
-    fn clone_into(&self) -> SynchronisedClock<Target> {
-        let SynchronisedClock {
+    fn clone_into(&self) -> RealTimeClock<Target> {
+        let RealTimeClock {
             global_start_time,
             resume_offset_nanoseconds,
             running,
             ..
         } = self.clone();
 
-        SynchronisedClock {
+        RealTimeClock {
             global_start_time,
             resume_offset_nanoseconds,
             running,
@@ -85,9 +62,9 @@ impl<Source: LocalTimestamp, Target: LocalTimestamp> CloneInto<SynchronisedClock
     }
 }
 
-impl<T: LocalTimestamp> SynchronisedClock<T> {
-    pub fn init() -> SynchronisedClock<()> {
-        SynchronisedClock::<()>::new()
+impl<T: LocalTimestamp> RealTimeClock<T> {
+    pub fn init() -> RealTimeClock<()> {
+        RealTimeClock::<()>::new()
     }
 
     pub fn new() -> Self {
@@ -133,7 +110,7 @@ impl<T: LocalTimestamp> SynchronisedClock<T> {
             if self.local_start_time.is_none()
                 || self.local_start_time.unwrap() < *global_start_time
             {
-                tracing::info!("Just resumed, resetting local state");
+                println!("Just resumed, resetting local state");
                 self.local_start_time = Some(now);
                 self.first_local_timestamp = Some(local.clone());
             }
@@ -154,7 +131,7 @@ impl<T: LocalTimestamp> SynchronisedClock<T> {
     }
 }
 
-impl PipelineClock for SynchronisedClock<()> {
+impl PipelineClock for RealTimeClock<()> {
     fn start(&mut self) {
         if !self.running() {
             let mut start_time = self.global_start_time.write().unwrap();
