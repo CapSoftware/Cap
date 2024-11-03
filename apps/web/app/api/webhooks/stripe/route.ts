@@ -45,7 +45,7 @@ export const POST = async (req: Request) => {
               .from(users)
               .where(eq(users.email, customer.email))
               .limit(1);
-            
+
             if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
               foundUserId = userByEmail[0].id;
               console.log(`User found by email: ${foundUserId}`);
@@ -73,14 +73,21 @@ export const POST = async (req: Request) => {
           .where(eq(users.id, foundUserId));
 
         if (!user) {
-          console.log("No user found in database for checkout.session.completed event");
+          console.log(
+            "No user found in database for checkout.session.completed event"
+          );
           return new Response("No user found", {
             status: 400,
           });
         }
 
-        const subscription = await stripe.subscriptions.retrieve(event.data.object.subscription as string);
-        const inviteQuota = subscription.items.data.reduce((total, item) => total + (item.quantity || 1), 0);
+        const subscription = await stripe.subscriptions.retrieve(
+          event.data.object.subscription as string
+        );
+        const inviteQuota = subscription.items.data.reduce(
+          (total, item) => total + (item.quantity || 1),
+          0
+        );
 
         await db
           .update(users)
@@ -90,7 +97,9 @@ export const POST = async (req: Request) => {
             inviteQuota: inviteQuota,
           })
           .where(eq(users.id, foundUserId));
-        console.log("User updated successfully for checkout.session.completed event");
+        console.log(
+          "User updated successfully for checkout.session.completed event"
+        );
       }
 
       if (event.type === "customer.subscription.updated") {
@@ -110,7 +119,7 @@ export const POST = async (req: Request) => {
               .from(users)
               .where(eq(users.email, customer.email))
               .limit(1);
-            
+
             if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
               foundUserId = userByEmail[0].id;
               console.log(`User found by email: ${foundUserId}`);
@@ -138,14 +147,19 @@ export const POST = async (req: Request) => {
           .where(eq(users.id, foundUserId));
 
         if (!user) {
-          console.log("No user found in database for customer.subscription.updated event");
+          console.log(
+            "No user found in database for customer.subscription.updated event"
+          );
           return new Response("No user found", {
             status: 400,
           });
         }
 
         const subscription = event.data.object as Stripe.Subscription;
-        const inviteQuota = subscription.items.data.reduce((total, item) => total + (item.quantity || 1), 0);
+        const inviteQuota = subscription.items.data.reduce(
+          (total, item) => total + (item.quantity || 1),
+          0
+        );
 
         await db
           .update(users)
@@ -155,7 +169,9 @@ export const POST = async (req: Request) => {
             inviteQuota: inviteQuota,
           })
           .where(eq(users.id, foundUserId));
-        console.log("User updated successfully for customer.subscription.updated event");
+        console.log(
+          "User updated successfully for customer.subscription.updated event"
+        );
       }
 
       if (event.type === "customer.subscription.deleted") {
@@ -175,7 +191,7 @@ export const POST = async (req: Request) => {
               .from(users)
               .where(eq(users.email, customer.email))
               .limit(1);
-            
+
             if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
               foundUserId = userByEmail[0].id;
               console.log(`User found by email: ${foundUserId}`);
@@ -203,7 +219,9 @@ export const POST = async (req: Request) => {
           .where(eq(users.id, foundUserId));
 
         if (!user) {
-          console.log("No user found in database for customer.subscription.deleted event");
+          console.log(
+            "No user found in database for customer.subscription.deleted event"
+          );
           return new Response("No user found", {
             status: 400,
           });
@@ -217,10 +235,12 @@ export const POST = async (req: Request) => {
             inviteQuota: 1, // Reset to default quota when subscription is deleted
           })
           .where(eq(users.id, foundUserId));
-        console.log("User updated successfully for customer.subscription.deleted event");
+        console.log(
+          "User updated successfully for customer.subscription.deleted event"
+        );
       }
     } catch (error) {
-      console.log('❌ Webhook handler failed. View logs.');
+      console.log("❌ Webhook handler failed. View logs.");
       return new Response(
         'Webhook error: "Webhook handler failed. View logs."',
         {

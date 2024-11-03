@@ -10,7 +10,10 @@ const planIds = {
 };
 
 export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
-  const environment = import.meta.env.VITE_ENVIRONMENT === "development" ? "development" : "production";
+  const environment =
+    import.meta.env.VITE_ENVIRONMENT === "development"
+      ? "development"
+      : "production";
   return planIds[environment]?.[billingCycle] || "";
 };
 

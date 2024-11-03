@@ -28,6 +28,7 @@ use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
 };
 use cap_rendering::ProjectUniforms;
+use cap_utils::create_named_pipe;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
@@ -42,6 +43,7 @@ use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::ffi::{CStr, OsStr};
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
@@ -61,6 +63,9 @@ use tokio::{
 };
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use windows::{CapWindow, CapWindowId};
+
+#[cfg(target_os = "macos")]
+use cocoa::foundation::{NSBundle, NSString};
 
 #[cfg(target_os = "macos")]
 use tauri_nspanel::ManagerExt;
@@ -2319,20 +2324,18 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
 
 #[tauri::command]
 #[specta::specta]
-async fn reset_microphone_permissions(app: AppHandle) -> Result<(), ()> {
-    #[cfg(macos)]
-    {
-        #[cfg(debug_assertions)]
-        let bundle_id = "com.apple.Terminal";
-        #[cfg(not(debug_assertions))]
-        let bundle_id = "so.cap.desktop";
-        Command::new("tccutil")
-            .arg("reset")
-            .arg("Microphone")
-            .arg(bundle_id)
-            .output()
-            .expect("Failed to reset microphone permissions");
-    }
+async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
+    #[cfg(debug_assertions)]
+    let bundle_id = "com.apple.Terminal";
+    #[cfg(not(debug_assertions))]
+    let bundle_id = "so.cap.desktop";
+
+    Command::new("tccutil")
+        .arg("reset")
+        .arg("Microphone")
+        .arg(bundle_id)
+        .output()
+        .expect("Failed to reset microphone permissions");
 
     Ok(())
 }
@@ -2424,6 +2427,7 @@ pub async fn run() {
             open_main_window,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
+            permissions::request_permission,
             upload_rendered_video,
             upload_screenshot,
             get_recording_meta,
