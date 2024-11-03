@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
     BufferSize, Device, SampleFormat, Stream, StreamConfig, StreamInstant, SupportedBufferSize,
@@ -105,7 +107,7 @@ impl AudioInputSource {
     pub fn build_stream(
         &self,
         mut clock: SynchronisedClock<StreamInstant>,
-        output: Sender<FFAudio>,
+        output: Arc<Mutex<Option<Sender<FFAudio>>>>,
     ) -> Result<Stream, MediaError> {
         let audio_info = self.info();
         let mut stream_config: StreamConfig = self.config.clone().into();
@@ -114,17 +116,25 @@ impl AudioInputSource {
 
         let data_callback = move |data: &cpal::Data, info: &cpal::InputCallbackInfo| {
             let capture_time = info.timestamp().capture;
-            match clock.timestamp_for(capture_time) {
-                None => eprintln!("Clock is currently stopped. Dropping samples."),
-                Some(timestamp) => {
-                    let buffer = audio_info.wrap_frame(data.bytes(), timestamp.try_into().unwrap());
-                    // TODO(PJ): Send error when I bring error infra back online
-                    output.send(buffer).unwrap();
-                    // if let Err(_) = output.send(buffer) {
-                    //     tracing::debug!("Pipeline is unreachable. Recording will shut down.");
-                    // }
-                }
+
+            let Ok(output) = output.try_lock() else {
+                return;
             };
+            let Some(output) = output.as_ref() else {
+                return;
+            };
+
+            let Some(timestamp) = clock.timestamp_for(capture_time) else {
+                eprintln!("Clock is currently stopped. Dropping samples.");
+                return;
+            };
+
+            let buffer = audio_info.wrap_frame(data.bytes(), timestamp.try_into().unwrap());
+            // TODO(PJ): Send error when I bring error infra back online
+            output.send(buffer).unwrap();
+            // if let Err(_) = output.send(buffer) {
+            //     tracing::debug!("Pipeline is unreachable. Recording will shut down.");
+            // }
         };
 
         let error_callback = |err| {
@@ -174,7 +184,9 @@ impl PipelineSourceTask for AudioInputSource {
     ) {
         println!("Preparing audio input source thread...");
 
-        match self.build_stream(clock, output) {
+        let output = Arc::new(Mutex::new(Some(output)));
+
+        match self.build_stream(clock.clone(), output.clone()) {
             Err(error) => ready_signal.send(Err(error)).unwrap(),
             Ok(stream) => {
                 println!("Using audio input device {}", self.device_name);
@@ -196,6 +208,7 @@ impl PipelineSourceTask for AudioInputSource {
                                 .expect("Failed to pause audio input recording");
                         }
                         Some(Control::Shutdown) | None => {
+                            output.lock().unwrap().take();
                             drop(stream);
                             break;
                         }
