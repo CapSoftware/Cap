@@ -4,9 +4,9 @@ mod camera;
 mod flags;
 mod general_settings;
 mod hotkeys;
-mod macos;
 mod notifications;
 mod permissions;
+mod platform;
 mod recording;
 // mod resource;
 mod tray;
@@ -29,7 +29,6 @@ use cap_project::{
 };
 use cap_rendering::ProjectUniforms;
 use cap_utils::create_named_pipe;
-use cocoa::foundation::{NSBundle, NSString};
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
@@ -54,7 +53,6 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
-use tauri_nspanel::ManagerExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
@@ -65,6 +63,12 @@ use tokio::{
 };
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use windows::{CapWindow, CapWindowId};
+
+#[cfg(target_os = "macos")]
+use cocoa::foundation::{NSBundle, NSString};
+
+#[cfg(target_os = "macos")]
+use tauri_nspanel::ManagerExt;
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -435,7 +439,10 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     }
 
     std::fs::create_dir_all(recording.recording_dir.join("screenshots")).ok();
-    let display_screenshot = recording.recording_dir.join("screenshots/display.jpg");
+    let display_screenshot = recording
+        .recording_dir
+        .join("screenshots")
+        .join("display.jpg");
     create_screenshot(
         recording.display_output_path.clone(),
         display_screenshot.clone(),
@@ -444,7 +451,10 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     .await?;
 
     // Create thumbnail
-    let thumbnail = recording.recording_dir.join("screenshots/thumbnail.png");
+    let thumbnail = recording
+        .recording_dir
+        .join("screenshots")
+        .join("thumbnail.png");
     create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
 
     let recording_dir = recording.recording_dir.clone();
@@ -509,7 +519,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
                 if let Some(pre_created_video) = state.pre_created_video.take() {
                     // Copy link to clipboard
                     #[cfg(target_os = "macos")]
-                    macos::write_string_to_pasteboard(&pre_created_video.link);
+                    platform::write_string_to_pasteboard(&pre_created_video.link);
 
                     // Send notification for shareable link
                     notifications::send_notification(
@@ -755,7 +765,10 @@ async fn get_rendered_video_impl(
     editor_instance: Arc<EditorInstance>,
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
-    let output_path = editor_instance.project_path.join("output/result.mp4");
+    let output_path = editor_instance
+        .project_path
+        .join("output")
+        .join("result.mp4");
 
     if !output_path.exists() {
         render_to_file_impl(&editor_instance, project, output_path.clone(), |_| {}).await?;
@@ -950,7 +963,8 @@ async fn render_to_file_impl(
 
             let video_tx = {
                 let pipe_path = video_dir.path().join("video.pipe");
-                create_named_pipe(&pipe_path).unwrap();
+                #[cfg(target_os = "macos")]
+                cap_utils::create_named_pipe(&pipe_path).unwrap();
 
                 ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
                     width: output_size.0,
@@ -977,7 +991,9 @@ async fn render_to_file_impl(
             };
             let audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
                 let pipe_path = audio_dir.path().join("audio.pipe");
-                create_named_pipe(&pipe_path).unwrap();
+
+                #[cfg(target_os = "macos")]
+                cap_utils::create_named_pipe(&pipe_path).unwrap();
 
                 ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
                     input: pipe_path.clone().into_os_string(),
@@ -1132,7 +1148,7 @@ async fn render_to_file_impl(
     ffmpeg_handle.await.ok();
 
     println!("Copying file to {:?}", recording_dir);
-    let result_path = recording_dir.join("output/result.mp4");
+    let result_path = recording_dir.join("output").join("result.mp4");
     // Function to check if the file is a valid MP4
     fn is_valid_mp4(path: &std::path::Path) -> bool {
         if let Ok(file) = std::fs::File::open(path) {
@@ -1362,8 +1378,10 @@ async fn get_video_metadata(
         .join("recordings")
         .join(format!("{}.cap", video_id));
 
-    let screen_video_path = video_dir.join("content/display.mp4");
-    let output_video_path = video_dir.join("output/result.mp4");
+    let screen_video_path = video_dir.join("content").join("display.mp4");
+    let output_video_path = video_dir.join("output").join("result.mp4");
+
+    println!("video_dir: {:?} \n video_id: {:?}", video_dir, video_id);
 
     let video_path = match video_type {
         Some(VideoType::Screen) => {
@@ -1377,8 +1395,8 @@ async fn get_video_metadata(
             screen_video_path
         }
         Some(VideoType::Output) | None => {
+            println!("Using output video path: {:?}", output_video_path);
             if output_video_path.exists() {
-                println!("Using output video path: {:?}", output_video_path);
                 output_video_path
             } else {
                 println!(
@@ -1509,7 +1527,7 @@ fn show_previous_recordings_window(app: AppHandle) {
             };
 
             let window_position = window.outer_position().unwrap();
-            let mouse_position = window.cursor_position().unwrap();
+            let mouse_position = window.cursor_position().unwrap(); // TODO(Ilya): Panics on Windows
             let scale_factor = window.scale_factor().unwrap();
 
             let mut ignore = true;
@@ -1551,16 +1569,19 @@ fn open_editor(app: AppHandle, id: String) {
 #[tauri::command(async)]
 #[specta::specta]
 fn close_previous_recordings_window(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
-        panel.released_when_closed(true);
-        panel.close();
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
+            panel.released_when_closed(true);
+            panel.close();
+        }
     }
 }
 
 #[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
+    if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
         panel.make_key_window();
     }
 }
@@ -1841,7 +1862,7 @@ async fn upload_rendered_video(
     };
 
     #[cfg(target_os = "macos")]
-    macos::write_string_to_pasteboard(&share_link);
+    platform::write_string_to_pasteboard(&share_link);
 
     Ok(UploadResult::Success(share_link))
 }
@@ -1921,7 +1942,7 @@ async fn upload_screenshot(
     println!("Copying to clipboard: {:?}", share_link);
 
     #[cfg(target_os = "macos")]
-    macos::write_string_to_pasteboard(&share_link);
+    platform::write_string_to_pasteboard(&share_link);
 
     // Send notification after successful upload and clipboard copy
     notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
@@ -2283,17 +2304,20 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
-    #[cfg(debug_assertions)]
-    let bundle_id = "com.apple.Terminal";
-    #[cfg(not(debug_assertions))]
-    let bundle_id = "so.cap.desktop";
+    #[cfg(target_os = "macos")]
+    {
+        #[cfg(debug_assertions)]
+        let bundle_id = "com.apple.Terminal";
+        #[cfg(not(debug_assertions))]
+        let bundle_id = "so.cap.desktop";
 
-    Command::new("tccutil")
-        .arg("reset")
-        .arg("Camera")
-        .arg(bundle_id)
-        .output()
-        .expect("Failed to reset camera permissions");
+        Command::new("tccutil")
+            .arg("reset")
+            .arg("Camera")
+            .arg(bundle_id)
+            .output()
+            .expect("Failed to reset camera permissions");
+    }
 
     Ok(())
 }
@@ -2302,7 +2326,7 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
 #[specta::specta]
 async fn reset_microphone_permissions(_app: AppHandle) -> Result<(), ()> {
     #[cfg(debug_assertions)]
-    let bundle_id = "dev.warp.Warp-Stable";
+    let bundle_id = "com.apple.Terminal";
     #[cfg(not(debug_assertions))]
     let bundle_id = "so.cap.desktop";
 
@@ -2462,9 +2486,16 @@ pub async fn run() {
 
     tauri::async_runtime::set(tokio::runtime::Handle::current());
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_nspanel::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_os::init())

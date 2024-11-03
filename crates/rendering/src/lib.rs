@@ -100,6 +100,7 @@ impl RecordingDecoders {
             self.screen.get_frame(frame_number),
             OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
         );
+        println!("-t Got Frame? {frame_number}: {}", &screen_frame.is_some());
 
         screen_frame.map(|f| (f, camera_frame.flatten()))
     }

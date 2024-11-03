@@ -154,13 +154,11 @@ impl ScreenCaptureSource {
             _ => None,
         });
 
-        #[cfg(target_os = "macos")]
         let names = crate::platform::window_names();
-        #[cfg(not(target_os = "macos"))]
-        let names = HashMap::new();
 
         for (idx, screen) in screens.into_iter().enumerate() {
             // Handle Target::Screen variant (assuming this is how it's structured in scap)
+            #[cfg(target_os = "macos")]
             targets.push(CaptureScreen {
                 id: screen.id,
                 name: names

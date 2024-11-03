@@ -1,7 +1,8 @@
-use std::path::Path;
+#[cfg(windows)]
+use tokio::net::windows::named_pipe;
 
 #[cfg(unix)]
-pub fn create_named_pipe(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn create_named_pipe(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     use nix::sys::stat;
     use nix::unistd;
     std::fs::remove_file(path).ok();
@@ -10,30 +11,38 @@ pub fn create_named_pipe(path: &Path) -> Result<(), Box<dyn std::error::Error>> 
 }
 
 #[cfg(windows)]
-pub fn create_named_pipe(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr::null_mut;
-    use winapi::um::winbase::{CreateNamedPipeA, PIPE_ACCESS_DUPLEX, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT};
-    use winapi::um::handleapi::INVALID_HANDLE_VALUE;
+pub fn get_last_win32_error_formatted() -> String {
+    format_error_message(unsafe { windows::Win32::Foundation::GetLastError().0 })
+}
 
-    let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let path_narrow: Vec<i8> = path_wide.iter().map(|&c| c as i8).collect();
-    let handle = unsafe {
-        CreateNamedPipeA(
-            path_narrow.as_ptr(),
-            PIPE_ACCESS_DUPLEX,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1,
-            4096,
-            4096,
-            0,
-            null_mut(),
-        )
+#[cfg(windows)]
+pub fn format_error_message(error_code: u32) -> String {
+    use windows::{
+        core::PWSTR,
+        Win32::System::Diagnostics::Debug::{FormatMessageW, FORMAT_MESSAGE_FROM_SYSTEM},
     };
 
-    if handle == INVALID_HANDLE_VALUE {
-        return Err("Failed to create named pipe".into());
+    let mut buffer = vec![0u16; 1024];
+    match unsafe {
+        FormatMessageW(
+            FORMAT_MESSAGE_FROM_SYSTEM,
+            None,
+            error_code,
+            0,
+            PWSTR(buffer.as_mut_ptr()),
+            buffer.len() as u32,
+            None,
+        )
+    } {
+        0 => format!("Unknown error: {}", error_code),
+        len => String::from_utf16_lossy(&buffer[..len as usize])
+            .trim()
+            .to_string(),
     }
+}
 
-    Ok(())
+// Windows named pipes must be in the format "\\.\pipe\name"
+#[cfg(windows)]
+fn named_pipe_to_path(name: &str) -> std::ffi::OsString {
+    format!(r"\\.\pipe\{}", name).into()
 }

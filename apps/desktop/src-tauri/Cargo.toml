@@ -13,6 +13,8 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.0.0-rc", features = [] }
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
 swift-rs = { version = "1.0.6", features = ["build"] }
 
 [dependencies]
@@ -78,6 +80,7 @@ reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
 dotenvy_macro = "0.15.7"
 global-hotkey = "0.6.3"
 tauri-plugin-http = "2.0.0-rc.0"
+rand = "0.8.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
@@ -85,6 +88,21 @@ core-foundation = "0.10.0"
 objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
 cocoa = "0.26.0"
 objc = "0.2.7"
+swift-rs = "1.0.6"
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+
+[target.'cfg(target_os= "windows")'.dependencies]
+windows = { version = "0.52.0", features = [
+	"Win32_Foundation",
+	"Win32_System",
+	"Win32_UI_WindowsAndMessaging",
+] }
+# Lock the version of windows-capture used by scap@691bd88798d3
+# TODO: Remove this once scap uses the latest version of `windows` and `windows-capture`
+windows-capture = "=1.2.0"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29.0", features = ["fs"] }
 
 # Optimize for smaller binary size
 [profile.release]

@@ -14,7 +14,7 @@ ffmpeg-sys-next.workspace = true
 flume = "0.11.0"
 indexmap = "2.5.0"
 nokhwa = { git = "https://github.com/capsoftware/nokhwa", rev = "6ce1e8270d57", features = [
-	"input-avfoundation",
+	"input-native",
 	"serialize",
 ] }
 scap = { git = "https://github.com/filleduchaos/scap", rev = "8eb00ce1b9bcf" }
@@ -33,3 +33,11 @@ objc = "0.2.7"
 objc-foundation = "0.1.1"
 objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
 nokhwa-bindings-macos = { git = "https://github.com/capsoftware/nokhwa", rev = "6ce1e8270d57" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.52.0", features = [
+	"Win32_Foundation",
+	"Win32_System",
+	"Win32_UI_WindowsAndMessaging",
+	"Win32_Graphics_Dwm",
+] }
