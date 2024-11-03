@@ -58,7 +58,7 @@ impl AsyncVideoDecoder {
             let mut context = codec::context::Context::new_with_codec(decoder_codec);
             context.set_parameters(input_stream.parameters()).unwrap();
 
-            context.print_supported_hw_modes();
+            // context.print_supported_hw_modes();
 
             let hw_device: Option<HwDevice> = {
                 #[cfg(target_os = "macos")]
@@ -101,10 +101,10 @@ impl AsyncVideoDecoder {
                 .map(|d| d.pix_fmt)
                 .unwrap_or(decoder.format());
 
-            println!("-t Scalar input pixel format");
-            dbg!(scaler_input_format);
-            println!("-t HWDevice input pixel format");
-            dbg!(hw_device.as_ref().map(|d| d.pix_fmt));
+            // println!("-t Scalar input pixel format");
+            // dbg!(scaler_input_format);
+            // println!("-t HWDevice input pixel format");
+            // dbg!(hw_device.as_ref().map(|d| d.pix_fmt));
 
             let mut scaler = Context::get(
                 scaler_input_format,
@@ -144,10 +144,10 @@ impl AsyncVideoDecoder {
             while let Ok(r) = peekable_requests.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(frame_number, sender) => {
-                        println!("retrieving frame {frame_number}");
+                        // println!("retrieving frame {frame_number}");
 
                         let mut sender = if let Some(cached) = cache.get(&frame_number) {
-                            println!("sending frame {frame_number} from cache");
+                            // println!("sending frame {frame_number} from cache");
                             sender.send(Some(cached.clone())).ok();
                             continue;
                         } else {
@@ -207,7 +207,7 @@ impl AsyncVideoDecoder {
                                         time_base,
                                         frame_rate,
                                     );
-                                    println!("processing frame {current_frame}");
+                                    // println!("processing frame {current_frame}");
                                     last_decoded_frame = Some(current_frame);
 
                                     let exceeds_cache_bounds = current_frame > cache_max;
@@ -466,7 +466,7 @@ impl CodecContextExt for codec::context::Context {
             let mut i = 0;
             loop {
                 let config = avcodec_get_hw_config(codec.as_ptr(), i);
-                println!("-t AVCodecHWConfig: ");
+                // println!("-t AVCodecHWConfig: ");
 
                 if config.is_null() {
                     dbg!(*config);
@@ -476,8 +476,8 @@ impl CodecContextExt for codec::context::Context {
                 if (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1
                     && (*config).device_type == TARGET_HWDEVICE
                 {
-                    println!("Setting PIX_FMT to ");
-                    dbg!((*config).pix_fmt);
+                    // println!("Setting PIX_FMT to ");
+                    // dbg!((*config).pix_fmt);
                     HW_PIX_FMT.set((*config).pix_fmt);
                     break;
                 }
