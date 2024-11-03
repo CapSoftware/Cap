@@ -77,10 +77,6 @@ impl<T: LocalTimestamp> RealTimeClock<T> {
         }
     }
 
-    pub fn running(&self) -> bool {
-        self.running.load(Ordering::Acquire)
-    }
-
     fn set_running(&self, value: bool) {
         self.running.store(value, Ordering::Release);
     }
@@ -100,7 +96,7 @@ impl<T: LocalTimestamp> RealTimeClock<T> {
     pub fn timestamp_for(&mut self, local: T) -> Option<i64> {
         let now = Instant::now();
 
-        if !self.running() {
+        if !self.running.load(Ordering::Acquire) {
             return None;
         }
 
@@ -132,6 +128,10 @@ impl<T: LocalTimestamp> RealTimeClock<T> {
 }
 
 impl PipelineClock for RealTimeClock<()> {
+    fn running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
+    }
+
     fn start(&mut self) {
         if !self.running() {
             let mut start_time = self.global_start_time.write().unwrap();

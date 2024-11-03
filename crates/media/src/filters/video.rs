@@ -37,7 +37,6 @@ impl VideoFilter {
         let mut output = filter_graph.get("out").unwrap();
         output.set_pixel_format(output_config.pixel_format);
 
-        // TODO: Remove fps hardcoding?
         let spec = format!(
             "scale={}x{}:flags=bilinear,fps=fps={}",
             output_config.width,

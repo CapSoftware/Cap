@@ -32,6 +32,7 @@ impl AudioFileSource {
         let decoder_ctx = context::Context::from_parameters(input_stream.parameters())?;
         let mut decoder = decoder_ctx.decoder().audio()?;
         decoder.set_parameters(input_stream.parameters())?;
+        decoder.set_packet_time_base(input_stream.time_base());
 
         Ok(Self {
             stream_index: input_stream.index(),
@@ -43,6 +44,10 @@ impl AudioFileSource {
 
     pub fn info(&self) -> AudioInfo {
         self.info
+    }
+
+    pub fn duration(&self) -> i64 {
+        self.input_ctx.duration()
     }
 
     fn set_playhead(&mut self, playhead_ratio: f64) -> bool {
