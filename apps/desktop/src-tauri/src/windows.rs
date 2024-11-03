@@ -306,7 +306,6 @@ impl CapWindow {
                 let window = window_builder.build()?;
 
                 window.set_ignore_cursor_events(true).unwrap();
-                window.open_devtools();
 
                 #[cfg(target_os = "macos")]
                 {
