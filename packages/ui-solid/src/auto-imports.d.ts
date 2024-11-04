@@ -58,6 +58,6 @@ declare global {
   const IconLucideLoaderCircle: typeof import('~icons/lucide/loader-circle.jsx')['default']
   const IconLucideRewind: typeof import("~icons/lucide/rewind.jsx")["default"]
   const IconLucideSettings: typeof import("~icons/lucide/settings.jsx")["default"]
-  const IconLucideSmile: typeof import("~icons/lucide/smile.jsx")["default"]
+  const IconLucideSmile: typeof import('~icons/lucide/smile.jsx')['default']
   const IconLucideVideo: typeof import('~icons/lucide/video.jsx')['default']
 }

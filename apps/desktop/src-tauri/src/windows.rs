@@ -193,7 +193,6 @@ impl CapWindow {
                     .inner_size(300.0, 375.0)
                     .resizable(false)
                     .maximized(false)
-                    .accept_first_mouse(true)
                     .transparent(true)
                     .theme(Some(tauri::Theme::Light))
                     .shadow(true);
@@ -227,7 +226,6 @@ impl CapWindow {
                     .min_inner_size(600.0, 450.0)
                     .resizable(true)
                     .maximized(false)
-                    .accept_first_mouse(true)
                     .transparent(true);
 
                 #[cfg(target_os = "windows")]
@@ -334,7 +332,6 @@ impl CapWindow {
                     .transparent(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(true)
-                    .accept_first_mouse(true)
                     .inner_size(width, height)
                     .position(
                         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
@@ -378,7 +375,6 @@ impl CapWindow {
                     .shadow(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
-                    .accept_first_mouse(true)
                     .content_protected(true)
                     .inner_size(
                         350.0,
@@ -426,7 +422,6 @@ impl CapWindow {
                     .title(self.title())
                     .hidden_title(true)
                     .title_bar_style(tauri::TitleBarStyle::Overlay)
-                    .accept_first_mouse(true)
                     .theme(Some(tauri::Theme::Light));
 
                 #[cfg(target_os = "macos")]
@@ -447,11 +442,10 @@ impl CapWindow {
                 let mut window_builder = self
                     .window_builder(app, "/permissions")
                     .title(self.title())
-                    .inner_size(300.0, 350.0)
+                    .inner_size(500.0, 425.0)
                     .resizable(false)
                     .maximized(false)
                     .shadow(true)
-                    .accept_first_mouse(true)
                     .transparent(true);
 
                 #[cfg(target_os = "macos")]
@@ -481,7 +475,6 @@ impl CapWindow {
                     .resizable(false)
                     .maximized(false)
                     .shadow(true)
-                    .accept_first_mouse(true)
                     .transparent(true);
 
                 #[cfg(target_os = "macos")]
@@ -511,7 +504,6 @@ impl CapWindow {
                     .resizable(false)
                     .maximized(false)
                     .shadow(true)
-                    .accept_first_mouse(true)
                     .transparent(true);
 
                 #[cfg(target_os = "macos")]
@@ -536,7 +528,6 @@ impl CapWindow {
                     .resizable(true)
                     .maximized(false)
                     .shadow(true)
-                    .accept_first_mouse(true)
                     .transparent(true);
 
                 #[cfg(target_os = "macos")]
@@ -569,6 +560,7 @@ impl CapWindow {
         WebviewWindow::builder(app, self.label(), WebviewUrl::App(url.into()))
             .title(self.title())
             .visible(false)
+            .accept_first_mouse(true)
     }
 }
 
