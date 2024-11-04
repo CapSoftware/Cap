@@ -5,6 +5,8 @@ import Icons from "unplugin-icons/vite";
 import { FileSystemIconLoader } from "unplugin-icons/loaders";
 import Unfonts from "unplugin-fonts/vite";
 
+const ABSOLUTE_PATH = /^\/|^[a-zA-Z]:\//;
+
 export default [
   VinxiAutoImport({
     resolvers: [
@@ -34,6 +36,9 @@ export default [
 ];
 
 // Workaround for https://github.com/solidjs/solid-start/issues/1374
+/**
+ * @param {import("unplugin-auto-import/dist/types.d.ts").Options} options
+ */
 function VinxiAutoImport(options) {
   const autoimport = AutoImport(options);
 
@@ -42,10 +47,10 @@ function VinxiAutoImport(options) {
     transform(src, id) {
       let pathname = id;
 
-      if (id.startsWith("/")) {
+      if (ABSOLUTE_PATH.test(id)) {
         pathname = new URL(`file://${id}`).pathname;
       }
-
+      
       return autoimport.transform(src, pathname);
     },
   };

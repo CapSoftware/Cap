@@ -103,6 +103,7 @@ pub enum RendererMessage {
         camera_frame: Option<DecodedFrame>,
         background: BackgroundSource,
         uniforms: ProjectUniforms,
+        time: f32, // Add this field
         finished: oneshot::Sender<()>,
     },
     Stop {
@@ -149,6 +150,7 @@ impl Renderer {
                         camera_frame,
                         background,
                         uniforms,
+                        time, // Add this
                         finished,
                     } => {
                         if let Some(task) = frame_task.as_ref() {
@@ -163,17 +165,18 @@ impl Renderer {
                         let frame_tx = self.frame_tx.clone();
 
                         frame_task = Some(tokio::spawn(async move {
-                            let time = Instant::now();
+                            let time_instant = Instant::now();
                             let frame = produce_frame(
                                 &render_constants,
                                 &screen_frame,
                                 &camera_frame,
                                 cap_rendering::Background::from(background),
                                 &uniforms,
+                                time, // Pass the actual time value
                             )
                             .await
                             .unwrap();
-                            // println!("produced frame in {:?}", time.elapsed());
+                            // println!("produced frame in {:?}", time_instant.elapsed());
 
                             frame_tx
                                 .send(SocketMessage::Frame {
@@ -212,6 +215,7 @@ impl RendererHandle {
         camera_frame: Option<DecodedFrame>,
         background: BackgroundSource,
         uniforms: ProjectUniforms,
+        time: f32, // Add this parameter
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();
 
@@ -220,6 +224,7 @@ impl RendererHandle {
             camera_frame,
             background,
             uniforms,
+            time, // Pass the time
             finished: finished_tx,
         })
         .await;

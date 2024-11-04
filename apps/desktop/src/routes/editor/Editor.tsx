@@ -17,7 +17,10 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { createMutation } from "@tanstack/solid-query";
-import { createEventListenerMap } from "@solid-primitives/event-listener";
+import {
+  createEventListener,
+  createEventListenerMap,
+} from "@solid-primitives/event-listener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { events, commands } from "~/utils/tauri";
@@ -131,24 +134,16 @@ function Inner() {
     }
   };
 
-  createEffect(() => {
-    const handleKeyDown = async (e: KeyboardEvent) => {
-      if (e.code === "Space" && e.target === document.body) {
-        e.preventDefault();
-        await togglePlayback();
-      }
-    };
-
-    document.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-    };
+  createEventListener(document, "keydown", async (e: KeyboardEvent) => {
+    if (e.code === "Space" && e.target === document.body) {
+      e.preventDefault();
+      await togglePlayback();
+    }
   });
 
   return (
     <div
-      class="p-5 flex flex-col gap-4 w-screen h-screen divide-y bg-gray-50 rounded-lg leading-5 animate-in fade-in"
+      class="p-5 flex flex-col gap-4 w-screen h-screen bg-gray-50 rounded-lg leading-5 animate-in fade-in"
       data-tauri-drag-region
     >
       <Header />

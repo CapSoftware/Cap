@@ -31,22 +31,16 @@ export default function () {
   const [store] = createResource(() => hotkeysStore.get());
 
   return (
-    <Show
-      when={(() => {
-        const s = store();
-        if (s === undefined) return;
-        return [s];
-      })()}
-    >
-      {(store) => <Inner store={store()[0]} />}
+    <Show when={store.state === "ready" && ([store()] as const)}>
+      {(store) => <Inner initialStore={store()[0] ?? null} />}
     </Show>
   );
 }
 
-function Inner(props: { store: HotkeysStore | null }) {
+function Inner(props: { initialStore: HotkeysStore | null }) {
   const [hotkeys, setHotkeys] = createStore<{
     [K in HotkeyAction]?: Hotkey;
-  }>(props.store?.hotkeys ?? {});
+  }>(props.initialStore?.hotkeys ?? {});
 
   createEffect(() => {
     // biome-ignore lint/suspicious/noExplicitAny: specta#283

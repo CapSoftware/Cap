@@ -3,7 +3,7 @@ use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
 use cap_ffmpeg::FFmpeg;
-use cap_project::{ProjectConfiguration, RecordingMeta};
+use cap_project::{CursorData, ProjectConfiguration, RecordingMeta};
 use cap_rendering::decoder::AsyncVideoDecoder;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
 use std::ops::Deref;
@@ -17,6 +17,7 @@ pub struct EditorInstance {
     pub project_path: PathBuf,
     pub id: String,
     pub audio: Arc<StdMutex<Option<AudioData>>>,
+    pub cursor: Arc<CursorData>,
     pub ws_port: u16,
     pub decoders: RecordingDecoders,
     pub recordings: ProjectRecordings,
@@ -107,16 +108,21 @@ impl EditorInstance {
 
         let (ws_port, ws_shutdown) = create_frames_ws(frame_rx).await;
 
-        let render_constants = Arc::new(RenderVideoConstants::new(render_options).await.unwrap());
+        let cursor = Arc::new(meta.cursor_data());
+
+        let render_constants = Arc::new(
+            RenderVideoConstants::new(
+                render_options,
+                cursor.clone(),
+                project_path.clone(), // Add project path argument
+            )
+            .await
+            .unwrap(),
+        );
 
         let renderer = Arc::new(editor::Renderer::spawn(render_constants.clone(), frame_tx));
 
         let (preview_tx, preview_rx) = watch::channel(None);
-
-        let project_config = std::fs::read_to_string(project_path.join("project-config.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
 
         let this = Arc::new(Self {
             id: video_id,
@@ -127,6 +133,7 @@ impl EditorInstance {
             renderer,
             render_constants,
             audio: Arc::new(StdMutex::new(audio)),
+            cursor,
             state: Arc::new(Mutex::new(EditorState {
                 playhead_position: 0,
                 playback_task: None,
@@ -134,7 +141,7 @@ impl EditorInstance {
             })),
             on_state_change: Box::new(on_state_change),
             preview_tx,
-            project_config: watch::channel(project_config),
+            project_config: watch::channel(meta.project_config()),
             ws_shutdown: Arc::new(StdMutex::new(Some(ws_shutdown))),
         });
 
@@ -257,7 +264,7 @@ impl EditorInstance {
         tokio::spawn(async move {
             loop {
                 preview_rx.changed().await.unwrap();
-                let Some(frame_number) = preview_rx.borrow().deref().clone() else {
+                let Some(frame_number) = *preview_rx.borrow().deref() else {
                     continue;
                 };
 
@@ -283,7 +290,8 @@ impl EditorInstance {
                         screen_frame,
                         camera_frame,
                         project.background.source.clone(),
-                        ProjectUniforms::new(&self.render_constants, &project),
+                        ProjectUniforms::new(&self.render_constants, &project, time as f32),
+                        time as f32, // Add the time parameter
                     )
                     .await;
             }

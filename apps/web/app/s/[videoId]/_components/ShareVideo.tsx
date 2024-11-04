@@ -14,6 +14,7 @@ import { LogoSpinner } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import toast from "react-hot-toast";
+import { Tooltip } from "react-tooltip"; // Make sure to import this if not already present
 
 declare global {
   interface Window {
@@ -29,6 +30,13 @@ const formatTime = (time: number) => {
     .padStart(2, "0")}`;
 };
 
+// million-ignore
+// Add this type definition at the top of the file
+type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
+  authorName: string | null;
+};
+
+// Update the component props type
 export const ShareVideo = ({
   data,
   user,
@@ -36,7 +44,7 @@ export const ShareVideo = ({
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
-  comments: (typeof commentsSchema.$inferSelect)[];
+  comments: CommentWithAuthor[];
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -53,38 +61,84 @@ export const ShareVideo = ({
 
   const [videoSpeed, setVideoSpeed] = useState(1);
   const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isHovering, setIsHovering] = useState(false);
+  const hideControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [forceHideControls, setForceHideControls] = useState(false);
+  const [isHoveringControls, setIsHoveringControls] = useState(false);
+  const enterControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const showControls = () => {
+    setOverlayVisible(true);
+    setIsHovering(true);
+    setForceHideControls(false);
+    if (hideControlsTimeoutRef.current) {
+      clearTimeout(hideControlsTimeoutRef.current);
+    }
+  };
+
+  const hideControls = () => {
+    if (!isHoveringControls) {
+      hideControlsTimeoutRef.current = setTimeout(() => {
+        setOverlayVisible(false);
+        setIsHovering(false);
+        setForceHideControls(true);
+      }, 250);
+    }
+  };
 
   useEffect(() => {
     const handleMouseMove = () => {
-      setOverlayVisible(true);
-      if (overlayTimeoutRef.current) {
-        clearTimeout(overlayTimeoutRef.current);
+      if (forceHideControls) {
+        setForceHideControls(false);
       }
-      overlayTimeoutRef.current = setTimeout(() => {
-        setOverlayVisible(false);
-      }, 1000);
+      showControls();
+      if (!isHoveringControls) {
+        hideControls();
+      }
     };
 
-    window.addEventListener("mousemove", handleMouseMove);
+    const handleMouseLeave = () => {
+      setIsHovering(false);
+      setIsHoveringControls(false);
+      hideControls();
+    };
+
+    const videoContainer = document.getElementById("video-container");
+    if (videoContainer) {
+      videoContainer.addEventListener("mousemove", handleMouseMove);
+      videoContainer.addEventListener("mouseleave", handleMouseLeave);
+    }
 
     return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      if (overlayTimeoutRef.current) {
-        clearTimeout(overlayTimeoutRef.current);
+      if (videoContainer) {
+        videoContainer.removeEventListener("mousemove", handleMouseMove);
+        videoContainer.removeEventListener("mouseleave", handleMouseLeave);
+      }
+      if (hideControlsTimeoutRef.current) {
+        clearTimeout(hideControlsTimeoutRef.current);
+      }
+      if (enterControlsTimeoutRef.current) {
+        clearTimeout(enterControlsTimeoutRef.current);
       }
     };
-  }, []);
+  }, [forceHideControls, isHoveringControls]);
+
+  useEffect(() => {
+    if (isPlaying) {
+      hideControls();
+    } else {
+      showControls();
+    }
+  }, [isPlaying]);
 
   useEffect(() => {
     if (videoMetadataLoaded) {
-      console.log("Metadata loaded");
       setIsLoading(false);
     }
   }, [videoMetadataLoaded]);
 
   useEffect(() => {
     const onVideoLoadedMetadata = () => {
-      console.log("Video metadata loaded");
       setVideoMetadataLoaded(true);
       if (videoRef.current) {
         setLongestDuration(videoRef.current.duration);
@@ -197,13 +251,12 @@ export const ShareVideo = ({
 
   const handleMuteClick = () => {
     if (videoRef.current) {
-      console.log("Mute clicked");
       videoRef.current.muted = videoRef.current.muted ? false : true;
     }
   };
 
   const handleFullscreenClick = () => {
-    const player = document.getElementById("player");
+    const player = document.getElementById("video-player");
     const video = videoRef.current;
 
     if (!video) return;
@@ -212,18 +265,9 @@ export const ShareVideo = ({
       /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     const isAndroid = /Android/.test(navigator.userAgent);
 
-    if (!document.fullscreenElement && !isIOS && !isAndroid) {
-      player
-        ?.requestFullscreen()
-        .catch((err) =>
-          console.error(
-            `Error attempting to enable full-screen mode: ${err.message} (${err.name})`
-          )
-        );
-    } else if (isIOS || isAndroid) {
-      if ("webkitEnterFullscreen" in video) {
-        (video as any).webkitEnterFullscreen();
-      } else if (video.requestFullscreen) {
+    if (isIOS || isAndroid) {
+      // For mobile devices, use the video element's fullscreen API
+      if (video.requestFullscreen) {
         video
           .requestFullscreen()
           .catch((err) =>
@@ -231,12 +275,40 @@ export const ShareVideo = ({
               `Error attempting to enable full-screen mode on mobile: ${err.message} (${err.name})`
             )
           );
+      } else if ("webkitEnterFullscreen" in video) {
+        (video as any).webkitEnterFullscreen();
+      } else if ("mozRequestFullScreen" in video) {
+        (video as any).mozRequestFullScreen();
+      } else if ("msRequestFullscreen" in video) {
+        (video as any).msRequestFullscreen();
       }
     } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
-      } else if ("webkitExitFullscreen" in document) {
-        (document as any).webkitExitFullscreen();
+      if (!document.fullscreenElement) {
+        if (player && player.requestFullscreen) {
+          player
+            .requestFullscreen()
+            .catch((err) =>
+              console.error(
+                `Error attempting to enable full-screen mode: ${err.message} (${err.name})`
+              )
+            );
+        } else if (player && "webkitRequestFullscreen" in player) {
+          (player as any).webkitRequestFullscreen();
+        } else if (player && "mozRequestFullScreen" in player) {
+          (player as any).mozRequestFullScreen();
+        } else if (player && "msRequestFullscreen" in player) {
+          (player as any).msRequestFullscreen();
+        }
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        } else if ("webkitExitFullscreen" in document) {
+          (document as any).webkitExitFullscreen();
+        } else if ("mozCancelFullScreen" in document) {
+          (document as any).mozCancelFullScreen();
+        } else if ("msExitFullscreen" in document) {
+          (document as any).msExitFullscreen();
+        }
       }
     }
   };
@@ -285,7 +357,7 @@ export const ShareVideo = ({
       .toString()
       .split(":")
       .map(Number);
-    return hours * 3600 + minutes * 60 + seconds;
+    return (hours ?? 0) * 3600 + (minutes ?? 0) * 60 + (seconds ?? 0);
   };
 
   useEffect(() => {
@@ -361,42 +433,50 @@ export const ShareVideo = ({
 
   return (
     <div
-      className="relative flex h-full w-full overflow-hidden shadow-lg rounded-lg group"
-      id="player"
+      id="video-container"
+      className="relative w-full h-full overflow-hidden shadow-lg rounded-lg group"
     >
       {isLoading && (
-        <div className="absolute top-0 left-0 flex flex-col items-center justify-center w-full h-full z-10">
+        <div className="absolute inset-0 flex items-center justify-center z-10">
           <LogoSpinner className="w-10 h-auto animate-spin" />
         </div>
       )}
-      {isLoading === false && (
-        <div
-          className={`absolute top-0 left-0 w-full h-full z-10 flex items-center justify-center bg-black bg-opacity-50 transition-all opacity-0 ${
-            overlayVisible && "group-hover:opacity-100"
-          } z-20`}
-        >
-          <button
-            aria-label="Play video"
-            className=" w-full h-full flex items-center justify-center text-sm font-medium transition ease-in-out duration-150 text-white border border-transparent px-2 py-2 justify-center rounded-lg"
-            tabIndex={0}
-            type="button"
-            onClick={() => handlePlayPauseClick()}
-          >
-            {isPlaying ? (
-              <Pause className="w-auto h-14 hover:opacity-50" />
-            ) : (
-              <Play className="w-auto h-14 hover:opacity-50" />
-            )}
-          </button>
+      <div className="relative w-full md:h-full">
+        <div className="md:absolute inset-0 bg-black">
+          {data.source.type === "desktopMP4" ? (
+            <MP4VideoPlayer ref={videoRef} videoSrc={videoSrc} />
+          ) : (
+            <VideoPlayer ref={videoRef} videoSrc={videoSrc} />
+          )}
         </div>
-      )}
-      <div
-        className="relative block w-full h-full rounded-lg bg-black"
-        style={{ paddingBottom: "min(806px, 56.25%)" }}
-      >
+        {!isLoading && (
+          <div
+            className={`absolute inset-0 z-20 flex items-center justify-center bg-black bg-opacity-50 transition-opacity duration-300 ${
+              (overlayVisible || isHovering) && !forceHideControls
+                ? "opacity-100"
+                : "opacity-0"
+            }`}
+          >
+            <button
+              aria-label={isPlaying ? "Pause video" : "Play video"}
+              className="w-full h-full flex items-center justify-center"
+              onClick={() => {
+                handlePlayPauseClick();
+                showControls();
+                hideControls();
+              }}
+            >
+              {isPlaying ? (
+                <Pause className="w-auto h-14 text-white hover:opacity-50" />
+              ) : (
+                <Play className="w-auto h-14 text-white hover:opacity-50" />
+              )}
+            </button>
+          </div>
+        )}
         {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
-          <div className="absolute bottom-0 w-full text-center transform transition p-1.5 lg:p-2.5 xl:p-3.5 -translate-y-16 z-10">
-            <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl leading-7 md:text-lg md:leading-9 lg:text-2xl lg:leading-11 2xl:text-3xl 2xl:leading-13 xs:text-base box-decoration-break-clone xs:leading-8 xl:text-2.5xl">
+          <div className="absolute bottom-16 w-full text-center p-2 z-10">
+            <div className="inline px-2 py-1 text-lg md:text-2xl text-white bg-black bg-opacity-75 rounded-xl">
               {currentSubtitle.text
                 .replace("- ", "")
                 .replace(".", "")
@@ -404,16 +484,32 @@ export const ShareVideo = ({
             </div>
           </div>
         )}
-        {data.source.type === "desktopMP4" ? (
-          <MP4VideoPlayer ref={videoRef} videoSrc={videoSrc} />
-        ) : (
-          <VideoPlayer ref={videoRef} videoSrc={videoSrc} />
-        )}
       </div>
-      <div className="absolute bottom-0 z-20 w-full text-white bg-black bg-opacity-50 opacity-0 group-hover:opacity-100 transition-all">
+      <div
+        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 z-20 transition-opacity duration-300 ${
+          (overlayVisible || isHovering || isHoveringControls) &&
+          !forceHideControls
+            ? "opacity-100"
+            : "opacity-0"
+        }`}
+        onMouseEnter={() => {
+          if (enterControlsTimeoutRef.current) {
+            clearTimeout(enterControlsTimeoutRef.current);
+          }
+          enterControlsTimeoutRef.current = setTimeout(() => {
+            setIsHoveringControls(true);
+          }, 100);
+        }}
+        onMouseLeave={() => {
+          if (enterControlsTimeoutRef.current) {
+            clearTimeout(enterControlsTimeoutRef.current);
+          }
+          setIsHoveringControls(false);
+        }}
+      >
         <div
           id="seek"
-          className="drag-seek absolute left-0 right-0 block h-4 mx-4 -mt-2 group z-20 cursor-pointer"
+          className="absolute left-0 right-0 -top-2 h-4 mx-4 cursor-pointer"
           onMouseDown={handleSeekMouseDown}
           onMouseMove={handleSeekMouseMove}
           onMouseUp={handleSeekMouseUp}
@@ -423,23 +519,33 @@ export const ShareVideo = ({
           {!isLoading && comments !== null && (
             <div className="w-full -mt-7 md:-mt-6">
               {comments.map((comment) => {
-                if (comment.timestamp === null) return null;
+                const commentPosition =
+                  comment.timestamp === null
+                    ? 0
+                    : (comment.timestamp / longestDuration) * 100;
+
+                let tooltipContent = "";
+                if (comment.type === "text") {
+                  tooltipContent =
+                    comment.authorId === "anonymous"
+                      ? `Anonymous: ${comment.content}`
+                      : `${comment.authorName || "User"}: ${comment.content}`;
+                } else {
+                  tooltipContent =
+                    comment.authorId === "anonymous"
+                      ? "Anonymous"
+                      : comment.authorName || "User";
+                }
 
                 return (
                   <div
                     key={comment.id}
-                    className="absolute z-10 text-[16px] hover:scale-125 transition-all"
+                    className="absolute z-10 text-sm hover:scale-125 transition-all"
                     style={{
-                      left: `${(comment.timestamp / longestDuration) * 100}%`,
+                      left: `${commentPosition}%`,
                     }}
                     data-tooltip-id={comment.id}
-                    data-tooltip-content={`${
-                      comment.type === "text"
-                        ? "User: " + comment.content
-                        : comment.authorId === "anonymous"
-                        ? "Anonymous"
-                        : "User"
-                    }`}
+                    data-tooltip-content={tooltipContent}
                   >
                     <span>
                       {comment.type === "text" ? (
@@ -451,6 +557,7 @@ export const ShareVideo = ({
                         comment.content
                       )}
                     </span>
+                    <Tooltip id={comment.id} />
                   </div>
                 );
               })}

@@ -1,10 +1,9 @@
 ---
 name: Bug report
 about: Report a crash, error, or other unusual behaviour by Cap
-title: ''
+title: ""
 labels: bug
-assignees: ''
-
+assignees: ""
 ---
 
 ### Description

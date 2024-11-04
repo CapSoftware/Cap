@@ -1,5 +1,5 @@
 import { createContextProvider } from "@solid-primitives/context";
-import { captureStoreUpdates, trackStore } from "@solid-primitives/deep";
+import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createUndoHistory } from "@solid-primitives/history";
 import { debounce } from "@solid-primitives/scheduled";
@@ -62,6 +62,10 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 
     const [split, setSplit] = createSignal(false);
 
+    const [state, setState] = createStore({
+      timelineSelection: null as null | { type: "zoom"; index: number },
+    });
+
     return {
       ...editorInstanceContext,
       editorInstance: props.editorInstance,
@@ -80,6 +84,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
       setPreviewTime,
       split,
       setSplit,
+      state,
+      setState,
     };
   },
   // biome-ignore lint/style/noNonNullAssertion: it's ok

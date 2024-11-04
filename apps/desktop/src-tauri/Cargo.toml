@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.0-beta.5.7.3"
+version = "0.3.0-beta.7"
 description = "Beautiful, shareable screen recordings."
 authors = ["you"]
 edition = "2021"
@@ -13,6 +13,8 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.0.0-rc", features = [] }
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
 swift-rs = { version = "1.0.6", features = ["build"] }
 
 [dependencies]
@@ -22,23 +24,23 @@ tauri = { workspace = true, features = [
 	"tray-icon",
 	"image-png",
 ] }
-tauri-plugin-shell = "2.0.0-rc"
+tauri-plugin-shell = "2.0.0"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
-tauri-plugin-store = "2.0.0-rc.0"
-tauri-plugin-os = "2.0.0-rc.0"
-tauri-plugin-process = "2.0.0-rc.0"
+tauri-plugin-store = "2.0.0"
+tauri-plugin-os = "2.0.0"
+tauri-plugin-process = "2.0.0"
 tauri-plugin-decorum = "1.0.0"
-tauri-plugin-dialog = "2.0.0-rc.0"
-tauri-plugin-notification = "2.0.0-rc.0"
-tauri-plugin-updater = "2.0.0-rc.0"
+tauri-plugin-dialog = "2.0.0"
+tauri-plugin-updater = "2.0.0"
+tauri-plugin-notification = "2.0.0-rc"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
-tauri-plugin-global-shortcut = "2.0.0-rc.0"
-tauri-specta = { version = "=2.0.0-rc.14", features = ["derive", "typescript"] }
+tauri-plugin-global-shortcut = "2.0.0"
+tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-specta = "=2.0.0-rc.19"
-specta-typescript = "0.0.6"
+specta.workspace = true
+specta-typescript = "0.0.7"
 swift-rs = "1.0.6"
 nix = { version = "0.29.0", features = ["fs"] }
 tokio.workspace = true
@@ -64,6 +66,7 @@ rodio = "0.19.0"
 fast_image_resize = "4.2.1"
 png = "0.17.13"
 device_query = "2.1.0"
+base64 = "0.22.1"
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
@@ -71,9 +74,12 @@ cap-rendering = { path = "../../../crates/rendering" }
 cap-ffmpeg = { path = "../../../crates/ffmpeg" }
 cap-editor = { path = "../../../crates/editor" }
 cap-media = { path = "../../../crates/media" }
+cap-flags = { path = "../../../crates/flags" }
 reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
 dotenvy_macro = "0.15.7"
-global-hotkey = "0.5.5"
+global-hotkey = "0.6.3"
+tauri-plugin-http = "2.0.0-rc.0"
+rand = "0.8.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
@@ -81,6 +87,21 @@ core-foundation = "0.10.0"
 objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
 cocoa = "0.26.0"
 objc = "0.2.7"
+swift-rs = "1.0.6"
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+
+[target.'cfg(target_os= "windows")'.dependencies]
+windows = { version = "0.52.0", features = [
+	"Win32_Foundation",
+	"Win32_System",
+	"Win32_UI_WindowsAndMessaging",
+] }
+# Lock the version of windows-capture used by scap@691bd88798d3
+# TODO: Remove this once scap uses the latest version of `windows` and `windows-capture`
+windows-capture = "=1.2.0"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29.0", features = ["fs"] }
 
 # Optimize for smaller binary size
 [profile.release]

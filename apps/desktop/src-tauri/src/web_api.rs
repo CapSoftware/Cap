@@ -9,13 +9,6 @@ pub fn make_url(pathname: impl AsRef<str>) -> String {
     format!("{server_url_base}{}", pathname.as_ref())
 }
 
-pub async fn do_request(
-    build: impl FnOnce(reqwest::Client) -> reqwest::RequestBuilder,
-) -> Result<reqwest::Response, reqwest::Error> {
-    let client = reqwest::Client::new();
-    build(client).send().await
-}
-
 async fn do_authed_request(
     auth: &AuthStore,
     build: impl FnOnce(reqwest::Client) -> reqwest::RequestBuilder,
@@ -43,7 +36,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         let Some(auth) = AuthStore::get(self.app_handle())? else {
             println!("Not logged in");
 
-            AuthenticationInvalid.emit(self);
+            AuthenticationInvalid.emit(self).ok();
 
             return Err("Unauthorized".to_string());
         };
@@ -55,7 +48,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         if response.status() == StatusCode::UNAUTHORIZED {
             println!("Authentication expired. Please log in again.");
 
-            AuthenticationInvalid.emit(self);
+            AuthenticationInvalid.emit(self).ok();
 
             return Err("Unauthorized".to_string());
         }

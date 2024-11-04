@@ -49,7 +49,9 @@ export async function POST(request: NextRequest) {
   }
 
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const validEmails = invitedEmails.filter((email: string) => emailRegex.test(email.trim()));
+  const validEmails = invitedEmails.filter((email: string) =>
+    emailRegex.test(email.trim())
+  );
 
   for (const email of validEmails) {
     const inviteId = nanoId();

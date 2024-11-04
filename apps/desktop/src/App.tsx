@@ -1,10 +1,11 @@
-import { Router } from "@solidjs/router";
+import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
-import { ErrorBoundary, Suspense } from "solid-js";
+import { ErrorBoundary, onMount, Suspense } from "solid-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const queryClient = new QueryClient();
 
@@ -12,8 +13,7 @@ export default function App() {
   return (
     <ErrorBoundary
       fallback={(e: Error) => {
-        console.log("An error was caught by the root error boundary");
-        console.log(e);
+        console.error(e);
         return (
           <>
             <p>{e.toString()}</p>
@@ -25,6 +25,16 @@ export default function App() {
       <QueryClientProvider client={queryClient}>
         <Router
           root={(props) => {
+            const matches = useCurrentMatches();
+
+            onMount(() => {
+              for (const match of matches()) {
+                if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+              }
+
+              getCurrentWindow().show();
+            });
+
             return <Suspense>{props.children}</Suspense>;
           }}
         >

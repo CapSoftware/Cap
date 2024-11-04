@@ -62,6 +62,12 @@ impl<Source: LocalTimestamp, Target: LocalTimestamp> CloneInto<RealTimeClock<Tar
     }
 }
 
+impl<T: LocalTimestamp> Default for RealTimeClock<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: LocalTimestamp> RealTimeClock<T> {
     pub fn init() -> RealTimeClock<()> {
         RealTimeClock::<()>::new()

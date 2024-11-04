@@ -1,3 +1,4 @@
+use cap_flags::FLAGS;
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
@@ -8,13 +9,16 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
 
-use crate::pipeline::{clock::*, control::Control, task::PipelineSourceTask};
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
     platform::{Bounds, Window},
 };
+use crate::{
+    pipeline::{clock::*, control::Control, task::PipelineSourceTask},
+    platform,
+};
 
-static EXCLUDED_WINDOWS: [&'static str; 4] = [
+static EXCLUDED_WINDOWS: [&str; 4] = [
     "Cap",
     "Cap Camera",
     "Cap Recordings",
@@ -29,10 +33,16 @@ pub struct CaptureWindow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct CaptureScreen {
+    pub id: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
     Window(CaptureWindow),
-    Screen,
+    Screen(CaptureScreen),
 }
 
 impl PartialEq<Target> for ScreenCaptureTarget {
@@ -41,8 +51,11 @@ impl PartialEq<Target> for ScreenCaptureTarget {
             (Self::Window(capture_window), Target::Window(window)) => {
                 window.id == capture_window.id
             }
-            (Self::Screen, Target::Display(_)) => true,
-            _ => false,
+            (ScreenCaptureTarget::Screen(capture_screen), Target::Display(display)) => {
+                display.id == capture_screen.id
+            }
+            (&ScreenCaptureTarget::Window(_), &scap::Target::Display(_))
+            | (&ScreenCaptureTarget::Screen(_), &scap::Target::Window(_)) => todo!(),
         }
     }
 }
@@ -51,6 +64,7 @@ pub struct ScreenCaptureSource {
     options: Options,
     video_info: VideoInfo,
     target: ScreenCaptureTarget,
+    pub bounds: Bounds,
 }
 
 impl ScreenCaptureSource {
@@ -63,10 +77,10 @@ impl ScreenCaptureSource {
     ) -> Self {
         let fps = fps.unwrap_or(Self::DEFAULT_FPS);
         let output_resolution = resolution.unwrap_or(Resolution::Captured);
-        let targets = scap::get_all_targets();
+        let targets = dbg!(scap::get_all_targets());
 
         let excluded_targets: Vec<scap::Target> = targets
-            .into_iter()
+            .iter()
             .filter(|target| match target {
                 Target::Window(scap_window)
                     if EXCLUDED_WINDOWS.contains(&scap_window.title.as_str()) =>
@@ -74,31 +88,48 @@ impl ScreenCaptureSource {
                     true
                 }
                 _ => false,
-            })
+            }).cloned()
             .collect();
 
-        let crop_area = match capture_target {
-            ScreenCaptureTarget::Window(capture_window) => Some(Area {
-                size: Size {
-                    width: capture_window.bounds.width,
-                    height: capture_window.bounds.height,
-                },
-                origin: Point {
-                    x: capture_window.bounds.x,
-                    y: capture_window.bounds.y,
-                },
-            }),
-            ScreenCaptureTarget::Screen => None,
+        let (crop_area, bounds) = match capture_target {
+            ScreenCaptureTarget::Window(capture_window) => (
+                Some(Area {
+                    size: Size {
+                        width: capture_window.bounds.width,
+                        height: capture_window.bounds.height,
+                    },
+                    origin: Point {
+                        x: capture_window.bounds.x,
+                        y: capture_window.bounds.y,
+                    },
+                }),
+                capture_window.bounds,
+            ),
+            ScreenCaptureTarget::Screen(capture_screen) => {
+                (None, platform::monitor_bounds(capture_screen.id))
+            }
+        };
+
+        let target = match capture_target {
+            ScreenCaptureTarget::Window(w) => None,
+            ScreenCaptureTarget::Screen(capture_screen) => targets
+                .iter()
+                .find(|t| match t {
+                    Target::Display(display) => display.id == capture_screen.id,
+                    _ => false,
+                })
+                .cloned(),
         };
 
         let options = Options {
             fps,
-            show_cursor: true,
+            show_cursor: !FLAGS.zoom,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
             output_type: FrameType::BGRAFrame,
             output_resolution,
             crop_area,
+            target,
             ..Default::default()
         };
 
@@ -107,8 +138,36 @@ impl ScreenCaptureSource {
         Self {
             options,
             target: capture_target.clone(),
+            bounds,
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps),
         }
+    }
+
+    pub fn list_screens() -> Vec<CaptureScreen> {
+        if !scap::has_permission() {
+            return vec![];
+        }
+
+        let mut targets = vec![];
+        let screens = scap::get_all_targets().into_iter().filter_map(|t| match t {
+            Target::Display(screen) => Some(screen),
+            _ => None,
+        });
+
+        let names = crate::platform::window_names();
+
+        for (idx, screen) in screens.into_iter().enumerate() {
+            // Handle Target::Screen variant (assuming this is how it's structured in scap)
+            #[cfg(target_os = "macos")]
+            targets.push(CaptureScreen {
+                id: screen.id,
+                name: names
+                    .get(&screen.raw_handle.id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Screen {}", idx + 1)),
+            });
+        }
+        targets
     }
 
     pub fn list_targets() -> Vec<CaptureWindow> {
@@ -165,9 +224,9 @@ impl PipelineSourceTask for ScreenCaptureSource {
             ScreenCaptureTarget::Window(window) => Some(window.id),
             _ => None,
         };
-        let mut capturer = Capturer::new(self.options.clone());
+        let mut capturer = Capturer::new(dbg!(self.options.clone()));
         let mut capturing = false;
-        let _ = ready_signal.send(Ok(())).unwrap();
+        ready_signal.send(Ok(())).unwrap();
 
         loop {
             match control_signal.last() {
@@ -208,7 +267,7 @@ impl PipelineSourceTask for ScreenCaptureSource {
                                     let src_data = &frame.data;
 
                                     let src_stride = src_data.len() / height;
-                                    let dst_stride = buffer.stride(0) as usize;
+                                    let dst_stride = buffer.stride(0);
 
                                     if src_data.len() < src_stride * height {
                                         eprintln!("Frame data size mismatch.");

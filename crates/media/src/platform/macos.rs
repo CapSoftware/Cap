@@ -1,3 +1,4 @@
+use cocoa::{base::id, foundation::NSDictionary};
 use core_foundation::{
     array::CFArrayGetCount,
     base::FromVoid,
@@ -15,7 +16,7 @@ use core_graphics::{
     },
 };
 pub use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
-use std::ffi::c_void;
+use std::{collections::HashMap, ffi::c_void};
 
 use crate::platform::{Bounds, Window};
 
@@ -247,5 +248,84 @@ pub fn bring_window_to_focus(window_id: u32) {
         println!("Finished attempt to bring window {} to focus", window_id);
     } else {
         eprintln!("Window with id {} not found", window_id);
+    }
+}
+
+pub fn window_names() -> HashMap<u32, String> {
+    use cocoa::appkit::NSScreen;
+    use cocoa::base::nil;
+    use cocoa::foundation::{NSArray, NSString};
+    use objc::{msg_send, *};
+    use std::ffi::CStr;
+
+    unsafe {
+        let screens = NSScreen::screens(nil);
+        let screen_count = NSArray::count(screens);
+
+        let mut names = HashMap::new();
+
+        for i in 0..screen_count {
+            let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
+
+            let name: id = msg_send![screen, localizedName];
+            let name = CStr::from_ptr(NSString::UTF8String(name))
+                .to_string_lossy()
+                .to_string();
+
+            let device_description = NSScreen::deviceDescription(screen);
+            let num = NSDictionary::valueForKey_(
+                device_description,
+                NSString::alloc(nil).init_str("NSScreenNumber"),
+            ) as id;
+            let num: *const objc2_foundation::NSNumber = num.cast();
+            let num = { &*num };
+            let num = num.as_u32();
+
+            names.insert(num, name);
+        }
+
+        names
+    }
+}
+
+pub fn monitor_bounds(id: u32) -> Bounds {
+    use cocoa::appkit::NSScreen;
+    use cocoa::base::nil;
+    use cocoa::foundation::{NSArray, NSDictionary, NSString};
+
+    unsafe {
+        let screens = NSScreen::screens(nil);
+        let screen_count = NSArray::count(screens);
+
+        for i in 0..screen_count {
+            let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
+
+            let device_description = NSScreen::deviceDescription(screen);
+            let num = NSDictionary::valueForKey_(
+                device_description,
+                NSString::alloc(nil).init_str("NSScreenNumber"),
+            ) as id;
+            let num: *const objc2_foundation::NSNumber = num.cast();
+            let num = { &*num };
+            let num = num.as_u32();
+
+            if num == id {
+                let frame = NSScreen::frame(screen);
+
+                return Bounds {
+                    x: frame.origin.x,
+                    y: frame.origin.y,
+                    width: frame.size.width,
+                    height: frame.size.height,
+                };
+            }
+        }
+
+        Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }
     }
 }

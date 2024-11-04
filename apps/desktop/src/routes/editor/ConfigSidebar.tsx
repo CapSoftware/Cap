@@ -4,15 +4,23 @@ import {
 } from "@kobalte/core/radio-group";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { cx } from "cva";
-import { type Component, createRoot, For, Show } from "solid-js";
+import { batch, type Component, createRoot, For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { produce } from "solid-js/store";
 
 import type { BackgroundSource, CursorType } from "~/utils/tauri";
 import { useEditorContext } from "./context";
-import { ComingSoonTooltip, Field, Slider, Subfield, Toggle } from "./ui";
+import {
+  ComingSoonTooltip,
+  EditorButton,
+  Field,
+  Subfield,
+  Toggle,
+  Slider,
+} from "./ui";
 import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
-import { createEventListenerMap } from "@solid-primitives/event-listener";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -29,8 +37,15 @@ const BACKGROUND_SOURCES_LIST = [
 ] satisfies Array<BackgroundSource["type"]>;
 
 export function ConfigSidebar() {
-  const { selectedTab, setSelectedTab, project, setProject, editorInstance } =
-    useEditorContext();
+  const {
+    selectedTab,
+    setSelectedTab,
+    project,
+    setProject,
+    editorInstance,
+    state,
+    setState,
+  } = useEditorContext();
 
   const backgrounds: {
     [K in BackgroundSource["type"]]: Extract<BackgroundSource, { type: K }>;
@@ -57,7 +72,7 @@ export function ConfigSidebar() {
   return (
     <KTabs
       value={selectedTab()}
-      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden w-[25.5rem] z-10 bg-gray-50"
+      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden w-[25.5rem] z-10 bg-gray-50 relative"
     >
       <KTabs.List class="h-[3.5rem] flex flex-row divide-x divide-gray-200 text-black/50 text-lg relative z-40 overflow-x-auto border-b border-gray-200">
         <For
@@ -489,17 +504,14 @@ export function ConfigSidebar() {
               </Subfield>
             </ComingSoonTooltip>
           </Field>
-          <ComingSoonTooltip>
-            <Field name="Size" icon={<IconCapEnlarge />}>
-              <Slider
-                disabled
-                value={[project.cursor.size]}
-                onChange={(v) => setProject("cursor", "size", v[0])}
-                minValue={0}
-                maxValue={100}
-              />
-            </Field>
-          </ComingSoonTooltip>
+          <Field name="Size" icon={<IconCapEnlarge />}>
+            <Slider
+              value={[project.cursor.size]}
+              onChange={(v) => setProject("cursor", "size", v[0])}
+              minValue={500}
+              maxValue={300}
+            />
+          </Field>
           <ComingSoonTooltip>
             <Field name="Type" icon={<IconCapCursor />}>
               <ul class="flex flex-row gap-2 text-gray-400">
@@ -545,6 +557,73 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
       </div>
+      <Show
+        when={(() => {
+          const selection =
+            state.timelineSelection?.type === "zoom" && state.timelineSelection;
+          if (!selection) return;
+
+          const segment = project.timeline?.zoomSegments?.[selection.index];
+          if (!segment) return;
+
+          return { selection, segment };
+        })()}
+      >
+        {(value) => {
+          return (
+            <div
+              data-visible={state.timelineSelection?.type === "zoom"}
+              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-50 z-50"
+            >
+              <div class="flex flex-row justify-between">
+                <EditorButton
+                  onClick={() => setState("timelineSelection", null)}
+                  leftIcon={<IconCapChevronDown />}
+                >
+                  Done
+                </EditorButton>
+                <EditorButton
+                  onClick={() => {
+                    const index = value().selection.index;
+
+                    batch(() => {
+                      setState("timelineSelection", null);
+                      setProject(
+                        "timeline",
+                        "zoomSegments",
+                        produce((s) => {
+                          if (!s) return;
+                          return s.splice(index, 1);
+                        })
+                      );
+                    });
+                  }}
+                  leftIcon={<IconCapTrash />}
+                >
+                  Delete
+                </EditorButton>
+              </div>
+              <Field name="Zoom Amount" icon={<IconCapEnlarge />}>
+                <Slider
+                  value={[value().segment.amount]}
+                  onChange={(v) =>
+                    setProject(
+                      "timeline",
+                      "zoomSegments",
+                      value().selection.index,
+                      "amount",
+                      v[0]
+                    )
+                  }
+                  minValue={1}
+                  maxValue={2.5}
+                  step={0.001}
+                />
+              </Field>
+            </div>
+          );
+        }}
+      </Show>
     </KTabs>
   );
 }

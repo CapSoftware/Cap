@@ -67,6 +67,9 @@ async listCameras() : Promise<string[]> {
 async listCaptureWindows() : Promise<CaptureWindow[]> {
     return await TAURI_INVOKE("list_capture_windows");
 },
+async listCaptureScreens() : Promise<CaptureScreen[]> {
+    return await TAURI_INVOKE("list_capture_screens");
+},
 async listAudioDevices() : Promise<Result<string[], null>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_audio_devices") };
@@ -310,6 +313,9 @@ async resetMicrophonePermissions() : Promise<Result<null, null>> {
 },
 async isCameraWindowOpen() : Promise<boolean> {
     return await TAURI_INVOKE("is_camera_window_open");
+},
+async seekTo(videoId: string, frameNumber: number) : Promise<void> {
+    await TAURI_INVOKE("seek_to", { videoId, frameNumber });
 }
 }
 
@@ -317,8 +323,10 @@ async isCameraWindowOpen() : Promise<boolean> {
 
 
 export const events = __makeEvents__<{
+authenticationInvalid: AuthenticationInvalid,
 currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
+newNotification: NewNotification,
 newRecordingAdded: NewRecordingAdded,
 newScreenshotAdded: NewScreenshotAdded,
 recordingMetaChanged: RecordingMetaChanged,
@@ -333,8 +341,10 @@ requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
 showCapturesPanel: ShowCapturesPanel
 }>({
+authenticationInvalid: "authentication-invalid",
 currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
+newNotification: "new-notification",
 newRecordingAdded: "new-recording-added",
 newScreenshotAdded: "new-screenshot-added",
 recordingMetaChanged: "recording-meta-changed",
@@ -361,6 +371,7 @@ export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
 export type AudioMeta = { path: string }
 export type AuthStore = { token: string; expires: number; plan: Plan | null }
+export type AuthenticationInvalid = null
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
 export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
 export type Bounds = { x: number; y: number; width: number; height: number }
@@ -369,6 +380,7 @@ export type CameraMeta = { path: string }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
+export type CaptureScreen = { id: number; name: string }
 export type CaptureWindow = { id: number; name: string; bounds: Bounds }
 export type Crop = { position: XY<number>; size: XY<number> }
 export type CurrentRecordingChanged = JsonValue<InProgressRecording | null>
@@ -376,13 +388,15 @@ export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: C
 export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type EditorStateChanged = { playhead_position: number }
-export type GeneralSettingsStore = { upload_individual_files: boolean; open_editor_after_recording: boolean; hide_dock_icon?: boolean; auto_create_shareable_link?: boolean }
+export type Flags = { recordMouse: boolean; split: boolean; pauseResume: boolean; zoom: boolean }
+export type GeneralSettingsStore = { upload_individual_files: boolean; open_editor_after_recording: boolean; hide_dock_icon?: boolean; auto_create_shareable_link?: boolean; enable_notifications?: boolean }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InProgressRecording = { recordingDir: string; displaySource: ScreenCaptureTarget; segments: number[] }
 export type JsonValue<T> = [T]
+export type NewNotification = { title: string; body: string; is_error: boolean }
 export type NewRecordingAdded = { path: string }
 export type NewScreenshotAdded = { path: string }
 export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
@@ -392,7 +406,7 @@ export type Plan = { upgraded: boolean; last_checked: number }
 export type PreCreatedVideo = { id: string; link: string; config: S3UploadMeta }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: CameraConfiguration; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
-export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[] }
+export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[]; cursor: string | null }
 export type RecordingMetaChanged = { id: string }
 export type RecordingOptions = { captureTarget: ScreenCaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
@@ -407,16 +421,17 @@ export type RequestRestartRecording = null
 export type RequestStartRecording = null
 export type RequestStopRecording = null
 export type S3UploadMeta = { id: string; user_id: string; aws_region: string; aws_bucket: string }
-export type ScreenCaptureTarget = ({ variant: "window" } & CaptureWindow) | { variant: "screen" }
+export type ScreenCaptureTarget = ({ variant: "window" } & CaptureWindow) | ({ variant: "screen" } & CaptureScreen)
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string; prettyName: string }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
-export type TimelineConfiguration = { segments: TimelineSegment[] }
+export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments?: ZoomSegment[] }
 export type TimelineSegment = { timescale: number; start: number; end: number }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
 export type Video = { duration: number; width: number; height: number; fps: number }
 export type VideoType = "screen" | "output"
 export type XY<T> = { x: T; y: T }
+export type ZoomSegment = { start: number; end: number; amount: number }
 
 /** tauri-specta globals **/
 
@@ -434,7 +449,7 @@ type __EventObj__<T> = {
 	once: (
 		cb: TAURI_API_EVENT.EventCallback<T>,
 	) => ReturnType<typeof TAURI_API_EVENT.once<T>>;
-	emit: T extends null
+	emit: null extends T
 		? (payload?: T) => ReturnType<typeof TAURI_API_EVENT.emit>
 		: (payload: T) => ReturnType<typeof TAURI_API_EVENT.emit>;
 };

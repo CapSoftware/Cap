@@ -20,7 +20,7 @@ import {
   topLeftAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
-import { flags } from "~/flags";
+import { createEventListener } from "@solid-primitives/event-listener";
 
 export function Player() {
   const {
@@ -31,6 +31,7 @@ export function Player() {
     latestFrame,
     setDialog,
     playbackTime,
+    setPlaybackTime,
     playing,
     setPlaying,
     split,
@@ -52,7 +53,7 @@ export function Player() {
 
   const splitButton = () => (
     <EditorButton<typeof KToggleButton>
-      disabled={!flags.split}
+      disabled={!window.FLAGS.split}
       pressed={split()}
       onChange={setSplit}
       as={KToggleButton}
@@ -62,6 +63,52 @@ export function Player() {
       Split
     </EditorButton>
   );
+
+  const totalDuration = () =>
+    project.timeline?.segments.reduce(
+      (acc, s) => acc + (s.end - s.start) / s.timescale,
+      0
+    ) ?? editorInstance.recordingDuration;
+
+  const isAtEnd = () => {
+    const total = totalDuration();
+    return total > 0 && total - playbackTime() <= 0.1;
+  };
+
+  createEffect(() => {
+    if (isAtEnd() && playing()) {
+      commands.stopPlayback(videoId);
+      setPlaying(false);
+    }
+  });
+
+  const handlePlayPauseClick = async () => {
+    try {
+      if (isAtEnd()) {
+        await commands.stopPlayback(videoId);
+        setPlaybackTime(0);
+        await commands.seekTo(videoId, 0);
+        await commands.startPlayback(videoId);
+        setPlaying(true);
+      } else if (playing()) {
+        await commands.stopPlayback(videoId);
+        setPlaying(false);
+      } else {
+        await commands.startPlayback(videoId);
+        setPlaying(true);
+      }
+    } catch (error) {
+      console.error("Error handling play/pause:", error);
+      setPlaying(false);
+    }
+  };
+
+  createEventListener(document, "keydown", async (e: KeyboardEvent) => {
+    if (e.code === "Space" && e.target === document.body) {
+      e.preventDefault();
+      await handlePlayPauseClick();
+    }
+  });
 
   return (
     <div class="flex flex-col divide-y flex-1">
@@ -177,39 +224,24 @@ export function Player() {
           <button type="button" disabled>
             <IconCapFrameFirst class="size-[1.2rem]" />
           </button>
-          {!playing() ? (
-            <button
-              type="button"
-              onClick={() =>
-                commands.startPlayback(videoId).then(() => setPlaying(true))
-              }
-            >
+          <button
+            type="button"
+            onClick={handlePlayPauseClick}
+            class="hover:text-black transition-colors"
+          >
+            {!playing() || isAtEnd() ? (
               <IconCapPlayCircle class="size-[1.5rem]" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() =>
-                commands.stopPlayback(videoId).then(() => setPlaying(false))
-              }
-            >
+            ) : (
               <IconCapStopCircle class="size-[1.5rem]" />
-            </button>
-          )}
+            )}
+          </button>
           <button type="button" disabled>
             <IconCapFrameLast class="size-[1rem]" />
           </button>
-          <span>
-            {formatTime(
-              project.timeline?.segments.reduce(
-                (acc, s) => acc + (s.end - s.start) / s.timescale,
-                0
-              ) ?? editorInstance.recordingDuration
-            )}
-          </span>
+          <span>{formatTime(totalDuration())}</span>
         </div>
         <div class="flex-1 flex flex-row justify-end">
-          {flags.split ? (
+          {window.FLAGS.split ? (
             splitButton()
           ) : (
             <ComingSoonTooltip>{splitButton()}</ComingSoonTooltip>

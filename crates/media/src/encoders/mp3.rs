@@ -24,9 +24,7 @@ impl MP3Encoder {
     const OUTPUT_BITRATE: usize = 128 * 1000; // 128k
 
     pub fn init(tag: &'static str, config: AudioInfo, output: Output) -> Result<Self, MediaError> {
-        let destination = match output {
-            Output::File(path) => path,
-        };
+        let Output::File(destination) = output;
         let mut output_ctx = format::output(&destination)?;
 
         let codec = encoder::find(ffmpeg::codec::Id::MP3)

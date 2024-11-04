@@ -22,7 +22,11 @@ export async function POST(request: NextRequest) {
 
   console.log(`User found: ${user.id}`);
 
-  const space = await db.select().from(spaces).where(eq(spaces.id, spaceId)).limit(1);
+  const space = await db
+    .select()
+    .from(spaces)
+    .where(eq(spaces.id, spaceId))
+    .limit(1);
   console.log(`Space query result:`, space);
 
   if (!space || space.length === 0) {
@@ -45,12 +49,10 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const result = await db.delete(spaceInvites)
+  const result = await db
+    .delete(spaceInvites)
     .where(
-      and(
-        eq(spaceInvites.id, inviteId),
-        eq(spaceInvites.spaceId, spaceId)
-      )
+      and(eq(spaceInvites.id, inviteId), eq(spaceInvites.spaceId, spaceId))
     );
 
   if (result.rowsAffected === 0) {
@@ -64,13 +66,10 @@ export async function POST(request: NextRequest) {
   }
 
   console.log("Workspace invite removed successfully");
-  return new Response(
-    JSON.stringify({ success: true }),
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    }
-  );
+  return new Response(JSON.stringify({ success: true }), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
 }

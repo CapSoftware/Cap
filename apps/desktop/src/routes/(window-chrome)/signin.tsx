@@ -2,7 +2,14 @@ import { Button } from "@cap/ui-solid";
 import * as shell from "@tauri-apps/plugin-shell";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { action, redirect, useAction, useSubmission } from "@solidjs/router";
+import {
+  action,
+  redirect,
+  useAction,
+  useSubmission,
+  useNavigate,
+} from "@solidjs/router";
+import { onMount, onCleanup } from "solid-js";
 
 import callbackTemplate from "./callback.template";
 import { authStore } from "~/store";
@@ -44,6 +51,8 @@ const signInAction = action(async () => {
       throw new Error("Invalid token or expires");
     }
 
+    await authStore.set(null);
+
     await authStore.set({
       token,
       expires,
@@ -56,6 +65,8 @@ const signInAction = action(async () => {
 
     return redirect("/");
   } catch (error) {
+    console.error("Sign in failed:", error);
+    await authStore.set(null);
     throw error;
   }
 });
@@ -63,6 +74,28 @@ const signInAction = action(async () => {
 export default function Page() {
   const signIn = useAction(signInAction);
   const submission = useSubmission(signInAction);
+  const navigate = useNavigate();
+
+  // Listen for auth changes and redirect to signin if auth is cleared
+  onMount(async () => {
+    let unsubscribe: (() => void) | undefined;
+
+    try {
+      unsubscribe = await authStore.listen((auth) => {
+        if (!auth) {
+          // Replace the current route with signin
+          navigate("/signin", { replace: true });
+        }
+      });
+    } catch (error) {
+      console.error("Failed to set up auth listener:", error);
+    }
+
+    // Clean up the listener when component unmounts
+    onCleanup(() => {
+      unsubscribe?.();
+    });
+  });
 
   return (
     <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100">

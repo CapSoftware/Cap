@@ -2,8 +2,9 @@ import { A, type RouteSectionProps, useLocation } from "@solidjs/router";
 import { cx } from "cva";
 import { createResource, For } from "solid-js";
 import { Button } from "@cap/ui-solid";
-import { commands } from "~/utils/tauri";
 import { getVersion } from "@tauri-apps/api/app";
+
+import { commands } from "~/utils/tauri";
 
 export default function (props: RouteSectionProps) {
   const location = useLocation();
@@ -42,10 +43,10 @@ export default function (props: RouteSectionProps) {
                   <A
                     href={item.href}
                     class={cx(
-                      "rounded-lg h-[2rem] px-[0.375rem] flex flex-row items-center gap-[0.375rem] transition-colors",
+                      "rounded-lg h-[2rem] px-[0.375rem] flex flex-row items-center gap-[0.375rem] transition-colors border",
                       isActive()
-                        ? "bg-blue-50 border border-blue-200 text-blue-700"
-                        : "hover:bg-gray-100"
+                        ? "bg-blue-50 border-blue-200 text-blue-700"
+                        : "hover:bg-gray-100 border-transparent"
                     )}
                   >
                     <item.icon class="size-[1.25rem]" />
