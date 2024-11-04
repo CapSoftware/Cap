@@ -4,9 +4,10 @@ use cpal::{
 };
 use flume::Receiver;
 use ringbuf::{
-    traits::{Consumer, Producer, Split},
+    traits::{Consumer, Observer, Producer, Split},
     HeapProd, HeapRb,
 };
+use std::{thread, time::Duration};
 
 use crate::{
     data::{ffmpeg_sample_format_for, AudioInfo, FFAudio},
@@ -35,11 +36,10 @@ impl AudioOutputSink {
         let device_name = device.name().unwrap();
 
         device
-            .supported_output_configs()
-            .unwrap()
-            .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
-            .map(|c| {
-                let ss_config = c.with_max_sample_rate();
+            .default_output_config()
+            .ok()
+            .filter(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
+            .map(|ss_config| {
                 let mut info = AudioInfo::from_stream_config(&ss_config);
                 info.sample_format = info.sample_format.packed();
 
@@ -140,7 +140,13 @@ impl PipelineSinkTask for AudioOutputSink {
                         break;
                     }
 
-                    samples.push_slice(frame.data(0));
+                    let data = frame.data(0);
+                    let safety_zone = 2 * data.len();
+                    samples.push_slice(data);
+
+                    if samples.vacant_len() < safety_zone {
+                        thread::sleep(Duration::from_millis(1));
+                    }
                 }
 
                 stream.pause().ok();

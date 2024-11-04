@@ -1,7 +1,7 @@
 use std::{sync::Arc, sync::Mutex as StdMutex, time::Duration};
 
-use cap_media::data::{AudioInfo, FromByteSlice};
-use cap_media::feeds::{AudioFeed, AudioFeedData, AudioFeedHandle};
+use cap_media::data::{AudioInfo, FromSampleBytes};
+use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
 use cap_project::ProjectConfiguration;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderVideoConstants};
 use cpal::{
@@ -10,7 +10,7 @@ use cpal::{
 };
 use tokio::{sync::watch, time::Instant};
 
-use crate::{audio::AudioData, editor, project_recordings::ProjectRecordings};
+use crate::{editor, project_recordings::ProjectRecordings};
 
 pub struct Playback {
     pub audio: Arc<StdMutex<Option<AudioData>>>,
@@ -155,8 +155,6 @@ impl AudioPlayback {
         let handle = tokio::runtime::Handle::current();
 
         std::thread::spawn(move || {
-            let audio = self.audio;
-
             let host = cpal::default_host();
             let device = host.default_output_device().unwrap();
             println!("Output device: {}", device.name().unwrap());
@@ -164,25 +162,17 @@ impl AudioPlayback {
                 .default_output_config()
                 .expect("Failed to get default output format");
 
-            let mut bytes = vec![0; audio.buffer.len() * 8];
-            for (src, dest) in std::iter::zip(audio.buffer.iter(), bytes.chunks_mut(8)) {
-                dest.copy_from_slice(&src.to_le_bytes());
-            }
-            let audio_data = AudioFeedData {
-                buffer: Arc::new(bytes),
-                info: AudioInfo::new(AudioFeed::FORMAT, audio.sample_rate, audio.channels),
-            };
             // TODO: Get fps from video (once we start supporting other frame rates)
             let video_frame_duration = f64::from(FPS) * self.duration;
 
             let shared_data = (
                 &device,
                 &supported_config,
-                audio_data,
+                self.audio,
                 video_frame_duration,
                 self.start_frame_number,
             );
-            let (_feed_handle, stream) = match supported_config.sample_format() {
+            let stream = match supported_config.sample_format() {
                 // SampleFormat::I8 => create_stream::<i8>(shared_data),
                 SampleFormat::I16 => create_stream::<i16>(shared_data),
                 SampleFormat::I32 => create_stream::<i32>(shared_data),
@@ -196,41 +186,43 @@ impl AudioPlayback {
                 _ => unimplemented!(),
             };
 
-            fn create_stream<T: FromByteSlice>(
+            fn create_stream<T: FromSampleBytes>(
                 (device, supported_config, audio_data, video_frame_duration, playhead): (
                     &cpal::Device,
                     &cpal::SupportedStreamConfig,
-                    AudioFeedData,
+                    AudioData,
                     f64,
                     u32,
                 ),
-            ) -> (AudioFeedHandle, cpal::Stream) {
+            ) -> cpal::Stream {
                 let mut output_info = AudioInfo::from_stream_config(&supported_config);
                 output_info.sample_format = output_info.sample_format.packed();
 
-                let (mut consumer, mut audio_feed) =
-                    AudioFeed::build(audio_data, output_info, video_frame_duration);
-                audio_feed.set_playhead(playhead);
-                let audio_feed_handle = audio_feed.launch();
+                let mut audio_renderer =
+                    AudioPlaybackBuffer::new(audio_data, output_info, video_frame_duration);
+                audio_renderer.set_playhead(playhead);
+
+                // Prerender enough for smooth playback
+                while !audio_renderer.buffer_reaching_limit() {
+                    audio_renderer.render();
+                }
 
                 let mut config = supported_config.config();
                 // Low-latency playback
-                config.buffer_size = BufferSize::Fixed(256);
+                config.buffer_size =
+                    BufferSize::Fixed(AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT);
 
-                (
-                    audio_feed_handle,
-                    device
-                        .build_output_stream(
-                            &config,
-                            move |buffer: &mut [T], _info| {
-                                // TODO: Clear after pause/change? Or just drop the playback/feed
-                                consumer.fill(buffer);
-                            },
-                            |_| {},
-                            None,
-                        )
-                        .unwrap(),
-                )
+                device
+                    .build_output_stream(
+                        &config,
+                        move |buffer: &mut [T], _info| {
+                            audio_renderer.render();
+                            audio_renderer.fill(buffer);
+                        },
+                        |_| {},
+                        None,
+                    )
+                    .unwrap()
             }
 
             stream.play().unwrap();

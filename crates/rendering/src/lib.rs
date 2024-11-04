@@ -100,7 +100,7 @@ impl RecordingDecoders {
             self.screen.get_frame(frame_number),
             OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
         );
-        println!("-t Got Frame? {frame_number}: {}", &screen_frame.is_some());
+        // println!("-t Got Frame? {frame_number}: {}", &screen_frame.is_some());
 
         screen_frame.map(|f| (f, camera_frame.flatten()))
     }
@@ -669,8 +669,6 @@ impl ZoomKeyframes {
 
         let t = delta_time / keyframe_length;
         let t = t.powf(0.5);
-
-        
 
         prev.amount + (next.amount - prev.amount) * t
     }

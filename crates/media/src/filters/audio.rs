@@ -30,6 +30,9 @@ impl AudioFilter {
         filter_graph.add(&filter::find("abuffer").unwrap(), "in", &input_args)?;
         filter_graph.add(&filter::find("abuffersink").unwrap(), "out", "")?;
 
+        // let mut output = filter_graph.get("out").unwrap();
+        // output.sink().set_frame_size(2048);
+
         let spec = format!(
             "aformat=sample_fmts={}:sample_rates={}:channel_layouts=0x{}",
             output_config.sample_format.name(),

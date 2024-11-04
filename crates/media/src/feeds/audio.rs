@@ -1,266 +1,288 @@
 use ffmpeg::{
+    codec::{context, decoder},
     format::sample::{Sample, Type},
     software::resampling,
 };
-use flume::{Sender, TryRecvError};
 use ringbuf::{
-    traits::{Consumer, Observer, Producer, Split},
-    HeapCons, HeapProd, HeapRb,
+    traits::{Consumer, Observer, Producer},
+    HeapRb,
 };
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
 use crate::{
-    data::{AudioInfo, FFAudio, FromByteSlice},
+    data::{AudioInfo, FFAudio, FromSampleBytes},
     MediaError,
 };
 
-enum AudioFeedControl {
-    Start(u32),
-    Stop,
-    Shutdown,
-}
-
-#[derive(Clone)]
-pub struct AudioFeedData {
+#[derive(Clone, PartialEq, Eq)]
+pub struct AudioData {
     pub buffer: Arc<Vec<u8>>,
     pub info: AudioInfo,
 }
 
-impl AudioFeedData {
-    pub fn from_file(_path: PathBuf) -> Result<Self, MediaError> {
-        todo!()
+impl AudioData {
+    pub const FORMAT: Sample = Sample::F64(Type::Packed);
+
+    pub fn from_file(path: PathBuf) -> Result<Self, MediaError> {
+        let input_ctx = ffmpeg::format::input(&path)?;
+        let input_stream = input_ctx
+            .streams()
+            .best(ffmpeg::media::Type::Audio)
+            .ok_or(MediaError::MissingMedia("audio"))?;
+
+        let decoder_ctx = context::Context::from_parameters(input_stream.parameters())?;
+        let mut decoder = decoder_ctx.decoder().audio()?;
+        decoder.set_parameters(input_stream.parameters())?;
+        decoder.set_packet_time_base(input_stream.time_base());
+
+        let input_info = AudioInfo::from_decoder(&decoder);
+        let mut output_info = input_info.clone();
+        output_info.sample_format = Self::FORMAT;
+
+        let resampler = AudioResampler::new(input_info, output_info)?;
+
+        let reader = AudioFileReader {
+            stream_index: input_stream.index(),
+            info: input_info,
+            resampler,
+            decoder,
+            first: true,
+        };
+
+        reader.read(input_ctx)
     }
 }
 
-pub struct AudioFeedHandle {
-    sender: Sender<AudioFeedControl>,
-    join_handle: std::thread::JoinHandle<()>,
-}
-
-impl AudioFeedHandle {
-    pub fn start(&self, playhead: Option<u32>) -> Result<(), MediaError> {
-        self.sender
-            .send(AudioFeedControl::Start(playhead.unwrap_or(0)))
-            .map_err(|_| MediaError::Any("Audio feed is unreachable!"))?;
-
-        Ok(())
-    }
-
-    pub fn stop(&self) -> Result<(), MediaError> {
-        self.sender
-            .send(AudioFeedControl::Stop)
-            .map_err(|_| MediaError::Any("Audio feed is unreachable!"))?;
-
-        Ok(())
-    }
-}
-
-impl Drop for AudioFeedHandle {
-    fn drop(&mut self) {
-        if let Err(_) = self.sender.send(AudioFeedControl::Shutdown) {
-            eprintln!("Audio stream has already shut down.");
-        }
-    }
-}
-
-pub struct AudioFeedConsumer<T: FromByteSlice> {
-    consumer: HeapCons<u8>,
-    marker: std::marker::PhantomData<T>,
-}
-
-impl<T: FromByteSlice> AudioFeedConsumer<T> {
-    fn new(consumer: HeapCons<u8>) -> Self {
-        Self {
-            consumer,
-            marker: std::marker::PhantomData,
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.consumer.clear();
-    }
-
-    pub fn fill(&mut self, data: &mut [T]) {
-        let mut byte_data = vec![0; data.len() * T::BYTE_SIZE];
-        let _ = self.consumer.pop_slice(&mut byte_data);
-
-        T::cast_slice(&byte_data, data);
-    }
-}
-
-pub struct AudioFeed {
-    resampler: resampling::Context,
-    data: AudioFeedData,
+pub struct AudioPlaybackBuffer<T: FromSampleBytes> {
+    data: AudioData,
     cursor: usize,
-    resampled_buffer: HeapProd<u8>,
-    resampled_frame: FFAudio,
-    resampling_delay: Option<resampling::Delay>,
+    processing_chunk_size: usize,
+    resampler: AudioResampler,
+    resampled_buffer: HeapRb<T>,
     video_frame_duration: f64,
 }
 
-impl AudioFeed {
-    pub const FORMAT: Sample = Sample::F64(Type::Packed);
-    const SAMPLES_COUNT: usize = 2048;
+impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
+    pub const PLAYBACK_SAMPLES_COUNT: u32 = 256;
+    const PROCESSING_SAMPLES_COUNT: u32 = 1024;
 
-    pub fn build<T: FromByteSlice>(
-        data: AudioFeedData,
-        output_info: AudioInfo,
-        video_frame_duration: f64,
-    ) -> (AudioFeedConsumer<T>, Self) {
+    pub fn new(data: AudioData, output_info: AudioInfo, video_frame_duration: f64) -> Self {
         println!("Input info: {:?}", data.info);
         println!("Output info: {:?}", output_info);
-        let resampler = ffmpeg::software::resampler(
-            (
-                data.info.sample_format,
-                data.info.channel_layout(),
-                data.info.sample_rate,
-            ),
-            (
-                output_info.sample_format,
-                output_info.channel_layout(),
-                output_info.sample_rate,
-            ),
-        )
-        .unwrap();
+
+        let resampler = AudioResampler::new(data.info, output_info).unwrap();
 
         // Up to 1 second of pre-rendered audio
         let capacity = (output_info.sample_rate as usize)
             * (output_info.channels as usize)
             * output_info.sample_format.bytes();
-        let buffer = HeapRb::new(capacity);
-        let (sample_producer, sample_consumer) = buffer.split();
+        let resampled_buffer = HeapRb::new(capacity);
 
-        (
-            AudioFeedConsumer::new(sample_consumer),
-            Self {
-                resampler,
-                data,
-                cursor: 0,
-                resampled_buffer: sample_producer,
-                resampled_frame: FFAudio::empty(),
-                resampling_delay: None,
-                video_frame_duration,
-            },
-        )
+        let processing_chunk_size = (Self::PROCESSING_SAMPLES_COUNT as usize)
+            * data.info.channels
+            * data.info.sample_format.bytes();
+
+        Self {
+            data,
+            cursor: 0,
+            processing_chunk_size,
+            resampler,
+            resampled_buffer,
+            video_frame_duration,
+        }
     }
 
     pub fn set_playhead(&mut self, playhead: u32) {
+        self.resampler.reset();
+        self.resampled_buffer.clear();
+
+        println!("Audio seeking to video frame {playhead}");
         let chunk_size = self.data.info.channels * self.data.info.sample_format.bytes();
         let total_samples = self.data.buffer.len() / chunk_size;
 
         let estimated_cursor =
             (total_samples as f64) * f64::from(playhead) / self.video_frame_duration;
         let cursor: usize = num_traits::cast(estimated_cursor).unwrap();
+        println!("Successful seek to sample {cursor}");
         self.cursor = cursor * chunk_size;
-        self.resampling_delay = None;
     }
 
-    pub fn produce_samples(&mut self) -> bool {
-        let bytes_per_sample = self.data.info.sample_format.bytes();
-
-        let mut samples = Self::SAMPLES_COUNT;
-        let mut chunk_size = samples * self.data.info.channels * bytes_per_sample;
-
-        let space_available = self.resampled_buffer.vacant_len() > 2 * chunk_size;
-
-        if self.cursor >= self.data.buffer.len() {
-            if self.resampling_delay.is_none() {
-                return false;
-            };
-
-            if space_available {
-                self.resampling_delay = self.resampler.flush(&mut self.resampled_frame).unwrap();
-                self.resampled_buffer
-                    .push_slice(self.resampled_frame.data(0));
-            }
-
-            return true;
-        }
-
-        if space_available {
-            let remaining_chunk = self.data.buffer.len() - self.cursor;
-            if remaining_chunk < chunk_size {
-                chunk_size = remaining_chunk;
-                samples = remaining_chunk / (self.data.info.channels * bytes_per_sample);
-            }
-
-            let mut raw_frame = FFAudio::new(
-                self.data.info.sample_format,
-                samples,
-                self.data.info.channel_layout(),
-            );
-            raw_frame.set_rate(self.data.info.sample_rate);
-            let start = self.cursor;
-            let end = self.cursor + chunk_size;
-            raw_frame.data_mut(0)[0..chunk_size].copy_from_slice(&self.data.buffer[start..end]);
-            self.cursor = end;
-
-            self.resampling_delay = self
-                .resampler
-                .run(&raw_frame, &mut self.resampled_frame)
-                .unwrap();
-            self.resampled_buffer
-                .push_slice(self.resampled_frame.data(0));
-        } else {
-            // TODO: remove this sleep to enable using the resampler in the same thread.
-            std::thread::sleep(Duration::from_millis(5));
-        }
-
-        true
+    pub fn buffer_reaching_limit(&self) -> bool {
+        self.resampled_buffer.vacant_len() <= 2 * self.processing_chunk_size
     }
 
-    pub fn launch(mut self) -> AudioFeedHandle {
-        println!("Launching audio feed stream");
-        let (control_sender, control) = flume::bounded(10);
+    fn create_frame(&mut self) -> FFAudio {
+        let mut samples = Self::PROCESSING_SAMPLES_COUNT as usize;
+        let mut chunk_size = self.processing_chunk_size;
 
-        let join_handle = std::thread::spawn(move || {
-            let control_signal_handler = |feed: &mut Self, signal: AudioFeedControl| match signal {
-                AudioFeedControl::Start(playhead) => {
-                    feed.set_playhead(playhead);
-                    Some(feed.produce_samples())
-                }
-                AudioFeedControl::Stop => Some(false),
-                AudioFeedControl::Shutdown => {
-                    println!("Received audio feed shutdown signal.");
-                    None
-                }
-            };
-
-            loop {
-                match control.try_recv() {
-                    Ok(signal) => match control_signal_handler(&mut self, signal) {
-                        Some(should_continue) => {
-                            if should_continue {
-                                continue;
-                            }
-                        }
-                        None => break,
-                    },
-                    Err(TryRecvError::Empty) => {
-                        self.produce_samples();
-                        continue;
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        eprintln!("Audio feed control signal lost.");
-                        break;
-                    }
-                }
-
-                // Wait for new start signal
-                if let Ok(signal) = control.recv() {
-                    if control_signal_handler(&mut self, signal).is_none() {
-                        break;
-                    }
-                } else {
-                    eprintln!("Audio feed control signal lost.");
-                    break;
-                }
-            }
-        });
-
-        AudioFeedHandle {
-            sender: control_sender,
-            join_handle,
+        let remaining_chunk = self.data.buffer.len() - self.cursor;
+        if remaining_chunk < chunk_size {
+            chunk_size = remaining_chunk;
+            samples =
+                remaining_chunk / (self.data.info.channels * self.data.info.sample_format.bytes());
         }
+
+        let mut raw_frame = FFAudio::new(
+            self.data.info.sample_format,
+            samples,
+            self.data.info.channel_layout(),
+        );
+        raw_frame.set_rate(self.data.info.sample_rate);
+        let start = self.cursor;
+        let end = self.cursor + chunk_size;
+        raw_frame.data_mut(0)[0..chunk_size].copy_from_slice(&self.data.buffer[start..end]);
+        self.cursor = end;
+
+        raw_frame
+    }
+
+    pub fn render(&mut self) {
+        if self.buffer_reaching_limit() {
+            return;
+        }
+
+        let bytes_per_sample = self.resampler.output.sample_size();
+        let maybe_rendered = match self.cursor >= self.data.buffer.len() {
+            true => self.resampler.flush_frame(),
+            false => {
+                let frame = self.create_frame();
+                Some(self.resampler.queue_and_process_frame(&frame))
+            }
+        };
+
+        if let Some(rendered) = maybe_rendered {
+            let mut typed_data = vec![T::EQUILIBRIUM; rendered.len() / bytes_per_sample];
+
+            for (src, dest) in std::iter::zip(rendered.chunks(bytes_per_sample), &mut typed_data) {
+                *dest = T::from_bytes(src);
+            }
+            self.resampled_buffer.push_slice(&typed_data);
+        }
+    }
+
+    pub fn fill(&mut self, playback_buffer: &mut [T]) {
+        let filled = self.resampled_buffer.pop_slice(playback_buffer);
+        playback_buffer[filled..].fill(T::EQUILIBRIUM);
+    }
+}
+
+struct AudioFileReader {
+    decoder: decoder::Audio,
+    resampler: AudioResampler,
+    stream_index: usize,
+    info: AudioInfo,
+    first: bool,
+}
+
+impl AudioFileReader {
+    fn read(
+        mut self,
+        mut input_ctx: ffmpeg::format::context::Input,
+    ) -> Result<AudioData, MediaError> {
+        let mut buffer = Vec::new();
+        let output_info = self.resampler.output;
+
+        for (stream, mut packet) in input_ctx.packets() {
+            if stream.index() == self.stream_index {
+                packet.rescale_ts(stream.time_base(), self.info.time_base);
+                self.decoder.send_packet(&packet).unwrap();
+                self.decode_packets(&mut buffer);
+            }
+        }
+
+        self.finish_resampling(&mut buffer);
+
+        Ok(AudioData {
+            buffer: Arc::new(buffer),
+            info: output_info,
+        })
+    }
+
+    fn decode_packets(&mut self, data: &mut Vec<u8>) {
+        let mut decoded_frame = FFAudio::empty();
+
+        while self.decoder.receive_frame(&mut decoded_frame).is_ok() {
+            let timestamp = decoded_frame.timestamp();
+            if self.first {
+                println!(
+                    "First timestamp: {timestamp:?}, time base {}",
+                    self.decoder.time_base()
+                );
+                self.first = false;
+            }
+            decoded_frame.set_pts(timestamp);
+            let resampled = self.resampler.queue_and_process_frame(&decoded_frame);
+            // println!("Resampled: {:?}", resampled);
+            data.extend_from_slice(resampled);
+            decoded_frame = FFAudio::empty();
+        }
+    }
+
+    fn finish_resampling(&mut self, data: &mut Vec<u8>) {
+        self.decoder.send_eof().unwrap();
+        self.decode_packets(data);
+
+        while let Some(resampled) = self.resampler.flush_frame() {
+            data.extend_from_slice(resampled);
+        }
+    }
+}
+
+pub struct AudioResampler {
+    context: resampling::Context,
+    output_frame: FFAudio,
+    delay: Option<resampling::Delay>,
+    input: AudioInfo,
+    output: AudioInfo,
+}
+
+impl AudioResampler {
+    pub fn new(input_info: AudioInfo, output_info: AudioInfo) -> Result<Self, MediaError> {
+        let context = ffmpeg::software::resampler(
+            (
+                input_info.sample_format,
+                input_info.channel_layout(),
+                input_info.sample_rate,
+            ),
+            (
+                output_info.sample_format,
+                output_info.channel_layout(),
+                output_info.sample_rate,
+            ),
+        )?;
+
+        Ok(Self {
+            input: input_info,
+            output: output_info,
+            context,
+            output_frame: FFAudio::empty(),
+            delay: None,
+        })
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::new(self.input, self.output).unwrap();
+    }
+
+    fn current_frame_data<'a>(&'a self) -> &'a [u8] {
+        let end = self.output_frame.samples() * self.output.channels * self.output.sample_size();
+        &self.output_frame.data(0)[0..end]
+    }
+
+    pub fn queue_and_process_frame<'a>(&'a mut self, frame: &FFAudio) -> &'a [u8] {
+        self.delay = self.context.run(frame, &mut self.output_frame).unwrap();
+
+        // Teeechnically this doesn't work for planar output
+        self.current_frame_data()
+    }
+
+    pub fn flush_frame<'a>(&'a mut self) -> Option<&'a [u8]> {
+        if self.delay.is_none() {
+            return None;
+        };
+
+        self.delay = self.context.flush(&mut self.output_frame).unwrap();
+
+        Some(self.current_frame_data())
     }
 }

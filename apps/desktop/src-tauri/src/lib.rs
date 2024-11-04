@@ -16,11 +16,11 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid};
-use cap_editor::{AudioData, EditorState, ProjectRecordings};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
+use cap_editor::{EditorState, ProjectRecordings};
 use cap_media::sources::CaptureScreen;
 use cap_media::{
-    feeds::{CameraFeed, CameraFrameSender},
+    feeds::{AudioData, CameraFeed, CameraFrameSender},
     platform::Bounds,
     sources::{AudioInputSource, ScreenCaptureTarget},
 };
@@ -998,8 +998,8 @@ async fn render_to_file_impl(
                 ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
                     input: pipe_path.clone().into_os_string(),
                     sample_format: "f64le".to_string(),
-                    sample_rate: audio_data.sample_rate,
-                    channels: audio_data.channels,
+                    sample_rate: audio_data.info.sample_rate,
+                    channels: audio_data.info.channels as u16,
                 });
 
                 let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<f64>>(30);
@@ -1051,13 +1051,24 @@ async fn render_to_file_impl(
                         }
 
                         if let Some(audio) = &audio {
-                            let samples_per_frame = audio.data.sample_rate as f64 / FPS as f64;
+                            let mut buffer = vec![0.; audio.data.buffer.len() / 8];
+                            for (src, dest) in
+                                std::iter::zip(audio.data.buffer.chunks(8), &mut buffer)
+                            {
+                                *dest = f64::from_le_bytes(src.try_into().unwrap());
+                            }
+
+                            let samples_per_frame = audio.data.info.channels as f64
+                                * audio.data.info.sample_rate as f64
+                                / FPS as f64;
 
                             let start_samples = match project.timeline() {
                                 Some(timeline) => timeline
                                     .get_recording_time(frame_count as f64 / FPS as f64)
                                     .map(|recording_time| {
-                                        recording_time * audio.data.sample_rate as f64
+                                        recording_time
+                                            * audio.data.info.channels as f64
+                                            * audio.data.info.sample_rate as f64
                                     }),
                                 None => Some(frame_count as f64 * samples_per_frame),
                             };
@@ -1065,7 +1076,7 @@ async fn render_to_file_impl(
                             if let Some(start) = start_samples {
                                 let end = start + samples_per_frame;
 
-                                let samples = &audio.data.buffer[start as usize..end as usize];
+                                let samples = &buffer[start as usize..end as usize];
                                 let mut samples_iter = samples.iter().copied();
 
                                 let mut frame_samples = Vec::new();

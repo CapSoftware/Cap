@@ -107,7 +107,10 @@ impl AudioFileSource {
 
         match packet.read(&mut self.input_ctx) {
             Ok(_) => (Some(packet), true),
-            Err(FFError::Eof) => (None, false),
+            Err(FFError::Eof) => {
+                println!("Reached EOF!");
+                (None, false)
+            }
             Err(_) => {
                 // TODO: What to do with other errors here? The ffmpeg wrapper ignores them and keeps looping
                 (None, true)

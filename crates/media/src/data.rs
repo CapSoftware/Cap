@@ -1,4 +1,4 @@
-use cpal::{Sample as CpalSample, SampleFormat, SupportedBufferSize, SupportedStreamConfig};
+use cpal::{SampleFormat, SupportedBufferSize, SupportedStreamConfig};
 pub use ffmpeg::format::{
     pixel::Pixel,
     sample::{Sample, Type},
@@ -9,7 +9,7 @@ pub use ffmpeg::util::{
     frame::{Audio as FFAudio, Frame as FFFrame, Video as FFVideo},
     rational::Rational as FFRational,
 };
-pub use ffmpeg::{Error as FFError, Packet as FFPacket};
+pub use ffmpeg::{error::EAGAIN, Error as FFError, Packet as FFPacket};
 
 pub enum RawVideoFormat {
     Bgra,
@@ -72,7 +72,7 @@ impl PlanarData for FFAudio {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct AudioInfo {
     pub sample_format: Sample,
     pub sample_rate: u32,
@@ -247,39 +247,16 @@ impl VideoInfo {
     }
 }
 
-pub trait FromByteSlice: cpal::SizedSample + std::fmt::Debug + Send + 'static {
+pub trait FromSampleBytes: cpal::SizedSample + std::fmt::Debug + Send + 'static {
     const BYTE_SIZE: usize;
-
-    fn cast_slice(in_bytes: &[u8], out: &mut [Self]) {
-        let filled = std::cmp::min(in_bytes.len() / Self::BYTE_SIZE, out.len());
-
-        for (src, dest) in std::iter::zip(in_bytes.chunks(Self::BYTE_SIZE), &mut *out) {
-            *dest = Self::from_bytes(src)
-        }
-        out[filled..].fill(Self::EQUILIBRIUM);
-    }
 
     fn from_bytes(bytes: &[u8]) -> Self;
 }
 
-impl FromByteSlice for u8 {
-    const BYTE_SIZE: usize = 1;
-
-    fn cast_slice(in_bytes: &[u8], out: &mut [Self]) {
-        let filled = std::cmp::min(in_bytes.len() / Self::BYTE_SIZE, out.len());
-        out.copy_from_slice(in_bytes);
-        out[filled..].fill(Self::EQUILIBRIUM);
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Self {
-        bytes[0]
-    }
-}
-
-macro_rules! slice_castable {
+macro_rules! sample_bytes {
     ( $( $num:ty, $size:literal ),* ) => (
         $(
-            impl FromByteSlice for $num {
+            impl FromSampleBytes for $num {
                 const BYTE_SIZE: usize = $size;
 
                 fn from_bytes(bytes: &[u8]) -> Self {
@@ -290,4 +267,4 @@ macro_rules! slice_castable {
     )
 }
 
-slice_castable!(i16, 2, i32, 4, i64, 8, f32, 4, f64, 8);
+sample_bytes!(u8, 1, i16, 2, i32, 4, i64, 8, f32, 4, f64, 8);
