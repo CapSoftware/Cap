@@ -1,10 +1,7 @@
 import { Button } from "@cap/ui-solid";
-import type { RouteSectionProps } from "@solidjs/router";
-import { commands, OSPermission, type OSPermissionStatus } from "~/utils/tauri";
 import {
   createEffect,
   createResource,
-  Suspense,
   createSignal,
   Show,
   For,
@@ -12,9 +9,8 @@ import {
 } from "solid-js";
 import { createTimer } from "@solid-primitives/timer";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Transition } from "solid-transition-group";
 
-import Header from "../../components/Header";
+import { commands, OSPermission, type OSPermissionStatus } from "~/utils/tauri";
 
 function isPermitted(status?: OSPermissionStatus): boolean {
   return status === "granted" || status === "notNeeded";
@@ -66,7 +62,7 @@ export default function () {
   };
 
   return (
-    <div class="flex flex-col p-[1rem] text-[0.875rem] font-[400] flex-1 bg-gray-100 justify-between">
+    <div class="flex flex-col p-[1rem] text-[0.875rem] font-[400] flex-1 bg-gray-100 justify-between items-center">
       <div class="flex flex-col items-center">
         <IconCapLogo class="size-16 mb-1" />
         <h1 class="text-[1rem] font-[700] mb-0.5">Permissions Required</h1>
@@ -110,14 +106,14 @@ export default function () {
       </ul>
 
       <Button
+        class="px-12"
+        size="lg"
         disabled={
           permissions.find((p) => !isPermitted(check()?.[p.key])) !== undefined
         }
         onClick={() => {
-          startTransition(() => {
-            commands.openMainWindow().then(() => {
-              getCurrentWindow().close();
-            });
+          commands.openMainWindow().then(() => {
+            getCurrentWindow().close();
           });
         }}
       >
