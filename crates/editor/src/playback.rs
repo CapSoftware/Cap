@@ -151,7 +151,7 @@ struct AudioPlayback {
 }
 
 impl AudioPlayback {
-    fn spawn(mut self) {
+    fn spawn(self) {
         let handle = tokio::runtime::Handle::current();
 
         std::thread::spawn(move || {
@@ -162,75 +162,72 @@ impl AudioPlayback {
                 .default_output_config()
                 .expect("Failed to get default output format");
 
-            // TODO: Get fps from video (once we start supporting other frame rates)
-            let video_frame_duration = f64::from(FPS) * self.duration;
-
-            let shared_data = (
-                &device,
-                &supported_config,
-                self.audio,
-                video_frame_duration,
-                self.start_frame_number,
-            );
-            let stream = match supported_config.sample_format() {
+            let (mut stop_rx, stream) = match supported_config.sample_format() {
                 // SampleFormat::I8 => create_stream::<i8>(shared_data),
-                SampleFormat::I16 => create_stream::<i16>(shared_data),
-                SampleFormat::I32 => create_stream::<i32>(shared_data),
-                SampleFormat::I64 => create_stream::<i64>(shared_data),
-                SampleFormat::U8 => create_stream::<u8>(shared_data),
+                SampleFormat::I16 => self.create_stream::<i16>(device, supported_config),
+                SampleFormat::I32 => self.create_stream::<i32>(device, supported_config),
+                SampleFormat::I64 => self.create_stream::<i64>(device, supported_config),
+                SampleFormat::U8 => self.create_stream::<u8>(device, supported_config),
                 // SampleFormat::U16 => create_stream::<u16>(shared_data),
                 // SampleFormat::U32 => create_stream::<u32>(shared_data),
                 // SampleFormat::U64 => create_stream::<u64>(shared_data),
-                SampleFormat::F32 => create_stream::<f32>(shared_data),
-                SampleFormat::F64 => create_stream::<f64>(shared_data),
+                SampleFormat::F32 => self.create_stream::<f32>(device, supported_config),
+                SampleFormat::F64 => self.create_stream::<f64>(device, supported_config),
                 _ => unimplemented!(),
             };
 
-            fn create_stream<T: FromSampleBytes>(
-                (device, supported_config, audio_data, video_frame_duration, playhead): (
-                    &cpal::Device,
-                    &cpal::SupportedStreamConfig,
-                    AudioData,
-                    f64,
-                    u32,
-                ),
-            ) -> cpal::Stream {
-                let mut output_info = AudioInfo::from_stream_config(&supported_config);
-                output_info.sample_format = output_info.sample_format.packed();
-
-                let mut audio_renderer =
-                    AudioPlaybackBuffer::new(audio_data, output_info, video_frame_duration);
-                audio_renderer.set_playhead(playhead);
-
-                // Prerender enough for smooth playback
-                while !audio_renderer.buffer_reaching_limit() {
-                    audio_renderer.render();
-                }
-
-                let mut config = supported_config.config();
-                // Low-latency playback
-                config.buffer_size =
-                    BufferSize::Fixed(AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT);
-
-                device
-                    .build_output_stream(
-                        &config,
-                        move |buffer: &mut [T], _info| {
-                            audio_renderer.render();
-                            audio_renderer.fill(buffer);
-                        },
-                        |_| {},
-                        None,
-                    )
-                    .unwrap()
-            }
-
             stream.play().unwrap();
 
-            handle.block_on(self.stop_rx.changed()).ok();
+            handle.block_on(stop_rx.changed()).ok();
 
             stream.pause().ok();
             drop(stream);
         });
+    }
+
+    fn create_stream<T: FromSampleBytes>(
+        self,
+        device: cpal::Device,
+        supported_config: cpal::SupportedStreamConfig,
+    ) -> (watch::Receiver<bool>, cpal::Stream) {
+        let AudioPlayback {
+            audio,
+            stop_rx,
+            start_frame_number,
+            duration,
+            project,
+        } = self;
+
+        let mut output_info = AudioInfo::from_stream_config(&supported_config);
+        output_info.sample_format = output_info.sample_format.packed();
+
+        // TODO: Get fps and duration from video (once we start supporting other frame rates)
+        // Also, it's a bit weird that self.duration can ever be infinity to begin with, since
+        // pre-recorded videos are obviously a fixed size
+        let mut audio_renderer = AudioPlaybackBuffer::new(audio, output_info, duration, FPS);
+        audio_renderer.set_playhead(start_frame_number);
+
+        // Prerender enough for smooth playback
+        while !audio_renderer.buffer_reaching_limit() {
+            audio_renderer.render(project.borrow().timeline().unwrap());
+        }
+
+        let mut config = supported_config.config();
+        // Low-latency playback
+        config.buffer_size = BufferSize::Fixed(AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT);
+
+        let stream = device
+            .build_output_stream(
+                &config,
+                move |buffer: &mut [T], _info| {
+                    audio_renderer.render(project.borrow().timeline().unwrap());
+                    audio_renderer.fill(buffer);
+                },
+                |_| {},
+                None,
+            )
+            .unwrap();
+
+        (stop_rx, stream)
     }
 }

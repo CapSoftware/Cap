@@ -1,3 +1,4 @@
+use cap_project::TimelineConfiguration;
 use ffmpeg::{
     codec::{context, decoder},
     format::sample::{Sample, Type},
@@ -56,17 +57,18 @@ impl AudioData {
 pub struct AudioPlaybackBuffer<T: FromSampleBytes> {
     data: AudioData,
     cursor: usize,
-    processing_chunk_size: usize,
+    chunk_size: usize,
     resampler: AudioResampler,
     resampled_buffer: HeapRb<T>,
-    video_frame_duration: f64,
+    duration: f64,
+    fps: f64,
 }
 
 impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     pub const PLAYBACK_SAMPLES_COUNT: u32 = 256;
     const PROCESSING_SAMPLES_COUNT: u32 = 1024;
 
-    pub fn new(data: AudioData, output_info: AudioInfo, video_frame_duration: f64) -> Self {
+    pub fn new(data: AudioData, output_info: AudioInfo, duration: f64, fps: u32) -> Self {
         println!("Input info: {:?}", data.info);
         println!("Output info: {:?}", output_info);
 
@@ -78,48 +80,55 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
             * output_info.sample_format.bytes();
         let resampled_buffer = HeapRb::new(capacity);
 
-        let processing_chunk_size = (Self::PROCESSING_SAMPLES_COUNT as usize)
-            * data.info.channels
-            * data.info.sample_format.bytes();
+        let chunk_size = data.info.channels * data.info.sample_format.bytes();
 
         Self {
             data,
             cursor: 0,
-            processing_chunk_size,
+            chunk_size,
             resampler,
             resampled_buffer,
-            video_frame_duration,
+            duration,
+            fps: f64::from(fps),
         }
     }
 
-    pub fn set_playhead(&mut self, playhead: u32) {
+    pub fn set_playhead(&mut self, playhead_in_frames: u32) {
         self.resampler.reset();
         self.resampled_buffer.clear();
 
-        println!("Audio seeking to video frame {playhead}");
-        let chunk_size = self.data.info.channels * self.data.info.sample_format.bytes();
-        let total_samples = self.data.buffer.len() / chunk_size;
-
-        let estimated_cursor =
-            (total_samples as f64) * f64::from(playhead) / self.video_frame_duration;
-        let cursor: usize = num_traits::cast(estimated_cursor).unwrap();
+        println!("Audio seeking to video frame {playhead_in_frames}");
+        let playhead = f64::from(playhead_in_frames) / self.fps;
+        let cursor = self.playhead_to_cursor(playhead);
         println!("Successful seek to sample {cursor}");
-        self.cursor = cursor * chunk_size;
+        self.cursor = cursor;
+    }
+
+    fn playhead_to_cursor(&self, playhead: f64) -> usize {
+        let total_samples = self.data.buffer.len() / self.chunk_size;
+
+        let estimated_cursor_in_samples = playhead * (total_samples as f64) / self.duration;
+        let cursor_in_samples: usize = num_traits::cast(estimated_cursor_in_samples).unwrap();
+        cursor_in_samples * self.chunk_size
+    }
+
+    fn cursor_to_playhead(&self) -> f64 {
+        self.duration * (self.cursor as f64) / (self.data.buffer.len() as f64)
     }
 
     pub fn buffer_reaching_limit(&self) -> bool {
-        self.resampled_buffer.vacant_len() <= 2 * self.processing_chunk_size
+        self.resampled_buffer.vacant_len()
+            <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize) * self.chunk_size
     }
 
     fn create_frame(&mut self) -> FFAudio {
         let mut samples = Self::PROCESSING_SAMPLES_COUNT as usize;
-        let mut chunk_size = self.processing_chunk_size;
+        let mut samples_size = self.chunk_size * samples;
 
-        let remaining_chunk = self.data.buffer.len() - self.cursor;
-        if remaining_chunk < chunk_size {
-            chunk_size = remaining_chunk;
-            samples =
-                remaining_chunk / (self.data.info.channels * self.data.info.sample_format.bytes());
+        let remaining_data = self.data.buffer.len() - self.cursor;
+        if remaining_data < samples_size {
+            samples_size = remaining_data;
+            samples = remaining_data / self.chunk_size;
         }
 
         let mut raw_frame = FFAudio::new(
@@ -129,17 +138,22 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         );
         raw_frame.set_rate(self.data.info.sample_rate);
         let start = self.cursor;
-        let end = self.cursor + chunk_size;
-        raw_frame.data_mut(0)[0..chunk_size].copy_from_slice(&self.data.buffer[start..end]);
+        let end = self.cursor + samples_size;
+        raw_frame.data_mut(0)[0..samples_size].copy_from_slice(&self.data.buffer[start..end]);
         self.cursor = end;
 
         raw_frame
     }
 
-    pub fn render(&mut self) {
+    pub fn render(&mut self, timeline: &TimelineConfiguration) {
         if self.buffer_reaching_limit() {
             return;
         }
+
+        self.cursor = match timeline.get_recording_time(self.cursor_to_playhead()) {
+            Some(playhead) => self.playhead_to_cursor(playhead),
+            None => self.data.buffer.len(),
+        };
 
         let bytes_per_sample = self.resampler.output.sample_size();
         let maybe_rendered = match self.cursor >= self.data.buffer.len() {
