@@ -338,7 +338,7 @@ function CameraSelect(props: {
         open={open()}
         onOpenChange={(isOpen) => {
           if (!permissionGranted()) {
-            requestPermission("microphone");
+            requestPermission("camera");
             return;
           }
 
