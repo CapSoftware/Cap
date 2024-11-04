@@ -27,10 +27,10 @@ function parseFrontmatter(fileContent: string) {
   return { metadata: metadata as ChangelogMetadata, content };
 }
 
+const dir = path.join(process.cwd(), "content/changelog");
+
 function getMDXFiles() {
-  return fs
-    .readdirSync(path.join(process.cwd(), "content/changelog"))
-    .filter((file) => path.extname(file) === ".mdx");
+  return fs.readdirSync(dir).filter((file) => path.extname(file) === ".mdx");
 }
 
 function readMDXFile(filePath: string) {
