@@ -151,9 +151,9 @@ export const PricingPage = () => {
               for the lifetime of your subscription.
             </p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-stretch">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch">
             <Card
-              className={`bg-white p-2 rounded-xl min-h-[600px] flex-grow ${
+              className={`bg-white rounded-xl min-h-[600px] flex-grow ${
                 initialRender ? "fade-in-down animate-delay-2" : ""
               }`}
             >
@@ -197,7 +197,7 @@ export const PricingPage = () => {
               </div>
             </Card>
             <Card
-              className={`bg-blue-300 p-2 rounded-xl min-h-[600px] flex-grow border-blue-500/20 ${
+              className={`bg-blue-300 rounded-xl min-h-[600px] flex-grow border-blue-500/20 ${
                 initialRender ? "fade-in-up animate-delay-2" : ""
               }`}
             >
@@ -208,7 +208,7 @@ export const PricingPage = () => {
                     For professional use and teams.
                   </CardDescription>
                   <div>
-                    <div className="flex items-center space-x-3">
+                    <div>
                       <h3 className="text-4xl text-white">
                         {isAnnual ? "$6/mo" : "$9/mo"}
                       </h3>
@@ -272,7 +272,7 @@ export const PricingPage = () => {
               </div>
             </Card>
             <Card
-              className={`bg-gray-900 text-white p-2 rounded-xl min-h-[600px] flex-grow ${
+              className={`bg-gray-900 text-white rounded-xl min-h-[600px] flex-grow ${
                 initialRender ? "fade-in-down animate-delay-2" : ""
               }`}
             >
