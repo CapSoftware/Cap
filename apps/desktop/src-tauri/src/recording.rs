@@ -229,7 +229,11 @@ pub async fn start(
         .pipe("screen_capture_filter", screen_filter)
         .sink("screen_capture_encoder", screen_encoder);
 
-    if let Some(mic_source) = AudioInputSource::init(recording_options.audio_input_name.as_ref()) {
+    if let Some(mic_source) = recording_options
+        .audio_input_name
+        .as_ref()
+        .and_then(|name| AudioInputSource::init(name))
+    {
         let mic_config = mic_source.info();
         audio_output_path = Some(content_dir.join("audio-input.mp3"));
 
