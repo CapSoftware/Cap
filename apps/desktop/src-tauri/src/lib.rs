@@ -9,6 +9,7 @@ mod permissions;
 mod platform;
 mod recording;
 // mod resource;
+mod cursor;
 mod tray;
 mod upload;
 mod web_api;
@@ -345,6 +346,7 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
     }
 
     match recording::start(
+        id,
         recording_dir,
         &state.start_recording_options,
         state.camera_feed.as_ref(),
@@ -497,77 +499,70 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
 
     AppSounds::StopRecording.play();
 
-    let recording_id = recording
-        .recording_dir
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string()
-        .trim_end_matches(".cap")
-        .to_string();
+    if let Some((settings, auth)) = GeneralSettingsStore::get(&app)
+        .ok()
+        .flatten()
+        .zip(AuthStore::get(&app).ok().flatten())
+    {
+        if auth.is_upgraded() && settings.auto_create_shareable_link {
+            if let Some(pre_created_video) = state.pre_created_video.take() {
+                // Copy link to clipboard
+                #[cfg(target_os = "macos")]
+                platform::write_string_to_pasteboard(&pre_created_video.link);
 
-    if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
-        if let Ok(Some(auth)) = AuthStore::get(&app) {
-            if auth.is_upgraded() && settings.auto_create_shareable_link {
-                if let Some(pre_created_video) = state.pre_created_video.take() {
-                    // Copy link to clipboard
-                    #[cfg(target_os = "macos")]
-                    platform::write_string_to_pasteboard(&pre_created_video.link);
+                // Send notification for shareable link
+                notifications::send_notification(
+                    &app,
+                    notifications::NotificationType::ShareableLinkCopied,
+                );
 
-                    // Send notification for shareable link
-                    notifications::send_notification(
-                        &app,
-                        notifications::NotificationType::ShareableLinkCopied,
-                    );
+                // Open the pre-created shareable link
+                open_external_link(app.clone(), pre_created_video.link.clone()).ok();
 
-                    // Open the pre-created shareable link
-                    open_external_link(app.clone(), pre_created_video.link.clone()).ok();
+                // Start the upload process in the background with retry mechanism
+                let app_clone = app.clone();
 
-                    // Start the upload process in the background with retry mechanism
-                    let app_clone = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let max_retries = 3;
+                    let mut retry_count = 0;
 
-                    tauri::async_runtime::spawn(async move {
-                        let max_retries = 3;
-                        let mut retry_count = 0;
+                    while retry_count < max_retries {
+                        match upload_rendered_video(
+                            app_clone.clone(),
+                            recording.id.clone(),
+                            ProjectConfiguration::default(),
+                            Some(pre_created_video.clone()),
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                println!("Video uploaded successfully");
+                                // Don't send notification here since we already did it above
+                                break;
+                            }
+                            Err(e) => {
+                                retry_count += 1;
+                                println!(
+                                    "Error during auto-upload (attempt {}/{}): {}",
+                                    retry_count, max_retries, e
+                                );
 
-                        while retry_count < max_retries {
-                            match upload_rendered_video(
-                                app_clone.clone(),
-                                recording_id.clone(),
-                                ProjectConfiguration::default(),
-                                Some(pre_created_video.clone()),
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    println!("Video uploaded successfully");
-                                    // Don't send notification here since we already did it above
-                                    break;
-                                }
-                                Err(e) => {
-                                    retry_count += 1;
-                                    println!(
-                                        "Error during auto-upload (attempt {}/{}): {}",
-                                        retry_count, max_retries, e
+                                if retry_count < max_retries {
+                                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                                } else {
+                                    println!("Max retries reached. Upload failed.");
+                                    notifications::send_notification(
+                                        &app_clone,
+                                        notifications::NotificationType::UploadFailed,
                                     );
-
-                                    if retry_count < max_retries {
-                                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                                    } else {
-                                        println!("Max retries reached. Upload failed.");
-                                        notifications::send_notification(
-                                            &app_clone,
-                                            notifications::NotificationType::UploadFailed,
-                                        );
-                                    }
                                 }
                             }
                         }
-                    });
-                }
-            } else if settings.open_editor_after_recording {
-                open_editor(app.clone(), recording_id);
+                    }
+                });
             }
+        } else if settings.open_editor_after_recording {
+            open_editor(app.clone(), recording.id);
         }
     }
 
