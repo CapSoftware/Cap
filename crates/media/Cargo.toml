@@ -11,13 +11,14 @@ cap-project = { path = "../project" }
 cpal = "0.15.3"
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
+ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 flume = "0.11.0"
 indexmap = "2.5.0"
 nokhwa = { git = "https://github.com/capsoftware/nokhwa", rev = "6ce1e8270d57", features = [
 	"input-native",
 	"serialize",
 ] }
-scap = { git = "https://github.com/filleduchaos/scap", rev = "8eb00ce1b9bcf" }
+scap.workspace = true
 serde = { version = "1", features = ["derive"] }
 specta.workspace = true
 tempfile = "3.12.0"

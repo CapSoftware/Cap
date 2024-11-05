@@ -1,14 +1,13 @@
+use crate::{
+    data::{FFPacket, FFVideo, VideoInfo},
+    pipeline::task::PipelineSinkTask,
+    MediaError,
+};
 use ffmpeg::{
     codec::{codec::Codec, context, encoder},
     format::{self},
     threading::Config,
     Dictionary,
-};
-
-use crate::{
-    data::{FFPacket, FFVideo, VideoInfo},
-    pipeline::task::PipelineSinkTask,
-    MediaError,
 };
 
 use super::Output;
@@ -27,6 +26,7 @@ impl H264Encoder {
         let (codec, options) = get_codec_and_options(&config)?;
 
         let mut encoder_ctx = context::Context::new_with_codec(codec);
+
         // TODO: Configure this per system
         encoder_ctx.set_threading(Config::count(4));
         let mut encoder = encoder_ctx.encoder().video()?;

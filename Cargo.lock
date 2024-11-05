@@ -795,6 +795,7 @@ dependencies = [
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
  "cpal",
+ "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
  "flume 0.11.0",
@@ -804,7 +805,7 @@ dependencies = [
  "objc",
  "objc-foundation",
  "objc2-foundation",
- "scap 0.0.5 (git+https://github.com/filleduchaos/scap?rev=8eb00ce1b9bcf)",
+ "scap",
  "serde",
  "specta",
  "tempfile",
@@ -831,6 +832,7 @@ dependencies = [
  "cap-ffmpeg",
  "cap-flags",
  "cap-project",
+ "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
  "futures",
@@ -1654,7 +1656,7 @@ dependencies = [
  "rand 0.8.5",
  "reqwest",
  "rodio",
- "scap 0.0.5 (git+https://github.com/CapSoftware/scap?rev=691bd88798d3)",
+ "scap",
  "serde",
  "serde_json",
  "specta",
@@ -2055,6 +2057,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f9bfee30e4dedf0ab8b422f03af778d9612b63f502710fc500a334ebe2de645"
 dependencies = [
  "simd-adler32",
+]
+
+[[package]]
+name = "ffmpeg-hw-device"
+version = "0.1.0"
+dependencies = [
+ "ffmpeg-next",
+ "ffmpeg-sys-next",
 ]
 
 [[package]]
@@ -5624,25 +5634,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "scap"
-version = "0.0.5"
-source = "git+https://github.com/CapSoftware/scap?rev=691bd88798d3#691bd88798d39478e09afb04d460e113097bb855"
-dependencies = [
- "cocoa 0.25.0",
- "core-graphics-helmer-fork",
- "dbus",
- "objc",
- "pipewire",
- "rand 0.8.5",
- "screencapturekit",
- "screencapturekit-sys",
- "sysinfo",
- "tao-core-video-sys",
- "windows 0.52.0",
- "windows-capture",
 ]
 
 [[package]]

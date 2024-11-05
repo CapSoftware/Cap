@@ -49,7 +49,7 @@ use std::ffi::{CStr, OsStr};
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
@@ -424,8 +424,9 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
             .as_secs_f64(),
     );
 
+    let now = Instant::now();
     let recording = current_recording.stop().await;
-    println!("Recording stopped");
+    println!("stopped recording in {:?}", now.elapsed());
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
         window.hide().unwrap();
@@ -439,15 +440,19 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     std::fs::create_dir_all(&screenshots_dir).ok();
 
     let display_screenshot = screenshots_dir.join("display.jpg");
+    let now = Instant::now();
     create_screenshot(
         recording.display_output_path.clone(),
         display_screenshot.clone(),
         None,
     )
     .await?;
+    println!("created screenshot in {:?}", now.elapsed());
 
-    let thumbnail = screenshots_dir.join("thumbnail.png");
-    create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
+    // let thumbnail = screenshots_dir.join("thumbnail.png");
+    // let now = Instant::now();
+    // create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
+    // println!("created thumbnail in {:?}", now.elapsed());
 
     let recording_dir = recording.recording_dir.clone();
 
@@ -1141,17 +1146,17 @@ async fn render_to_file_impl(
                     eprintln!("Failed to save screenshot: {:?}", e);
                 });
 
-                // Create and save thumbnail
-                let thumbnail = image::imageops::resize(
-                    &rgb_img,
-                    100,
-                    100,
-                    image::imageops::FilterType::Lanczos3,
-                );
-                let thumbnail_path = screenshots_dir.join("thumbnail.png");
-                thumbnail.save(&thumbnail_path).unwrap_or_else(|e| {
-                    eprintln!("Failed to save thumbnail: {:?}", e);
-                });
+                // // Create and save thumbnail
+                // let thumbnail = image::imageops::resize(
+                //     &rgb_img,
+                //     100,
+                //     100,
+                //     image::imageops::FilterType::Lanczos3,
+                // );
+                // let thumbnail_path = screenshots_dir.join("thumbnail.png");
+                // thumbnail.save(&thumbnail_path).unwrap_or_else(|e| {
+                //     eprintln!("Failed to save thumbnail: {:?}", e);
+                // });
             } else {
                 eprintln!("No frames were processed, cannot save screenshot or thumbnail");
             }
