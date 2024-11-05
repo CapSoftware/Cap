@@ -1,6 +1,7 @@
 import type { RouteSectionProps } from "@solidjs/router";
 import { onMount, ParentProps, Suspense } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Transition } from "solid-transition-group";
 
 import Header from "../components/Header";
 

@@ -438,11 +438,10 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         window.unminimize().ok();
     }
 
-    std::fs::create_dir_all(recording.recording_dir.join("screenshots")).ok();
-    let display_screenshot = recording
-        .recording_dir
-        .join("screenshots")
-        .join("display.jpg");
+    let screenshots_dir = recording.recording_dir.join("screenshots");
+    std::fs::create_dir_all(&screenshots_dir).ok();
+
+    let display_screenshot = screenshots_dir.join("display.jpg");
     create_screenshot(
         recording.display_output_path.clone(),
         display_screenshot.clone(),
@@ -450,11 +449,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     )
     .await?;
 
-    // Create thumbnail
-    let thumbnail = recording
-        .recording_dir
-        .join("screenshots")
-        .join("thumbnail.png");
+    let thumbnail = screenshots_dir.join("thumbnail.png");
     create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
 
     let recording_dir = recording.recording_dir.clone();
@@ -473,6 +468,8 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     .emit(&app)
     .ok();
 
+    let recordings = ProjectRecordings::new(&recording.meta);
+
     let config = {
         let mut segments = vec![];
         let mut passed_duration = 0.0;
@@ -482,7 +479,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
             passed_duration += recording.segments[i + 1] - recording.segments[i];
             segments.push(TimelineSegment {
                 start,
-                end: passed_duration,
+                end: passed_duration.min(recordings.duration()),
                 timescale: 1.0,
             });
         }
@@ -496,11 +493,7 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         }
     };
 
-    std::fs::write(
-        recording.recording_dir.join("project-config.json"),
-        serde_json::to_string_pretty(&json!(&config)).unwrap(),
-    )
-    .unwrap();
+    config.write(&recording.recording_dir).unwrap();
 
     AppSounds::StopRecording.play();
 
@@ -1581,7 +1574,7 @@ fn close_previous_recordings_window(app: AppHandle) {
 #[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindow::PrevRecordings.label()) {
+    if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
         panel.make_key_window();
     }
 }
@@ -1651,11 +1644,7 @@ async fn set_playhead_position(app: AppHandle, video_id: String, frame_number: u
 async fn set_project_config(app: AppHandle, video_id: String, config: ProjectConfiguration) {
     let editor_instance = upsert_editor_instance(&app, video_id).await;
 
-    std::fs::write(
-        editor_instance.project_path.join("project-config.json"),
-        serde_json::to_string_pretty(&json!(config)).unwrap(),
-    )
-    .unwrap();
+    config.write(&editor_instance.project_path).unwrap();
 
     editor_instance.project_config.0.send(config).ok();
 }

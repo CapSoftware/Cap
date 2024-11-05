@@ -1,7 +1,7 @@
 use cap_flags::FLAGS;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
-use cap_project::CursorEvent;
-use device_query::{DeviceQuery, DeviceState};
+use cap_project::{CursorEvent, RecordingMeta};
+use device_query::{DeviceEvents, DeviceQuery, DeviceState};
 use serde::Serialize;
 use specta::Type;
 use std::collections::HashMap;
@@ -85,6 +85,7 @@ pub struct CompletedRecording {
     pub audio_output_path: Option<PathBuf>,
     pub display_source: ScreenCaptureTarget,
     pub segments: Vec<f64>,
+    pub meta: RecordingMeta,
 }
 
 impl InProgressRecording {
@@ -148,7 +149,7 @@ impl InProgressRecording {
         if FLAGS.record_mouse {
             // Save mouse events to files
             let mut file = File::create(self.recording_dir.join("cursor.json")).unwrap();
-            serde_json::to_writer(
+            serde_json::to_writer_pretty(
                 &mut file,
                 &CursorData {
                     clicks: self.cursor_clicks.await.unwrap(),
@@ -168,6 +169,7 @@ impl InProgressRecording {
             audio_output_path: self.audio_output_path,
             display_source: self.display_source,
             segments: self.segments,
+            meta,
         }
     }
 
@@ -341,7 +343,8 @@ pub async fn start(
                     moves.push(mouse_event);
                 }
 
-                if mouse_state.button_pressed[0] && !last_mouse_state.button_pressed[0] {
+                // cursor 0 doesn't do anything
+                if mouse_state.button_pressed[1] && !last_mouse_state.button_pressed[1] {
                     let mouse_event = CursorEvent {
                         active_modifiers: vec![],
                         cursor_id,
@@ -367,7 +370,7 @@ pub async fn start(
             let cursor_json_path = content_dir.join("cursor.json");
             println!("Saving cursor data to: {:?}", cursor_json_path);
             if let Ok(mut file) = File::create(&cursor_json_path) {
-                if let Err(e) = serde_json::to_writer(&mut file, &cursor_data) {
+                if let Err(e) = serde_json::to_writer_pretty(&mut file, &cursor_data) {
                     eprintln!("Failed to save cursor data: {}", e);
                 } else {
                     println!("Successfully saved cursor data");

@@ -85,10 +85,7 @@ impl RecordingMeta {
     }
 
     pub fn project_config(&self) -> ProjectConfiguration {
-        std::fs::read_to_string(self.project_path.join("project-config.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        ProjectConfiguration::load(&self.project_path).unwrap_or_default()
     }
 
     pub fn cursor_data(&self) -> CursorData {

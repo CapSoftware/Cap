@@ -3,7 +3,7 @@ use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
 use cap_ffmpeg::FFmpeg;
-use cap_project::{CursorData, ProjectConfiguration, RecordingMeta};
+use cap_project::{CursorData, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::decoder::AsyncVideoDecoder;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
 use std::ops::Deref;
@@ -60,8 +60,11 @@ impl EditorInstance {
         let recordings = ProjectRecordings::new(&meta);
 
         let render_options = RenderOptions {
-            screen_size: (recordings.display.width, recordings.display.height),
-            camera_size: recordings.camera.as_ref().map(|c| (c.width, c.height)),
+            screen_size: XY::new(recordings.display.width, recordings.display.height),
+            camera_size: recordings
+                .camera
+                .as_ref()
+                .map(|c| XY::new(c.width, c.height)),
         };
 
         let screen_decoder =

@@ -5,13 +5,14 @@ use tauri::{
     AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
 
+#[derive(Clone)]
 pub enum CapWindow {
     Main,
     Settings { page: Option<String> },
     Editor { project_id: String },
     Permissions,
     PrevRecordings,
-    Notifications,
+    // Notifications,
     WindowCaptureOccluder,
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
@@ -20,13 +21,14 @@ pub enum CapWindow {
     Changelog,
 }
 
+#[derive(Clone)]
 pub enum CapWindowId {
     Main,
     Settings,
     Editor { project_id: String },
     Permissions,
     PrevRecordings,
-    Notifications,
+    // Notifications,
     WindowCaptureOccluder,
     Camera,
     InProgressRecording,
@@ -44,7 +46,7 @@ impl CapWindowId {
             "window-capture-occluder" => Self::WindowCaptureOccluder,
             "in-progress-recording" => Self::InProgressRecording,
             "prev-recordings" => Self::PrevRecordings,
-            "notifications" => Self::Notifications,
+            // "notifications" => Self::Notifications,
             "permissions" => Self::Permissions,
             "feedback" => Self::Feedback,
             "upgrade" => Self::Upgrade,
@@ -64,7 +66,7 @@ impl CapWindowId {
             Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
             Self::InProgressRecording => "in-progress-recording".to_string(),
             Self::PrevRecordings => "prev-recordings".to_string(),
-            Self::Notifications => "notifications".to_string(),
+            // Self::Notifications => "notifications".to_string(),
             Self::Editor { project_id } => format!("editor-{}", project_id),
             Self::Permissions => "permissions".to_string(),
             Self::Feedback => "feedback".to_string(),
@@ -79,7 +81,7 @@ impl CapWindowId {
             Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
-            Self::Notifications => "Cap Notifications".to_string(),
+            // Self::Notifications => "Cap Notifications".to_string(),
             Self::Permissions => "Cap Permissions".to_string(),
             Self::Changelog => "Cap Changelog".to_string(),
             _ => "Cap".to_string(),
@@ -88,14 +90,14 @@ impl CapWindowId {
 
     pub fn activates_dock(&self) -> bool {
         match self {
-            Self::Main => true,
-            Self::Editor { .. } => true,
-            Self::Settings => true,
-            Self::Notifications => true,
-            Self::Permissions => true,
-            Self::Feedback => true,
-            Self::Upgrade => true,
-            Self::Changelog => true,
+            Self::Main
+            | Self::Editor { .. }
+            | Self::Settings
+            // | Self::Notifications
+            | Self::Permissions
+            | Self::Feedback
+            | Self::Upgrade
+            | Self::Changelog => true,
             _ => false,
         }
     }
@@ -104,75 +106,23 @@ impl CapWindowId {
         let label = self.label();
         app.get_webview_window(&label)
     }
+
+    pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
+        match self {
+            Self::Camera
+            | Self::InProgressRecording
+            | Self::WindowCaptureOccluder
+            | Self::PrevRecordings => None,
+            // | Self::Notifications => None,
+            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 48.0))),
+            _ => Some(None),
+        }
+    }
 }
 
 impl CapWindow {
-    pub fn from_label(label: &str) -> Self {
-        match label {
-            "main" => Self::Main,
-            "settings" => Self::Settings { page: None },
-            "camera" => Self::Camera { ws_port: 0 },
-            "window-capture-occluder" => Self::WindowCaptureOccluder,
-            "in-progress-recording" => Self::InProgressRecording { position: None },
-            "prev-recordings" => Self::PrevRecordings,
-            "notifications" => Self::Notifications,
-            "permissions" => Self::Permissions,
-            "feedback" => Self::Feedback,
-            "upgrade" => Self::Upgrade,
-            "changelog" => Self::Changelog,
-            s if s.starts_with("editor-") => Self::Editor {
-                project_id: s.replace("editor-", ""),
-            },
-            _ => unreachable!("unknown window label: {}", label),
-        }
-    }
-
-    pub fn label(&self) -> String {
-        match self {
-            Self::Main => "main".to_string(),
-            Self::Settings { .. } => "settings".to_string(),
-            Self::Camera { .. } => "camera".to_string(),
-            Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
-            Self::InProgressRecording { .. } => "in-progress-recording".to_string(),
-            Self::PrevRecordings => "prev-recordings".to_string(),
-            Self::Notifications => "notifications".to_string(),
-            Self::Editor { project_id } => format!("editor-{}", project_id),
-            Self::Permissions => "permissions".to_string(),
-            Self::Feedback => "feedback".to_string(),
-            Self::Upgrade => "upgrade".to_string(),
-            Self::Changelog => "changelog".to_string(),
-        }
-    }
-
-    pub fn title(&self) -> String {
-        match self {
-            Self::Settings { .. } => "Cap Settings".to_string(),
-            Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
-            Self::InProgressRecording { .. } => "Cap In Progress Recording".to_string(),
-            Self::Editor { .. } => "Cap Editor".to_string(),
-            Self::Notifications => "Cap Notifications".to_string(),
-            Self::Permissions => "Cap Permissions".to_string(),
-            Self::Changelog => "Cap Changelog".to_string(),
-            _ => "Cap".to_string(),
-        }
-    }
-
-    pub fn activates_dock(&self) -> bool {
-        match self {
-            CapWindow::Main => true,
-            CapWindow::Editor { .. } => true,
-            CapWindow::Settings { .. } => true,
-            CapWindow::Notifications => true,
-            CapWindow::Permissions => true,
-            CapWindow::Feedback => true,
-            CapWindow::Upgrade => true,
-            CapWindow::Changelog => true,
-            _ => false,
-        }
-    }
-
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
-        let label = self.label();
+        let label = self.id().label();
         app.get_webview_window(&label)
     }
 
@@ -184,9 +134,11 @@ impl CapWindow {
             return Ok(window);
         }
 
+        let id = self.id();
+
         let monitor = app.primary_monitor()?.unwrap();
 
-        Ok(match self {
+        let window = match self {
             Self::Main => {
                 let mut window_builder = self
                     .window_builder(app, "/")
@@ -197,25 +149,12 @@ impl CapWindow {
                     .theme(Some(tauri::Theme::Light))
                     .shadow(true);
 
-                #[cfg(target_os = "macos")]
-                {
-                    window_builder = window_builder
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .shadow(true);
-                }
-
                 #[cfg(target_os = "windows")]
                 {
                     window_builder = window_builder.decorations(false).shadow(false);
                 }
 
-                let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
-                setup_delegates(&window, None);
-
-                window
+                window_builder.build()?
             }
             Self::Settings { page } => {
                 let mut window_builder = self
@@ -228,11 +167,6 @@ impl CapWindow {
                     .maximized(false)
                     .transparent(true);
 
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.decorations(false).shadow(false);
-                }
-
                 #[cfg(target_os = "macos")]
                 {
                     window_builder = window_builder
@@ -241,12 +175,78 @@ impl CapWindow {
                         .shadow(true);
                 }
 
+                window_builder.build()?
+            }
+            Self::Editor { project_id } => {
+                let mut window_builder = self
+                    .window_builder(app, format!("/editor?id={project_id}"))
+                    .inner_size(1150.0, 800.0)
+                    .hidden_title(true)
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .theme(Some(tauri::Theme::Light));
+
+                window_builder.build()?
+            }
+            Self::Permissions => {
+                let mut window_builder = self
+                    .window_builder(app, "/permissions")
+                    .inner_size(500.0, 425.0)
+                    .resizable(false)
+                    .maximized(false)
+                    .shadow(true)
+                    .transparent(true);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.decorations(false);
+                }
+
+                window_builder.build()?
+            }
+            Self::Feedback => {
+                let mut window_builder = self
+                    .window_builder(app, "/feedback")
+                    .inner_size(400.0, 400.0)
+                    .resizable(false)
+                    .maximized(false)
+                    .shadow(true)
+                    .transparent(true);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.decorations(false);
+                }
+
+                window_builder.build()?
+            }
+            Self::Upgrade => {
+                let mut window_builder = self
+                    .window_builder(app, "/upgrade")
+                    .inner_size(800.0, 850.0)
+                    .resizable(false)
+                    .maximized(false)
+                    .shadow(true)
+                    .transparent(true);
+
                 let window = window_builder.build()?;
 
-                #[cfg(target_os = "macos")]
-                setup_delegates(&window, None);
-
                 window
+            }
+            Self::Changelog => {
+                let mut window_builder = self
+                    .window_builder(app, "/changelog")
+                    .inner_size(600.0, 450.0)
+                    .resizable(true)
+                    .maximized(false)
+                    .shadow(true)
+                    .transparent(true);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.decorations(false);
+                }
+
+                window_builder.build()?
             }
             Self::Camera { ws_port } => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
@@ -322,7 +322,6 @@ impl CapWindow {
                 let height = 40.0;
 
                 self.window_builder(app, "/in-progress-recording")
-                    .title(self.title())
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
@@ -340,31 +339,31 @@ impl CapWindow {
                     .visible(false)
                     .build()?
             }
-            Self::Notifications => {
-                let window = self
-                    .window_builder(app, "/notifications")
-                    .maximized(false)
-                    .transparent(true)
-                    .resizable(false)
-                    .fullscreen(false)
-                    .decorations(false)
-                    .shadow(false)
-                    .always_on_top(true)
-                    .visible_on_all_workspaces(true)
-                    .content_protected(true)
-                    .inner_size(350.0, 350.0)
-                    .skip_taskbar(true)
-                    .position(
-                        (monitor.size().width as f64) / monitor.scale_factor() - 350.0,
-                        0.0,
-                    )
-                    .build()?;
+            // Self::Notifications => {
+            //     let window = self
+            //         .window_builder(app, "/notifications")
+            //         .maximized(false)
+            //         .transparent(true)
+            //         .resizable(false)
+            //         .fullscreen(false)
+            //         .decorations(false)
+            //         .shadow(false)
+            //         .always_on_top(true)
+            //         .visible_on_all_workspaces(true)
+            //         .content_protected(true)
+            //         .inner_size(350.0, 350.0)
+            //         .skip_taskbar(true)
+            //         .position(
+            //             (monitor.size().width as f64) / monitor.scale_factor() - 350.0,
+            //             0.0,
+            //         )
+            //         .build()?;
 
-                // Make window non-interactive
-                window.set_ignore_cursor_events(true)?;
+            //     // Make window non-interactive
+            //     window.set_ignore_cursor_events(true)?;
 
-                window
-            }
+            //     window
+            // }
             Self::PrevRecordings => {
                 let mut window_builder = self
                     .window_builder(app, "/prev-recordings")
@@ -415,141 +414,13 @@ impl CapWindow {
 
                 window
             }
-            Self::Editor { project_id } => {
-                let mut window_builder = self
-                    .window_builder(app, format!("/editor?id={project_id}"))
-                    .inner_size(1150.0, 800.0)
-                    .title(self.title())
-                    .hidden_title(true)
-                    .title_bar_style(tauri::TitleBarStyle::Overlay)
-                    .theme(Some(tauri::Theme::Light));
+        };
 
-                #[cfg(target_os = "macos")]
-                {
-                    window_builder = window_builder
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay);
-                }
+        if let Some(position) = id.traffic_lights_position() {
+            add_traffic_lights(&window, position);
+        }
 
-                let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
-                setup_delegates(&window, Some(LogicalPosition::new(20.0, 48.0)));
-
-                window
-            }
-            Self::Permissions => {
-                let mut window_builder = self
-                    .window_builder(app, "/permissions")
-                    .title(self.title())
-                    .inner_size(500.0, 425.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .shadow(true)
-                    .transparent(true);
-
-                #[cfg(target_os = "macos")]
-                {
-                    window_builder = window_builder
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay);
-                }
-
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.decorations(false);
-                }
-
-                let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
-                setup_delegates(&window, None);
-
-                window
-            }
-            Self::Feedback => {
-                let mut window_builder = self
-                    .window_builder(app, "/feedback")
-                    .title(self.title())
-                    .inner_size(400.0, 400.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .shadow(true)
-                    .transparent(true);
-
-                #[cfg(target_os = "macos")]
-                {
-                    window_builder = window_builder
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay);
-                }
-
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.decorations(false);
-                }
-
-                let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
-                setup_delegates(&window, None);
-
-                window
-            }
-            Self::Upgrade => {
-                let mut window_builder = self
-                    .window_builder(app, "/upgrade")
-                    .title(self.title())
-                    .inner_size(800.0, 850.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .shadow(true)
-                    .transparent(true);
-
-                #[cfg(target_os = "macos")]
-                {
-                    window_builder = window_builder
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay);
-                }
-
-                let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
-                setup_delegates(&window, None);
-
-                window
-            }
-            Self::Changelog => {
-                let mut window_builder = self
-                    .window_builder(app, "/changelog")
-                    .title(self.title())
-                    .inner_size(600.0, 450.0)
-                    .resizable(true)
-                    .maximized(false)
-                    .shadow(true)
-                    .transparent(true);
-
-                #[cfg(target_os = "macos")]
-                {
-                    window_builder = window_builder
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay);
-                }
-
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.decorations(false);
-                }
-
-                let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
-                setup_delegates(&window, None);
-
-                window
-            }
-        })
+        Ok(window)
     }
 
     fn window_builder<'a>(
@@ -557,39 +428,73 @@ impl CapWindow {
         app: &'a AppHandle<Wry>,
         url: impl Into<PathBuf>,
     ) -> WebviewWindowBuilder<'a, Wry, AppHandle<Wry>> {
-        WebviewWindow::builder(app, self.label(), WebviewUrl::App(url.into()))
-            .title(self.title())
+        let id = self.id();
+
+        let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
+            .title(id.title())
             .visible(false)
-            .accept_first_mouse(true)
+            .accept_first_mouse(true);
+
+        #[cfg(target_os = "macos")]
+        {
+            if id.traffic_lights_position().is_some() {
+                builder = builder
+                    .hidden_title(true)
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .shadow(true);
+            }
+        }
+
+        builder
+    }
+
+    pub fn id(&self) -> CapWindowId {
+        match self {
+            CapWindow::Main => CapWindowId::Main,
+            CapWindow::Settings { .. } => CapWindowId::Settings,
+            CapWindow::Editor { project_id } => CapWindowId::Editor {
+                project_id: project_id.clone(),
+            },
+            CapWindow::Permissions => CapWindowId::Permissions,
+            CapWindow::PrevRecordings => CapWindowId::PrevRecordings,
+            // CapWindow::Notifications => CapWindowId::Notifications,
+            CapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
+            CapWindow::Camera { .. } => CapWindowId::Camera,
+            CapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
+            CapWindow::Feedback => CapWindowId::Feedback,
+            CapWindow::Upgrade => CapWindowId::Upgrade,
+            CapWindow::Changelog => CapWindowId::Changelog,
+        }
     }
 }
+fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<LogicalPosition<f64>>) {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::platform::delegates;
 
-#[cfg(target_os = "macos")]
-fn setup_delegates(window: &WebviewWindow<Wry>, controls_inset: Option<LogicalPosition<f64>>) {
-    use crate::platform::delegates;
+        let target_window = window.clone();
+        window
+            .run_on_main_thread(move || {
+                delegates::setup(
+                    target_window.as_ref().window(),
+                    controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+                );
 
-    let target_window = window.clone();
-    window
-        .run_on_main_thread(move || {
-            delegates::setup(
-                target_window.as_ref().window(),
-                controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
-            );
-
-            let c_win = target_window.clone();
-            target_window.on_window_event(move |event| match event {
-                tauri::WindowEvent::ThemeChanged(..) => {
-                    delegates::position_window_controls(
-                        delegates::UnsafeWindowHandle(
-                            c_win
-                                .ns_window()
-                                .expect("Failed to get native window handle"),
-                        ),
-                        &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
-                    );
-                }
-                _ => (),
-            });
-        })
-        .ok();
+                let c_win = target_window.clone();
+                target_window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::ThemeChanged(..) => {
+                        delegates::position_window_controls(
+                            delegates::UnsafeWindowHandle(
+                                c_win
+                                    .ns_window()
+                                    .expect("Failed to get native window handle"),
+                            ),
+                            &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+                        );
+                    }
+                    _ => (),
+                });
+            })
+            .ok();
+    }
 }

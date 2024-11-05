@@ -573,7 +573,7 @@ export function ConfigSidebar() {
           return (
             <div
               data-visible={state.timelineSelection?.type === "zoom"}
-              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-50 z-50"
+              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-50 z-50 animate-in slide-in-from-bottom-2 fade-in"
             >
               <div class="flex flex-row justify-between">
                 <EditorButton

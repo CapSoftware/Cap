@@ -29,13 +29,13 @@ pub use decoder::DecodedFrame;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 50.0; // Standard height for all cursors
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Type)]
 pub struct RenderOptions {
-    pub camera_size: Option<(u32, u32)>,
-    pub screen_size: (u32, u32),
+    pub camera_size: Option<XY<u32>>,
+    pub screen_size: XY<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Type)]
 pub struct WebcamStyle {
     pub border_radius: f32,
     pub shadow_color: [f32; 4],
@@ -100,7 +100,6 @@ impl RecordingDecoders {
             self.screen.get_frame(frame_number),
             OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
         );
-        println!("-t Got Frame? {frame_number}: {}", &screen_frame.is_some());
 
         screen_frame.map(|f| (f, camera_frame.flatten()))
     }
@@ -384,8 +383,8 @@ impl ProjectUniforms {
         project.background.crop.unwrap_or(Crop {
             position: XY { x: 0, y: 0 },
             size: XY {
-                x: options.screen_size.0,
-                y: options.screen_size.1,
+                x: options.screen_size.x,
+                y: options.screen_size.y,
             },
         })
     }
@@ -453,14 +452,14 @@ impl ProjectUniforms {
         let crop = Self::get_crop(options, project);
 
         let zoom_origin = zoom_origin_uv.to_raw_display_space(XY {
-            x: options.screen_size.0 as f64,
-            y: options.screen_size.1 as f64,
+            x: options.screen_size.x as f64,
+            y: options.screen_size.y as f64,
         });
         let zoom_origin = zoom_origin.to_cropped_display_space(crop);
 
         let (display, zoom) = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
-            let size = [options.screen_size.0 as f32, options.screen_size.1 as f32];
+            let size = [options.screen_size.x as f32, options.screen_size.y as f32];
 
             let crop_start = Coord::<RawDisplaySpace>::new(XY::new(
                 crop.position.x as f64,
@@ -538,7 +537,7 @@ impl ProjectUniforms {
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
 
-                let frame_size = [camera_size.0 as f32, camera_size.1 as f32];
+                let frame_size = [camera_size.x as f32, camera_size.y as f32];
                 let min_axis = output_size[0].min(output_size[1]);
 
                 let size = [
@@ -670,8 +669,6 @@ impl ZoomKeyframes {
         let t = delta_time / keyframe_length;
         let t = t.powf(0.5);
 
-        
-
         prev.amount + (next.amount - prev.amount) * t
     }
 }
@@ -750,8 +747,8 @@ pub async fn produce_frame(
         let texture = constants.device.create_texture(
             &(wgpu::TextureDescriptor {
                 size: wgpu::Extent3d {
-                    width: constants.options.screen_size.0,
-                    height: constants.options.screen_size.1,
+                    width: constants.options.screen_size.x,
+                    height: constants.options.screen_size.y,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -778,12 +775,12 @@ pub async fn produce_frame(
             screen_frame,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(constants.options.screen_size.0 * 4),
+                bytes_per_row: Some(constants.options.screen_size.x * 4),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
-                width: frame_size.0,
-                height: frame_size.1,
+                width: frame_size.x,
+                height: frame_size.y,
                 depth_or_array_layers: 1,
             },
         );
@@ -824,8 +821,8 @@ pub async fn produce_frame(
         let texture = constants.device.create_texture(
             &(wgpu::TextureDescriptor {
                 size: wgpu::Extent3d {
-                    width: camera_size.0,
-                    height: camera_size.1,
+                    width: camera_size.x,
+                    height: camera_size.y,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -852,12 +849,12 @@ pub async fn produce_frame(
             camera_frame,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(camera_size.0 * 4),
+                bytes_per_row: Some(camera_size.x * 4),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
-                width: camera_size.0,
-                height: camera_size.1,
+                width: camera_size.x,
+                height: camera_size.y,
                 depth_or_array_layers: 1,
             },
         );
@@ -980,7 +977,6 @@ fn draw_cursor(
     // );
 
     let cursor_event = find_cursor_event(&constants.cursor, time);
-    println!("Found cursor event with ID: {}", cursor_event.cursor_id);
 
     let Some(cursor_texture) = constants.cursor_textures.get(&cursor_event.cursor_id) else {
         return;
@@ -994,7 +990,6 @@ fn draw_cursor(
     } else {
         uniforms.cursor_size
     };
-    let scale_factor = cursor_size_percentage / 100.0;
 
     // Calculate normalized size maintaining aspect ratio
     let normalized_size = [
@@ -1002,17 +997,9 @@ fn draw_cursor(
         STANDARD_CURSOR_HEIGHT,
     ];
 
-    println!(
-        "Original cursor size: {}x{}, Normalized size: {}x{}",
-        cursor_size.width, cursor_size.height, normalized_size[0], normalized_size[1]
-    );
-
     let position = uniforms.zoom.apply_scale(
         cursor_position
-            .to_raw_display_space(XY::new(
-                constants.options.screen_size.0 as f64,
-                constants.options.screen_size.1 as f64,
-            ))
+            .to_raw_display_space(constants.options.screen_size.map(|v| v as f64))
             .to_cropped_display_space(ProjectUniforms::get_crop(
                 &constants.options,
                 &uniforms.project,
@@ -1022,8 +1009,6 @@ fn draw_cursor(
                 uniforms.display.target_bounds[1] as f64,
             )),
     );
-
-    // println!("Screen position: ({}, {})", position.0, position.1);
 
     let cursor_uniforms = CursorUniforms {
         position: [position.x as f32, position.y as f32, 0.0, 0.0],
@@ -1039,8 +1024,6 @@ fn draw_cursor(
         padding: [0.0; 3],
         _alignment: [0.0; 4],
     };
-
-    println!("Cursor uniforms: {:?}", cursor_uniforms);
 
     let cursor_uniform_buffer =
         constants
@@ -1096,8 +1079,6 @@ fn draw_cursor(
     render_pass.set_pipeline(&constants.cursor_pipeline.render_pipeline);
     render_pass.set_bind_group(0, &cursor_bind_group, &[]);
     render_pass.draw(0..4, 0..1);
-
-    println!("Drew cursor");
 }
 
 struct CompositeVideoFramePipeline {
@@ -1516,8 +1497,6 @@ struct CursorUniforms {
 
 fn find_cursor_event(cursor: &CursorData, time: f32) -> &CursorEvent {
     let time_ms = time * 1000.0;
-    println!("Finding cursor event for time: {}ms", time_ms);
-    println!("Total cursor moves: {}", cursor.moves.len());
 
     let event = cursor
         .moves
@@ -1529,7 +1508,6 @@ fn find_cursor_event(cursor: &CursorData, time: f32) -> &CursorEvent {
         })
         .unwrap_or(&cursor.moves[0]);
 
-    println!("Found cursor event: {:?}", event);
     event
 }
 

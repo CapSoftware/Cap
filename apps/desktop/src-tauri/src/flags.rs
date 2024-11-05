@@ -9,7 +9,7 @@ pub mod plugin {
         Builder::new("cap-flags")
             .js_init_script(format!(
                 "window.FLAGS = {}",
-                serde_json::to_string(&FLAGS).unwrap()
+                serde_json::to_string_pretty(&FLAGS).unwrap()
             ))
             .build()
     }

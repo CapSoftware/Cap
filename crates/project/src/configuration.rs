@@ -1,4 +1,7 @@
-use std::ops::{Add, Div, Mul, Sub};
+use std::{
+    ops::{Add, Div, Mul, Sub},
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -328,6 +331,18 @@ pub struct ProjectConfiguration {
 }
 
 impl ProjectConfiguration {
+    pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+        std::fs::read_to_string(project_path.as_ref().join("project-config.json"))
+            .map(|s| serde_json::from_str(&s).unwrap_or_default())
+    }
+
+    pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
+        std::fs::write(
+            project_path.as_ref().join("project-config.json"),
+            serde_json::to_string_pretty(self)?,
+        )
+    }
+
     pub fn timeline(&self) -> Option<&TimelineConfiguration> {
         self.timeline.as_ref()
     }
