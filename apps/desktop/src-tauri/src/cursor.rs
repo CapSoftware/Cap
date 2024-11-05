@@ -7,7 +7,7 @@ use std::{
 };
 
 use cap_media::platform::Bounds;
-use cap_project::{CursorData, CursorEvent};
+use cap_project::{CursorClickEvent, CursorData, CursorMoveEvent};
 use device_query::{DeviceQuery, DeviceState};
 use tokio::sync::oneshot;
 
@@ -17,8 +17,8 @@ pub fn spawn_cursor_recorder(
     content_dir: PathBuf,
     cursors_dir: PathBuf,
 ) -> (
-    oneshot::Receiver<Vec<CursorEvent>>,
-    oneshot::Receiver<Vec<CursorEvent>>,
+    oneshot::Receiver<Vec<CursorMoveEvent>>,
+    oneshot::Receiver<Vec<CursorClickEvent>>,
 ) {
     let (move_tx, move_rx) = oneshot::channel();
     let (click_tx, click_rx) = oneshot::channel();
@@ -74,7 +74,7 @@ pub fn spawn_cursor_recorder(
             };
 
             if mouse_state.coords != last_mouse_state.coords {
-                let mouse_event = CursorEvent {
+                let mouse_event = CursorMoveEvent {
                     active_modifiers: vec![],
                     cursor_id: cursor_id.clone(),
                     process_time_ms: elapsed,
@@ -85,11 +85,20 @@ pub fn spawn_cursor_recorder(
                 moves.push(mouse_event);
             }
 
-            // cursor 0 doesn't do anything
-            if mouse_state.button_pressed[1] && !last_mouse_state.button_pressed[1] {
-                let mouse_event = CursorEvent {
+            for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {
+                let Some(prev) = last_mouse_state.button_pressed.get(num) else {
+                    continue;
+                };
+
+                if pressed == *prev {
+                    continue;
+                }
+
+                let mouse_event = CursorClickEvent {
+                    down: pressed,
                     active_modifiers: vec![],
-                    cursor_id,
+                    cursor_num: num as u8,
+                    cursor_id: cursor_id.clone(),
                     process_time_ms: elapsed,
                     unix_time_ms: unix_time,
                     x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,

@@ -5,7 +5,7 @@ use std::fs::File;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone, Type, Debug)]
-pub struct CursorEvent {
+pub struct CursorMoveEvent {
     pub active_modifiers: Vec<String>,
     pub cursor_id: String,
     pub process_time_ms: f64,
@@ -14,10 +14,22 @@ pub struct CursorEvent {
     pub y: f64,
 }
 
+#[derive(Serialize, Deserialize, Clone, Type, Debug)]
+pub struct CursorClickEvent {
+    pub active_modifiers: Vec<String>,
+    pub cursor_num: u8,
+    pub cursor_id: String,
+    pub process_time_ms: f64,
+    pub unix_time_ms: f64,
+    pub down: bool,
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
 pub struct CursorData {
-    pub clicks: Vec<CursorEvent>,
-    pub moves: Vec<CursorEvent>,
+    pub clicks: Vec<CursorClickEvent>,
+    pub moves: Vec<CursorMoveEvent>,
     pub cursor_images: HashMap<String, String>,
 }
 

@@ -27,8 +27,9 @@ use cap_media::{
 };
 use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
+    ZoomSegment,
 };
-use cap_rendering::ProjectUniforms;
+use cap_rendering::{ProjectUniforms, ZOOM_DURATION};
 use cap_utils::create_named_pipe;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
@@ -64,12 +65,6 @@ use tokio::{
 };
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use windows::{CapWindow, CapWindowId};
-
-#[cfg(target_os = "macos")]
-use cocoa::foundation::{NSBundle, NSString};
-
-#[cfg(target_os = "macos")]
-use tauri_nspanel::ManagerExt;
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -471,25 +466,64 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
     .ok();
 
     let recordings = ProjectRecordings::new(&recording.meta);
+    let max_duration = recordings.duration();
 
     let config = {
-        let mut segments = vec![];
-        let mut passed_duration = 0.0;
+        let segments = {
+            let mut segments = vec![];
+            let mut passed_duration = 0.0;
 
-        for i in (0..recording.segments.len()).step_by(2) {
-            let start = passed_duration;
-            passed_duration += recording.segments[i + 1] - recording.segments[i];
-            segments.push(TimelineSegment {
-                start,
-                end: passed_duration.min(recordings.duration()),
-                timescale: 1.0,
-            });
-        }
+            for i in (0..recording.segments.len()).step_by(2) {
+                let start = passed_duration;
+                passed_duration += recording.segments[i + 1] - recording.segments[i];
+                segments.push(TimelineSegment {
+                    start,
+                    end: passed_duration.min(recordings.duration()),
+                    timescale: 1.0,
+                });
+            }
+            segments
+        };
+
+        let zoom_segments = {
+            let mut segments = vec![];
+
+            const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
+
+            for click in &recording.cursor_data.clicks {
+                if segments.last().is_none() {
+                    segments.push(ZoomSegment {
+                        start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
+                        end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
+                        amount: 2.0,
+                    });
+                } else {
+                    let last_segment = segments.last_mut().unwrap();
+
+                    if click.down {
+                        let time = click.process_time_ms / 1000.0;
+
+                        if last_segment.end > time {
+                            last_segment.end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING)
+                                .min(recordings.duration());
+                        } else if time < max_duration - ZOOM_DURATION {
+                            segments.push(ZoomSegment {
+                                start: (time - ZOOM_DURATION).max(0.0),
+                                end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
+                                amount: 2.0,
+                            });
+                        }
+                    }
+                }
+            }
+
+            segments
+        };
 
         ProjectConfiguration {
             timeline: Some(TimelineConfiguration {
                 segments,
-                zoom_segments: vec![],
+                zoom_segments,
             }),
             ..Default::default()
         }
@@ -1559,6 +1593,7 @@ fn open_editor(app: AppHandle, id: String) {
 fn close_previous_recordings_window(app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
+        use tauri_nspanel::ManagerExt;
         if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
             panel.released_when_closed(true);
             panel.close();
@@ -1569,8 +1604,12 @@ fn close_previous_recordings_window(app: AppHandle) {
 #[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(app: AppHandle) {
-    if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
-        panel.make_key_window();
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::ManagerExt;
+        if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
+            panel.make_key_window();
+        }
     }
 }
 

@@ -1,15 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-	"apps/desktop/src-tauri",
-	"crates/rendering",
-	"crates/ffmpeg",
-	"crates/media",
-	"crates/utils",
-	"crates/project",
-	"crates/editor",
-	"crates/flags",
-]
+members = ["apps/desktop/src-tauri", "crates/*"]
 
 [workspace.dependencies]
 anyhow = "1.0.86"

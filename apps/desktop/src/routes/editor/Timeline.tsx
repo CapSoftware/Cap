@@ -40,7 +40,6 @@ export function Timeline() {
     setPreviewTime,
     history,
     split,
-    state,
     setState,
   } = useEditorContext();
 

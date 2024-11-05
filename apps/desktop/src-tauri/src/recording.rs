@@ -1,14 +1,12 @@
 use cap_flags::FLAGS;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
-use cap_project::{CursorEvent, RecordingMeta};
-use device_query::{DeviceEvents, DeviceQuery, DeviceState};
+use cap_project::{CursorClickEvent, CursorMoveEvent, RecordingMeta};
 use serde::Serialize;
 use specta::Type;
 use std::collections::HashMap;
 use std::fs::File;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, time::Duration};
 use tokio::sync::{oneshot, Mutex};
@@ -19,13 +17,6 @@ use crate::RecordingOptions;
 
 // TODO: Hacky, please fix
 pub const FPS: u32 = 30;
-
-#[derive(Serialize)]
-struct CursorData {
-    moves: Vec<CursorEvent>,
-    clicks: Vec<CursorEvent>,
-    cursor_images: HashMap<String, String>, // Maps cursor ID to filename
-}
 
 #[tauri::command(async)]
 #[specta::specta]
@@ -61,9 +52,9 @@ pub struct InProgressRecording {
     pub display_source: ScreenCaptureTarget,
     pub segments: Vec<f64>,
     #[serde(skip)]
-    pub cursor_moves: oneshot::Receiver<Vec<CursorEvent>>,
+    pub cursor_moves: oneshot::Receiver<Vec<CursorMoveEvent>>,
     #[serde(skip)]
-    pub cursor_clicks: oneshot::Receiver<Vec<CursorEvent>>,
+    pub cursor_clicks: oneshot::Receiver<Vec<CursorClickEvent>>,
     #[serde(skip)]
     pub stop_signal: Arc<AtomicBool>,
 }
@@ -80,6 +71,7 @@ pub struct CompletedRecording {
     pub display_source: ScreenCaptureTarget,
     pub segments: Vec<f64>,
     pub meta: RecordingMeta,
+    pub cursor_data: cap_project::CursorData,
 }
 
 impl InProgressRecording {
@@ -141,18 +133,16 @@ impl InProgressRecording {
         self.stop_signal
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
+        let cursor_data = cap_project::CursorData {
+            clicks: self.cursor_clicks.await.unwrap(),
+            moves: self.cursor_moves.await.unwrap(),
+            cursor_images: HashMap::new(), // This will be populated during recording
+        };
+
         if FLAGS.record_mouse {
             // Save mouse events to files
             let mut file = File::create(self.recording_dir.join("cursor.json")).unwrap();
-            serde_json::to_writer_pretty(
-                &mut file,
-                &CursorData {
-                    clicks: self.cursor_clicks.await.unwrap(),
-                    moves: self.cursor_moves.await.unwrap(),
-                    cursor_images: HashMap::new(), // This will be populated during recording
-                },
-            )
-            .unwrap();
+            serde_json::to_writer_pretty(&mut file, &cursor_data).unwrap();
         }
 
         meta.save_for_project();
@@ -166,6 +156,7 @@ impl InProgressRecording {
             display_source: self.display_source,
             segments: self.segments,
             meta,
+            cursor_data,
         }
     }
 
