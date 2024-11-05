@@ -508,8 +508,9 @@ export function ConfigSidebar() {
             <Slider
               value={[project.cursor.size]}
               onChange={(v) => setProject("cursor", "size", v[0])}
-              minValue={500}
+              minValue={20}
               maxValue={300}
+              step={1}
             />
           </Field>
           <ComingSoonTooltip>

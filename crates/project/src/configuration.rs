@@ -328,6 +328,7 @@ pub struct ProjectConfiguration {
     pub hotkeys: HotkeysConfiguration,
     #[serde(default)]
     pub timeline: Option<TimelineConfiguration>,
+    pub motion_blur: Option<f32>,
 }
 
 impl ProjectConfiguration {
@@ -361,6 +362,7 @@ impl Default for ProjectConfiguration {
             cursor: CursorConfiguration::default(),
             hotkeys: HotkeysConfiguration::default(),
             timeline: None,
+            motion_blur: None,
         }
     }
 }
