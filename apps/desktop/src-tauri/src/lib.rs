@@ -491,6 +491,8 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
             const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
 
             for click in &recording.cursor_data.clicks {
+                let time = click.process_time_ms / 1000.0;
+
                 if segments.last().is_none() {
                     segments.push(ZoomSegment {
                         start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
@@ -501,8 +503,6 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
                     let last_segment = segments.last_mut().unwrap();
 
                     if click.down {
-                        let time = click.process_time_ms / 1000.0;
-
                         if last_segment.end > time {
                             last_segment.end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING)
                                 .min(recordings.duration());
@@ -513,6 +513,9 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
                                 amount: 2.0,
                             });
                         }
+                    } else {
+                        last_segment.end =
+                            (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
                     }
                 }
             }
