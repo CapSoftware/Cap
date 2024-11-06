@@ -5638,8 +5638,7 @@ dependencies = [
 
 [[package]]
 name = "scap"
-version = "0.0.5"
-source = "git+https://github.com/filleduchaos/scap?rev=8eb00ce1b9bcf#8eb00ce1b9bcfa22d38f7c2857539f2c5139dfe3"
+version = "0.0.6"
 dependencies = [
  "cocoa 0.25.0",
  "core-graphics-helmer-fork",

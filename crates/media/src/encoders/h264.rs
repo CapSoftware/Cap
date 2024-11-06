@@ -6,6 +6,7 @@ use crate::{
 use ffmpeg::{
     codec::{codec::Codec, context, encoder},
     format::{self},
+    software,
     threading::Config,
     Dictionary,
 };
@@ -16,6 +17,7 @@ pub struct H264Encoder {
     tag: &'static str,
     encoder: encoder::Video,
     output_ctx: format::context::Output,
+    last_pts: Option<i64>,
 }
 
 impl H264Encoder {
@@ -35,6 +37,8 @@ impl H264Encoder {
         encoder.set_height(config.height);
         encoder.set_format(config.pixel_format);
         encoder.set_time_base(config.frame_rate.invert());
+        encoder.set_frame_rate(Some(config.frame_rate));
+        encoder.set_bit_rate(5_000_000);
 
         let video_encoder = encoder.open_with(options)?;
 
@@ -48,10 +52,21 @@ impl H264Encoder {
             tag,
             encoder: video_encoder,
             output_ctx,
+            last_pts: None,
         })
     }
 
-    fn queue_frame(&mut self, frame: FFVideo) {
+    fn queue_frame(&mut self, mut frame: FFVideo) {
+        if let Some(last_pts) = self.last_pts {
+            if frame.pts().unwrap() == last_pts {
+                frame.set_pts(Some(last_pts + 1));
+            }
+        }
+
+        self.last_pts = frame.pts();
+
+        dbg!(frame.pts());
+
         self.encoder.send_frame(&frame).unwrap();
     }
 
@@ -103,7 +118,7 @@ impl PipelineSinkTask for H264Encoder {
 }
 
 fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), MediaError> {
-    if let Some(codec) = encoder::find_by_name("libx264") {
+    if let Some(codec) = encoder::find_by_name("h264_videotoolbox") {
         let mut options = Dictionary::new();
 
         let keyframe_interval_secs = 2;
