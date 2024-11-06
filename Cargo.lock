@@ -753,7 +753,7 @@ name = "cap-editor"
 version = "0.1.0"
 dependencies = [
  "axum",
- "cap-ffmpeg",
+ "cap-ffmpeg-cli",
  "cap-project",
  "cap-rendering",
  "cpal",
@@ -766,7 +766,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cap-ffmpeg"
+name = "cap-ffmpeg-cli"
 version = "0.1.0"
 dependencies = [
  "cap-utils",
@@ -829,7 +829,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
- "cap-ffmpeg",
+ "cap-ffmpeg-cli",
  "cap-flags",
  "cap-project",
  "ffmpeg-hw-device",
@@ -1626,7 +1626,7 @@ dependencies = [
  "base64 0.22.1",
  "bytemuck",
  "cap-editor",
- "cap-ffmpeg",
+ "cap-ffmpeg-cli",
  "cap-flags",
  "cap-media",
  "cap-project",

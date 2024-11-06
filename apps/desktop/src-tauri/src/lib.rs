@@ -986,7 +986,7 @@ async fn render_to_file_impl(
         let recording_dir = recording_dir.clone();
         async move {
             println!("Starting FFmpeg output process...");
-            let mut ffmpeg = cap_ffmpeg::FFmpeg::new();
+            let mut ffmpeg = cap_ffmpeg_cli::FFmpeg::new();
 
             let audio_dir = tempfile::tempdir().unwrap();
             let video_dir = tempfile::tempdir().unwrap();
@@ -996,7 +996,7 @@ async fn render_to_file_impl(
                 #[cfg(target_os = "macos")]
                 cap_utils::create_named_pipe(&pipe_path).unwrap();
 
-                ffmpeg.add_input(cap_ffmpeg::FFmpegRawVideoInput {
+                ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawVideoInput {
                     width: output_size.0,
                     height: output_size.1,
                     fps: 30,
@@ -1025,7 +1025,7 @@ async fn render_to_file_impl(
                 #[cfg(target_os = "macos")]
                 cap_utils::create_named_pipe(&pipe_path).unwrap();
 
-                ffmpeg.add_input(cap_ffmpeg::FFmpegRawAudioInput {
+                ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
                     input: pipe_path.clone().into_os_string(),
                     sample_format: "f64le".to_string(),
                     sample_rate: audio_data.sample_rate,

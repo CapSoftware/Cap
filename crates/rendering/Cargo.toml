@@ -12,7 +12,7 @@ specta.workspace = true
 wgpu = "22.1.0"
 image = "0.25.2"
 
-cap-ffmpeg = { path = "../ffmpeg" }
+cap-ffmpeg-cli = { path = "../ffmpeg-cli" }
 cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }

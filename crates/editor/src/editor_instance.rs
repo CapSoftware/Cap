@@ -2,7 +2,7 @@ use crate::audio::AudioData;
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
-use cap_ffmpeg::FFmpeg;
+use cap_ffmpeg_cli::FFmpeg;
 use cap_project::{CursorData, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::decoder::AsyncVideoDecoder;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
