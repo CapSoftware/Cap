@@ -25,7 +25,6 @@ tauri = { workspace = true, features = [
 	"image-png",
 ] }
 tauri-plugin-shell = "2.0.0"
-tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 tauri-plugin-store = "2.0.0"
 tauri-plugin-os = "2.0.0"
 tauri-plugin-process = "2.0.0"
@@ -96,6 +95,7 @@ windows = { version = "0.52.0", features = [
 	"Win32_Foundation",
 	"Win32_System",
 	"Win32_UI_WindowsAndMessaging",
+	"Win32_Graphics_Gdi",
 ] }
 # Lock the version of windows-capture used by scap@691bd88798d3
 # TODO: Remove this once scap uses the latest version of `windows` and `windows-capture`

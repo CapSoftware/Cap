@@ -78,11 +78,51 @@ impl CameraFeed {
     }
 
     pub fn list_cameras() -> Vec<String> {
-        nokhwa::query(ApiBackend::Auto)
-            .unwrap()
-            .into_iter()
-            .map(|i| i.human_name().to_string())
-            .collect()
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::Media::MediaFoundation::{MFStartup, MFSTARTUP_FULL};
+            use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+            
+            // On Windows, wrap the entire operation in a catch_unwind to prevent crashes
+            match std::panic::catch_unwind(|| {
+                // Initialize COM and Media Foundation
+                unsafe {
+                    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                    let _ = MFStartup(0x20070, MFSTARTUP_FULL);
+                }
+
+                match nokhwa::query(ApiBackend::Auto) {
+                    Ok(cameras) => cameras
+                        .into_iter()
+                        .map(|i| i.human_name().to_string())
+                        .collect::<Vec<String>>(),
+                    Err(e) => {
+                        error!("Failed to query cameras: {}", e);
+                        Vec::new()
+                    }
+                }
+            }) {
+                Ok(cameras) => cameras,
+                Err(e) => {
+                    error!("Camera query panicked: {:?}", e);
+                    Vec::new()
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            match nokhwa::query(ApiBackend::Auto) {
+                Ok(cameras) => cameras
+                    .into_iter()
+                    .map(|i| i.human_name().to_string())
+                    .collect(),
+                Err(e) => {
+                    error!("Failed to query cameras: {}", e);
+                    Vec::new()
+                }
+            }
+        }
     }
 
     pub fn video_info(&self) -> VideoInfo {

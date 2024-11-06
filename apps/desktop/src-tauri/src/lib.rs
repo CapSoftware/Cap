@@ -30,7 +30,6 @@ use cap_project::{
     ZoomSegment,
 };
 use cap_rendering::{ProjectUniforms, ZOOM_DURATION};
-use cap_utils::create_named_pipe;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};

@@ -181,9 +181,15 @@ impl CapWindow {
                 let mut window_builder = self
                     .window_builder(app, format!("/editor?id={project_id}"))
                     .inner_size(1150.0, 800.0)
-                    .hidden_title(true)
-                    .title_bar_style(tauri::TitleBarStyle::Overlay)
                     .theme(Some(tauri::Theme::Light));
+
+                #[cfg(target_os = "macos")]
+                {
+                    use tauri::TitleBarStyle;
+                    window_builder = window_builder
+                        .hidden_title(true)
+                        .title_bar_style(TitleBarStyle::Overlay);
+                }
 
                 window_builder.build()?
             }
