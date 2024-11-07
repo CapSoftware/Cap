@@ -569,7 +569,8 @@ impl ProjectUniforms {
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: velocity,
                     motion_blur_amount,
-                    ..Default::default()
+                    camera_motion_blur_amount: 0.0,
+                    _padding: [0.0; 4],
                 },
                 zoom,
             )
@@ -626,6 +627,19 @@ impl ProjectUniforms {
                     position[1] + size[1],
                 ];
 
+                // Calculate camera motion blur based on zoom transition
+                let camera_motion_blur = {
+                    let base_blur = project.motion_blur.unwrap_or(0.2) as f32;
+                    let zoom_delta = (current_zoom - prev_zoom).abs() as f32;
+
+                    // Calculate a smooth transition factor
+                    let transition_speed = 30.0f32; // Frames per second
+                    let transition_factor = (zoom_delta * transition_speed).min(1.0);
+
+                    // Reduce multiplier from 3.0 to 2.0 for weaker blur
+                    (base_blur * 2.0 * transition_factor).min(1.0)
+                };
+
                 CompositeVideoFrameUniforms {
                     output_size,
                     frame_size,
@@ -643,8 +657,9 @@ impl ProjectUniforms {
                     rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0],
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: [0.0, 0.0],
-                    motion_blur_amount: 0.5,
-                    ..Default::default()
+                    motion_blur_amount,
+                    camera_motion_blur_amount: camera_motion_blur,
+                    _padding: [0.0; 4],
                 }
             });
 
@@ -1099,7 +1114,7 @@ fn draw_cursor(
         screen_bounds: uniforms.display.target_bounds,
         cursor_size: cursor_size_percentage,
         last_click_time: last_click_time.min(0.5),
-        velocity,
+        velocity: [0.0, 0.0],
         motion_blur_amount,
         _alignment: [0.0; 7],
     };
@@ -1177,7 +1192,8 @@ struct CompositeVideoFrameUniforms {
     pub rounding_px: f32,
     pub mirror_x: f32,
     pub motion_blur_amount: f32,
-    _padding: [f32; 1],
+    pub camera_motion_blur_amount: f32,
+    _padding: [f32; 4],
 }
 
 impl CompositeVideoFrameUniforms {

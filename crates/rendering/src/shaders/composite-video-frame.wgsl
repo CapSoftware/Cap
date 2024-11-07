@@ -8,7 +8,8 @@ struct Uniforms {
     rounding_px: f32,
     mirror_x: f32,
     motion_blur_amount: f32,
-    _padding: f32,
+    camera_motion_blur_amount: f32,
+    _padding: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -35,14 +36,18 @@ fn main_image(frag_color: vec4<f32>, frag_coord: vec2<f32>) -> vec4<f32> {
 		var base_color = sample_texture(target_uv, crop_bounds_uv);
 		base_color = apply_rounded_corners(base_color, target_uv);
 
-		if u.motion_blur_amount <= 0.0 {
+		let blur_amount = select(u.motion_blur_amount, u.camera_motion_blur_amount, u.camera_motion_blur_amount > 0.0);
+		
+		if blur_amount < 0.01 {
 				return mix(textureSample(prev_tex, sampler0, uv), base_color, base_color.a);
 		}
 
 		let center = vec2<f32>(0.5, 0.5);
 		let dir = normalize(target_uv - center);
 		
-		let num_samples = 16;
+		let base_samples = 16.0;
+		let num_samples = i32(base_samples * smoothstep(0.0, 1.0, blur_amount));
+		
 		var accum = base_color;
 		var weight_sum = 1.0;
 		
@@ -50,10 +55,16 @@ fn main_image(frag_color: vec4<f32>, frag_coord: vec2<f32>) -> vec4<f32> {
 				let t = f32(i) / f32(num_samples);
 				let dist_from_center = length(target_uv - center);
 				
-				let random_offset = (rand(target_uv + vec2<f32>(t)) - 0.5) * 0.1;
-				let scale = dist_from_center * u.motion_blur_amount * (0.08 + random_offset);
+				let random_offset = (rand(target_uv + vec2<f32>(t)) - 0.5) * 0.1 * smoothstep(0.0, 0.2, blur_amount);
 				
-				let angle_variation = (rand(target_uv + vec2<f32>(t * 2.0)) - 0.5) * 0.1;
+				let base_scale = select(
+					0.08,  // Regular content scale
+					0.16,  // Camera scale (reduced from 0.24 to 0.16)
+					u.camera_motion_blur_amount > 0.0
+				);
+				let scale = dist_from_center * blur_amount * (base_scale + random_offset) * smoothstep(0.0, 0.1, blur_amount);
+				
+				let angle_variation = (rand(target_uv + vec2<f32>(t * 2.0)) - 0.5) * 0.1 * smoothstep(0.0, 0.2, blur_amount);
 				let rotated_dir = vec2<f32>(
 						dir.x * cos(angle_variation) - dir.y * sin(angle_variation),
 						dir.x * sin(angle_variation) + dir.y * cos(angle_variation)
@@ -113,6 +124,12 @@ fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4
 // Add this helper function for pseudo-random numbers
 fn rand(co: vec2<f32>) -> f32 {
 		return fract(sin(dot(co, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+}
+
+// Add smoothstep helper function if not already present
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
 }
 
 struct VertexOutput {
