@@ -1,7 +1,7 @@
 use cap_gpu_converters::{NV12Input, NV12ToRGBA, YUYVToRGBA};
 use ffmpeg::software::scaling;
 use flume::{Receiver, Sender, TryRecvError};
-use nokhwa::{pixel_format::*, utils::*, Camera};
+use nokhwa::{utils::*, Camera};
 use std::{
     thread::{self, JoinHandle},
     time::Instant,

@@ -8,9 +8,8 @@ use std::fs::File;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{path::PathBuf, time::Duration};
-use tokio::sync::{oneshot, Mutex};
-use uuid::Uuid;
+use std::path::PathBuf;
+use tokio::sync::oneshot;
 
 use crate::cursor::spawn_cursor_recorder;
 use crate::RecordingOptions;

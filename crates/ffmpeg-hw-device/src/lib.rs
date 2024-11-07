@@ -9,9 +9,8 @@ use ffmpeg::{
     frame::{self, Video},
 };
 use ffmpeg_sys_next::{
-    av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create, av_hwframe_ctx_alloc,
-    av_hwframe_ctx_init, av_hwframe_transfer_data, avcodec_get_hw_config, AVBufferRef,
-    AVCodecContext, AVHWDeviceType, AVHWFramesContext, AVPixelFormat,
+    av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create, av_hwframe_transfer_data,
+    avcodec_get_hw_config, AVBufferRef, AVCodecContext, AVHWDeviceType, AVPixelFormat,
     AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX,
 };
 

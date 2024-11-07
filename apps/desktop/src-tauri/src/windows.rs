@@ -234,9 +234,9 @@ impl CapWindow {
                     .shadow(true)
                     .transparent(true);
 
-                let window = window_builder.build()?;
+                
 
-                window
+                window_builder.build()?
             }
             Self::Changelog => {
                 let mut window_builder = self
@@ -284,9 +284,9 @@ impl CapWindow {
                     ))
                     .transparent(true);
 
-                let window = window_builder.build()?;
+                
 
-                window
+                window_builder.build()?
             }
             Self::WindowCaptureOccluder => {
                 let mut window_builder = self
@@ -487,18 +487,15 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
                 );
 
                 let c_win = target_window.clone();
-                target_window.on_window_event(move |event| match event {
-                    tauri::WindowEvent::ThemeChanged(..) => {
-                        delegates::position_window_controls(
-                            delegates::UnsafeWindowHandle(
-                                c_win
-                                    .ns_window()
-                                    .expect("Failed to get native window handle"),
-                            ),
-                            &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
-                        );
-                    }
-                    _ => (),
+                target_window.on_window_event(move |event| if let tauri::WindowEvent::ThemeChanged(..) = event {
+                    delegates::position_window_controls(
+                        delegates::UnsafeWindowHandle(
+                            c_win
+                                .ns_window()
+                                .expect("Failed to get native window handle"),
+                        ),
+                        &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+                    );
                 });
             })
             .ok();

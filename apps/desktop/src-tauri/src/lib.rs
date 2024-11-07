@@ -44,7 +44,6 @@ use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::ffi::{CStr, OsStr};
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};

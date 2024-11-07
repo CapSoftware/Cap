@@ -1,7 +1,4 @@
-use std::collections::VecDeque;
-
 use ffmpeg::filter;
-use ffmpeg_sys_next::av_rescale_q;
 
 use crate::{
     data::{FFVideo, VideoInfo},
@@ -57,7 +54,6 @@ impl VideoFilter {
     }
 
     fn queue_frame(&mut self, frame: FFVideo) {
-        // self.frames.push_back(frame);
         self.filter_graph
             .get("in")
             .unwrap()

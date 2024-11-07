@@ -116,7 +116,7 @@ impl NV12ToRGBA {
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::MipMajor,
-            &input.y_data,
+            input.y_data,
         );
 
         let uv_texture = self.device.create_texture_with_data(
@@ -136,7 +136,7 @@ impl NV12ToRGBA {
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::MipMajor,
-            &input.uv_data,
+            input.uv_data,
         );
 
         // Create output texture

@@ -1,9 +1,8 @@
 use cap_flags::FLAGS;
-use ffmpeg_sys_next::AVRational;
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
-    frame::{Frame, FrameType},
+    frame::FrameType,
     Target,
 };
 use serde::{Deserialize, Serialize};

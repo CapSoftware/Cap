@@ -6,7 +6,6 @@ use crate::{
 use ffmpeg::{
     codec::{codec::Codec, context, encoder},
     format::{self},
-    software,
     threading::Config,
     Dictionary,
 };
@@ -108,7 +107,14 @@ impl PipelineSinkTask for H264Encoder {
 }
 
 fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), MediaError> {
-    if let Some(codec) = encoder::find_by_name("h264_videotoolbox") {
+    let encoder_name = {
+        if cfg!(target_os = "macos") {
+            "h264_videotoolbox"
+        } else {
+            "h264"
+        }
+    };
+    if let Some(codec) = encoder::find_by_name(encoder_name) {
         let mut options = Dictionary::new();
 
         let keyframe_interval_secs = 2;
