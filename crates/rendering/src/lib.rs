@@ -682,7 +682,7 @@ pub struct ZoomKeyframe {
 #[derive(Debug)]
 pub struct ZoomKeyframes(Vec<ZoomKeyframe>);
 
-pub const ZOOM_DURATION: f64 = 0.3;
+pub const ZOOM_DURATION: f64 = 0.6;
 
 impl ZoomKeyframes {
     pub fn new(config: &ProjectConfiguration) -> Self {
