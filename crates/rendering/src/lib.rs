@@ -16,18 +16,14 @@ use cap_project::{
     CursorData, CursorMoveEvent, ProjectConfiguration, XY,
 };
 
-use std::time::Instant;
-
-// Add this import at the top with the other imports
-use std::path::PathBuf;
-
-// Add this import at the top
 use image::GenericImageView;
+use std::path::PathBuf;
+use std::time::Instant;
 
 pub mod decoder;
 pub use decoder::DecodedFrame;
 
-const STANDARD_CURSOR_HEIGHT: f32 = 50.0; // Standard height for all cursors
+const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
 
 #[derive(Debug, Clone, Type)]
 pub struct RenderOptions {
@@ -1023,12 +1019,16 @@ fn draw_cursor(
         return;
     };
 
-    // println!(
-    //     "Raw cursor position: ({}, {})",
-    //     cursor_position.0, cursor_position.1
-    // );
-
     let cursor_event = find_cursor_event(&constants.cursor, time);
+
+    let last_click_time = constants
+        .cursor
+        .clicks
+        .iter()
+        .filter(|click| click.down && click.process_time_ms <= (time as f64) * 1000.0)
+        .max_by_key(|click| click.process_time_ms as i64)
+        .map(|click| ((time as f64) * 1000.0 - click.process_time_ms) as f32 / 1000.0)
+        .unwrap_or(1.0);
 
     let Some(cursor_texture) = constants.cursor_textures.get(&cursor_event.cursor_id) else {
         return;
@@ -1040,21 +1040,20 @@ fn draw_cursor(
     let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
         100.0
     } else {
-        uniforms.cursor_size / 100.0 // Convert percentage to scale factor
+        uniforms.cursor_size / 100.0
     };
 
-    // Calculate normalized size maintaining aspect ratio
     let normalized_size = [
         STANDARD_CURSOR_HEIGHT * aspect_ratio * cursor_size_percentage,
         STANDARD_CURSOR_HEIGHT * cursor_size_percentage,
     ];
 
-    let position = uniforms
-        .zoom
-        .apply_scale(cursor_position.to_frame_space(&constants.options, &uniforms.project));
+    let frame_position = cursor_position.to_frame_space(&constants.options, &uniforms.project);
+    let position = uniforms.zoom.apply_scale(frame_position);
+    let relative_position = [position.x as f32, position.y as f32];
 
     let cursor_uniforms = CursorUniforms {
-        position: [position.x as f32, position.y as f32, 0.0, 0.0],
+        position: [relative_position[0], relative_position[1], 0.0, 0.0],
         size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
         output_size: [
             uniforms.output_size.0 as f32,
@@ -1064,7 +1063,8 @@ fn draw_cursor(
         ],
         screen_bounds: uniforms.display.target_bounds,
         cursor_size: cursor_size_percentage,
-        padding: [0.0; 3],
+        last_click_time: last_click_time.min(0.5),
+        padding: [0.0; 2],
         _alignment: [0.0; 8],
     };
 
@@ -1357,7 +1357,6 @@ impl GradientOrColorPipeline {
     }
 }
 
-// Update the do_render_pass function to accept a LoadOp parameter
 fn do_render_pass(
     encoder: &mut wgpu::CommandEncoder,
     output_view: &wgpu::TextureView,
@@ -1469,8 +1468,6 @@ fn get_either<T>((a, b): (T, T), left: bool) -> T {
     }
 }
 
-// Add this to the AsyncVideoDecoderHandle struct or impl block
-
 impl AsyncVideoDecoderHandle {
     // ... (existing methods)
 
@@ -1535,7 +1532,8 @@ struct CursorUniforms {
     output_size: [f32; 4],
     screen_bounds: [f32; 4],
     cursor_size: f32,
-    padding: [f32; 3],
+    last_click_time: f32,
+    padding: [f32; 2],
     _alignment: [f32; 8],
 }
 
