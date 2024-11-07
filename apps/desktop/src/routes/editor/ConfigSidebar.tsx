@@ -452,9 +452,6 @@ export function ConfigSidebar() {
               maxValue={60}
               step={0.1}
             />
-            <div class="text-sm text-gray-500 mt-1">
-              Camera size when zoomed in (default: 70% of normal size)
-            </div>
           </Field>
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
