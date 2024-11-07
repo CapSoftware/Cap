@@ -580,13 +580,29 @@ impl ProjectUniforms {
             .filter(|_| !project.camera.hide)
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
-
                 let frame_size = [camera_size.x as f32, camera_size.y as f32];
                 let min_axis = output_size[0].min(output_size[1]);
 
+                // Calculate camera size based on zoom
+                let base_size = project.camera.size / 100.0;
+                let zoom_amount = zoom_keyframes.get_amount(time as f64) as f32;
+                let zoomed_size = if zoom_amount > 1.0 {
+                    // Get the zoom size as a percentage (0-1 range)
+                    let zoom_size = project.camera.zoom_size.unwrap_or(20.0) / 100.0;
+
+                    // Smoothly interpolate between base size and zoom size
+                    let t = (zoom_amount - 1.0) / 1.5; // Normalize to 0-1 range
+                    let t = t.min(1.0); // Clamp to prevent over-scaling
+
+                    // Lerp between base_size and zoom_size
+                    base_size * (1.0 - t) + zoom_size * t
+                } else {
+                    base_size
+                };
+
                 let size = [
-                    min_axis * project.camera.size / 100.0 + CAMERA_PADDING,
-                    min_axis * project.camera.size / 100.0 + CAMERA_PADDING,
+                    min_axis * zoomed_size + CAMERA_PADDING,
+                    min_axis * zoomed_size + CAMERA_PADDING,
                 ];
 
                 let position = {
@@ -1019,6 +1035,25 @@ fn draw_cursor(
         return;
     };
 
+    // Calculate previous position for velocity
+    let prev_position = interpolate_cursor_position(&constants.cursor, time - 1.0 / 30.0);
+
+    // Calculate velocity in screen space
+    let velocity = if let Some(prev_pos) = prev_position {
+        let curr_frame_pos = cursor_position.to_frame_space(&constants.options, &uniforms.project);
+        let prev_frame_pos = prev_pos.to_frame_space(&constants.options, &uniforms.project);
+        let frame_velocity = curr_frame_pos.coord - prev_frame_pos.coord;
+
+        // Convert to pixels per frame
+        [frame_velocity.x as f32, frame_velocity.y as f32]
+    } else {
+        [0.0, 0.0]
+    };
+
+    // Calculate motion blur amount based on velocity magnitude
+    let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
+    let motion_blur_amount = (speed * 0.3).min(1.0) * uniforms.project.motion_blur.unwrap_or(0.8);
+
     let cursor_event = find_cursor_event(&constants.cursor, time);
 
     let last_click_time = constants
@@ -1064,8 +1099,9 @@ fn draw_cursor(
         screen_bounds: uniforms.display.target_bounds,
         cursor_size: cursor_size_percentage,
         last_click_time: last_click_time.min(0.5),
-        padding: [0.0; 2],
-        _alignment: [0.0; 8],
+        velocity,
+        motion_blur_amount,
+        _alignment: [0.0; 7],
     };
 
     let cursor_uniform_buffer =
@@ -1533,8 +1569,9 @@ struct CursorUniforms {
     screen_bounds: [f32; 4],
     cursor_size: f32,
     last_click_time: f32,
-    padding: [f32; 2],
-    _alignment: [f32; 8],
+    velocity: [f32; 2],
+    motion_blur_amount: f32,
+    _alignment: [f32; 7],
 }
 
 fn find_cursor_event(cursor: &CursorData, time: f32) -> &CursorMoveEvent {
