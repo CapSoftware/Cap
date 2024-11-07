@@ -142,7 +142,7 @@ impl VideoInfo {
             pixel_format: Pixel::NV12,
             width,
             height,
-            time_base: FFRational(1, fps.try_into().unwrap()),
+            time_base: self.time_base,
             frame_rate: FFRational(fps.try_into().unwrap(), 1),
         }
     }

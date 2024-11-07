@@ -56,17 +56,7 @@ impl H264Encoder {
         })
     }
 
-    fn queue_frame(&mut self, mut frame: FFVideo) {
-        if let Some(last_pts) = self.last_pts {
-            if frame.pts().unwrap() == last_pts {
-                frame.set_pts(Some(last_pts + 1));
-            }
-        }
-
-        self.last_pts = frame.pts();
-
-        dbg!(frame.pts());
-
+    fn queue_frame(&mut self, frame: FFVideo) {
         self.encoder.send_frame(&frame).unwrap();
     }
 

@@ -2337,7 +2337,8 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
     #[cfg(target_os = "macos")]
     {
         #[cfg(debug_assertions)]
-        let bundle_id = "com.apple.Terminal";
+        let bundle_id =
+            std::env::var("CAP_BUNDLE_ID").unwrap_or_else(|_| "com.apple.Terminal".to_string());
         #[cfg(not(debug_assertions))]
         let bundle_id = "so.cap.desktop";
 
