@@ -4037,6 +4037,7 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 [[package]]
 name = "nokhwa"
 version = "0.10.3"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=c5c7e2298764#c5c7e2298764ddf122c2ec0206a8aa7ba80257f0"
 dependencies = [
  "flume 0.10.14",
  "image 0.24.9",
@@ -4052,6 +4053,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-linux"
 version = "0.1.0"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=c5c7e2298764#c5c7e2298764ddf122c2ec0206a8aa7ba80257f0"
 dependencies = [
  "nokhwa-core",
  "v4l",
@@ -4061,6 +4063,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-macos"
 version = "0.2.0"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=c5c7e2298764#c5c7e2298764ddf122c2ec0206a8aa7ba80257f0"
 dependencies = [
  "block",
  "cocoa-foundation 0.1.2",
@@ -4075,6 +4078,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-windows"
 version = "0.4.0"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=c5c7e2298764#c5c7e2298764ddf122c2ec0206a8aa7ba80257f0"
 dependencies = [
  "nokhwa-core",
  "once_cell",
@@ -4084,6 +4088,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-core"
 version = "0.1.0"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=c5c7e2298764#c5c7e2298764ddf122c2ec0206a8aa7ba80257f0"
 dependencies = [
  "bytes",
  "image 0.24.9",

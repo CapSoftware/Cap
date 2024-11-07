@@ -18,11 +18,9 @@ tokio = { version = "1.39.3", features = [
 tauri = { version = "2.0.0" }
 specta = { version = "=2.0.0-rc.20" }
 scap = { git = "https://github.com/CapSoftware/scap", rev = "4d6be030ba2b0cea565ccaee28b1999f25b8dd5d" }
-nokhwa = { path = "../../l1npengtul/nokhwa" }
-nokhwa-bindings-macos = { path = "../../l1npengtul/nokhwa/nokhwa-bindings-macos" }
-# nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "6ce1e8270d57", features = [
-# 	"input-native",
-# 	"serialize",
-# ] }
-# nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "6ce1e8270d57" }
+nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "c5c7e2298764", features = [
+	"input-native",
+	"serialize",
+] }
+nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "c5c7e2298764" }
 wgpu = "22.1.0"

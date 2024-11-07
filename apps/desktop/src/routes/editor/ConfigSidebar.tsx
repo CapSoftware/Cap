@@ -444,6 +444,15 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
+          <Field name="Size During Zoom" icon={<IconCapEnlarge />}>
+            <Slider
+              value={[project.camera.zoom_size ?? 20]}
+              onChange={(v) => setProject("camera", "zoom_size", v[0])}
+              minValue={10}
+              maxValue={60}
+              step={0.1}
+            />
+          </Field>
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
               value={[project.camera.rounding ?? 100.0]}

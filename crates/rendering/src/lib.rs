@@ -16,18 +16,14 @@ use cap_project::{
     CursorData, CursorMoveEvent, ProjectConfiguration, XY,
 };
 
-use std::time::Instant;
-
-// Add this import at the top with the other imports
-use std::path::PathBuf;
-
-// Add this import at the top
 use image::GenericImageView;
+use std::path::PathBuf;
+use std::time::Instant;
 
 pub mod decoder;
 pub use decoder::DecodedFrame;
 
-const STANDARD_CURSOR_HEIGHT: f32 = 50.0; // Standard height for all cursors
+const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
 
 #[derive(Debug, Clone, Type)]
 pub struct RenderOptions {
@@ -573,7 +569,8 @@ impl ProjectUniforms {
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: velocity,
                     motion_blur_amount,
-                    ..Default::default()
+                    camera_motion_blur_amount: 0.0,
+                    _padding: [0.0; 4],
                 },
                 zoom,
             )
@@ -584,13 +581,29 @@ impl ProjectUniforms {
             .filter(|_| !project.camera.hide)
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
-
                 let frame_size = [camera_size.x as f32, camera_size.y as f32];
                 let min_axis = output_size[0].min(output_size[1]);
 
+                // Calculate camera size based on zoom
+                let base_size = project.camera.size / 100.0;
+                let zoom_amount = zoom_keyframes.get_amount(time as f64) as f32;
+                let zoomed_size = if zoom_amount > 1.0 {
+                    // Get the zoom size as a percentage (0-1 range)
+                    let zoom_size = project.camera.zoom_size.unwrap_or(20.0) / 100.0;
+
+                    // Smoothly interpolate between base size and zoom size
+                    let t = (zoom_amount - 1.0) / 1.5; // Normalize to 0-1 range
+                    let t = t.min(1.0); // Clamp to prevent over-scaling
+
+                    // Lerp between base_size and zoom_size
+                    base_size * (1.0 - t) + zoom_size * t
+                } else {
+                    base_size
+                };
+
                 let size = [
-                    min_axis * project.camera.size / 100.0 + CAMERA_PADDING,
-                    min_axis * project.camera.size / 100.0 + CAMERA_PADDING,
+                    min_axis * zoomed_size + CAMERA_PADDING,
+                    min_axis * zoomed_size + CAMERA_PADDING,
                 ];
 
                 let position = {
@@ -614,6 +627,19 @@ impl ProjectUniforms {
                     position[1] + size[1],
                 ];
 
+                // Calculate camera motion blur based on zoom transition
+                let camera_motion_blur = {
+                    let base_blur = project.motion_blur.unwrap_or(0.2) as f32;
+                    let zoom_delta = (current_zoom - prev_zoom).abs() as f32;
+
+                    // Calculate a smooth transition factor
+                    let transition_speed = 30.0f32; // Frames per second
+                    let transition_factor = (zoom_delta * transition_speed).min(1.0);
+
+                    // Reduce multiplier from 3.0 to 2.0 for weaker blur
+                    (base_blur * 2.0 * transition_factor).min(1.0)
+                };
+
                 CompositeVideoFrameUniforms {
                     output_size,
                     frame_size,
@@ -631,8 +657,9 @@ impl ProjectUniforms {
                     rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0],
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: [0.0, 0.0],
-                    motion_blur_amount: 0.5,
-                    ..Default::default()
+                    motion_blur_amount,
+                    camera_motion_blur_amount: camera_motion_blur,
+                    _padding: [0.0; 4],
                 }
             });
 
@@ -655,7 +682,7 @@ pub struct ZoomKeyframe {
 #[derive(Debug)]
 pub struct ZoomKeyframes(Vec<ZoomKeyframe>);
 
-pub const ZOOM_DURATION: f64 = 0.3;
+pub const ZOOM_DURATION: f64 = 0.6;
 
 impl ZoomKeyframes {
     pub fn new(config: &ProjectConfiguration) -> Self {
@@ -1023,12 +1050,35 @@ fn draw_cursor(
         return;
     };
 
-    // println!(
-    //     "Raw cursor position: ({}, {})",
-    //     cursor_position.0, cursor_position.1
-    // );
+    // Calculate previous position for velocity
+    let prev_position = interpolate_cursor_position(&constants.cursor, time - 1.0 / 30.0);
+
+    // Calculate velocity in screen space
+    let velocity = if let Some(prev_pos) = prev_position {
+        let curr_frame_pos = cursor_position.to_frame_space(&constants.options, &uniforms.project);
+        let prev_frame_pos = prev_pos.to_frame_space(&constants.options, &uniforms.project);
+        let frame_velocity = curr_frame_pos.coord - prev_frame_pos.coord;
+
+        // Convert to pixels per frame
+        [frame_velocity.x as f32, frame_velocity.y as f32]
+    } else {
+        [0.0, 0.0]
+    };
+
+    // Calculate motion blur amount based on velocity magnitude
+    let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
+    let motion_blur_amount = (speed * 0.3).min(1.0) * uniforms.project.motion_blur.unwrap_or(0.8);
 
     let cursor_event = find_cursor_event(&constants.cursor, time);
+
+    let last_click_time = constants
+        .cursor
+        .clicks
+        .iter()
+        .filter(|click| click.down && click.process_time_ms <= (time as f64) * 1000.0)
+        .max_by_key(|click| click.process_time_ms as i64)
+        .map(|click| ((time as f64) * 1000.0 - click.process_time_ms) as f32 / 1000.0)
+        .unwrap_or(1.0);
 
     let Some(cursor_texture) = constants.cursor_textures.get(&cursor_event.cursor_id) else {
         return;
@@ -1040,21 +1090,20 @@ fn draw_cursor(
     let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
         100.0
     } else {
-        uniforms.cursor_size / 100.0 // Convert percentage to scale factor
+        uniforms.cursor_size / 100.0
     };
 
-    // Calculate normalized size maintaining aspect ratio
     let normalized_size = [
         STANDARD_CURSOR_HEIGHT * aspect_ratio * cursor_size_percentage,
         STANDARD_CURSOR_HEIGHT * cursor_size_percentage,
     ];
 
-    let position = uniforms
-        .zoom
-        .apply_scale(cursor_position.to_frame_space(&constants.options, &uniforms.project));
+    let frame_position = cursor_position.to_frame_space(&constants.options, &uniforms.project);
+    let position = uniforms.zoom.apply_scale(frame_position);
+    let relative_position = [position.x as f32, position.y as f32];
 
     let cursor_uniforms = CursorUniforms {
-        position: [position.x as f32, position.y as f32, 0.0, 0.0],
+        position: [relative_position[0], relative_position[1], 0.0, 0.0],
         size: [normalized_size[0], normalized_size[1], 0.0, 0.0],
         output_size: [
             uniforms.output_size.0 as f32,
@@ -1064,8 +1113,10 @@ fn draw_cursor(
         ],
         screen_bounds: uniforms.display.target_bounds,
         cursor_size: cursor_size_percentage,
-        padding: [0.0; 3],
-        _alignment: [0.0; 8],
+        last_click_time: last_click_time.min(0.5),
+        velocity: [0.0, 0.0],
+        motion_blur_amount,
+        _alignment: [0.0; 7],
     };
 
     let cursor_uniform_buffer =
@@ -1141,7 +1192,8 @@ struct CompositeVideoFrameUniforms {
     pub rounding_px: f32,
     pub mirror_x: f32,
     pub motion_blur_amount: f32,
-    _padding: [f32; 1],
+    pub camera_motion_blur_amount: f32,
+    _padding: [f32; 4],
 }
 
 impl CompositeVideoFrameUniforms {
@@ -1357,7 +1409,6 @@ impl GradientOrColorPipeline {
     }
 }
 
-// Update the do_render_pass function to accept a LoadOp parameter
 fn do_render_pass(
     encoder: &mut wgpu::CommandEncoder,
     output_view: &wgpu::TextureView,
@@ -1469,8 +1520,6 @@ fn get_either<T>((a, b): (T, T), left: bool) -> T {
     }
 }
 
-// Add this to the AsyncVideoDecoderHandle struct or impl block
-
 impl AsyncVideoDecoderHandle {
     // ... (existing methods)
 
@@ -1535,8 +1584,10 @@ struct CursorUniforms {
     output_size: [f32; 4],
     screen_bounds: [f32; 4],
     cursor_size: f32,
-    padding: [f32; 3],
-    _alignment: [f32; 8],
+    last_click_time: f32,
+    velocity: [f32; 2],
+    motion_blur_amount: f32,
+    _alignment: [f32; 7],
 }
 
 fn find_cursor_event(cursor: &CursorData, time: f32) -> &CursorMoveEvent {
