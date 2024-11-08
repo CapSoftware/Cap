@@ -54,21 +54,126 @@ impl AudioData {
     }
 }
 
-pub struct AudioPlaybackBuffer<T: FromSampleBytes> {
+pub struct AudioFrameBuffer {
     data: AudioData,
     cursor: usize,
-    chunk_size: usize,
+    elapsed_samples: usize,
+    sample_size: usize,
+}
+
+impl AudioFrameBuffer {
+    pub fn new(data: AudioData) -> Self {
+        let sample_size = data.info.channels * data.info.sample_format.bytes();
+
+        Self {
+            data,
+            cursor: 0,
+            elapsed_samples: 0,
+            sample_size,
+        }
+    }
+
+    pub fn info(&self) -> AudioInfo {
+        self.data.info
+    }
+
+    pub fn set_playhead(&mut self, playhead: f64, maybe_timeline: Option<&TimelineConfiguration>) {
+        self.elapsed_samples = self.playhead_to_samples(playhead);
+
+        self.cursor = match maybe_timeline {
+            Some(timeline) => match timeline.get_recording_time(playhead) {
+                Some(time) => self.playhead_to_samples(time) * self.sample_size,
+                None => self.data.buffer.len(),
+            },
+            None => self.elapsed_samples * self.sample_size,
+        };
+    }
+
+    fn adjust_cursor(&mut self, timeline: &TimelineConfiguration) {
+        let playhead = self.elapsed_samples_to_playhead();
+
+        // ! Basically, to allow for some slop in the float -> usize and back conversions,
+        // this will only seek if there is a significant change in actual vs expected next sample
+        // (corresponding to a trim or split point). Currently this change is at least 0.2 seconds
+        // - not sure we offer that much precision in the editor even!
+        let new_cursor = match timeline.get_recording_time(playhead) {
+            Some(time) => self.playhead_to_samples(time) * self.sample_size,
+            None => self.data.buffer.len(),
+        };
+
+        let cursor_diff = new_cursor as isize - self.cursor as isize;
+        if cursor_diff.abs() as usize > (self.data.info.sample_rate as usize) / 5 {
+            self.cursor = new_cursor;
+        }
+    }
+
+    fn playhead_to_samples(&self, playhead: f64) -> usize {
+        let estimated_start_sample = playhead * f64::from(self.data.info.sample_rate);
+        num_traits::cast(estimated_start_sample).unwrap()
+    }
+
+    fn elapsed_samples_to_playhead(&self) -> f64 {
+        self.elapsed_samples as f64 / f64::from(self.data.info.sample_rate)
+    }
+
+    pub fn next_frame(
+        &mut self,
+        requested_samples: usize,
+        timeline: Option<&TimelineConfiguration>,
+    ) -> Option<FFAudio> {
+        let format = self.data.info.sample_format;
+        let channels = self.data.info.channel_layout();
+        let sample_rate = self.data.info.sample_rate;
+
+        self.next_frame_data(requested_samples, timeline)
+            .map(move |(samples, data)| {
+                let mut raw_frame = FFAudio::new(format, samples, channels);
+                raw_frame.set_rate(sample_rate);
+                raw_frame.data_mut(0)[0..data.len()].copy_from_slice(data);
+
+                raw_frame
+            })
+    }
+
+    pub fn next_frame_data<'a>(
+        &'a mut self,
+        mut samples: usize,
+        maybe_timeline: Option<&TimelineConfiguration>,
+    ) -> Option<(usize, &'a [u8])> {
+        if let Some(timeline) = maybe_timeline {
+            self.adjust_cursor(timeline);
+        }
+
+        if self.cursor >= self.data.buffer.len() {
+            return None;
+        }
+
+        let mut bytes_size = self.sample_size * samples;
+
+        let remaining_data = self.data.buffer.len() - self.cursor;
+        if remaining_data < bytes_size {
+            bytes_size = remaining_data;
+            samples = remaining_data / self.sample_size;
+        }
+
+        let start = self.cursor;
+        self.elapsed_samples += samples;
+        self.cursor += bytes_size;
+        Some((samples, &self.data.buffer[start..self.cursor]))
+    }
+}
+
+pub struct AudioPlaybackBuffer<T: FromSampleBytes> {
+    frame_buffer: AudioFrameBuffer,
     resampler: AudioResampler,
     resampled_buffer: HeapRb<T>,
-    duration: f64,
-    fps: f64,
 }
 
 impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     pub const PLAYBACK_SAMPLES_COUNT: u32 = 256;
     const PROCESSING_SAMPLES_COUNT: u32 = 1024;
 
-    pub fn new(data: AudioData, output_info: AudioInfo, duration: f64, fps: u32) -> Self {
+    pub fn new(data: AudioData, output_info: AudioInfo) -> Self {
         println!("Input info: {:?}", data.info);
         println!("Output info: {:?}", output_info);
 
@@ -80,88 +185,42 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
             * output_info.sample_format.bytes();
         let resampled_buffer = HeapRb::new(capacity);
 
-        let chunk_size = data.info.channels * data.info.sample_format.bytes();
+        let frame_buffer = AudioFrameBuffer::new(data);
 
         Self {
-            data,
-            cursor: 0,
-            chunk_size,
+            frame_buffer,
             resampler,
             resampled_buffer,
-            duration,
-            fps: f64::from(fps),
         }
     }
 
-    pub fn set_playhead(&mut self, playhead_in_frames: u32) {
+    pub fn set_playhead(&mut self, playhead: f64, maybe_timeline: Option<&TimelineConfiguration>) {
         self.resampler.reset();
         self.resampled_buffer.clear();
+        self.frame_buffer.set_playhead(playhead, maybe_timeline);
 
-        println!("Audio seeking to video frame {playhead_in_frames}");
-        let playhead = f64::from(playhead_in_frames) / self.fps;
-        let cursor = self.playhead_to_cursor(playhead);
-        println!("Successful seek to sample {cursor}");
-        self.cursor = cursor;
-    }
-
-    fn playhead_to_cursor(&self, playhead: f64) -> usize {
-        let total_samples = self.data.buffer.len() / self.chunk_size;
-
-        let estimated_cursor_in_samples = playhead * (total_samples as f64) / self.duration;
-        let cursor_in_samples: usize = num_traits::cast(estimated_cursor_in_samples).unwrap();
-        cursor_in_samples * self.chunk_size
-    }
-
-    fn cursor_to_playhead(&self) -> f64 {
-        self.duration * (self.cursor as f64) / (self.data.buffer.len() as f64)
+        println!("Successful seek to sample {}", self.frame_buffer.cursor);
     }
 
     pub fn buffer_reaching_limit(&self) -> bool {
         self.resampled_buffer.vacant_len()
-            <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize) * self.chunk_size
+            <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize)
+                * (self.resampler.output.channels as usize)
+                * self.resampler.output.sample_format.bytes()
     }
 
-    fn create_frame(&mut self) -> FFAudio {
-        let mut samples = Self::PROCESSING_SAMPLES_COUNT as usize;
-        let mut samples_size = self.chunk_size * samples;
-
-        let remaining_data = self.data.buffer.len() - self.cursor;
-        if remaining_data < samples_size {
-            samples_size = remaining_data;
-            samples = remaining_data / self.chunk_size;
-        }
-
-        let mut raw_frame = FFAudio::new(
-            self.data.info.sample_format,
-            samples,
-            self.data.info.channel_layout(),
-        );
-        raw_frame.set_rate(self.data.info.sample_rate);
-        let start = self.cursor;
-        let end = self.cursor + samples_size;
-        raw_frame.data_mut(0)[0..samples_size].copy_from_slice(&self.data.buffer[start..end]);
-        self.cursor = end;
-
-        raw_frame
-    }
-
-    pub fn render(&mut self, timeline: &TimelineConfiguration) {
+    pub fn render(&mut self, timeline: Option<&TimelineConfiguration>) {
         if self.buffer_reaching_limit() {
             return;
         }
 
-        self.cursor = match timeline.get_recording_time(self.cursor_to_playhead()) {
-            Some(playhead) => self.playhead_to_cursor(playhead),
-            None => self.data.buffer.len(),
-        };
-
         let bytes_per_sample = self.resampler.output.sample_size();
-        let maybe_rendered = match self.cursor >= self.data.buffer.len() {
-            true => self.resampler.flush_frame(),
-            false => {
-                let frame = self.create_frame();
-                Some(self.resampler.queue_and_process_frame(&frame))
-            }
+        let maybe_rendered = match self
+            .frame_buffer
+            .next_frame(Self::PROCESSING_SAMPLES_COUNT as usize, timeline)
+        {
+            Some(frame) => Some(self.resampler.queue_and_process_frame(&frame)),
+            None => self.resampler.flush_frame(),
         };
 
         if let Some(rendered) = maybe_rendered {

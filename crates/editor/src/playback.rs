@@ -194,8 +194,8 @@ impl AudioPlayback {
             audio,
             stop_rx,
             start_frame_number,
-            duration,
             project,
+            ..
         } = self;
 
         let mut output_info = AudioInfo::from_stream_config(&supported_config);
@@ -204,12 +204,13 @@ impl AudioPlayback {
         // TODO: Get fps and duration from video (once we start supporting other frame rates)
         // Also, it's a bit weird that self.duration can ever be infinity to begin with, since
         // pre-recorded videos are obviously a fixed size
-        let mut audio_renderer = AudioPlaybackBuffer::new(audio, output_info, duration, FPS);
-        audio_renderer.set_playhead(start_frame_number);
+        let mut audio_renderer = AudioPlaybackBuffer::new(audio, output_info);
+        let playhead = f64::from(start_frame_number) / f64::from(FPS);
+        audio_renderer.set_playhead(playhead, project.borrow().timeline());
 
         // Prerender enough for smooth playback
         while !audio_renderer.buffer_reaching_limit() {
-            audio_renderer.render(project.borrow().timeline().unwrap());
+            audio_renderer.render(project.borrow().timeline());
         }
 
         let mut config = supported_config.config();
@@ -220,7 +221,7 @@ impl AudioPlayback {
             .build_output_stream(
                 &config,
                 move |buffer: &mut [T], _info| {
-                    audio_renderer.render(project.borrow().timeline().unwrap());
+                    audio_renderer.render(project.borrow().timeline());
                     audio_renderer.fill(buffer);
                 },
                 |_| {},

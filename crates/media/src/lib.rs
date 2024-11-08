@@ -12,7 +12,6 @@ pub mod feeds;
 pub mod filters;
 pub mod pipeline;
 pub mod platform;
-pub mod sinks;
 pub mod sources;
 
 pub fn init() -> Result<(), MediaError> {

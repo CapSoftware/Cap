@@ -20,7 +20,7 @@ use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_editor::{EditorState, ProjectRecordings};
 use cap_media::sources::CaptureScreen;
 use cap_media::{
-    feeds::{AudioData, CameraFeed, CameraFrameSender},
+    feeds::{AudioData, AudioFrameBuffer, CameraFeed, CameraFrameSender},
     platform::Bounds,
     sources::{AudioInputSource, ScreenCaptureTarget},
 };
@@ -927,8 +927,8 @@ async fn open_file_path(app: AppHandle, path: PathBuf) -> Result<(), String> {
 }
 
 struct AudioRender {
-    data: AudioData,
-    pipe_tx: tokio::sync::mpsc::Sender<Vec<f64>>,
+    buffer: AudioFrameBuffer,
+    pipe_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
 }
 
 async fn render_to_file_impl(
@@ -989,7 +989,7 @@ async fn render_to_file_impl(
 
                 tx
             };
-            let audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
+            let mut audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
                 let pipe_path = audio_dir.path().join("audio.pipe");
 
                 #[cfg(target_os = "macos")]
@@ -1002,25 +1002,22 @@ async fn render_to_file_impl(
                     channels: audio_data.info.channels as u16,
                 });
 
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<f64>>(30);
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
 
                 tokio::spawn(async move {
                     let mut file = std::fs::File::create(&pipe_path).unwrap();
                     println!("audio pipe opened");
 
                     while let Some(bytes) = rx.recv().await {
-                        let bytes = bytes
-                            .iter()
-                            .flat_map(|f| f.to_le_bytes())
-                            .collect::<Vec<_>>();
                         file.write_all(&bytes).unwrap();
                     }
 
                     println!("done writing to audio pipe");
                 });
 
+                let buffer = AudioFrameBuffer::new(audio_data.clone());
                 Some(AudioRender {
-                    data: audio_data.clone(),
+                    buffer,
                     pipe_tx: tx,
                 })
             } else {
@@ -1050,40 +1047,20 @@ async fn render_to_file_impl(
                             first_frame = Some(frame.clone());
                         }
 
-                        if let Some(audio) = &audio {
-                            let mut buffer = vec![0.; audio.data.buffer.len() / 8];
-                            for (src, dest) in
-                                std::iter::zip(audio.data.buffer.chunks(8), &mut buffer)
-                            {
-                                *dest = f64::from_le_bytes(src.try_into().unwrap());
+                        if let Some(audio) = &mut audio {
+                            if frame_count == 0 {
+                                audio.buffer.set_playhead(0., project.timeline());
                             }
 
-                            let samples_per_frame = audio.data.info.channels as f64
-                                * audio.data.info.sample_rate as f64
-                                / FPS as f64;
+                            let audio_info = audio.buffer.info();
+                            let estimated_samples_per_frame =
+                                f64::from(audio_info.sample_rate) / f64::from(FPS);
+                            let samples = estimated_samples_per_frame.ceil() as usize;
 
-                            let start_samples = match project.timeline() {
-                                Some(timeline) => timeline
-                                    .get_recording_time(frame_count as f64 / FPS as f64)
-                                    .map(|recording_time| {
-                                        recording_time
-                                            * audio.data.info.channels as f64
-                                            * audio.data.info.sample_rate as f64
-                                    }),
-                                None => Some(frame_count as f64 * samples_per_frame),
-                            };
-
-                            if let Some(start) = start_samples {
-                                let end = start + samples_per_frame;
-
-                                let samples = &buffer[start as usize..end as usize];
-                                let mut samples_iter = samples.iter().copied();
-
-                                let mut frame_samples = Vec::new();
-                                for _ in 0..samples_per_frame as usize {
-                                    frame_samples.push(samples_iter.next().unwrap_or(0.0));
-                                }
-
+                            if let Some((_, frame_data)) =
+                                audio.buffer.next_frame_data(samples, project.timeline())
+                            {
+                                let frame_samples = frame_data.to_vec();
                                 audio.pipe_tx.send(frame_samples).await.unwrap();
                             }
                         }
