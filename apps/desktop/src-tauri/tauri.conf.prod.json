@@ -1,6 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cap",
+  "mainBinaryName": "Cap",
   "identifier": "so.cap.desktop",
   "plugins": {
     "updater": {

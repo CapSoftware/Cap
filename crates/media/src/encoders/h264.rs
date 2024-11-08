@@ -1,14 +1,13 @@
+use crate::{
+    data::{FFPacket, FFVideo, VideoInfo},
+    pipeline::task::PipelineSinkTask,
+    MediaError,
+};
 use ffmpeg::{
     codec::{codec::Codec, context, encoder},
     format::{self},
     threading::Config,
     Dictionary,
-};
-
-use crate::{
-    data::{FFPacket, FFVideo, VideoInfo},
-    pipeline::task::PipelineSinkTask,
-    MediaError,
 };
 
 use super::Output;
@@ -17,6 +16,7 @@ pub struct H264Encoder {
     tag: &'static str,
     encoder: encoder::Video,
     output_ctx: format::context::Output,
+    last_pts: Option<i64>,
 }
 
 impl H264Encoder {
@@ -27,6 +27,7 @@ impl H264Encoder {
         let (codec, options) = get_codec_and_options(&config)?;
 
         let mut encoder_ctx = context::Context::new_with_codec(codec);
+
         // TODO: Configure this per system
         encoder_ctx.set_threading(Config::count(4));
         let mut encoder = encoder_ctx.encoder().video()?;
@@ -35,6 +36,8 @@ impl H264Encoder {
         encoder.set_height(config.height);
         encoder.set_format(config.pixel_format);
         encoder.set_time_base(config.frame_rate.invert());
+        encoder.set_frame_rate(Some(config.frame_rate));
+        encoder.set_bit_rate(5_000_000);
 
         let video_encoder = encoder.open_with(options)?;
 
@@ -48,6 +51,7 @@ impl H264Encoder {
             tag,
             encoder: video_encoder,
             output_ctx,
+            last_pts: None,
         })
     }
 
@@ -103,7 +107,14 @@ impl PipelineSinkTask for H264Encoder {
 }
 
 fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), MediaError> {
-    if let Some(codec) = encoder::find_by_name("libx264") {
+    let encoder_name = {
+        if cfg!(target_os = "macos") {
+            "h264_videotoolbox"
+        } else {
+            "h264"
+        }
+    };
+    if let Some(codec) = encoder::find_by_name(encoder_name) {
         let mut options = Dictionary::new();
 
         let keyframe_interval_secs = 2;

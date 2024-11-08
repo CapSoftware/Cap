@@ -41,6 +41,7 @@ async function exists(path) {
 async function main() {
   const targetTriple = process.env.TARGET_TRIPLE ?? (await getRustupTarget());
   const binaries = FFMPEG_BINARIES[targetTriple];
+  if (!binaries) return;
 
   const ffmpegDownloadPath = path.join(binariesDir, "ffmpeg-download");
   if (!(await exists(ffmpegDownloadPath))) {

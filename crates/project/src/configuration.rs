@@ -1,4 +1,7 @@
-use std::ops::{Add, Div, Mul, Sub};
+use std::{
+    ops::{Add, Div, Mul, Sub},
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -182,37 +185,28 @@ pub struct CameraPosition {
     pub y: CameraYPosition,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct CameraConfiguration {
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct Camera {
     pub hide: bool,
     pub mirror: bool,
     pub position: CameraPosition,
-    pub rounding: f32,
-    pub shadow: u32,
     pub size: f32,
+    pub zoom_size: Option<f32>,
+    pub rounding: f32,
+    pub shadow: f32,
 }
 
-impl Default for CameraConfiguration {
+impl Default for Camera {
     fn default() -> Self {
         Self {
             hide: false,
             mirror: false,
             position: CameraPosition::default(),
-            rounding: Self::default_rounding(),
-            shadow: 0,
-            size: Self::default_size(),
+            size: 30.0,
+            zoom_size: None,
+            rounding: 100.0,
+            shadow: 0.0,
         }
-    }
-}
-
-impl CameraConfiguration {
-    fn default_size() -> f32 {
-        30.0
-    }
-
-    fn default_rounding() -> f32 {
-        100.0
     }
 }
 
@@ -319,15 +313,28 @@ impl TimelineConfiguration {
 pub struct ProjectConfiguration {
     pub aspect_ratio: Option<AspectRatio>,
     pub background: BackgroundConfiguration,
-    pub camera: CameraConfiguration,
+    pub camera: Camera,
     pub audio: AudioConfiguration,
     pub cursor: CursorConfiguration,
     pub hotkeys: HotkeysConfiguration,
     #[serde(default)]
     pub timeline: Option<TimelineConfiguration>,
+    pub motion_blur: Option<f32>,
 }
 
 impl ProjectConfiguration {
+    pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+        std::fs::read_to_string(project_path.as_ref().join("project-config.json"))
+            .map(|s| serde_json::from_str(&s).unwrap_or_default())
+    }
+
+    pub fn write(&self, project_path: impl AsRef<Path>) -> Result<(), std::io::Error> {
+        std::fs::write(
+            project_path.as_ref().join("project-config.json"),
+            serde_json::to_string_pretty(self)?,
+        )
+    }
+
     pub fn timeline(&self) -> Option<&TimelineConfiguration> {
         self.timeline.as_ref()
     }
@@ -341,11 +348,12 @@ impl Default for ProjectConfiguration {
                 source: BackgroundSource::default(),
                 ..Default::default()
             },
-            camera: CameraConfiguration::default(),
+            camera: Camera::default(),
             audio: AudioConfiguration::default(),
             cursor: CursorConfiguration::default(),
             hotkeys: HotkeysConfiguration::default(),
             timeline: None,
+            motion_blur: None,
         }
     }
 }

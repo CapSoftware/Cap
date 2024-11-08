@@ -2,10 +2,11 @@
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cap - Development",
   "identifier": "so.cap.desktop.dev",
+  "mainBinaryName": "Cap - Development",
   "build": {
-    "beforeDevCommand": "pnpm localdev",
+    "beforeDevCommand": "node scripts/prepareSidecars.js && pnpm localdev",
     "devUrl": "http://localhost:3001",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "node scripts/prepareSidecars.js && pnpm build",
     "frontendDist": "../.output/public"
   },
   "app": {

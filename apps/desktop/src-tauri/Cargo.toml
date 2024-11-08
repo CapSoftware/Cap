@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.0-beta.7"
+version = "0.3.0-beta.8"
 description = "Beautiful, shareable screen recordings."
 authors = ["you"]
 edition = "2021"
@@ -25,7 +25,6 @@ tauri = { workspace = true, features = [
 	"image-png",
 ] }
 tauri-plugin-shell = "2.0.0"
-tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 tauri-plugin-store = "2.0.0"
 tauri-plugin-os = "2.0.0"
 tauri-plugin-process = "2.0.0"
@@ -45,9 +44,9 @@ swift-rs = "1.0.6"
 nix = { version = "0.29.0", features = ["fs"] }
 tokio.workspace = true
 uuid = { version = "1.10.0", features = ["v4"] }
-scap = { git = "https://github.com/CapSoftware/scap", rev = "691bd88798d3" }
+scap.workspace = true
 ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
-wgpu = "22.1.0"
+wgpu.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
 image = "0.25.2"
 tauri-plugin-fs = "2.0.0-rc.0"
@@ -71,7 +70,7 @@ base64 = "0.22.1"
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
 cap-rendering = { path = "../../../crates/rendering" }
-cap-ffmpeg = { path = "../../../crates/ffmpeg" }
+cap-ffmpeg-cli = { path = "../../../crates/ffmpeg-cli" }
 cap-editor = { path = "../../../crates/editor" }
 cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
@@ -95,6 +94,7 @@ windows = { version = "0.52.0", features = [
 	"Win32_Foundation",
 	"Win32_System",
 	"Win32_UI_WindowsAndMessaging",
+	"Win32_Graphics_Gdi",
 ] }
 # Lock the version of windows-capture used by scap@691bd88798d3
 # TODO: Remove this once scap uses the latest version of `windows` and `windows-capture`

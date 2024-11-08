@@ -444,6 +444,15 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
+          <Field name="Size During Zoom" icon={<IconCapEnlarge />}>
+            <Slider
+              value={[project.camera.zoom_size ?? 20]}
+              onChange={(v) => setProject("camera", "zoom_size", v[0])}
+              minValue={10}
+              maxValue={60}
+              step={0.1}
+            />
+          </Field>
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
               value={[project.camera.rounding ?? 100.0]}
@@ -508,8 +517,9 @@ export function ConfigSidebar() {
             <Slider
               value={[project.cursor.size]}
               onChange={(v) => setProject("cursor", "size", v[0])}
-              minValue={500}
+              minValue={20}
               maxValue={300}
+              step={1}
             />
           </Field>
           <ComingSoonTooltip>
@@ -573,7 +583,7 @@ export function ConfigSidebar() {
           return (
             <div
               data-visible={state.timelineSelection?.type === "zoom"}
-              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-50 z-50"
+              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-50 z-50 animate-in slide-in-from-bottom-2 fade-in"
             >
               <div class="flex flex-row justify-between">
                 <EditorButton

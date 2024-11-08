@@ -127,10 +127,7 @@ pub struct OSPermissionsCheck {
 
 impl OSPermissionsCheck {
     pub fn necessary_granted(&self) -> bool {
-        self.screen_recording.permitted()
-            && self.microphone.permitted()
-            && self.camera.permitted()
-            && self.accessibility.permitted()
+        self.screen_recording.permitted() && self.accessibility.permitted()
     }
 }
 
@@ -150,10 +147,7 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
             },
             microphone: check_av_permission(AVMediaType::Audio),
             camera: check_av_permission(AVMediaType::Video),
-            accessibility: {
-                
-                check_accessibility_permission()
-            },
+            accessibility: { check_accessibility_permission() },
         }
     }
 

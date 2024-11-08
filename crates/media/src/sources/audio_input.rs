@@ -33,13 +33,11 @@ pub struct AudioInputSource {
 }
 
 impl AudioInputSource {
-    pub fn init(selected_audio_input: Option<&String>) -> Option<Self> {
-        println!("Selected audio input: {:?}", selected_audio_input);
+    pub fn init(selected_audio_input: &str) -> Option<Self> {
+        println!("Selected audio input: {selected_audio_input}",);
 
-        let mut devices = Self::get_devices();
-
-        selected_audio_input
-            .and_then(|device_name| devices.swap_remove_entry(device_name))
+        Self::get_devices()
+            .swap_remove_entry(selected_audio_input)
             .map(|(device_name, (device, config))| {
                 println!("Using audio device: {}", device_name);
 

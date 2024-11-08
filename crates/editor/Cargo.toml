@@ -7,7 +7,7 @@ edition = "2021"
 
 cap-media = { path = "../media" }
 cap-project = { path = "../project" }
-cap-ffmpeg = { path = "../ffmpeg" }
+cap-ffmpeg-cli = { path = "../ffmpeg-cli" }
 cap-rendering = { path = "../rendering" }
 
 tokio = { version = "1.39.2", features = ["macros", "process", "fs"] }

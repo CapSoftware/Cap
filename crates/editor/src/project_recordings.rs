@@ -9,7 +9,6 @@ pub struct Video {
     pub duration: f64,
     pub width: u32,
     pub height: u32,
-    pub fps: f32,
 }
 
 impl Video {
@@ -23,13 +22,10 @@ impl Video {
             .video()
             .unwrap();
 
-        let frame_rate = video_decoder.frame_rate().unwrap();
-
         Video {
             width: video_decoder.width(),
             height: video_decoder.height(),
-            duration: (input.duration() / 1_000_000) as f64,
-            fps: frame_rate.numerator() as f32 / frame_rate.denominator() as f32,
+            duration: input.duration() as f64 / 1_000_000.0,
         }
     }
 }
@@ -53,7 +49,7 @@ impl Audio {
             .unwrap();
 
         Audio {
-            duration: (input.duration() / 1_000_000) as f64,
+            duration: input.duration() as f64 / 1_000_000.0,
             sample_rate: audio_decoder.rate(),
             channels: audio_decoder.channels(),
         }

@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { getChangelogPosts } from "../../../utils/changelog";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
 export async function GET() {
   const allUpdates = getChangelogPosts();
 

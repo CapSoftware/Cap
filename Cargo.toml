@@ -1,15 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-	"apps/desktop/src-tauri",
-	"crates/rendering",
-	"crates/ffmpeg",
-	"crates/media",
-	"crates/utils",
-	"crates/project",
-	"crates/editor",
-	"crates/flags",
-]
+members = ["apps/desktop/src-tauri", "crates/*"]
 
 [workspace.dependencies]
 anyhow = "1.0.86"
@@ -29,3 +20,10 @@ tokio = { version = "1.39.3", features = [
 ] }
 tauri = { version = "2.0.0" }
 specta = { version = "=2.0.0-rc.20" }
+scap = { git = "https://github.com/CapSoftware/scap", rev = "4d6be030ba2b0cea565ccaee28b1999f25b8dd5d" }
+nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "c5c7e2298764", features = [
+	"input-native",
+	"serialize",
+] }
+nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "c5c7e2298764" }
+wgpu = "22.1.0"

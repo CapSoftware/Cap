@@ -27,7 +27,9 @@ function parseFrontmatter(fileContent: string) {
   return { metadata: metadata as ChangelogMetadata, content };
 }
 
-function getMDXFiles(dir: string) {
+const dir = path.join(process.cwd(), "content/changelog");
+
+function getMDXFiles() {
   return fs.readdirSync(dir).filter((file) => path.extname(file) === ".mdx");
 }
 
@@ -36,8 +38,8 @@ function readMDXFile(filePath: string) {
   return parseFrontmatter(rawContent);
 }
 
-function getMDXData(dir: string) {
-  let mdxFiles = getMDXFiles(dir);
+function getMDXData() {
+  let mdxFiles = getMDXFiles();
   return mdxFiles.map((file) => {
     let { metadata, content } = readMDXFile(path.join(dir, file));
     let slug = path.basename(file, path.extname(file));
@@ -50,5 +52,5 @@ function getMDXData(dir: string) {
 }
 
 export function getChangelogPosts() {
-  return getMDXData(path.join(process.cwd(), "content/changelog"));
+  return getMDXData();
 }

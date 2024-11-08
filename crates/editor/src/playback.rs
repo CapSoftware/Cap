@@ -121,7 +121,6 @@ impl Playback {
                 }
             }
 
-            println!("playback done");
             stop_tx.send(true).ok();
 
             event_tx.send(PlaybackEvent::Stop).ok();
