@@ -263,8 +263,10 @@ impl PipelineSourceTask for ScreenCaptureSource {
 
                                     let planes = pixel_buffer.planes();
 
-                                    frame.data_mut(0).copy_from_slice(&planes[0].data());
-                                    frame.data_mut(1).copy_from_slice(&planes[1].data());
+                                    let len = frame.data_mut(0).len();
+                                    frame.data_mut(0).copy_from_slice(&planes[0].data()[0..len]);
+                                    let len = frame.data_mut(1).len();
+                                    frame.data_mut(1).copy_from_slice(&planes[1].data()[0..len]);
 
                                     if let Err(_) = output.send(frame) {
                                         eprintln!(

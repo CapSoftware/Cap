@@ -321,10 +321,7 @@ fn run_camera_feed(
                     format.set_format(raw_buffer.source_frame_format());
                     let converter = FrameConverter::build(format);
                     if let Some(ready_signal) = ready_signal.take() {
-                        let mut video_info = converter.video_info;
-                        video_info.pixel_format = ffmpeg::format::Pixel::NV12;
-
-                        ready_signal.send(Ok(video_info)).unwrap();
+                        ready_signal.send(Ok(converter.video_info)).unwrap();
                     }
                     converter
                 });
@@ -348,7 +345,7 @@ fn run_camera_feed(
 
                 if let Some(ref raw_data) = maybe_raw_data {
                     let frame = RawCameraFrame {
-                        frame: converter.nv12(&raw_buffer),
+                        frame: converter.raw(&raw_buffer),
                         captured_at,
                     };
                     if dropping_send(raw_data, frame).is_err() {
@@ -453,7 +450,7 @@ impl FrameConverter {
         data
     }
 
-    fn nv12(&mut self, buffer: &nokhwa::Buffer) -> FFVideo {
+    fn raw(&mut self, buffer: &nokhwa::Buffer) -> FFVideo {
         self.video_info.wrap_frame(buffer.buffer(), 0)
     }
 }
