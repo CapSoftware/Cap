@@ -1,4 +1,4 @@
-use cap_gpu_converters::{NV12Input, NV12ToRGBA, YUYVToRGBA};
+use cap_gpu_converters::{NV12Input, NV12ToRGBA, UYVYToRGBA};
 use ffmpeg::software::scaling;
 use flume::{Receiver, Sender, TryRecvError};
 use nokhwa::{utils::*, Camera};
@@ -321,7 +321,10 @@ fn run_camera_feed(
                     format.set_format(raw_buffer.source_frame_format());
                     let converter = FrameConverter::build(format);
                     if let Some(ready_signal) = ready_signal.take() {
-                        ready_signal.send(Ok(converter.video_info)).unwrap();
+                        let mut video_info = converter.video_info;
+                        video_info.pixel_format = ffmpeg::format::Pixel::NV12;
+
+                        ready_signal.send(Ok(video_info)).unwrap();
                     }
                     converter
                 });
@@ -345,7 +348,7 @@ fn run_camera_feed(
 
                 if let Some(ref raw_data) = maybe_raw_data {
                     let frame = RawCameraFrame {
-                        frame: converter.raw(&raw_buffer),
+                        frame: converter.nv12(&raw_buffer),
                         captured_at,
                     };
                     if dropping_send(raw_data, frame).is_err() {
@@ -376,7 +379,7 @@ struct FrameConverter {
 
 pub enum HwConverter {
     NV12(NV12ToRGBA),
-    YUYV(YUYVToRGBA),
+    UYVY(UYVYToRGBA),
 }
 
 impl FrameConverter {
@@ -408,8 +411,8 @@ impl FrameConverter {
             FrameFormat::NV12 => Some(HwConverter::NV12(futures::executor::block_on(
                 NV12ToRGBA::new(),
             ))),
-            FrameFormat::YUYV => Some(HwConverter::YUYV(futures::executor::block_on(
-                YUYVToRGBA::new(),
+            FrameFormat::YUYV => Some(HwConverter::UYVY(futures::executor::block_on(
+                UYVYToRGBA::new(),
             ))),
             _ => None,
         };
@@ -431,7 +434,7 @@ impl FrameConverter {
                 resolution.width(),
                 resolution.height(),
             ),
-            Some(HwConverter::YUYV(converter)) => {
+            Some(HwConverter::UYVY(converter)) => {
                 converter.convert(buffer.buffer(), resolution.width(), resolution.height())
             }
             None => {
@@ -450,7 +453,7 @@ impl FrameConverter {
         data
     }
 
-    fn raw(&mut self, buffer: &nokhwa::Buffer) -> FFVideo {
+    fn nv12(&mut self, buffer: &nokhwa::Buffer) -> FFVideo {
         self.video_info.wrap_frame(buffer.buffer(), 0)
     }
 }

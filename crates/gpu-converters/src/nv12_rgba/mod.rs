@@ -11,6 +11,7 @@ pub struct NV12ToRGBA {
 
 impl NV12ToRGBA {
     pub async fn new() -> Self {
+        println!("NV12ToRGBA");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
 
         // Get adapter for GPU

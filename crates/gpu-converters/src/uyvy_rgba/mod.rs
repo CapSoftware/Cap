@@ -1,13 +1,18 @@
 use wgpu::{self, util::DeviceExt};
 
-pub struct YUYVToRGBA {
+use crate::{
+    util::{copy_texture_to_buffer_command, read_buffer_to_vec},
+    uyvy,
+};
+
+pub struct UYVYToRGBA {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 }
 
-impl YUYVToRGBA {
+impl UYVYToRGBA {
     pub async fn new() -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
 
@@ -82,27 +87,9 @@ impl YUYVToRGBA {
         }
     }
 
-    pub fn convert(&self, yuyv_data: &[u8], width: u32, height: u32) -> Vec<u8> {
-        // Create YUYV texture
-        let yuyv_texture = self.device.create_texture_with_data(
-            &self.queue,
-            &wgpu::TextureDescriptor {
-                label: Some("YUYV Texture"),
-                size: wgpu::Extent3d {
-                    width: width / 2,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Uint,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            },
-            wgpu::util::TextureDataOrder::MipMajor,
-            yuyv_data,
-        );
+    pub fn convert(&self, uyvy_data: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let uyvy_texture =
+            uyvy::create_input_texture(&self.device, &self.queue, uyvy_data, width, height);
 
         // Create output texture
         let output_texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -128,7 +115,7 @@ impl YUYVToRGBA {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(
-                        &yuyv_texture.create_view(&Default::default()),
+                        &uyvy_texture.create_view(&Default::default()),
                     ),
                 },
                 wgpu::BindGroupEntry {
@@ -157,50 +144,12 @@ impl YUYVToRGBA {
             compute_pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
         }
 
-        // Create buffer for reading back the results
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Output Buffer"),
-            size: (width * height * 4) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
-        // Copy texture to buffer
-        encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
-                texture: &output_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::ImageCopyBuffer {
-                buffer: &output_buffer,
-                layout: wgpu::ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width * 4),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+        let output_buffer =
+            copy_texture_to_buffer_command(&self.device, &output_texture, &mut encoder);
 
         // Submit commands
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        // Read back the results
-        let buffer_slice = output_buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            tx.send(result).unwrap();
-        });
-        self.device.poll(wgpu::Maintain::Wait);
-        rx.recv().unwrap().unwrap();
-
-        let data = buffer_slice.get_mapped_range();
-        data.to_vec()
+        read_buffer_to_vec(&output_buffer, &self.device)
     }
 }

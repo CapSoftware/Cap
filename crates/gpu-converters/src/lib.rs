@@ -1,8 +1,12 @@
 mod nv12_rgba;
-mod yuyv_rgba;
+mod util;
+mod uyvy;
+mod uyvy_nv12;
+mod uyvy_rgba;
 
 pub use nv12_rgba::NV12ToRGBA;
-pub use yuyv_rgba::YUYVToRGBA;
+pub use uyvy_nv12::UYVYToNV12;
+pub use uyvy_rgba::UYVYToRGBA;
 
 pub struct NV12Input<'a> {
     y_data: &'a [u8],
