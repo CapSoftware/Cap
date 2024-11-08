@@ -1,12 +1,6 @@
-use wgpu::{
-    self,
-    util::{BufferInitDescriptor, DeviceExt},
-};
+use wgpu::{self, util::DeviceExt};
 
-use crate::{
-    util::{copy_texture_to_buffer_command, read_buffer_to_vec},
-    uyvy,
-};
+use crate::{util::read_buffer_to_vec, uyvy};
 
 pub struct UYVYToNV12 {
     device: wgpu::Device,
