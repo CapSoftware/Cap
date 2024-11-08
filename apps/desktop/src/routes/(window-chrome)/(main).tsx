@@ -101,24 +101,30 @@ export default function () {
     }
   });
 
+  setTitlebar("hideMaximize", true);
+  setTitlebar(
+    "items",
+    <div
+      dir={ostype() === "windows" ? "rtl" : "auto"}
+      class="flex mx-3 items-center gap-[0.25rem]"
+    >
+      <Button
+        variant="secondary"
+        size="xs"
+        onClick={() => {
+          commands.openFeedbackWindow();
+        }}
+      >
+        Feedback
+      </Button>
+      <div>
+        <ChangelogButton />
+      </div>
+    </div>
+  );
+
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
-      <div class="absolute top-3 right-3">
-        <div class="flex items-center gap-[0.25rem]">
-          <Button
-            variant="secondary"
-            size="xs"
-            onClick={() => {
-              commands.openFeedbackWindow();
-            }}
-          >
-            Feedback
-          </Button>
-          <div>
-            <ChangelogButton />
-          </div>
-        </div>
-      </div>
       <div class="flex items-center justify-between pb-[0.25rem]">
         <IconCapLogoFull class="w-[90px] h-auto" />
         <button
@@ -186,6 +192,8 @@ function useRequestPermission() {
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
+import titlebarState, { setTitlebar } from "~/utils/titlebar-state";
+import { type as ostype } from "@tauri-apps/plugin-os";
 
 let hasChecked = false;
 function createUpdateCheck() {

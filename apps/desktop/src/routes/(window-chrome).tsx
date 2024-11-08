@@ -1,9 +1,11 @@
 import type { RouteSectionProps } from "@solidjs/router";
-import { onMount, ParentProps, Suspense } from "solid-js";
+import { onCleanup, onMount, ParentProps, Suspense } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Transition } from "solid-transition-group";
+import titlebarState, { initializeTitlebar } from "~/utils/titlebar-state";
 
-import Header from "../components/Header";
+import Titlebar from "~/components/titlebar/Titlebar";
+import { type as ostype } from "@tauri-apps/plugin-os";
 
 export const route = {
   info: {
@@ -12,20 +14,34 @@ export const route = {
 };
 
 export default function (props: RouteSectionProps) {
-  onMount(() => {
+  let unlistenResize: () => void | undefined;
+
+  onMount(async () => {
+    unlistenResize = await initializeTitlebar();
     if (location.pathname === "/") getCurrentWindow().show();
   });
 
+  onCleanup(() => {
+    unlistenResize?.();
+  });
+
   return (
-    <div class="rounded-[1.5rem] bg-gray-100 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden">
-      <Header />
+    <div
+      class={`${
+        titlebarState.maximized
+          ? ostype() === "macos"
+            ? "rounded-[10px]"
+            : "rounded-0"
+          : "rounded-[1.5rem]"
+      } bg-gray-100 border-gray-200 border w-screen h-screen flex flex-col overflow-hidden transition-[border-radius] duration-300`}
+    >
       {/* <Transition
         mode="outin"
         enterActiveClass="transition-opacity duration-100"
         exitActiveClass="transition-opacity duration-100"
         enterClass="opacity-0"
         exitToClass="opacity-0"
-      > */}
+        > */}
       <Suspense
         fallback={
           <div class="w-full h-full flex items-center justify-center bg-gray-100">
@@ -35,6 +51,7 @@ export default function (props: RouteSectionProps) {
           </div>
         }
       >
+        <Titlebar />
         <Inner>{props.children}</Inner>
       </Suspense>
       {/* </Transition> */}

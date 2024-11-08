@@ -1,7 +1,14 @@
 import { Button } from "@cap/ui-solid";
 import { cx } from "cva";
-import { Match, Show, Switch, createResource } from "solid-js";
-import { platform } from "@tauri-apps/plugin-os";
+import {
+  Match,
+  Show,
+  Switch,
+  createResource,
+  onCleanup,
+  onMount,
+} from "solid-js";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { createStore, reconcile } from "solid-js/store";
 
 import { type RenderProgress, commands } from "~/utils/tauri";
@@ -10,15 +17,25 @@ import { useEditorContext } from "./context";
 import { Dialog, DialogContent } from "./ui";
 
 export function Header() {
-  const [os] = createResource(() => platform());
+  let unlistenResize: () => void | undefined;
 
-  return (
-    <header
+  onMount(async () => {
+    unlistenResize = await initializeTitlebar();
+  });
+
+  onCleanup(() => {
+    unlistenResize?.();
+  });
+
+  setTitlebar("border", false);
+  setTitlebar("height", "4.5rem");
+  setTitlebar(
+    "items",
+    <div
       class={cx(
-        "flex flex-row justify-between items-center",
-        os() === "macos" && "pl-[4.3rem]"
+        "flex flex-row justify-between items-center w-full cursor-default",
+        ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem] pr-3"
       )}
-      data-tauri-drag-region
     >
       <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]">
         <div class="flex flex-row items-center gap-[0.375rem]">
@@ -37,14 +54,18 @@ export function Header() {
         <ShareButton />
         <ExportButton />
       </div>
-    </header>
+    </div>
   );
+
+  return <Titlebar />;
 }
 
 import { Channel } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { createMutation } from "@tanstack/solid-query";
+import Titlebar from "~/components/titlebar/Titlebar";
+import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
 
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
@@ -159,7 +180,10 @@ function ShareButton() {
     mutationFn: async () => {
       const res = await commands.uploadRenderedVideo(
         videoId,
-        project ? project : presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+        project
+          ? project
+          : presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+        null
       );
       if (res.status !== "ok") throw new Error(res.error);
     },

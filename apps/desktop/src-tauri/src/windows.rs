@@ -146,8 +146,8 @@ impl CapWindow {
                     .resizable(false)
                     .maximized(false)
                     .transparent(true)
-                    .theme(Some(tauri::Theme::Light))
-                    .shadow(true);
+                    .theme(Some(tauri::Theme::Light));
+                // .shadow(true);
 
                 #[cfg(target_os = "windows")]
                 {
@@ -181,6 +181,7 @@ impl CapWindow {
                 let mut window_builder = self
                     .window_builder(app, format!("/editor?id={project_id}"))
                     .inner_size(1150.0, 800.0)
+                    .maximizable(true)
                     .theme(Some(tauri::Theme::Light));
 
                 #[cfg(target_os = "macos")]
@@ -423,7 +424,13 @@ impl CapWindow {
         };
 
         if let Some(position) = id.traffic_lights_position() {
+            println!("Adding TRAFFIC LIGHTS for {}: {:?}", id.title(), position);
             add_traffic_lights(&window, position);
+        }
+
+        #[cfg(target_os = "macos")]
+        if id.label() == CapWindowId::Main.label() {
+            make_webview_transparent(&window);
         }
 
         Ok(window)
@@ -503,4 +510,24 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
             })
             .ok();
     }
+}
+
+/// Makes the background of the WKWebView layer transparent.
+/// This differs from Tauri's implementation as it does not change the window background which causes performance performance issues and artifacts when shadows are enabled on the window.
+/// Use Tauri's implementation to make the window itself transparent.
+#[cfg(target_os = "macos")]
+fn make_webview_transparent(target: &WebviewWindow) -> tauri::Result<()> {
+    use cocoa::{
+        appkit::NSColor,
+        base::{id, nil},
+        foundation::NSString,
+    };
+    use objc::{class, msg_send, sel, sel_impl};
+
+    target.with_webview(|webview| unsafe {
+        let wkwebview = webview.inner() as id;
+        let no: id = msg_send![class!(NSNumber), numberWithBool:0];
+        // [https://developer.apple.com/documentation/webkit/webview/1408486-drawsbackground]
+        let _: id = msg_send![wkwebview, setValue:no forKey: NSString::alloc(nil).init_str("drawsBackground")];
+    })
 }
