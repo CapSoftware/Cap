@@ -47,10 +47,17 @@ impl AsyncVideoDecoder {
             let mut context = codec::context::Context::new_with_codec(decoder_codec);
             context.set_parameters(input_stream.parameters()).unwrap();
 
+            let input_stream_index = input_stream.index();
+            let time_base = input_stream.time_base();
+            let frame_rate = input_stream.rate();
+
+            // Create a decoder for the video stream
+            let mut decoder = context.decoder().video().unwrap();
+
             let hw_device: Option<HwDevice> = {
                 #[cfg(target_os = "macos")]
                 {
-                    context
+                    decoder
                         .try_use_hw_device(
                             AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
                             Pixel::NV12,
@@ -61,13 +68,6 @@ impl AsyncVideoDecoder {
                 #[cfg(not(target_os = "macos"))]
                 None
             };
-
-            let input_stream_index = input_stream.index();
-            let time_base = input_stream.time_base();
-            let frame_rate = input_stream.rate();
-
-            // Create a decoder for the video stream
-            let mut decoder = context.decoder().video().unwrap();
 
             use ffmpeg::format::Pixel;
             use ffmpeg::software::scaling::{context::Context, flag::Flags};

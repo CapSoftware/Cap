@@ -110,7 +110,7 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
         }
         extern "C" fn on_window_did_resize<R: Runtime>(this: &Object, _cmd: Sel, notification: id) {
             unsafe {
-                with_window_state(&*this, |state: &mut WindowState<R>| {
+                with_window_state(this, |state: &mut WindowState<R>| {
                     position_window_controls(
                         UnsafeWindowHandle(
                             state
@@ -205,7 +205,7 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             notification: id,
         ) {
             unsafe {
-                with_window_state(&*this, |state: &mut WindowState<R>| {
+                with_window_state(this, |state: &mut WindowState<R>| {
                     state
                         .window
                         .emit("did-enter-fullscreen", ())
@@ -222,7 +222,7 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             notification: id,
         ) {
             unsafe {
-                with_window_state(&*this, |state: &mut WindowState<R>| {
+                with_window_state(this, |state: &mut WindowState<R>| {
                     state
                         .window
                         .emit("will-enter-fullscreen", ())
@@ -239,7 +239,7 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             notification: id,
         ) {
             unsafe {
-                with_window_state(&*this, |state: &mut WindowState<R>| {
+                with_window_state(this, |state: &mut WindowState<R>| {
                     state
                         .window
                         .emit("did-exit-fullscreen", ())
@@ -266,7 +266,7 @@ pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>
             notification: id,
         ) {
             unsafe {
-                with_window_state(&*this, |state: &mut WindowState<R>| {
+                with_window_state(this, |state: &mut WindowState<R>| {
                     state
                         .window
                         .emit("will-exit-fullscreen", ())

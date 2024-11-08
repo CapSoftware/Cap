@@ -1,6 +1,7 @@
+use cap_gpu_converters::{NV12Input, NV12ToRGBA, UYVYToNV12, UYVYToRGBA};
 use ffmpeg::software::scaling;
 use flume::{Receiver, Sender, TryRecvError};
-use nokhwa::{pixel_format::*, utils::*, Camera};
+use nokhwa::{utils::*, Camera};
 use std::{
     thread::{self, JoinHandle},
     time::Instant,
@@ -82,7 +83,7 @@ impl CameraFeed {
         {
             use windows::Win32::Media::MediaFoundation::{MFStartup, MFSTARTUP_FULL};
             use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
-            
+
             // On Windows, wrap the entire operation in a catch_unwind to prevent crashes
             match std::panic::catch_unwind(|| {
                 // Initialize COM and Media Foundation
@@ -178,13 +179,16 @@ fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
 
     // TODO: Make selected format more flexible
     // let format = RequestedFormat::new::<RgbAFormat>(RequestedFormatType::AbsoluteHighestResolution);
-    let format = RequestedFormat::new::<RgbAFormat>(RequestedFormatType::ClosestIgnoringFormat {
-        resolution: Resolution {
-            width_x: 1920,
-            height_y: 1080,
+    let format = RequestedFormat::with_formats(
+        RequestedFormatType::ClosestIgnoringFormat {
+            resolution: Resolution {
+                width_x: 1920,
+                height_y: 1080,
+            },
+            frame_rate: 30,
         },
-        frame_rate: 30,
-    });
+        &[FrameFormat::NV12],
+    );
 
     let index = info.index().clone();
 
@@ -367,6 +371,12 @@ struct FrameConverter {
     video_info: VideoInfo,
     context: scaling::Context,
     pub format: FrameFormat,
+    hw_converter: Option<HwConverter>,
+}
+
+pub enum HwConverter {
+    NV12(NV12ToRGBA),
+    UYVY(UYVYToRGBA),
 }
 
 impl FrameConverter {
@@ -394,22 +404,45 @@ impl FrameConverter {
         )
         .unwrap();
 
+        let hw_converter = match camera_format.format() {
+            FrameFormat::NV12 => Some(HwConverter::NV12(futures::executor::block_on(
+                NV12ToRGBA::new(),
+            ))),
+            FrameFormat::YUYV => Some(HwConverter::UYVY(futures::executor::block_on(
+                UYVYToRGBA::new(),
+            ))),
+            _ => None,
+        };
+
         Self {
             video_info,
             context,
             format: camera_format.format(),
+            hw_converter,
         }
     }
 
     fn rgba(&mut self, buffer: &nokhwa::Buffer) -> Vec<u8> {
         let resolution = buffer.resolution();
 
-        let input_frame = self.video_info.wrap_frame(buffer.buffer(), 0);
-        let mut rgba_frame = FFVideo::empty();
+        let mut data = match &self.hw_converter {
+            Some(HwConverter::NV12(converter)) => converter.convert(
+                NV12Input::from_buffer(buffer.buffer(), resolution.width(), resolution.height()),
+                resolution.width(),
+                resolution.height(),
+            ),
+            Some(HwConverter::UYVY(converter)) => {
+                converter.convert(buffer.buffer(), resolution.width(), resolution.height())
+            }
+            None => {
+                let input_frame = self.video_info.wrap_frame(buffer.buffer(), 0);
+                let mut rgba_frame = FFVideo::empty();
 
-        self.context.run(&input_frame, &mut rgba_frame).unwrap();
+                self.context.run(&input_frame, &mut rgba_frame).unwrap();
 
-        let mut data = rgba_frame.data(0).to_vec();
+                rgba_frame.data(0).to_vec()
+            }
+        };
 
         data.extend_from_slice(&resolution.height().to_le_bytes());
         data.extend_from_slice(&resolution.width().to_le_bytes());

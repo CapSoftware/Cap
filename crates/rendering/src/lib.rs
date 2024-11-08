@@ -12,7 +12,7 @@ use wgpu::util::DeviceExt;
 use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
 use cap_project::{
-    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorClickEvent,
+    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop,
     CursorData, CursorMoveEvent, ProjectConfiguration, XY,
 };
 
@@ -433,7 +433,7 @@ impl ProjectUniforms {
         let output_size = Self::get_output_size(options, project);
         let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
 
-        let output_aspect = output_size.x as f64 / output_size.y as f64;
+        let output_aspect = output_size.x / output_size.y;
 
         let crop = Self::get_crop(options, project);
 
@@ -629,7 +629,7 @@ impl ProjectUniforms {
 
                 // Calculate camera motion blur based on zoom transition
                 let camera_motion_blur = {
-                    let base_blur = project.motion_blur.unwrap_or(0.2) as f32;
+                    let base_blur = project.motion_blur.unwrap_or(0.2);
                     let zoom_delta = (current_zoom - prev_zoom).abs() as f32;
 
                     // Calculate a smooth transition factor

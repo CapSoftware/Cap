@@ -138,7 +138,7 @@ pub fn spawn_cursor_recorder(
 #[cfg(target_os = "macos")]
 fn get_cursor_image_data() -> Option<Vec<u8>> {
     use cocoa::base::{id, nil};
-    use cocoa::foundation::{NSData, NSUInteger};
+    use cocoa::foundation::NSUInteger;
     use objc::rc::autoreleasepool;
     use objc::runtime::Class;
     use objc::*;

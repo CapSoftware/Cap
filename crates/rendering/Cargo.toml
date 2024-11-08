@@ -9,7 +9,7 @@ bytemuck = { version = "1.7", features = ["derive"] }
 futures-intrusive = "0.5.0"
 serde = "1.0.209"
 specta.workspace = true
-wgpu = "22.1.0"
+wgpu.workspace = true
 image = "0.25.2"
 
 cap-ffmpeg-cli = { path = "../ffmpeg-cli" }

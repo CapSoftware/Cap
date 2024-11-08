@@ -77,7 +77,7 @@ pub trait CodecContextExt {
     ) -> Result<HwDevice, &'static str>;
 }
 
-impl CodecContextExt for codec::context::Context {
+impl CodecContextExt for codec::decoder::decoder::Decoder {
     fn try_use_hw_device(
         &mut self,
         device_type: AVHWDeviceType,
@@ -123,3 +123,36 @@ impl CodecContextExt for codec::context::Context {
         }
     }
 }
+
+// impl CodecContextExt for codec::encoder::video::Video {
+//     fn try_use_hw_device(
+//         &mut self,
+//         device_type: AVHWDeviceType,
+//         pix_fmt: Pixel,
+//     ) -> Result<HwDevice, &'static str> {
+//         unsafe {
+//             let mut hw_device_ctx = null_mut();
+//             if av_hwdevice_ctx_create(&mut hw_device_ctx, device_type, null(), null_mut(), 0) < 0 {
+//                 return Err("failed to create hw device context");
+//             }
+
+//             let hw_frames_ref = av_hwframe_ctx_alloc(hw_device_ctx);
+//             let frames_ctx = (*hw_frames_ref).data as *mut AVHWFramesContext;
+//             (*frames_ctx).format = self.format().into();
+//             (*frames_ctx).sw_format = AVPixelFormat::AV_PIX_FMT_NV12;
+//             (*frames_ctx).width = self.width() as i32;
+//             (*frames_ctx).height = self.height() as i32;
+//             (*frames_ctx).initial_pool_size = 20;
+
+//             av_hwframe_ctx_init(hw_frames_ref);
+
+//             (*self.as_mut().as_mut_ptr()).hw_frames_ctx = av_buffer_ref(hw_frames_ref);
+
+//             Ok(HwDevice {
+//                 device_type,
+//                 ctx: hw_device_ctx,
+//                 pix_fmt,
+//             })
+//         }
+//     }
+// }
