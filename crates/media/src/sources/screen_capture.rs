@@ -263,10 +263,24 @@ impl PipelineSourceTask for ScreenCaptureSource {
 
                                     let planes = pixel_buffer.planes();
 
-                                    let len = frame.data_mut(0).len();
-                                    frame.data_mut(0).copy_from_slice(&planes[0].data()[0..len]);
-                                    let len = frame.data_mut(1).len();
-                                    frame.data_mut(1).copy_from_slice(&planes[1].data()[0..len]);
+                                    for (i, plane) in planes.into_iter().enumerate() {
+                                        let data = plane.data();
+
+                                        for y in 0..plane.height() {
+                                            let buffer_y_offset = y * plane.bytes_per_row();
+                                            let frame_y_offset = y * frame.stride(i);
+
+                                            let num_bytes =
+                                                frame.stride(i).min(plane.bytes_per_row());
+
+                                            frame.data_mut(i)
+                                                [frame_y_offset..frame_y_offset + num_bytes]
+                                                .copy_from_slice(
+                                                    &data[buffer_y_offset
+                                                        ..buffer_y_offset + num_bytes],
+                                                );
+                                        }
+                                    }
 
                                     if let Err(_) = output.send(frame) {
                                         eprintln!(
