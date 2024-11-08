@@ -1113,8 +1113,8 @@ fn draw_cursor(
         ],
         screen_bounds: uniforms.display.target_bounds,
         cursor_size: cursor_size_percentage,
-        last_click_time: last_click_time.min(0.5),
-        velocity: [0.0, 0.0],
+        last_click_time,
+        velocity,
         motion_blur_amount,
         _alignment: [0.0; 7],
     };
