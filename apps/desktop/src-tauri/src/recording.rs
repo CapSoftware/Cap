@@ -5,10 +5,10 @@ use serde::Serialize;
 use specta::Type;
 use std::collections::HashMap;
 use std::fs::File;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::path::PathBuf;
 use tokio::sync::oneshot;
 
 use crate::cursor::spawn_cursor_recorder;
@@ -206,7 +206,7 @@ pub async fn start(
     let screen_config = screen_source.info();
     let screen_bounds = screen_source.bounds;
 
-    let output_config = screen_config.scaled(1920, 30);
+    let output_config = screen_config; // .scaled(1920, 30);
     let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
     let screen_encoder = H264Encoder::init(
         "screen",
@@ -215,7 +215,7 @@ pub async fn start(
     )?;
     pipeline_builder = pipeline_builder
         .source("screen_capture", screen_source)
-        .pipe("screen_capture_filter", screen_filter)
+        // .pipe("screen_capture_filter", screen_filter)
         .sink("screen_capture_encoder", screen_encoder);
 
     if let Some(mic_source) = recording_options
@@ -241,7 +241,7 @@ pub async fn start(
 
     if let Some(camera_source) = CameraSource::init(camera_feed) {
         let camera_config = camera_source.info();
-        let output_config = camera_config.scaled(1920, 30);
+        let output_config = camera_config; //.scaled(1920, 30);
         camera_output_path = Some(content_dir.join("camera.mp4"));
 
         let camera_filter = VideoFilter::init("camera", camera_config, output_config)?;
@@ -263,9 +263,11 @@ pub async fn start(
     let stop_signal = Arc::new(AtomicBool::new(false));
 
     // Initialize default values for cursor channels
-    let (mouse_moves, mouse_clicks) = if FLAGS.record_mouse {
-        spawn_cursor_recorder(stop_signal.clone(), screen_bounds, content_dir, cursors_dir)
-    } else {
+    let (mouse_moves, mouse_clicks) =
+    // if FLAGS.record_mouse
+    {
+    //     spawn_cursor_recorder(stop_signal.clone(), screen_bounds, content_dir, cursors_dir)
+    // } else {
         // Create dummy channels that will never receive data
         let (move_tx, move_rx) = oneshot::channel();
         let (click_tx, click_rx) = oneshot::channel();
