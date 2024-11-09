@@ -2,7 +2,7 @@ use cap_flags::FLAGS;
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
-    frame::{Frame, FrameType},
+    frame::FrameType,
     Target,
 };
 use serde::{Deserialize, Serialize};
@@ -88,7 +88,8 @@ impl ScreenCaptureSource {
                     true
                 }
                 _ => false,
-            }).cloned()
+            })
+            .cloned()
             .collect();
 
         let (crop_area, bounds) = match capture_target {
@@ -126,7 +127,7 @@ impl ScreenCaptureSource {
             show_cursor: !FLAGS.zoom,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
-            output_type: FrameType::BGRAFrame,
+            output_type: FrameType::YUVFrame,
             output_resolution,
             crop_area,
             target,
@@ -139,7 +140,7 @@ impl ScreenCaptureSource {
             options,
             target: capture_target.clone(),
             bounds,
-            video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps),
+            video_info: VideoInfo::from_raw(RawVideoFormat::Nv12, frame_width, frame_height, fps),
         }
     }
 
@@ -241,66 +242,47 @@ impl PipelineSourceTask for ScreenCaptureSource {
                         println!("Screen recording started.");
                     }
 
-                    match capturer.get_next_frame() {
-                        Ok(Frame::BGRA(frame)) => {
-                            if frame.height == 0 || frame.width == 0 {
+                    match capturer.raw().get_next_pixel_buffer() {
+                        Ok(pixel_buffer) => {
+                            if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
                                 continue;
                             }
 
-                            let raw_timestamp = RawNanoseconds(frame.display_time);
+                            let raw_timestamp = RawNanoseconds(pixel_buffer.display_time());
                             match clock.timestamp_for(raw_timestamp) {
                                 None => {
                                     eprintln!("Clock is currently stopped. Dropping frames.");
                                 }
                                 Some(timestamp) => {
-                                    let mut buffer = FFVideo::new(
+                                    let mut frame = FFVideo::new(
                                         self.video_info.pixel_format,
                                         self.video_info.width,
                                         self.video_info.height,
                                     );
-                                    buffer.set_pts(Some(timestamp));
+                                    frame.set_pts(Some(timestamp));
 
-                                    let bytes_per_pixel = 4;
-                                    let width_in_bytes = frame.width as usize * bytes_per_pixel;
-                                    let height = frame.height as usize;
+                                    let planes = pixel_buffer.planes();
 
-                                    let src_data = &frame.data;
+                                    for (i, plane) in planes.into_iter().enumerate() {
+                                        let data = plane.data();
 
-                                    let src_stride = src_data.len() / height;
-                                    let dst_stride = buffer.stride(0);
+                                        for y in 0..plane.height() {
+                                            let buffer_y_offset = y * plane.bytes_per_row();
+                                            let frame_y_offset = y * frame.stride(i);
 
-                                    if src_data.len() < src_stride * height {
-                                        eprintln!("Frame data size mismatch.");
-                                        continue;
-                                    }
+                                            let num_bytes =
+                                                frame.stride(i).min(plane.bytes_per_row());
 
-                                    if src_stride < width_in_bytes {
-                                        eprintln!(
-                                            "Source stride is less than expected width in bytes."
-                                        );
-                                        continue;
-                                    }
-
-                                    if buffer.data(0).len() < dst_stride * height {
-                                        eprintln!("Destination data size mismatch.");
-                                        continue;
-                                    }
-
-                                    {
-                                        let dst_data = buffer.data_mut(0);
-
-                                        for y in 0..height {
-                                            let src_offset = y * src_stride;
-                                            let dst_offset = y * dst_stride;
-                                            dst_data[dst_offset..dst_offset + width_in_bytes]
+                                            frame.data_mut(i)
+                                                [frame_y_offset..frame_y_offset + num_bytes]
                                                 .copy_from_slice(
-                                                    &src_data
-                                                        [src_offset..src_offset + width_in_bytes],
+                                                    &data[buffer_y_offset
+                                                        ..buffer_y_offset + num_bytes],
                                                 );
                                         }
                                     }
 
-                                    if let Err(_) = output.send(buffer) {
+                                    if let Err(_) = output.send(frame) {
                                         eprintln!(
                                             "Pipeline is unreachable. Shutting down recording."
                                         );
@@ -309,7 +291,6 @@ impl PipelineSourceTask for ScreenCaptureSource {
                                 }
                             };
                         }
-                        Ok(_) => unreachable!(),
                         Err(error) => {
                             eprintln!("Capture error: {error}");
                             break;

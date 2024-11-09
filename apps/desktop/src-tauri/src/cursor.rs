@@ -138,7 +138,7 @@ pub fn spawn_cursor_recorder(
 #[cfg(target_os = "macos")]
 fn get_cursor_image_data() -> Option<Vec<u8>> {
     use cocoa::base::{id, nil};
-    use cocoa::foundation::{NSData, NSUInteger};
+    use cocoa::foundation::NSUInteger;
     use objc::rc::autoreleasepool;
     use objc::runtime::Class;
     use objc::*;
@@ -185,15 +185,15 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
 
 #[cfg(windows)]
 fn get_cursor_image_data() -> Option<Vec<u8>> {
+    use windows::Win32::Foundation::{BOOL, HWND, POINT};
+    use windows::Win32::Graphics::Gdi::{
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC,
+        DeleteObject, GetDC, GetObjectA, ReleaseDC, SelectObject, BITMAP, BITMAPINFO,
+        BITMAPINFOHEADER, DIB_RGB_COLORS, SRCCOPY,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{GetCursorInfo, CURSORINFO, CURSORINFO_FLAGS};
     use windows::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
-    use windows::Win32::Graphics::Gdi::{
-        CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-        GetDC, GetObjectA, ReleaseDC, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
-        DIB_RGB_COLORS, SRCCOPY, BitBlt,
-    };
-    use windows::Win32::Foundation::{BOOL, POINT, HWND};
-    
+
     unsafe {
         // Get cursor info
         let mut cursor_info = CURSORINFO {
@@ -202,7 +202,7 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
             hCursor: Default::default(),
             ptScreenPos: POINT::default(),
         };
-        
+
         // Handle Result return type
         if GetCursorInfo(&mut cursor_info).is_err() {
             return None;
@@ -226,14 +226,15 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
             icon_info.hbmColor,
             std::mem::size_of::<BITMAP>() as i32,
             Some(&mut bitmap as *mut _ as *mut _),
-        ) == 0 {
+        ) == 0
+        {
             return None;
         }
 
         // Create compatible DC
         let screen_dc = GetDC(HWND(0));
         let mem_dc = CreateCompatibleDC(screen_dc);
-        
+
         // Create bitmap info header
         let bi = BITMAPINFOHEADER {
             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -256,14 +257,7 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
 
         // Create DIB section
         let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let dib = CreateDIBSection(
-            mem_dc,
-            &bitmap_info,
-            DIB_RGB_COLORS,
-            &mut bits,
-            None,
-            0,
-        );
+        let dib = CreateDIBSection(mem_dc, &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0);
 
         if dib.is_err() {
             return None;
@@ -285,7 +279,9 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
             cursor_info.ptScreenPos.x,
             cursor_info.ptScreenPos.y,
             SRCCOPY,
-        ).is_err() {
+        )
+        .is_err()
+        {
             return None;
         }
 
@@ -303,14 +299,16 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
         DeleteObject(icon_info.hbmMask);
 
         // Convert to PNG format
-        let image = image::RgbaImage::from_raw(
-            bitmap.bmWidth as u32,
-            bitmap.bmHeight as u32,
-            image_data,
-        )?;
+        let image =
+            image::RgbaImage::from_raw(bitmap.bmWidth as u32, bitmap.bmHeight as u32, image_data)?;
 
         let mut png_data = Vec::new();
-        image.write_to(&mut std::io::Cursor::new(&mut png_data), image::ImageFormat::Png).ok()?;
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_data),
+                image::ImageFormat::Png,
+            )
+            .ok()?;
 
         Some(png_data)
     }

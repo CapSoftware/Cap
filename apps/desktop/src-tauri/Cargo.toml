@@ -46,7 +46,7 @@ tokio.workspace = true
 uuid = { version = "1.10.0", features = ["v4"] }
 scap.workspace = true
 ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
-wgpu = "22.1.0"
+wgpu.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
 image = "0.25.2"
 tauri-plugin-fs = "2.0.0-rc.0"

@@ -8,9 +8,8 @@ use std::fs::File;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{path::PathBuf, time::Duration};
-use tokio::sync::{oneshot, Mutex};
-use uuid::Uuid;
+use std::path::PathBuf;
+use tokio::sync::oneshot;
 
 use crate::cursor::spawn_cursor_recorder;
 use crate::RecordingOptions;
@@ -263,8 +262,18 @@ pub async fn start(
 
     let stop_signal = Arc::new(AtomicBool::new(false));
 
-    let (mouse_moves, mouse_clicks) =
-        spawn_cursor_recorder(stop_signal.clone(), screen_bounds, content_dir, cursors_dir);
+    // Initialize default values for cursor channels
+    let (mouse_moves, mouse_clicks) = if FLAGS.record_mouse {
+        spawn_cursor_recorder(stop_signal.clone(), screen_bounds, content_dir, cursors_dir)
+    } else {
+        // Create dummy channels that will never receive data
+        let (move_tx, move_rx) = oneshot::channel();
+        let (click_tx, click_rx) = oneshot::channel();
+        // Send empty vectors immediately
+        move_tx.send(vec![]).unwrap();
+        click_tx.send(vec![]).unwrap();
+        (move_rx, click_rx)
+    };
 
     Ok(InProgressRecording {
         id,
