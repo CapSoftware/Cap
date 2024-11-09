@@ -111,7 +111,7 @@ fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), Medi
         if cfg!(target_os = "macos") {
             "h264_videotoolbox"
         } else {
-            "h264"
+            "libx264"
         }
     };
     if let Some(codec) = encoder::find_by_name(encoder_name) {
