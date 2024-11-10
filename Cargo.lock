@@ -865,6 +865,7 @@ dependencies = [
  "objc-foundation",
  "objc2-foundation",
  "scap",
+ "screencapturekit",
  "serde",
  "specta",
  "tempfile",
@@ -5773,8 +5774,8 @@ dependencies = [
 
 [[package]]
 name = "scap"
-version = "0.0.6"
-source = "git+https://github.com/CapSoftware/scap?rev=4d6be030ba2b0cea565ccaee28b1999f25b8dd5d#4d6be030ba2b0cea565ccaee28b1999f25b8dd5d"
+version = "0.0.7"
+source = "git+https://github.com/CapSoftware/scap?rev=b1e140a3fe90#b1e140a3fe905c19b845dfea66b3b1aea02f0472"
 dependencies = [
  "cocoa 0.25.0",
  "core-graphics-helmer-fork",
@@ -5786,7 +5787,7 @@ dependencies = [
  "screencapturekit-sys",
  "sysinfo",
  "tao-core-video-sys",
- "windows 0.52.0",
+ "windows 0.58.0",
  "windows-capture",
 ]
 

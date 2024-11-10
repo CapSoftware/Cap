@@ -1,4 +1,6 @@
 use cap_flags::FLAGS;
+use cidre::cm;
+use core_foundation::base::{kCFAllocatorDefault, CFAllocatorRef};
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
@@ -7,7 +9,12 @@ use scap::{
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    ffi::c_void,
+    path::PathBuf,
+    ptr::{null, null_mut},
+};
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
@@ -57,14 +64,15 @@ impl PartialEq<Target> for ScreenCaptureTarget {
     }
 }
 
-pub struct ScreenCaptureSource {
+pub struct ScreenCaptureSource<T> {
     options: Options,
     video_info: VideoInfo,
     target: ScreenCaptureTarget,
     pub bounds: Bounds,
+    phantom: std::marker::PhantomData<T>,
 }
 
-impl ScreenCaptureSource {
+impl<T> ScreenCaptureSource<T> {
     pub const DEFAULT_FPS: u32 = 30;
 
     pub fn init(
@@ -134,6 +142,7 @@ impl ScreenCaptureSource {
             target: capture_target.clone(),
             bounds,
             video_info: VideoInfo::from_raw(RawVideoFormat::Nv12, frame_width, frame_height, fps),
+            phantom: Default::default(),
         }
     }
 
@@ -201,7 +210,9 @@ impl ScreenCaptureSource {
     }
 }
 
-impl PipelineSourceTask for ScreenCaptureSource {
+pub struct AVFrameCapture;
+
+impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     type Clock = SynchronisedClock<RawNanoseconds>;
     type Output = FFVideo;
 
@@ -222,45 +233,121 @@ impl PipelineSourceTask for ScreenCaptureSource {
         let mut capturing = false;
         ready_signal.send(Ok(())).unwrap();
 
-        use cidre::{objc::Obj, *};
+        loop {
+            match control_signal.last() {
+                Some(Control::Play) => {
+                    if !capturing {
+                        if let Some(window_id) = maybe_capture_window_id {
+                            crate::platform::bring_window_to_focus(window_id);
+                        }
+                        capturer.start_capture();
+                        capturing = true;
 
-        let mut asset_writer = av::AssetWriter::with_url_and_file_type(
-            cf::Url::with_path(&PathBuf::from("../bruh.mp4").as_path(), false)
-                .unwrap()
-                .as_ns(),
-            av::FileType::mp4(),
-        )
-        .unwrap();
+                        println!("Screen recording started.");
+                    }
 
-        let assistant =
-            av::OutputSettingsAssistant::with_preset(av::OutputSettingsPreset::h264_3840x2160())
-                .unwrap();
+                    match capturer.raw().get_next_pixel_buffer() {
+                        Ok(pixel_buffer) => {
+                            if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
+                                continue;
+                            }
 
-        let mut output_settings = assistant.video_settings().unwrap().copy_mut();
+                            let raw_timestamp = RawNanoseconds(pixel_buffer.display_time());
+                            match clock.timestamp_for(raw_timestamp) {
+                                None => {
+                                    eprintln!("Clock is currently stopped. Dropping frames.");
+                                }
+                                Some(timestamp) => {
+                                    let mut frame = FFVideo::new(
+                                        self.video_info.pixel_format,
+                                        self.video_info.width,
+                                        self.video_info.height,
+                                    );
+                                    frame.set_pts(Some(timestamp));
 
-        output_settings.insert(
-            av::video_settings_keys::width(),
-            ns::Number::with_u32(self.video_info.width).as_id_ref(),
-        );
+                                    let planes = pixel_buffer.planes();
 
-        output_settings.insert(
-            av::video_settings_keys::height(),
-            ns::Number::with_u32(self.video_info.height).as_id_ref(),
-        );
+                                    for (i, plane) in planes.into_iter().enumerate() {
+                                        let data = plane.data();
 
-        let mut video_input = av::AssetWriterInput::with_media_type_and_output_settings(
-            av::MediaType::video(),
-            Some(output_settings.as_ref()),
-        )
-        .unwrap();
-        video_input.set_expects_media_data_in_real_time(true);
+                                        for y in 0..plane.height() {
+                                            let buffer_y_offset = y * plane.bytes_per_row();
+                                            let frame_y_offset = y * frame.stride(i);
 
-        asset_writer.add_input(&video_input).unwrap();
+                                            let num_bytes =
+                                                frame.stride(i).min(plane.bytes_per_row());
 
-        asset_writer.start_writing();
+                                            frame.data_mut(i)
+                                                [frame_y_offset..frame_y_offset + num_bytes]
+                                                .copy_from_slice(
+                                                    &data[buffer_y_offset
+                                                        ..buffer_y_offset + num_bytes],
+                                                );
+                                        }
+                                    }
 
-        let mut first_timestamp = None;
-        let mut last_timestamp = None;
+                                    if let Err(_) = output.send(frame) {
+                                        eprintln!(
+                                            "Pipeline is unreachable. Shutting down recording."
+                                        );
+                                        break;
+                                    }
+                                }
+                            };
+                        }
+                        Err(error) => {
+                            eprintln!("Capture error: {error}");
+                            break;
+                        }
+                    }
+                }
+                Some(Control::Pause) => {
+                    println!("Received pause signal");
+                    if capturing {
+                        capturer.stop_capture();
+                        capturing = false;
+                    }
+                }
+                Some(Control::Shutdown) | None => {
+                    println!("Received shutdown signal");
+                    if capturing {
+                        capturer.stop_capture();
+                    }
+                    break;
+                }
+            }
+        }
+
+        println!("Shutting down screen capture source thread.");
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub struct CMSampleBufferCapture;
+
+#[cfg(target_os = "macos")]
+impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
+    type Clock = SynchronisedClock<RawNanoseconds>;
+    type Output = screencapturekit::cm_sample_buffer::CMSampleBuffer;
+
+    fn run(
+        &mut self,
+        _: Self::Clock,
+        ready_signal: crate::pipeline::task::PipelineReadySignal,
+        mut control_signal: crate::pipeline::control::PipelineControlSignal,
+        output: Sender<Self::Output>,
+    ) {
+        use cidre::*;
+
+        println!("Preparing screen capture source thread...");
+
+        let maybe_capture_window_id = match &self.target {
+            ScreenCaptureTarget::Window(window) => Some(window.id),
+            _ => None,
+        };
+        let mut capturer = Capturer::new(dbg!(self.options.clone()));
+        let mut capturing = false;
+        ready_signal.send(Ok(())).unwrap();
 
         loop {
             match control_signal.last() {
@@ -281,75 +368,10 @@ impl PipelineSourceTask for ScreenCaptureSource {
                                 continue;
                             }
 
-                            let timestamp =
-                                pixel_buffer.buffer().sys_ref.get_presentation_timestamp();
-                            let time = cm::Time::with_epoch(
-                                timestamp.value,
-                                timestamp.timescale,
-                                timestamp.epoch,
-                            );
-
-                            if first_timestamp.is_none() {
-                                asset_writer.start_session_at_src_time(time);
-                                first_timestamp = Some(time);
+                            if let Err(_) = output.send(pixel_buffer.into()) {
+                                eprintln!("Pipeline is unreachable. Shutting down recording.");
+                                break;
                             }
-                            last_timestamp = Some(time);
-
-                            video_input
-                                .append_sample_buf(unsafe {
-                                    let ptr = &*pixel_buffer.buffer().sys_ref as *const _
-                                        as *const cm::SampleBuf;
-
-                                    // let ret = std::mem::transmute(ptr);
-
-                                    // std::mem::forget(pixel_buffer);
-
-                                    &*ptr
-                                })
-                                .unwrap();
-
-                            // let raw_timestamp = RawNanoseconds(pixel_buffer.display_time());
-                            // match clock.timestamp_for(raw_timestamp) {
-                            //     None => {
-                            //         eprintln!("Clock is currently stopped. Dropping frames.");
-                            //     }
-                            //     Some(timestamp) => {
-                            //         // let mut frame = FFVideo::new(
-                            //         //     self.video_info.pixel_format,
-                            //         //     self.video_info.width,
-                            //         //     self.video_info.height,
-                            //         // );
-                            //         // frame.set_pts(Some(timestamp));
-
-                            //         // let planes = pixel_buffer.planes();
-
-                            //         // for (i, plane) in planes.into_iter().enumerate() {
-                            //         //     let data = plane.data();
-
-                            //         //     for y in 0..plane.height() {
-                            //         //         let buffer_y_offset = y * plane.bytes_per_row();
-                            //         //         let frame_y_offset = y * frame.stride(i);
-
-                            //         //         let num_bytes =
-                            //         //             frame.stride(i).min(plane.bytes_per_row());
-
-                            //         //         frame.data_mut(i)
-                            //         //             [frame_y_offset..frame_y_offset + num_bytes]
-                            //         //             .copy_from_slice(
-                            //         //                 &data[buffer_y_offset
-                            //         //                     ..buffer_y_offset + num_bytes],
-                            //         //             );
-                            //         //     }
-                            //         // }
-
-                            //         if let Err(_) = output.send(frame) {
-                            //             eprintln!(
-                            //                 "Pipeline is unreachable. Shutting down recording."
-                            //             );
-                            //             break;
-                            //         }
-                            //     }
-                            // };
                         }
                         Err(error) => {
                             eprintln!("Capture error: {error}");
@@ -368,11 +390,6 @@ impl PipelineSourceTask for ScreenCaptureSource {
                     println!("Received shutdown signal");
                     if capturing {
                         capturer.stop_capture();
-                        asset_writer.end_session_at_src_time(
-                            last_timestamp.take().unwrap_or(cm::Time::zero()),
-                        );
-                        video_input.mark_as_finished();
-                        asset_writer.finish_writing();
                     }
                     break;
                 }

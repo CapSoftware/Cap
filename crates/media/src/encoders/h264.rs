@@ -67,25 +67,6 @@ impl H264Encoder {
     }
 
     fn queue_frame(&mut self, frame: FFVideo) {
-        // let out_frame = if frame.width() > self.config.width || frame.height() > self.config.height
-        // {
-        //     let mut conv = software::scaler(
-        //         frame.format(),
-        //         software::scaling::Flags::FAST_BILINEAR,
-        //         (frame.width(), frame.height()),
-        //         (self.config.width, self.config.height),
-        //     )
-        //     .unwrap();
-
-        //     let mut out_frame = FFVideo::empty();
-        //     conv.run(&frame, &mut out_frame).unwrap();
-
-        //     out_frame.set_pts(frame.pts());
-        //     out_frame
-        // } else {
-        //     frame
-        // };
-
         self.encoder.send_frame(&frame).unwrap();
     }
 
@@ -96,8 +77,7 @@ impl H264Encoder {
         while self.encoder.receive_packet(&mut encoded_packet).is_ok() {
             encoded_packet.set_stream(0);
             encoded_packet.rescale_ts(
-                ffmpeg::Rational::new(1, 1_000_000),
-                // self.encoder.time_base(),
+                self.encoder.time_base(),
                 self.output_ctx.stream(0).unwrap().time_base(),
             );
             // TODO: Possibly move writing to disk to its own file, to increase encoding throughput?
@@ -140,9 +120,9 @@ impl PipelineSinkTask for H264Encoder {
 fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), MediaError> {
     let encoder_name = {
         if cfg!(target_os = "macos") {
-            // "libx264"
+            "libx264"
             // looks terrible rn :(
-            "h264_videotoolbox"
+            // "h264_videotoolbox"
         } else {
             "libx264"
         }
