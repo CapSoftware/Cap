@@ -28,12 +28,8 @@ export default function (props: RouteSectionProps) {
   return (
     <div
       class={`${
-        titlebarState.maximized
-          ? ostype() === "macos"
-            ? "rounded-[10px]"
-            : "rounded-0"
-          : "rounded-[1.5rem]"
-      } bg-gray-100 border-gray-200 border w-screen h-screen flex flex-col overflow-hidden transition-[border-radius] duration-300`}
+        titlebarState.maximized ? "" : "rounded-[1.5rem] border"
+      } bg-gray-100 border-gray-200 w-screen h-screen flex flex-col overflow-hidden transition-[border-radius] duration-300`}
     >
       {/* <Transition
         mode="outin"
