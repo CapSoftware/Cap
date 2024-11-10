@@ -213,7 +213,7 @@ impl<T> ScreenCaptureSource<T> {
 pub struct AVFrameCapture;
 
 impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
-    type Clock = SynchronisedClock<RawNanoseconds>;
+    type Clock = RealTimeClock<RawNanoseconds>;
     type Output = FFVideo;
 
     fn run(
@@ -327,7 +327,7 @@ pub struct CMSampleBufferCapture;
 
 #[cfg(target_os = "macos")]
 impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
-    type Clock = SynchronisedClock<RawNanoseconds>;
+    type Clock = RealTimeClock<RawNanoseconds>;
     type Output = screencapturekit::cm_sample_buffer::CMSampleBuffer;
 
     fn run(

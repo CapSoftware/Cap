@@ -13,20 +13,37 @@ pub struct AudioFilter {
 }
 
 impl AudioFilter {
-    pub fn init(tag: &'static str, config: AudioInfo, spec: &str) -> Result<Self, MediaError> {
+    pub fn init(
+        tag: &'static str,
+        input_config: AudioInfo,
+        output_config: AudioInfo,
+    ) -> Result<Self, MediaError> {
         let mut filter_graph = filter::Graph::new();
 
         let input_args = format!(
             "time_base={}:sample_rate={}:sample_fmt={}:channel_layout=0x{:x}",
-            config.time_base,
-            config.rate(),
-            config.sample_format.name(),
-            config.channel_layout().bits()
+            input_config.time_base,
+            input_config.rate(),
+            input_config.sample_format.name(),
+            input_config.channel_layout().bits(),
         );
         filter_graph.add(&filter::find("abuffer").unwrap(), "in", &input_args)?;
         filter_graph.add(&filter::find("abuffersink").unwrap(), "out", "")?;
 
-        filter_graph.output("in", 0)?.input("out", 0)?.parse(spec)?;
+        // let mut output = filter_graph.get("out").unwrap();
+        // output.sink().set_frame_size(2048);
+
+        let spec = format!(
+            "aformat=sample_fmts={}:sample_rates={}:channel_layouts=0x{}",
+            output_config.sample_format.name(),
+            output_config.rate(),
+            output_config.channel_layout().bits(),
+        );
+
+        filter_graph
+            .output("in", 0)?
+            .input("out", 0)?
+            .parse(&spec)?;
         filter_graph.validate()?;
 
         Ok(Self { filter_graph, tag })
