@@ -129,7 +129,6 @@ impl AsyncVideoDecoder {
                                 })
                                 .unwrap_or(true)
                         {
-                            dbg!((requested_frame, last_decoded_frame));
                             let timestamp_us =
                                 ((requested_frame as f32 / frame_rate.numerator() as f32)
                                     * 1_000_000.0) as i64;
@@ -290,12 +289,7 @@ impl AsyncVideoDecoder {
                         }
 
                         if let Some(s) = sender.take() {
-                            println!("sending None for {requested_frame}");
-                            dbg!(last_sent_frame.as_ref().map(|f| f.0));
-                            dbg!(&last_decoded_frame);
                             s.send(None);
-                        } else {
-                            println!("sent frame {requested_frame}");
                         }
                     }
                 }
