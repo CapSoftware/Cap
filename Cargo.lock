@@ -823,7 +823,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
- "windows 0.52.0",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -1716,8 +1716,7 @@ dependencies = [
  "tracing",
  "uuid",
  "wgpu",
- "windows 0.52.0",
- "windows-capture",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -5687,8 +5686,8 @@ dependencies = [
 
 [[package]]
 name = "scap"
-version = "0.0.6"
-source = "git+https://github.com/CapSoftware/scap?rev=4d6be030ba2b0cea565ccaee28b1999f25b8dd5d#4d6be030ba2b0cea565ccaee28b1999f25b8dd5d"
+version = "0.0.7"
+source = "git+https://github.com/CapSoftware/scap?rev=b1e140a3fe905c19b845dfea66b3b1aea02f0472#b1e140a3fe905c19b845dfea66b3b1aea02f0472"
 dependencies = [
  "cocoa 0.25.0",
  "core-graphics-helmer-fork",
@@ -5700,7 +5699,7 @@ dependencies = [
  "screencapturekit-sys",
  "sysinfo",
  "tao-core-video-sys",
- "windows 0.52.0",
+ "windows 0.58.0",
  "windows-capture",
 ]
 
@@ -8136,14 +8135,14 @@ dependencies = [
 
 [[package]]
 name = "windows-capture"
-version = "1.2.0"
+version = "1.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15e2f94b43842205eb84814f505badade792e7b8cd132e436636ccbf7baa08fc"
+checksum = "5cc0a71a6b97b2fb0643c0655e19b8fa4a78c768bf5b2acfdaf453873e53ad4e"
 dependencies = [
  "parking_lot",
  "rayon",
  "thiserror",
- "windows 0.56.0",
+ "windows 0.58.0",
 ]
 
 [[package]]

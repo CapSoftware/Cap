@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{c_void, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
@@ -16,6 +16,7 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Shell::GetDpiForShellUIComponent;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetCursorInfo, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
     GetWindowThreadProcessId, IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO,
@@ -26,7 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 #[inline]
 pub fn bring_window_to_focus(window_id: u32) {
-    let _ = unsafe { SetForegroundWindow(HWND(window_id as isize)) };
+    let _ = unsafe { SetForegroundWindow(HWND(window_id as *mut c_void)) };
 }
 
 pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
@@ -62,28 +63,28 @@ pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
 /// Keeps handles to default cursor.
 /// Read more: [MS Doc - About Cursors](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)
 pub struct DefaultCursors {
-    arrow: isize,
-    ibeam: isize,
-    wait: isize,
-    cross: isize,
-    up_arrow: isize,
-    size_nwse: isize,
-    size_nesw: isize,
-    size_we: isize,
-    size_ns: isize,
-    size_all: isize,
-    no: isize,
-    hand: isize,
-    appstarting: isize,
-    help: isize,
-    pin: isize,
-    person: isize,
+    arrow: *mut c_void,
+    ibeam: *mut c_void,
+    wait: *mut c_void,
+    cross: *mut c_void,
+    up_arrow: *mut c_void,
+    size_nwse: *mut c_void,
+    size_nesw: *mut c_void,
+    size_we: *mut c_void,
+    size_ns: *mut c_void,
+    size_all: *mut c_void,
+    no: *mut c_void,
+    hand: *mut c_void,
+    appstarting: *mut c_void,
+    help: *mut c_void,
+    pin: *mut c_void,
+    person: *mut c_void,
 }
 
 impl Default for DefaultCursors {
     fn default() -> Self {
         #[inline]
-        fn load_cursor(lpcursorname: PCWSTR) -> isize {
+        fn load_cursor(lpcursorname: PCWSTR) -> *mut c_void {
             unsafe { LoadCursorW(None, lpcursorname) }
                 .expect("Failed to load default system cursors")
                 .0
@@ -112,7 +113,7 @@ impl Default for DefaultCursors {
 
 unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
     let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)?;
-    if handle.is_invalid() || handle.0 == 0 {
+    if handle.is_invalid() {
         tracing::error!("Invalid PID {}", pid);
     }
     let mut lpexename = [0u16; 1024];
@@ -135,7 +136,7 @@ pub fn get_on_screen_windows() -> Vec<Window> {
     let mut windows = Vec::<Window>::new();
 
     unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        if hwnd.0 == 0 {
+        if hwnd.is_invalid() {
             return TRUE;
         }
         let windows = &mut *(lparam.0 as *mut Vec<Window>);

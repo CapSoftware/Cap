@@ -25,10 +25,6 @@ specta.workspace = true
 tempfile = "3.12.0"
 thiserror = "1.0"
 tracing = "0.1"
-windows = { version = "0.52", features = [
-	"Win32_Media_MediaFoundation",
-	"Win32_System_Com",
-] }
 futures = "0.3.31"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -41,9 +37,11 @@ objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
 nokhwa-bindings-macos.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.52.0", features = [
+windows = { version = "0.58", features = [
 	"Win32_Foundation",
 	"Win32_System",
-	"Win32_UI_WindowsAndMessaging",
+	"Win32_System_Com",
 	"Win32_Graphics_Dwm",
+	"Win32_UI_WindowsAndMessaging",
+	"Win32_Media_MediaFoundation",
 ] }
