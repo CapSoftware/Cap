@@ -17,8 +17,16 @@ pub struct PipelineControlSignal {
 
 impl PipelineControlSignal {
     pub fn last(&mut self) -> Option<Control> {
+        self.blocking_last_if(false)
+    }
+
+    pub fn blocking_last(&mut self) -> Option<Control> {
+        self.blocking_last_if(true)
+    }
+
+    pub fn blocking_last_if(&mut self, should_block: bool) -> Option<Control> {
         match self.last_value {
-            Some(Control::Play) => {
+            Some(Control::Play) if !should_block => {
                 // Only peek for a new signal, else relinquish control to the caller
                 match self.receiver.try_recv() {
                     Ok(control) => {
@@ -34,16 +42,12 @@ impl PipelineControlSignal {
             _ => {
                 // For all else, block until a signal is sent.
                 // TODO: Maybe also spin down until the signal is different from the last value we have?
-                self.blocking_last()
+                println!("Waiting for play signal...");
+                self.last_value = self.receiver.recv().ok();
+
+                self.last_value
             }
         }
-    }
-
-    pub fn blocking_last(&mut self) -> Option<Control> {
-        println!("Waiting for play signal...");
-        self.last_value = self.receiver.recv().ok();
-
-        self.last_value
     }
 }
 

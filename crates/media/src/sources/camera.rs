@@ -4,7 +4,7 @@ use std::time::Instant;
 use crate::{
     data::{FFVideo, VideoInfo},
     feeds::{CameraConnection, CameraFeed, RawCameraFrame},
-    pipeline::{clock::SynchronisedClock, control::Control, task::PipelineSourceTask},
+    pipeline::{clock::RealTimeClock, control::Control, task::PipelineSourceTask},
     MediaError,
 };
 
@@ -27,7 +27,7 @@ impl CameraSource {
 
     fn process_frame(
         &self,
-        clock: &mut SynchronisedClock<Instant>,
+        clock: &mut RealTimeClock<Instant>,
         output: &Sender<FFVideo>,
         camera_frame: RawCameraFrame,
     ) -> Result<(), MediaError> {
@@ -52,7 +52,7 @@ impl CameraSource {
 
     fn pause_and_drain_frames(
         &self,
-        clock: &mut SynchronisedClock<Instant>,
+        clock: &mut RealTimeClock<Instant>,
         output: &Sender<FFVideo>,
         frames_rx: Receiver<RawCameraFrame>,
     ) {
@@ -71,7 +71,7 @@ impl CameraSource {
 impl PipelineSourceTask for CameraSource {
     type Output = FFVideo;
 
-    type Clock = SynchronisedClock<Instant>;
+    type Clock = RealTimeClock<Instant>;
 
     // #[tracing::instrument(skip_all)]
     fn run(
