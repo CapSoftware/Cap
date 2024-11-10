@@ -5,6 +5,8 @@ use tauri::{
     AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
 
+const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(14.0, 22.0);
+
 #[derive(Clone)]
 pub enum CapWindow {
     Main,
@@ -126,10 +128,10 @@ impl CapWindow {
                     .window_builder(app, "/")
                     .inner_size(300.0, 375.0)
                     .resizable(false)
-                    .maximized(false)
                     .transparent(true)
-                    .theme(Some(tauri::Theme::Light));
-                // .shadow(true);
+                    .maximized(false)
+                    .theme(Some(tauri::Theme::Light))
+                    .shadow(true);
 
                 #[cfg(target_os = "windows")]
                 {
@@ -351,7 +353,7 @@ impl CapWindow {
 
         #[cfg(target_os = "macos")]
         if id.label() == CapWindowId::Main.label() {
-            make_webview_transparent(&window);
+            crate::platform::make_webview_transparent(&window);
         }
 
         Ok(window)
@@ -408,7 +410,7 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
             .run_on_main_thread(move || {
                 delegates::setup(
                     target_window.as_ref().window(),
-                    controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+                    controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
                 );
 
                 let c_win = target_window.clone();
@@ -420,7 +422,7 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
                                     .ns_window()
                                     .expect("Failed to get native window handle"),
                             ),
-                            &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+                            &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
                         );
                     }
                 });
@@ -429,22 +431,34 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
     }
 }
 
-/// Makes the background of the WKWebView layer transparent.
-/// This differs from Tauri's implementation as it does not change the window background which causes performance performance issues and artifacts when shadows are enabled on the window.
-/// Use Tauri's implementation to make the window itself transparent.
-#[cfg(target_os = "macos")]
-fn make_webview_transparent(target: &WebviewWindow) -> tauri::Result<()> {
-    use cocoa::{
-        appkit::NSColor,
-        base::{id, nil},
-        foundation::NSString,
-    };
-    use objc::{class, msg_send, sel, sel_impl};
+#[tauri::command]
+#[specta::specta]
+pub fn invalidate_shadow(window: tauri::Window) {
+    #[cfg(target_os = "macos")]
+    crate::platform::invalidate_shadow(window);
+}
 
-    target.with_webview(|webview| unsafe {
-        let wkwebview = webview.inner() as id;
-        let no: id = msg_send![class!(NSNumber), numberWithBool:0];
-        // [https://developer.apple.com/documentation/webkit/webview/1408486-drawsbackground]
-        let _: id = msg_send![wkwebview, setValue:no forKey: NSString::alloc(nil).init_str("drawsBackground")];
-    })
+#[tauri::command]
+#[specta::specta]
+pub fn position_traffic_lights(window: tauri::Window, controls_inset: Option<(f64, f64)>) {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::platform::delegates::{position_window_controls, UnsafeWindowHandle};
+        let c_win = window.clone();
+
+        window
+            .run_on_main_thread(move || {
+                position_window_controls(
+                    UnsafeWindowHandle(
+                        c_win
+                            .ns_window()
+                            .expect("Failed to get native window handle"),
+                    ),
+                    &controls_inset
+                        .and_then(|inset| Some(LogicalPosition::from(inset)))
+                        .unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
+                );
+            })
+            .ok();
+    }
 }

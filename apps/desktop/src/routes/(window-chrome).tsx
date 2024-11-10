@@ -1,11 +1,18 @@
 import type { RouteSectionProps } from "@solidjs/router";
-import { onCleanup, onMount, ParentProps, Suspense } from "solid-js";
+import {
+  createEffect,
+  onCleanup,
+  onMount,
+  ParentProps,
+  Suspense,
+} from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Transition } from "solid-transition-group";
 import titlebarState, { initializeTitlebar } from "~/utils/titlebar-state";
 
 import Titlebar from "~/components/titlebar/Titlebar";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import { commands } from "~/utils/tauri";
 
 export const route = {
   info: {
@@ -18,6 +25,7 @@ export default function (props: RouteSectionProps) {
 
   onMount(async () => {
     unlistenResize = await initializeTitlebar();
+    if (ostype() === "macos") commands.invalidateShadow();
     if (location.pathname === "/") getCurrentWindow().show();
   });
 
@@ -25,11 +33,15 @@ export default function (props: RouteSectionProps) {
     unlistenResize?.();
   });
 
+  createEffect(() => {
+    console.log(`Maximized? ${titlebarState.maximized}`);
+  });
+
   return (
     <div
       class={`${
         titlebarState.maximized ? "" : "rounded-[1.5rem] border"
-      } bg-gray-100 border-gray-200 w-screen h-screen flex flex-col overflow-hidden transition-[border-radius] duration-300`}
+      } bg-gray-100 border-gray-200 w-screen h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200`}
     >
       {/* <Transition
         mode="outin"
