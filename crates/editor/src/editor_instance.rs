@@ -1,8 +1,7 @@
-use crate::audio::AudioData;
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
-use cap_ffmpeg_cli::FFmpeg;
+use cap_media::feeds::AudioData;
 use cap_project::{CursorData, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::decoder::AsyncVideoDecoder;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
@@ -74,37 +73,11 @@ impl EditorInstance {
             .as_ref()
             .map(|camera| AsyncVideoDecoder::spawn(project_path.join(&camera.path).clone()));
 
-        let audio = meta
-            .audio
-            .as_ref()
-            .zip(recordings.audio)
-            .map(|(meta, recording)| {
-                let audio_path = project_path.join(&meta.path);
+        let audio = meta.audio.as_ref().map(|meta| {
+            let audio_path = project_path.join(&meta.path);
 
-                // TODO: Use ffmpeg crate instead of command line
-                let stdout = FFmpeg::new()
-                    .command
-                    .arg("-i")
-                    .arg(audio_path)
-                    .args(["-f", "f64le", "-acodec", "pcm_f64le"])
-                    .args(["-ar", &recording.sample_rate.to_string()])
-                    .args(["-ac", &recording.channels.to_string(), "-"])
-                    .output()
-                    .unwrap()
-                    .stdout;
-
-                let buffer = stdout
-                    .chunks_exact(8)
-                    .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
-                    .collect::<Vec<_>>();
-
-                println!("audio buffer length: {}", buffer.len());
-
-                AudioData {
-                    buffer: Arc::new(buffer),
-                    sample_rate: recording.sample_rate,
-                }
-            });
+            AudioData::from_file(audio_path).unwrap()
+        });
 
         let (frame_tx, frame_rx) = tokio::sync::mpsc::unbounded_channel();
 

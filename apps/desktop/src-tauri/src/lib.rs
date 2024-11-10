@@ -17,11 +17,11 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid};
-use cap_editor::{AudioData, EditorState, ProjectRecordings};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
+use cap_editor::{EditorState, ProjectRecordings};
 use cap_media::sources::CaptureScreen;
 use cap_media::{
-    feeds::{CameraFeed, CameraFrameSender},
+    feeds::{AudioData, AudioFrameBuffer, CameraFeed, CameraFrameSender},
     platform::Bounds,
     sources::{AudioInputSource, ScreenCaptureTarget},
 };
@@ -955,8 +955,8 @@ async fn open_file_path(app: AppHandle, path: PathBuf) -> Result<(), String> {
 }
 
 struct AudioRender {
-    data: AudioData,
-    pipe_tx: tokio::sync::mpsc::Sender<Vec<f64>>,
+    buffer: AudioFrameBuffer,
+    pipe_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
 }
 
 async fn render_to_file_impl(
@@ -1017,7 +1017,7 @@ async fn render_to_file_impl(
 
                 tx
             };
-            let audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
+            let mut audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
                 let pipe_path = audio_dir.path().join("audio.pipe");
 
                 #[cfg(target_os = "macos")]
@@ -1026,29 +1026,26 @@ async fn render_to_file_impl(
                 ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
                     input: pipe_path.clone().into_os_string(),
                     sample_format: "f64le".to_string(),
-                    sample_rate: audio_data.sample_rate,
-                    channels: 1,
+                    sample_rate: audio_data.info.sample_rate,
+                    channels: audio_data.info.channels as u16,
                 });
 
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<f64>>(30);
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
 
                 tokio::spawn(async move {
                     let mut file = std::fs::File::create(&pipe_path).unwrap();
                     println!("audio pipe opened");
 
                     while let Some(bytes) = rx.recv().await {
-                        let bytes = bytes
-                            .iter()
-                            .flat_map(|f| f.to_le_bytes())
-                            .collect::<Vec<_>>();
                         file.write_all(&bytes).unwrap();
                     }
 
                     println!("done writing to audio pipe");
                 });
 
+                let buffer = AudioFrameBuffer::new(audio_data.clone());
                 Some(AudioRender {
-                    data: audio_data.clone(),
+                    buffer,
                     pipe_tx: tx,
                 })
             } else {
@@ -1078,29 +1075,20 @@ async fn render_to_file_impl(
                             first_frame = Some(frame.clone());
                         }
 
-                        if let Some(audio) = &audio {
-                            let samples_per_frame = audio.data.sample_rate as f64 / FPS as f64;
+                        if let Some(audio) = &mut audio {
+                            if frame_count == 0 {
+                                audio.buffer.set_playhead(0., project.timeline());
+                            }
 
-                            let start_samples = match project.timeline() {
-                                Some(timeline) => timeline
-                                    .get_recording_time(frame_count as f64 / FPS as f64)
-                                    .map(|recording_time| {
-                                        recording_time * audio.data.sample_rate as f64
-                                    }),
-                                None => Some(frame_count as f64 * samples_per_frame),
-                            };
+                            let audio_info = audio.buffer.info();
+                            let estimated_samples_per_frame =
+                                f64::from(audio_info.sample_rate) / f64::from(FPS);
+                            let samples = estimated_samples_per_frame.ceil() as usize;
 
-                            if let Some(start) = start_samples {
-                                let end = start + samples_per_frame;
-
-                                let samples = &audio.data.buffer[start as usize..end as usize];
-                                let mut samples_iter = samples.iter().copied();
-
-                                let mut frame_samples = Vec::new();
-                                for _ in 0..samples_per_frame as usize {
-                                    frame_samples.push(samples_iter.next().unwrap_or(0.0));
-                                }
-
+                            if let Some((_, frame_data)) =
+                                audio.buffer.next_frame_data(samples, project.timeline())
+                            {
+                                let frame_samples = frame_data.to_vec();
                                 audio.pipe_tx.send(frame_samples).await.unwrap();
                             }
                         }
@@ -1732,20 +1720,8 @@ fn open_main_window(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
-async fn open_feedback_window(app: AppHandle) {
-    CapWindow::Feedback.show(&app).ok();
-}
-
-#[tauri::command]
-#[specta::specta]
 async fn open_upgrade_window(app: AppHandle) {
     CapWindow::Upgrade.show(&app).ok();
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn open_changelog_window(app: AppHandle) {
-    CapWindow::Changelog.show(&app);
 }
 
 #[tauri::command]
@@ -2434,7 +2410,6 @@ pub async fn run() {
             list_capture_screens,
             list_audio_devices,
             show_previous_recordings_window,
-            // show_notifications_window,
             close_previous_recordings_window,
             set_fake_window_bounds,
             remove_fake_window,
@@ -2461,10 +2436,8 @@ pub async fn run() {
             upload_rendered_video,
             upload_screenshot,
             get_recording_meta,
-            open_feedback_window,
-            open_settings_window,
-            open_changelog_window,
             open_upgrade_window,
+            open_settings_window,
             save_file_dialog,
             list_recordings,
             list_screenshots,
@@ -2476,7 +2449,8 @@ pub async fn run() {
             reset_camera_permissions,
             reset_microphone_permissions,
             is_camera_window_open,
-            seek_to
+            seek_to,
+            send_feedback_request,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2797,4 +2771,51 @@ fn screenshots_path(app: &AppHandle) -> PathBuf {
 
 fn screenshot_path(app: &AppHandle, screenshot_id: &str) -> PathBuf {
     screenshots_path(app).join(format!("{}.cap", screenshot_id))
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn send_feedback_request(app: AppHandle, feedback: String) -> Result<(), String> {
+    let auth = AuthStore::get(&app)
+        .map_err(|e| e.to_string())?
+        .ok_or("Not authenticated")?;
+
+    let feedback_url = web_api::make_url("/api/desktop/feedback");
+
+    // Create a proper multipart form
+    let form = reqwest::multipart::Form::new().text("feedback", feedback);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(feedback_url)
+        .header("Authorization", format!("Bearer {}", auth.token))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send feedback: {}", e))?;
+
+    if !response.status().is_success() {
+        println!("Feedback request failed with status: {}", response.status());
+
+        let error_text = response
+            .text()
+            .await
+            .map_err(|_| "Failed to read error response")?;
+
+        println!("Error response: {}", error_text);
+
+        // Parse the error response and convert to owned String immediately
+        let error = match serde_json::from_str::<serde_json::Value>(&error_text) {
+            Ok(v) => v
+                .get("error")
+                .and_then(|e| e.as_str())
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "Failed to submit feedback".to_string()),
+            Err(_) => "Failed to submit feedback".to_string(),
+        };
+
+        return Err(error);
+    }
+
+    Ok(())
 }

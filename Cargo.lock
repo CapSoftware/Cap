@@ -754,9 +754,10 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "cap-ffmpeg-cli",
+ "cap-media",
  "cap-project",
  "cap-rendering",
- "cpal",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "serde",
  "serde_json",
@@ -802,7 +803,7 @@ dependencies = [
  "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
- "cpal",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
@@ -811,9 +812,11 @@ dependencies = [
  "indexmap 2.5.0",
  "nokhwa",
  "nokhwa-bindings-macos",
+ "num-traits",
  "objc",
  "objc-foundation",
  "objc2-foundation",
+ "ringbuf",
  "scap",
  "serde",
  "specta",
@@ -1402,6 +1405,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpal"
+version = "0.15.3"
+source = "git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf#f43d36e55494993bbbde3299af0c53e5cdf4d4cf"
+dependencies = [
+ "alsa",
+ "core-foundation-sys 0.8.7",
+ "coreaudio-rs",
+ "dasp_sample",
+ "jni",
+ "js-sys",
+ "libc",
+ "mach2",
+ "ndk 0.8.0",
+ "ndk-context",
+ "oboe",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows 0.54.0",
+]
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1628,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.0-beta.8"
+version = "0.3.0-beta.9-audio-rc"
 dependencies = [
  "anyhow",
  "axum",
@@ -1645,7 +1670,6 @@ dependencies = [
  "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
- "cpal",
  "device_query",
  "dotenvy_macro",
  "fast_image_resize",
@@ -4971,6 +4995,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "portable-atomic"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc9c68a3f6da06753e9335d63e27f6b9754dd1920d941135b7ea8224f141adb2"
+
+[[package]]
 name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5520,13 +5550,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ringbuf"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "726bb493fe9cac765e8f96a144c3a8396bdf766dedad22e504b70b908dcbceb4"
+dependencies = [
+ "crossbeam-utils",
+ "portable-atomic",
+]
+
+[[package]]
 name = "rodio"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6006a627c1a38d37f3d3a85c6575418cfe34a5392d60a686d0071e1c8d427acb"
 dependencies = [
  "claxon",
- "cpal",
+ "cpal 0.15.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "hound",
  "lewton",
  "symphonia",

@@ -45,4 +45,7 @@ pub enum MediaError {
 
     #[error("Device {0} is unreachable. It may have been disconnected")]
     DeviceUnreachable(String),
+
+    #[error("Could not find a suitable {0} stream in this file")]
+    MissingMedia(&'static str),
 }

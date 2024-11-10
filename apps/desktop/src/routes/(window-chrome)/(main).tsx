@@ -112,7 +112,7 @@ export default function () {
         variant="secondary"
         size="xs"
         onClick={() => {
-          commands.openFeedbackWindow();
+          commands.openSettingsWindow("feedback");
         }}
       >
         Feedback
@@ -633,7 +633,7 @@ function ChangelogButton() {
   );
 
   const handleChangelogClick = () => {
-    commands.openChangelogWindow();
+    commands.openSettingsWindow("changelog");
     const version = currentVersion();
     if (version) {
       setChangelogState({

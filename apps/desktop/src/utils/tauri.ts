@@ -219,17 +219,11 @@ async uploadScreenshot(screenshotPath: string) : Promise<Result<UploadResult, st
 async getRecordingMeta(id: string, fileType: string) : Promise<RecordingMeta> {
     return await TAURI_INVOKE("get_recording_meta", { id, fileType });
 },
-async openFeedbackWindow() : Promise<void> {
-    await TAURI_INVOKE("open_feedback_window");
+async openUpgradeWindow() : Promise<void> {
+    await TAURI_INVOKE("open_upgrade_window");
 },
 async openSettingsWindow(page: string) : Promise<void> {
     await TAURI_INVOKE("open_settings_window", { page });
-},
-async openChangelogWindow() : Promise<void> {
-    await TAURI_INVOKE("open_changelog_window");
-},
-async openUpgradeWindow() : Promise<void> {
-    await TAURI_INVOKE("open_upgrade_window");
 },
 async saveFileDialog(fileName: string, fileType: string) : Promise<Result<string | null, string>> {
     try {
@@ -316,6 +310,14 @@ async isCameraWindowOpen() : Promise<boolean> {
 },
 async seekTo(videoId: string, frameNumber: number) : Promise<void> {
     await TAURI_INVOKE("seek_to", { videoId, frameNumber });
+},
+async sendFeedbackRequest(feedback: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("send_feedback_request", { feedback }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 

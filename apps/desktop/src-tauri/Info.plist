@@ -27,5 +27,7 @@
 	<string>Cap uses your microphone to record you in your Caps</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Cap captures your screen as part of recording your Caps</string>
+	<key>NSCameraUseContinuityCameraDeviceType</key>
+	<true/>
 </dict>
 </plist>

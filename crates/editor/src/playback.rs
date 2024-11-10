@@ -1,14 +1,16 @@
 use std::{sync::Arc, sync::Mutex as StdMutex, time::Duration};
 
+use cap_media::data::{AudioInfo, FromSampleBytes};
+use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
 use cap_project::ProjectConfiguration;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    SampleFormat, SizedSample,
+    BufferSize, SampleFormat,
 };
 use tokio::{sync::watch, time::Instant};
 
-use crate::{audio::AudioData, editor, project_recordings::ProjectRecordings};
+use crate::{editor, project_recordings::ProjectRecordings};
 
 pub struct Playback {
     pub audio: Arc<StdMutex<Option<AudioData>>>,
@@ -148,102 +150,84 @@ struct AudioPlayback {
 }
 
 impl AudioPlayback {
-    fn spawn(mut self) {
+    fn spawn(self) {
         let handle = tokio::runtime::Handle::current();
 
         std::thread::spawn(move || {
-            let audio = self.audio;
-
             let host = cpal::default_host();
             let device = host.default_output_device().unwrap();
+            println!("Output device: {}", device.name().unwrap());
             let supported_config = device
                 .default_output_config()
                 .expect("Failed to get default output format");
-            let mut config = supported_config.config();
-            config.channels = 1;
 
-            let data = audio.buffer.clone();
-            let duration = data.len() as f64 / audio.sample_rate as f64;
-            let mut time = self.start_frame_number as f64 / FPS as f64;
-
-            let time_inc = 1.0 / config.sample_rate.0 as f64;
-
-            let mut clock =
-                data.len() as f64 * self.start_frame_number as f64 / (FPS as f64 * self.duration);
-
-            let resample_ratio = audio.sample_rate as f64 / config.sample_rate.0 as f64;
-
-            let next_sample = move || {
-                time += time_inc;
-                let time = self.project.borrow().timeline()?.get_recording_time(time)?;
-
-                let index = time / duration * data.len() as f64;
-
-                clock += resample_ratio;
-
-                if clock >= data.len() as f64 {
-                    return None;
-                }
-
-                // Add a check to prevent index_int from going out of bounds
-                let index_int = index as usize;
-                if index_int >= data.len() - 1 {
-                    return None;
-                }
-
-                let frac = index.fract();
-                let current = data[index_int];
-                let next = data[(index_int + 1) % data.len()];
-                Some(current * (1.0 - frac) + next * frac)
-            };
-
-            let shared_data = (&device, &config, next_sample);
-            let stream = match supported_config.sample_format() {
-                SampleFormat::I8 => create_stream::<i8>(shared_data),
-                SampleFormat::I16 => create_stream::<i16>(shared_data),
-                SampleFormat::I32 => create_stream::<i32>(shared_data),
-                SampleFormat::I64 => create_stream::<i64>(shared_data),
-                SampleFormat::U8 => create_stream::<u8>(shared_data),
-                SampleFormat::U16 => create_stream::<u16>(shared_data),
-                SampleFormat::U32 => create_stream::<u32>(shared_data),
-                SampleFormat::U64 => create_stream::<u64>(shared_data),
-                SampleFormat::F32 => create_stream::<f32>(shared_data),
-                SampleFormat::F64 => create_stream::<f64>(shared_data),
+            let (mut stop_rx, stream) = match supported_config.sample_format() {
+                // SampleFormat::I8 => create_stream::<i8>(shared_data),
+                SampleFormat::I16 => self.create_stream::<i16>(device, supported_config),
+                SampleFormat::I32 => self.create_stream::<i32>(device, supported_config),
+                SampleFormat::I64 => self.create_stream::<i64>(device, supported_config),
+                SampleFormat::U8 => self.create_stream::<u8>(device, supported_config),
+                // SampleFormat::U16 => create_stream::<u16>(shared_data),
+                // SampleFormat::U32 => create_stream::<u32>(shared_data),
+                // SampleFormat::U64 => create_stream::<u64>(shared_data),
+                SampleFormat::F32 => self.create_stream::<f32>(device, supported_config),
+                SampleFormat::F64 => self.create_stream::<f64>(device, supported_config),
                 _ => unimplemented!(),
             };
 
-            fn create_stream<T: SizedSample + cpal::FromSample<f64> + 'static>(
-                (device, config, mut next_sample): (
-                    &cpal::Device,
-                    &cpal::StreamConfig,
-                    impl FnMut() -> Option<f64> + Send + 'static,
-                ),
-            ) -> cpal::Stream {
-                device
-                    .build_output_stream(
-                        config,
-                        move |buffer: &mut [T], _info| {
-                            for sample in buffer.iter_mut() {
-                                let Some(s) = next_sample() else {
-                                    *sample = T::EQUILIBRIUM;
-                                    continue;
-                                };
-                                let value = cpal::Sample::from_sample::<f64>(s);
-                                *sample = value;
-                            }
-                        },
-                        |_| {},
-                        None,
-                    )
-                    .unwrap()
-            }
-
             stream.play().unwrap();
 
-            handle.block_on(self.stop_rx.changed()).ok();
+            handle.block_on(stop_rx.changed()).ok();
 
             stream.pause().ok();
             drop(stream);
         });
+    }
+
+    fn create_stream<T: FromSampleBytes>(
+        self,
+        device: cpal::Device,
+        supported_config: cpal::SupportedStreamConfig,
+    ) -> (watch::Receiver<bool>, cpal::Stream) {
+        let AudioPlayback {
+            audio,
+            stop_rx,
+            start_frame_number,
+            project,
+            ..
+        } = self;
+
+        let mut output_info = AudioInfo::from_stream_config(&supported_config);
+        output_info.sample_format = output_info.sample_format.packed();
+
+        // TODO: Get fps and duration from video (once we start supporting other frame rates)
+        // Also, it's a bit weird that self.duration can ever be infinity to begin with, since
+        // pre-recorded videos are obviously a fixed size
+        let mut audio_renderer = AudioPlaybackBuffer::new(audio, output_info);
+        let playhead = f64::from(start_frame_number) / f64::from(FPS);
+        audio_renderer.set_playhead(playhead, project.borrow().timeline());
+
+        // Prerender enough for smooth playback
+        while !audio_renderer.buffer_reaching_limit() {
+            audio_renderer.render(project.borrow().timeline());
+        }
+
+        let mut config = supported_config.config();
+        // Low-latency playback
+        config.buffer_size = BufferSize::Fixed(AudioPlaybackBuffer::<T>::PLAYBACK_SAMPLES_COUNT);
+
+        let stream = device
+            .build_output_stream(
+                &config,
+                move |buffer: &mut [T], _info| {
+                    audio_renderer.render(project.borrow().timeline());
+                    audio_renderer.fill(buffer);
+                },
+                |_| {},
+                None,
+            )
+            .unwrap();
+
+        (stop_rx, stream)
     }
 }

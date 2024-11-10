@@ -12,8 +12,8 @@ use wgpu::util::DeviceExt;
 use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
 use cap_project::{
-    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop,
-    CursorData, CursorMoveEvent, ProjectConfiguration, XY,
+    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorData,
+    CursorMoveEvent, ProjectConfiguration, XY,
 };
 
 use image::GenericImageView;

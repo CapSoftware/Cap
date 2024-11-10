@@ -42,7 +42,7 @@ impl Audio {
         let input = ffmpeg::format::input(path).unwrap();
         let stream = input.streams().best(ffmpeg::media::Type::Audio).unwrap();
 
-        let video_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
+        let audio_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
             .unwrap()
             .decoder()
             .audio()
@@ -50,8 +50,8 @@ impl Audio {
 
         Audio {
             duration: input.duration() as f64 / 1_000_000.0,
-            sample_rate: video_decoder.rate(),
-            channels: video_decoder.channels(),
+            sample_rate: audio_decoder.rate(),
+            channels: audio_decoder.channels(),
         }
     }
 }
