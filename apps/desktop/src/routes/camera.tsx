@@ -261,7 +261,7 @@ function CameraLoadingState(props: { shape: CameraWindow.Shape }) {
   });
 
   return (
-    <div class="flex flex-col w-full h-full">
+    <div class="flex flex-col w-full h-full bg-black">
       <div class="h-14" />
       <div
         class={cx(

@@ -12,13 +12,10 @@ pub enum CapWindow {
     Editor { project_id: String },
     Permissions,
     PrevRecordings,
-    // Notifications,
     WindowCaptureOccluder,
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
-    Feedback,
     Upgrade,
-    Changelog,
 }
 
 #[derive(Clone)]
@@ -28,13 +25,10 @@ pub enum CapWindowId {
     Editor { project_id: String },
     Permissions,
     PrevRecordings,
-    // Notifications,
     WindowCaptureOccluder,
     Camera,
     InProgressRecording,
-    Feedback,
     Upgrade,
-    Changelog,
 }
 
 impl CapWindowId {
@@ -46,11 +40,8 @@ impl CapWindowId {
             "window-capture-occluder" => Self::WindowCaptureOccluder,
             "in-progress-recording" => Self::InProgressRecording,
             "prev-recordings" => Self::PrevRecordings,
-            // "notifications" => Self::Notifications,
             "permissions" => Self::Permissions,
-            "feedback" => Self::Feedback,
             "upgrade" => Self::Upgrade,
-            "changelog" => Self::Changelog,
             s if s.starts_with("editor-") => Self::Editor {
                 project_id: s.replace("editor-", ""),
             },
@@ -66,12 +57,9 @@ impl CapWindowId {
             Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
             Self::InProgressRecording => "in-progress-recording".to_string(),
             Self::PrevRecordings => "prev-recordings".to_string(),
-            // Self::Notifications => "notifications".to_string(),
             Self::Editor { project_id } => format!("editor-{}", project_id),
             Self::Permissions => "permissions".to_string(),
-            Self::Feedback => "feedback".to_string(),
             Self::Upgrade => "upgrade".to_string(),
-            Self::Changelog => "changelog".to_string(),
         }
     }
 
@@ -81,9 +69,7 @@ impl CapWindowId {
             Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
-            // Self::Notifications => "Cap Notifications".to_string(),
             Self::Permissions => "Cap Permissions".to_string(),
-            Self::Changelog => "Cap Changelog".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -93,11 +79,8 @@ impl CapWindowId {
             Self::Main
             | Self::Editor { .. }
             | Self::Settings
-            // | Self::Notifications
             | Self::Permissions
-            | Self::Feedback
-            | Self::Upgrade
-            | Self::Changelog => true,
+            | Self::Upgrade => true,
             _ => false,
         }
     }
@@ -113,7 +96,6 @@ impl CapWindowId {
             | Self::InProgressRecording
             | Self::WindowCaptureOccluder
             | Self::PrevRecordings => None,
-            // | Self::Notifications => None,
             Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 48.0))),
             _ => Some(None),
         }
@@ -209,22 +191,6 @@ impl CapWindow {
 
                 window_builder.build()?
             }
-            Self::Feedback => {
-                let mut window_builder = self
-                    .window_builder(app, "/feedback")
-                    .inner_size(400.0, 400.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .shadow(true)
-                    .transparent(true);
-
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.decorations(false);
-                }
-
-                window_builder.build()?
-            }
             Self::Upgrade => {
                 let mut window_builder = self
                     .window_builder(app, "/upgrade")
@@ -233,24 +199,6 @@ impl CapWindow {
                     .maximized(false)
                     .shadow(true)
                     .transparent(true);
-
-                
-
-                window_builder.build()?
-            }
-            Self::Changelog => {
-                let mut window_builder = self
-                    .window_builder(app, "/changelog")
-                    .inner_size(600.0, 450.0)
-                    .resizable(true)
-                    .maximized(false)
-                    .shadow(true)
-                    .transparent(true);
-
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.decorations(false);
-                }
 
                 window_builder.build()?
             }
@@ -283,8 +231,6 @@ impl CapWindow {
 		                ",
                     ))
                     .transparent(true);
-
-                
 
                 window_builder.build()?
             }
@@ -345,31 +291,6 @@ impl CapWindow {
                     .visible(false)
                     .build()?
             }
-            // Self::Notifications => {
-            //     let window = self
-            //         .window_builder(app, "/notifications")
-            //         .maximized(false)
-            //         .transparent(true)
-            //         .resizable(false)
-            //         .fullscreen(false)
-            //         .decorations(false)
-            //         .shadow(false)
-            //         .always_on_top(true)
-            //         .visible_on_all_workspaces(true)
-            //         .content_protected(true)
-            //         .inner_size(350.0, 350.0)
-            //         .skip_taskbar(true)
-            //         .position(
-            //             (monitor.size().width as f64) / monitor.scale_factor() - 350.0,
-            //             0.0,
-            //         )
-            //         .build()?;
-
-            //     // Make window non-interactive
-            //     window.set_ignore_cursor_events(true)?;
-
-            //     window
-            // }
             Self::PrevRecordings => {
                 let mut window_builder = self
                     .window_builder(app, "/prev-recordings")
@@ -463,13 +384,10 @@ impl CapWindow {
             },
             CapWindow::Permissions => CapWindowId::Permissions,
             CapWindow::PrevRecordings => CapWindowId::PrevRecordings,
-            // CapWindow::Notifications => CapWindowId::Notifications,
             CapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
             CapWindow::Camera { .. } => CapWindowId::Camera,
             CapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
-            CapWindow::Feedback => CapWindowId::Feedback,
             CapWindow::Upgrade => CapWindowId::Upgrade,
-            CapWindow::Changelog => CapWindowId::Changelog,
         }
     }
 }
@@ -487,15 +405,17 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
                 );
 
                 let c_win = target_window.clone();
-                target_window.on_window_event(move |event| if let tauri::WindowEvent::ThemeChanged(..) = event {
-                    delegates::position_window_controls(
-                        delegates::UnsafeWindowHandle(
-                            c_win
-                                .ns_window()
-                                .expect("Failed to get native window handle"),
-                        ),
-                        &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
-                    );
+                target_window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::ThemeChanged(..) = event {
+                        delegates::position_window_controls(
+                            delegates::UnsafeWindowHandle(
+                                c_win
+                                    .ns_window()
+                                    .expect("Failed to get native window handle"),
+                            ),
+                            &controls_inset.unwrap_or(LogicalPosition::new(14.0, 22.0)),
+                        );
+                    }
                 });
             })
             .ok();

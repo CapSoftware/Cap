@@ -3,11 +3,21 @@ import { cx } from "cva";
 import { createResource, For } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { getVersion } from "@tauri-apps/api/app";
+import { lazy } from "solid-js";
 
 import { commands } from "~/utils/tauri";
 
-export default function (props: RouteSectionProps) {
+// Lazy load the tab components
+const FeedbackTab = lazy(() => import("./settings/feedback"));
+const GeneralTab = lazy(() => import("./settings/general"));
+const HotkeysTab = lazy(() => import("./settings/hotkeys"));
+const RecordingsTab = lazy(() => import("./settings/recordings"));
+const ScreenshotsTab = lazy(() => import("./settings/screenshots"));
+const ChangelogTab = lazy(() => import("./settings/changelog"));
+
+export default function Settings(props: RouteSectionProps) {
   const location = useLocation();
+  const currentPath = () => location.pathname.split("/").pop();
 
   const handleSignOut = async () => {
     await commands.deleteAuthOpenSignin();
@@ -15,6 +25,25 @@ export default function (props: RouteSectionProps) {
 
   const [version] = createResource(async () => getVersion());
   const versionString = () => version() ?? "0";
+
+  const renderTab = () => {
+    switch (currentPath()) {
+      case "feedback":
+        return <FeedbackTab />;
+      case "general":
+        return <GeneralTab />;
+      case "hotkeys":
+        return <HotkeysTab />;
+      case "recordings":
+        return <RecordingsTab />;
+      case "screenshots":
+        return <ScreenshotsTab />;
+      case "changelog":
+        return <ChangelogTab />;
+      default:
+        return <GeneralTab />;
+    }
+  };
 
   return (
     <div class="h-[calc(100vh-3rem)] flex flex-row divide-x divide-gray-200 text-[0.875rem] leading-[1.25rem]">
@@ -34,10 +63,20 @@ export default function (props: RouteSectionProps) {
                 name: "Previous Screenshots",
                 icon: IconLucideCamera,
               },
+              {
+                href: "feedback",
+                name: "Feedback",
+                icon: IconLucideMessageSquarePlus,
+              },
+              {
+                href: "changelog",
+                name: "Changelog",
+                icon: IconLucideBell,
+              },
             ]}
           >
             {(item) => {
-              const isActive = () => location.pathname.includes(item.href);
+              const isActive = () => currentPath() === item.href;
               return (
                 <li>
                   <A
@@ -66,7 +105,7 @@ export default function (props: RouteSectionProps) {
           </Button>
         </div>
       </div>
-      <div class="flex-1 bg-gray-50">{props.children}</div>
+      <div class="flex-1 bg-gray-50 overflow-y-auto">{renderTab()}</div>
     </div>
   );
 }
