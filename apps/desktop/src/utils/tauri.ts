@@ -279,6 +279,14 @@ async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<Result<nu
     else return { status: "error", error: e  as any };
 }
 },
+async setRecordingSettings(settings: RecordingSettingsStore) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_recording_settings", { settings }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async setGeneralSettings(settings: GeneralSettingsStore) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_general_settings", { settings }) };
@@ -411,6 +419,7 @@ export type RecordingMetaChanged = { id: string }
 export type RecordingOptions = { captureTarget: ScreenCaptureTarget; cameraLabel: string | null; audioInputName: string | null }
 export type RecordingOptionsChanged = null
 export type RecordingSegment = { start: number; end: number }
+export type RecordingSettingsStore = { use_hardware_acceleration: boolean; recording_resolution: TargetResolution; recording_fps: TargetFPS }
 export type RecordingStarted = null
 export type RecordingStopped = { path: string }
 export type RenderFrameEvent = { frame_number: number }
@@ -425,6 +434,8 @@ export type ScreenCaptureTarget = ({ variant: "window" } & CaptureWindow) | ({ v
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string; prettyName: string }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
+export type TargetFPS = "_30" | "_60" | "Native"
+export type TargetResolution = "_720p" | "_1080p" | "Native"
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments?: ZoomSegment[] }
 export type TimelineSegment = { timescale: number; start: number; end: number }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"

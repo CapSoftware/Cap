@@ -1,14 +1,16 @@
 use cap_flags::FLAGS;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
-use cap_project::{CursorClickEvent, CursorMoveEvent, RecordingMeta};
-use serde::Serialize;
+use cap_project::{CursorClickEvent, CursorMoveEvent, RecordingMeta, TargetFPS, TargetResolution};
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Manager, Wry};
+use tauri_plugin_store::StoreExt;
 use tokio::sync::oneshot;
 
 use crate::cursor::spawn_cursor_recorder;
@@ -16,6 +18,52 @@ use crate::RecordingOptions;
 
 // TODO: Hacky, please fix
 pub const FPS: u32 = 30;
+
+#[derive(Serialize, Deserialize, Type, Default, Debug)]
+pub struct RecordingSettingsStore {
+    pub use_hardware_acceleration: bool,
+    pub recording_resolution: TargetResolution,
+    pub recording_fps: TargetFPS,
+}
+
+pub type RecordingSettingsState = Mutex<RecordingSettingsStore>;
+
+pub fn init_settings(app: &AppHandle) {
+    println!("Initializing RecordingSettingsStore");
+    let store = RecordingSettingsStore::get(app)
+        .unwrap()
+        .unwrap_or_default();
+    app.manage(RecordingSettingsState::new(store));
+    println!("RecordingSettingsState managed");
+}
+
+impl RecordingSettingsStore {
+    pub fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
+        let Some(Some(store)) = app.get_store("store").map(|s| s.get("recording_settings")) else {
+            return Ok(None);
+        };
+
+        serde_json::from_value(store).map_err(|e| e.to_string())
+    }
+
+    pub fn set(app: &AppHandle, settings: Self) -> Result<(), String> {
+        let Some(store) = app.get_store("store") else {
+            return Err("Store not found".to_string());
+        };
+
+        store.set("recording_settings", serde_json::json!(settings));
+        store.save().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn set_recording_settings(
+    app: AppHandle,
+    settings: RecordingSettingsStore,
+) -> Result<(), String> {
+    RecordingSettingsStore::set(&app, settings)
+}
 
 #[tauri::command(async)]
 #[specta::specta]
@@ -239,7 +287,7 @@ pub async fn start(
         )?;
         pipeline_builder = pipeline_builder
             .source("screen_capture", screen_source)
-            // .pipe("screen_capture_filter", screen_filter)
+            .pipe("screen_capture_filter", screen_filter)
             .sink("screen_capture_encoder", screen_encoder);
     }
 
@@ -251,7 +299,6 @@ pub async fn start(
         let mic_config = mic_source.info();
         audio_output_path = Some(content_dir.join("audio-input.mp3"));
 
-        // let mic_filter = AudioFilter::init("microphone", mic_config, "aresample=async=1:min_hard_comp=0.100000:first_pts=0")?;
         let mic_encoder = MP3Encoder::init(
             "microphone",
             mic_config,
@@ -260,7 +307,6 @@ pub async fn start(
 
         pipeline_builder = pipeline_builder
             .source("microphone_capture", mic_source)
-            // .pipe("microphone_filter", mic_filter)
             .sink("microphone_encoder", mic_encoder);
     }
 

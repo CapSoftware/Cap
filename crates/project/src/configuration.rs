@@ -51,6 +51,22 @@ impl Default for BackgroundSource {
     }
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+pub enum TargetResolution {
+    _720p,
+    #[default]
+    _1080p,
+    Native,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+pub enum TargetFPS {
+    #[default]
+    _30,
+    _60,
+    Native,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct XY<T> {

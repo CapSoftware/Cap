@@ -5,6 +5,7 @@ import type {
   ProjectConfiguration,
   HotkeysStore,
   GeneralSettingsStore,
+  RecordingSettingsStore,
 } from "~/utils/tauri";
 
 let _store: Promise<Store> | undefined;
@@ -63,4 +64,13 @@ export const generalSettingsStore = {
     await s.set("general_settings", value);
     await s.save();
   },
+};
+
+export const recordingSettingsStore = {
+  get: () => store().then((s) => s.get<RecordingSettingsStore>("recording_settings")),
+  set: async (value: RecordingSettingsStore) => {
+    const s = await store();
+    await s.set("recording_settings", value);
+    await s.save();
+  }
 };

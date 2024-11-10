@@ -24,6 +24,7 @@ export default function (props: RouteSectionProps) {
             each={[
               { href: "general", name: "General", icon: IconCapSettings },
               { href: "hotkeys", name: "Shortcuts", icon: IconCapHotkeys },
+              { href: "recording", name: "Recording", icon: IconLucideVideo },
               {
                 href: "recordings",
                 name: "Previous Recordings",

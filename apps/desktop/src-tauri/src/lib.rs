@@ -2459,6 +2459,7 @@ pub async fn run() {
             check_upgraded_and_update,
             open_external_link,
             hotkeys::set_hotkey,
+            recording::set_recording_settings,
             set_general_settings,
             delete_auth_open_signin,
             reset_camera_permissions,
@@ -2489,6 +2490,7 @@ pub async fn run() {
         .typ::<AuthStore>()
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
+        .typ::<recording::RecordingSettingsStore>()
         .typ::<cap_flags::Flags>();
 
     #[cfg(debug_assertions)]
@@ -2528,6 +2530,7 @@ pub async fn run() {
             specta_builder.mount_events(app);
             hotkeys::init(app.handle());
             general_settings::init(app.handle());
+            recording::init_settings(app.handle());
 
             let app_handle = app.handle().clone();
 
