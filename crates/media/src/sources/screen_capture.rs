@@ -209,7 +209,7 @@ impl ScreenCaptureSource {
 }
 
 impl PipelineSourceTask for ScreenCaptureSource {
-    type Clock = SynchronisedClock<RawNanoseconds>;
+    type Clock = RealTimeClock<RawNanoseconds>;
     type Output = FFVideo;
 
     fn run(

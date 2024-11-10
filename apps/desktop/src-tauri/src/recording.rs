@@ -41,7 +41,7 @@ pub struct InProgressRecording {
     pub id: String,
     pub recording_dir: PathBuf,
     #[serde(skip)]
-    pub pipeline: Pipeline<SynchronisedClock<()>>,
+    pub pipeline: Pipeline<RealTimeClock<()>>,
     #[serde(skip)]
     pub display_output_path: PathBuf,
     #[serde(skip)]
@@ -194,7 +194,7 @@ pub async fn start(
     std::fs::create_dir_all(&content_dir).unwrap();
     std::fs::create_dir_all(&cursors_dir).unwrap();
 
-    let clock = SynchronisedClock::<()>::new();
+    let clock = RealTimeClock::<()>::new();
     let mut pipeline_builder = Pipeline::builder(clock);
 
     let display_output_path = content_dir.join("display.mp4");

@@ -1,3 +1,4 @@
+use cpal::{SampleFormat, SupportedBufferSize, SupportedStreamConfig};
 pub use ffmpeg::format::{
     pixel::Pixel,
     sample::{Sample, Type},
@@ -8,16 +9,7 @@ pub use ffmpeg::util::{
     frame::{Audio as FFAudio, Frame as FFFrame, Video as FFVideo},
     rational::Rational as FFRational,
 };
-pub use ffmpeg::{Error as FFError, Packet as FFPacket};
-
-pub enum RawAudioFormat {
-    U8,
-    I16,
-    I32,
-    I64,
-    F32,
-    F64,
-}
+pub use ffmpeg::{error::EAGAIN, Error as FFError, Packet as FFPacket};
 
 pub enum RawVideoFormat {
     Bgra,
@@ -29,46 +21,108 @@ pub enum RawVideoFormat {
     YUYV420,
 }
 
-impl From<RawAudioFormat> for Sample {
-    fn from(value: RawAudioFormat) -> Self {
-        match value {
-            RawAudioFormat::U8 => Self::U8(Type::Packed),
-            RawAudioFormat::I16 => Self::I16(Type::Packed),
-            RawAudioFormat::I32 => Self::I32(Type::Packed),
-            RawAudioFormat::I64 => Self::I64(Type::Packed),
-            RawAudioFormat::F32 => Self::F32(Type::Packed),
-            RawAudioFormat::F64 => Self::F64(Type::Packed),
+pub fn ffmpeg_sample_format_for(sample_format: SampleFormat) -> Option<Sample> {
+    match sample_format {
+        SampleFormat::U8 => Some(Sample::U8(Type::Planar)),
+        SampleFormat::I16 => Some(Sample::I16(Type::Planar)),
+        SampleFormat::I32 => Some(Sample::I32(Type::Planar)),
+        SampleFormat::I64 => Some(Sample::I64(Type::Planar)),
+        SampleFormat::F32 => Some(Sample::F32(Type::Planar)),
+        SampleFormat::F64 => Some(Sample::F64(Type::Planar)),
+        _ => None,
+    }
+}
+
+pub trait PlanarData {
+    fn plane_data(&self, index: usize) -> &[u8];
+
+    fn plane_data_mut(&mut self, index: usize) -> &mut [u8];
+}
+
+// The ffmpeg crate's implementation of the `data_mut` function is wrong for audio;
+// per [the FFmpeg docs](https://www.ffmpeg.org/doxygen/7.0/structAVFrame.html]) only
+// the linesize of the first plane may be set for planar audio, and so we need to use
+// that linesize for the rest of the planes (else they will appear to be empty slices).
+impl PlanarData for FFAudio {
+    #[inline]
+    fn plane_data(&self, index: usize) -> &[u8] {
+        if index >= self.planes() {
+            panic!("out of bounds");
+        }
+
+        unsafe {
+            std::slice::from_raw_parts(
+                (*self.as_ptr()).data[index],
+                (*self.as_ptr()).linesize[0] as usize,
+            )
+        }
+    }
+
+    #[inline]
+    fn plane_data_mut(&mut self, index: usize) -> &mut [u8] {
+        if index >= self.planes() {
+            panic!("out of bounds");
+        }
+
+        unsafe {
+            std::slice::from_raw_parts_mut(
+                (*self.as_mut_ptr()).data[index],
+                (*self.as_ptr()).linesize[0] as usize,
+            )
         }
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct AudioInfo {
     pub sample_format: Sample,
-    sample_rate: u32,
-    channels: usize,
+    pub sample_rate: u32,
+    pub channels: usize,
     pub time_base: FFRational,
     pub buffer_size: u32,
 }
 
 impl AudioInfo {
-    pub fn from_raw(
-        format: RawAudioFormat,
-        sample_rate: u32,
-        channels: u16,
-        buffer_size: u32,
-    ) -> Self {
+    pub fn new(sample_format: Sample, sample_rate: u32, channel_count: u16) -> Self {
         Self {
-            sample_format: format.into(),
+            sample_format,
             sample_rate,
-            channels: channels.into(),
+            channels: channel_count.into(),
+            time_base: FFRational(1, 1_000_000),
+            buffer_size: 1024,
+        }
+    }
+
+    pub fn from_stream_config(config: &SupportedStreamConfig) -> Self {
+        let sample_format = ffmpeg_sample_format_for(config.sample_format()).unwrap();
+        let buffer_size = match config.buffer_size() {
+            SupportedBufferSize::Range { max, .. } => *max,
+            // TODO: Different buffer sizes for different contexts?
+            SupportedBufferSize::Unknown => 1024,
+        };
+
+        Self {
+            sample_format,
+            sample_rate: config.sample_rate().0,
+            channels: config.channels().into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size,
         }
     }
 
+    pub fn from_decoder(decoder: &ffmpeg::codec::decoder::Audio) -> Self {
+        Self {
+            sample_format: decoder.format(),
+            sample_rate: decoder.rate(),
+            // TODO: Use channel layout when we support more than just mono/stereo
+            channels: usize::from(decoder.channels()),
+            time_base: decoder.time_base(),
+            buffer_size: decoder.frame_size(),
+        }
+    }
+
     pub fn sample_size(&self) -> usize {
-        self.sample_format.bytes() * self.channels
+        self.sample_format.bytes()
     }
 
     pub fn rate(&self) -> i32 {
@@ -85,14 +139,44 @@ impl AudioInfo {
         }
     }
 
+    pub fn empty_frame(&self, sample_count: usize) -> FFAudio {
+        let mut frame = FFAudio::new(self.sample_format, sample_count, self.channel_layout());
+        frame.set_rate(self.sample_rate);
+
+        frame
+    }
+
     pub fn wrap_frame(&self, data: &[u8], timestamp: i64) -> FFAudio {
-        let samples = data.len() / self.sample_size();
+        let sample_size = self.sample_size();
+        let interleaved_chunk_size = sample_size * self.channels;
+        let samples = data.len() / interleaved_chunk_size;
 
         let mut frame = FFAudio::new(self.sample_format, samples, self.channel_layout());
-
         frame.set_pts(Some(timestamp));
         frame.set_rate(self.sample_rate);
-        frame.data_mut(0)[0..data.len()].copy_from_slice(data);
+
+        match self.channels {
+            0 => unreachable!(),
+            1 => frame.plane_data_mut(0)[0..data.len()].copy_from_slice(data),
+            // cpal *always* returns interleaved data (i.e. the first sample from every channel, followed
+            // by the second sample from every channel, et cetera). Many audio codecs work better/primarily
+            // with planar data, so we de-interleave it here if there is more than one channel.
+            channel_count => {
+                for (chunk_index, interleaved_chunk) in
+                    data.chunks(interleaved_chunk_size).enumerate()
+                {
+                    let start = chunk_index * sample_size;
+                    let end = start + sample_size;
+
+                    for channel in 0..channel_count {
+                        let channel_start = channel * sample_size;
+                        let channel_end = channel_start + sample_size;
+                        frame.plane_data_mut(channel)[start..end]
+                            .copy_from_slice(&interleaved_chunk[channel_start..channel_end]);
+                    }
+                }
+            }
+        }
 
         frame
     }
@@ -164,3 +248,25 @@ impl VideoInfo {
         frame
     }
 }
+
+pub trait FromSampleBytes: cpal::SizedSample + std::fmt::Debug + Send + 'static {
+    const BYTE_SIZE: usize;
+
+    fn from_bytes(bytes: &[u8]) -> Self;
+}
+
+macro_rules! sample_bytes {
+    ( $( $num:ty, $size:literal ),* ) => (
+        $(
+            impl FromSampleBytes for $num {
+                const BYTE_SIZE: usize = $size;
+
+                fn from_bytes(bytes: &[u8]) -> Self {
+                    Self::from_le_bytes(bytes.try_into().expect("Incorrect byte slice length"))
+                }
+            }
+        )*
+    )
+}
+
+sample_bytes!(u8, 1, i16, 2, i32, 4, i64, 8, f32, 4, f64, 8);

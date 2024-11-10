@@ -10,14 +10,16 @@ anyhow.workspace = true
 cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
 cap-gpu-converters = { path = "../gpu-converters" }
-cpal = "0.15.3"
+cpal.workspace = true
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 flume = "0.11.0"
 indexmap = "2.5.0"
-scap.workspace = true
 nokhwa = { workspace = true, features = ["input-native", "serialize"] }
+num-traits = "0.2.19"
+ringbuf = "0.4.7"
+scap.workspace = true
 serde = { version = "1", features = ["derive"] }
 specta.workspace = true
 tempfile = "3.12.0"

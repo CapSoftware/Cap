@@ -6,7 +6,7 @@ use ffmpeg::{
 use std::collections::VecDeque;
 
 use crate::{
-    data::{AudioInfo, FFAudio, FFPacket, FFRational},
+    data::{AudioInfo, FFAudio, FFPacket, FFRational, PlanarData},
     pipeline::task::PipelineSinkTask,
     MediaError,
 };
@@ -17,10 +17,7 @@ pub struct MP3Encoder {
     tag: &'static str,
     encoder: encoder::Audio,
     output_ctx: format::context::Output,
-    frame_size: usize,
-    sample_size: usize,
-    frame_buffer: VecDeque<u8>,
-    next_pts: i64,
+    buffer: AudioBuffer,
 }
 
 impl MP3Encoder {
@@ -29,7 +26,6 @@ impl MP3Encoder {
     pub fn init(tag: &'static str, config: AudioInfo, output: Output) -> Result<Self, MediaError> {
         let Output::File(destination) = output;
         let mut output_ctx = format::output(&destination)?;
-        println!("Sample format: {:#?}", config.sample_format);
 
         let codec = encoder::find(ffmpeg::codec::Id::MP3)
             .ok_or(MediaError::TaskLaunch("Could not find MP3 codec".into()))?;
@@ -50,47 +46,19 @@ impl MP3Encoder {
         output_stream.set_parameters(&audio_encoder);
         output_ctx.write_header()?;
 
-        let sample_size = config.sample_size();
-        let frame_buffer_size = usize::try_from(config.buffer_size).unwrap() * sample_size;
         Ok(Self {
             tag,
-            frame_size: audio_encoder.frame_size().try_into().unwrap(),
-            sample_size,
+            buffer: AudioBuffer::new(config, &audio_encoder),
             encoder: audio_encoder,
             output_ctx,
-            frame_buffer: VecDeque::with_capacity(frame_buffer_size * 2),
-            next_pts: 0,
         })
     }
 
-    fn queue_frames_from_buffer(&mut self) {
-        if self.frame_buffer.is_empty() {
-            return;
-        }
-
-        let data_size = self.frame_size * self.sample_size;
-        // let data_size = std::cmp::min(self.frame_size * self.sample_size, self.frame_buffer.len());
-        let mut frame = FFAudio::new(
-            self.encoder.format(),
-            self.frame_size,
-            self.encoder.channel_layout(),
-        );
-        frame.set_rate(self.encoder.rate());
-        // TODO: Set first PTS with ffmpeg::sys::av_rescale_q??
-        frame.set_pts(Some(self.next_pts));
-        for (index, byte) in self.frame_buffer.drain(0..data_size).enumerate() {
-            frame.data_mut(0)[index] = byte;
-        }
-
-        self.encoder.send_frame(&frame).unwrap();
-        self.process_packets();
-    }
-
     fn queue_frame(&mut self, frame: FFAudio) {
-        self.frame_buffer.extend(frame.data(0));
-        while self.frame_buffer.len() >= self.frame_size * self.sample_size {
-            self.queue_frames_from_buffer();
-            self.next_pts += i64::try_from(self.frame_size).unwrap();
+        self.buffer.consume(frame);
+        while let Some(buffered_frame) = self.buffer.next_frame() {
+            self.encoder.send_frame(&buffered_frame).unwrap();
+            self.process_packets();
         }
     }
 
@@ -110,7 +78,6 @@ impl MP3Encoder {
     }
 
     fn finish(&mut self) {
-        // self.queue_frames_from_buffer();
         self.encoder.send_eof().unwrap();
         self.process_packets();
         self.output_ctx.write_trailer().unwrap();
@@ -136,5 +103,72 @@ impl PipelineSinkTask for MP3Encoder {
         self.finish();
 
         println!("Shutting down {} audio encoding thread", self.tag);
+    }
+}
+
+#[derive(Debug)]
+struct AudioBuffer {
+    current_pts: i64,
+    data: Vec<VecDeque<u8>>,
+    frame_size: usize,
+    config: AudioInfo,
+}
+
+impl AudioBuffer {
+    fn new(config: AudioInfo, encoder: &encoder::Audio) -> Self {
+        let sample_size = config.sample_size();
+        let frame_buffer_size = usize::try_from(config.buffer_size).unwrap() * sample_size;
+
+        Self {
+            current_pts: 0,
+            data: vec![VecDeque::with_capacity(frame_buffer_size); config.channels],
+            frame_size: encoder.frame_size().try_into().unwrap(),
+            config,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.data[0].is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.data[0].len()
+    }
+
+    fn consume(&mut self, frame: FFAudio) {
+        // TODO: Set PTS from frame with ffmpeg::sys::av_rescale_q??
+        // if let Some(pts) = frame.pts() {
+        //     self.current_pts = pts;
+        // }
+        for channel in 0..self.config.channels {
+            // if self.current_pts == 0 {
+            //     println!("Data in channel {channel}: {:?}", frame.data(channel));
+            // }
+            self.data[channel].extend(frame.plane_data(channel));
+        }
+    }
+
+    fn next_frame(&mut self) -> Option<FFAudio> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let frame_size = self.frame_size * self.config.sample_size();
+
+        if self.len() < frame_size {
+            return None;
+        }
+
+        let mut frame = self.config.empty_frame(self.frame_size);
+        frame.set_pts(Some(self.current_pts));
+
+        for channel in 0..self.config.channels {
+            for (index, byte) in self.data[channel].drain(0..frame_size).enumerate() {
+                frame.plane_data_mut(channel)[index] = byte;
+            }
+        }
+
+        self.current_pts += i64::try_from(frame_size / self.config.sample_size()).unwrap();
+        Some(frame)
     }
 }
