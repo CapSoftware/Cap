@@ -7,7 +7,9 @@ use tauri_plugin_store::StoreExt;
 
 #[derive(Serialize, Deserialize, Type, Default)]
 pub struct GeneralSettingsStore {
+    #[serde(default)]
     pub upload_individual_files: bool,
+    #[serde(default)]
     pub open_editor_after_recording: bool,
     #[serde(default)]
     pub hide_dock_icon: bool,
@@ -23,11 +25,16 @@ fn default_enable_notifications() -> bool {
 
 impl GeneralSettingsStore {
     pub fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
-        let Some(Some(store)) = app.get_store("store").map(|s| s.get("general_settings")) else {
-            return Ok(None);
-        };
-
-        serde_json::from_value(store).map_err(|e| e.to_string())
+        match app.get_store("store").map(|s| s.get("general_settings")) {
+            Some(Some(store)) => {
+                // Handle potential deserialization errors gracefully
+                match serde_json::from_value(store) {
+                    Ok(settings) => Ok(Some(settings)),
+                    Err(_) => Ok(Some(GeneralSettingsStore::default())),
+                }
+            }
+            _ => Ok(None),
+        }
     }
 
     pub fn set(app: &AppHandle, settings: Self) -> Result<(), String> {
@@ -44,7 +51,10 @@ pub type GeneralSettingsState = Mutex<GeneralSettingsStore>;
 
 pub fn init(app: &AppHandle) {
     println!("Initializing GeneralSettingsStore");
-    let store = GeneralSettingsStore::get(app).unwrap().unwrap_or_default();
+    // Use unwrap_or_default() to handle potential errors gracefully
+    let store = GeneralSettingsStore::get(app)
+        .unwrap_or(None)
+        .unwrap_or_default();
     app.manage(GeneralSettingsState::new(store));
     println!("GeneralSettingsState managed");
 }

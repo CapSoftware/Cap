@@ -2654,14 +2654,17 @@ pub async fn run() {
                             let app_handle = app.clone();
                             tokio::spawn(async move {
                                 let _ = remove_editor_instance(&app_handle, project_id).await;
-
                                 tokio::task::yield_now().await;
                             });
+                        }
+                        CapWindowId::Settings { .. } => {
+                            // Don't quit the app when settings window is closed
+                            return;
                         }
                         _ => {}
                     };
 
-                    if let Some(settings) = GeneralSettingsStore::get(app).unwrap() {
+                    if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None) {
                         if settings.hide_dock_icon
                             && app
                                 .webview_windows()
