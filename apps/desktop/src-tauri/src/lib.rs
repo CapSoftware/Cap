@@ -52,7 +52,7 @@ use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
 };
-use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
+use tauri::{AppHandle, LogicalPosition, Manager, Runtime, State, WindowEvent};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
@@ -2451,6 +2451,8 @@ pub async fn run() {
             is_camera_window_open,
             seek_to,
             send_feedback_request,
+            windows::position_traffic_lights,
+            windows::invalidate_shadow,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

@@ -1,6 +1,8 @@
 import { createStore } from "solid-js/store";
 import type { JSX } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { commands } from "./tauri";
+import { type as ostype } from "@tauri-apps/plugin-os";
 
 export interface TitlebarState {
   height: string;
@@ -34,6 +36,7 @@ async function initializeTitlebar() {
     currentWindow.isMaximizable(),
     currentWindow.isClosable(),
   ]);
+  if (ostype() === "macos") commands.positionTrafficLights(null);
 
   setState({ maximized, maximizable, closable });
 

@@ -12,7 +12,7 @@ export default function Titlebar() {
 
   return (
     <header
-      class={`z-50 flex flex-row items-center select-none bg-gray-50 space-x-1 shrink-0 border-gray-200 ${
+      class={`z-50 flex flex-row items-center select-none bg-gray-50 space-x-1 shrink-0 border-gray-200 rounded-[inherit] ${
         titlebarState.border ? "border-b" : ""
       }`}
       style={{
