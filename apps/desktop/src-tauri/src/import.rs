@@ -4,8 +4,7 @@ use tauri::Manager;
 use tracing::{error, info};
 use uuid::Uuid;
 
-#[tauri::command]
-pub fn get_projects_dir(app: tauri::AppHandle) -> Result<PathBuf, String> {
+pub fn get_projects_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     Ok(app_data.join("recordings"))
 }
@@ -33,7 +32,7 @@ pub async fn import_video_to_project(
     info!("Generated project ID: {}", project_id);
 
     // Create the project directory with .cap extension
-    let project_dir = get_projects_dir(app)?.join(format!("{}.cap", project_id));
+    let project_dir = get_projects_dir(&app)?.join(format!("{}.cap", project_id));
     info!("Project directory: {:?}", project_dir);
 
     std::fs::create_dir_all(&project_dir).map_err(|e| {
