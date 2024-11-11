@@ -26,10 +26,17 @@ export const DEFAULT_PROJECT_CONFIG: ProjectConfiguration = {
     rounding: 100,
     shadow: 50,
     size: 30,
+    zoom_size: 20,
   },
   audio: { mute: false, improve: false },
-  cursor: { hideWhenIdle: false, size: 0, type: "pointer" },
+  cursor: { 
+    hideWhenIdle: false, 
+    size: 0, 
+    type: "pointer",
+    animationStyle: "regular" as const
+  },
   hotkeys: { show: false },
+  motionBlur: 0.2,
 };
 
 export const ASPECT_RATIOS = {

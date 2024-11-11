@@ -10,7 +10,11 @@ import { createWritableMemo } from "@solid-primitives/memo";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { produce } from "solid-js/store";
 
-import type { BackgroundSource, CursorType } from "~/utils/tauri";
+import type {
+  BackgroundSource,
+  CursorType,
+  CursorAnimationStyle,
+} from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import {
   ComingSoonTooltip,
@@ -35,6 +39,12 @@ const BACKGROUND_SOURCES_LIST = [
   "color",
   "gradient",
 ] satisfies Array<BackgroundSource["type"]>;
+
+const CURSOR_ANIMATION_STYLES: Record<CursorAnimationStyle, string> = {
+  slow: "Slow & Smooth",
+  regular: "Regular",
+  fast: "Fast & Responsive",
+} as const;
 
 export function ConfigSidebar() {
   const {
@@ -522,40 +532,51 @@ export function ConfigSidebar() {
               step={1}
             />
           </Field>
-          <ComingSoonTooltip>
-            <Field name="Type" icon={<IconCapCursor />}>
-              <ul class="flex flex-row gap-2 text-gray-400">
-                <For
-                  each={
-                    [
-                      { type: "pointer", icon: IconCapCursor },
-                      { type: "circle", icon: IconCapCircle },
-                    ] satisfies Array<{
-                      icon: Component;
-                      type: CursorType;
-                    }>
-                  }
-                >
-                  {(item) => (
-                    <li>
-                      <button
-                        disabled
-                        type="button"
-                        onClick={() => setProject("cursor", "type", item.type)}
-                        data-selected={project.cursor.type === item.type}
-                        class="border border-black-transparent-5 bg-gray-100 rounded-lg p-[0.625rem] text-gray-400 data-[selected='true']:text-gray-500 disabled:text-gray-300 focus-visible:outline-blue-300 focus-visible:outline outline-1 outline-offset-1"
-                      >
-                        <Dynamic
-                          component={item.icon}
-                          class="size-[1.75rem] mx-auto"
-                        />
-                      </button>
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </Field>
-          </ComingSoonTooltip>
+          <Field name="Animation Style" icon={<IconLucideRabbit />}>
+            <RadioGroup
+              defaultValue="regular"
+              value={project.cursor.animationStyle}
+              onChange={(value) => {
+                console.log("Changing animation style to:", value);
+                setProject(
+                  "cursor",
+                  "animationStyle",
+                  value as CursorAnimationStyle
+                );
+              }}
+              class="flex flex-col gap-2"
+            >
+              {(
+                Object.entries(CURSOR_ANIMATION_STYLES) as [
+                  CursorAnimationStyle,
+                  string
+                ][]
+              ).map(([value, label]) => (
+                <RadioGroup.Item value={value} class="flex items-center">
+                  <RadioGroup.ItemInput class="peer sr-only" />
+                  <RadioGroup.ItemControl
+                    class={cx(
+                      "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                      "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                      "after:transition-colors after:duration-200",
+                      "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                      "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
+                      "peer-disabled:opacity-50"
+                    )}
+                  />
+                  <span
+                    class={cx(
+                      "text-gray-500",
+                      "peer-checked:text-gray-900",
+                      "peer-disabled:opacity-50"
+                    )}
+                  >
+                    {label}
+                  </span>
+                </RadioGroup.Item>
+              ))}
+            </RadioGroup>
+          </Field>
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>
