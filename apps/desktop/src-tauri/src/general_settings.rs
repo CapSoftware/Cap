@@ -17,6 +17,8 @@ pub struct GeneralSettingsStore {
     pub auto_create_shareable_link: bool,
     #[serde(default = "default_enable_notifications")]
     pub enable_notifications: bool,
+    #[serde(default)]
+    pub disable_auto_open_links: bool,
 }
 
 fn default_enable_notifications() -> bool {

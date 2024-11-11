@@ -39,6 +39,12 @@ const settingsList = [
       "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
     requiresPermission: true,
   },
+  {
+    key: "disable_auto_open_links",
+    label: "Disable automatic link opening",
+    description:
+      "When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link).",
+  },
 ];
 
 export default function GeneralSettings() {

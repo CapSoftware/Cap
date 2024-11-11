@@ -2265,6 +2265,13 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
 #[tauri::command]
 #[specta::specta]
 fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    // Check settings first
+    if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
+        if settings.disable_auto_open_links {
+            return Ok(());
+        }
+    }
+
     app.shell()
         .open(&url, None)
         .map_err(|e| format!("Failed to open URL: {}", e))?;
