@@ -5,29 +5,46 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::StoreExt;
 
-#[derive(Serialize, Deserialize, Type, Default)]
+#[derive(Serialize, Deserialize, Type, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsStore {
-    pub upload_individual_files: bool,
-    pub open_editor_after_recording: bool,
-    #[serde(default)]
     pub hide_dock_icon: bool,
-    #[serde(default)]
-    pub auto_create_shareable_link: bool,
-    #[serde(default = "default_enable_notifications")]
+    pub has_completed_startup: bool,
     pub enable_notifications: bool,
+    pub open_editor_after_recording: bool,
+    pub auto_create_shareable_link: bool,
 }
 
-fn default_enable_notifications() -> bool {
-    true
+impl Default for GeneralSettingsStore {
+    fn default() -> Self {
+        Self {
+            hide_dock_icon: false,
+            enable_notifications: true,
+            auto_create_shareable_link: false,
+            open_editor_after_recording: true,
+            has_completed_startup: false,
+        }
+    }
 }
 
 impl GeneralSettingsStore {
     pub fn get(app: &AppHandle<Wry>) -> Result<Option<Self>, String> {
-        let Some(Some(store)) = app.get_store("store").map(|s| s.get("general_settings")) else {
-            return Ok(None);
-        };
-
-        serde_json::from_value(store).map_err(|e| e.to_string())
+        match app.get_store("store") {
+            Some(store) => match store.get("general_settings") {
+                Some(value) => {
+                    // Try to deserialize existing settings
+                    match serde_json::from_value(value) {
+                        Ok(settings) => Ok(Some(settings)),
+                        Err(_) => {
+                            // If deserialization fails, return default settings
+                            Ok(Some(Self::default()))
+                        }
+                    }
+                }
+                None => Ok(Some(Self::default())), // No settings found, return defaults
+            },
+            None => Ok(Some(Self::default())), // No store found, return defaults
+        }
     }
 
     pub fn set(app: &AppHandle, settings: Self) -> Result<(), String> {

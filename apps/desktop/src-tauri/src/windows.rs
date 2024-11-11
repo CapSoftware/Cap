@@ -7,6 +7,7 @@ use tauri::{
 
 #[derive(Clone)]
 pub enum CapWindow {
+    Startup,
     Main,
     Settings { page: Option<String> },
     Editor { project_id: String },
@@ -20,6 +21,7 @@ pub enum CapWindow {
 
 #[derive(Clone)]
 pub enum CapWindowId {
+    Startup,
     Main,
     Settings,
     Editor { project_id: String },
@@ -34,6 +36,7 @@ pub enum CapWindowId {
 impl CapWindowId {
     pub fn from_label(label: &str) -> Self {
         match label {
+            "startup" => Self::Startup,
             "main" => Self::Main,
             "settings" => Self::Settings,
             "camera" => Self::Camera,
@@ -51,15 +54,16 @@ impl CapWindowId {
 
     pub fn label(&self) -> String {
         match self {
+            Self::Startup => "startup".to_string(),
             Self::Main => "main".to_string(),
             Self::Settings => "settings".to_string(),
             Self::Camera => "camera".to_string(),
             Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
             Self::InProgressRecording => "in-progress-recording".to_string(),
             Self::PrevRecordings => "prev-recordings".to_string(),
-            Self::Editor { project_id } => format!("editor-{}", project_id),
             Self::Permissions => "permissions".to_string(),
             Self::Upgrade => "upgrade".to_string(),
+            Self::Editor { project_id } => format!("editor-{}", project_id),
         }
     }
 
@@ -76,7 +80,8 @@ impl CapWindowId {
 
     pub fn activates_dock(&self) -> bool {
         match self {
-            Self::Main
+            Self::Startup
+            | Self::Main
             | Self::Editor { .. }
             | Self::Settings
             | Self::Permissions
@@ -121,12 +126,36 @@ impl CapWindow {
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
+            Self::Startup => {
+                let mut window_builder = self
+                    .window_builder(app, "/startup")
+                    .inner_size(600.0, 600.0)
+                    .resizable(false)
+                    .maximized(false)
+                    .center()
+                    .focused(true)
+                    .maximizable(false)
+                    .transparent(true)
+                    .theme(Some(tauri::Theme::Light))
+                    .visible(true)
+                    .shadow(true);
+
+                #[cfg(target_os = "windows")]
+                {
+                    window_builder = window_builder.decorations(false).shadow(false);
+                }
+
+                let window = window_builder.build()?;
+                window.set_focus().ok();
+                window
+            }
             Self::Main => {
                 let mut window_builder = self
                     .window_builder(app, "/")
                     .inner_size(300.0, 375.0)
                     .resizable(false)
                     .maximized(false)
+                    .maximizable(false)
                     .transparent(true)
                     .theme(Some(tauri::Theme::Light))
                     .shadow(true);
@@ -377,6 +406,7 @@ impl CapWindow {
 
     pub fn id(&self) -> CapWindowId {
         match self {
+            CapWindow::Startup => CapWindowId::Startup,
             CapWindow::Main => CapWindowId::Main,
             CapWindow::Settings { .. } => CapWindowId::Settings,
             CapWindow::Editor { project_id } => CapWindowId::Editor {

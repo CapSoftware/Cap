@@ -58,9 +58,13 @@ export const hotkeysStore = {
 export const generalSettingsStore = {
   get: () =>
     store().then((s) => s.get<GeneralSettingsStore>("general_settings")),
-  set: async (value: GeneralSettingsStore) => {
+  set: async (value: Partial<GeneralSettingsStore>) => {
     const s = await store();
-    await s.set("general_settings", value);
+    const current = await s.get<GeneralSettingsStore>("general_settings") || {};
+    await s.set("general_settings", {
+      ...current,
+      ...value,
+    });
     await s.save();
   },
 };

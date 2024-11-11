@@ -1680,6 +1680,7 @@ dependencies = [
  "global-hotkey",
  "image 0.25.2",
  "indexmap 2.5.0",
+ "lazy_static",
  "mp4",
  "nix 0.29.0",
  "num-traits",

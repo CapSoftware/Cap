@@ -5,3 +5,7 @@
 body {
   font-family: "Geist Sans", sans-serif;
 }
+
+.custom-bg {
+  background: linear-gradient(180deg, #3B82F6 0%, #2563EB 100%);
+}

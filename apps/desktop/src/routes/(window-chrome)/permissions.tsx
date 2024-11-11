@@ -20,13 +20,13 @@ const permissions = [
   {
     name: "Screen Recording",
     key: "screenRecording" as const,
-    description: "Cap needs access to record your screen",
+    description: "This permission is required to record your screen.",
   },
   {
     name: "Accessibility",
     key: "accessibility" as const,
     description:
-      "Cap records your mouse and keyboard activity to be used in your Caps",
+      "During recording, Cap collects mouse activity locally to generate automatic zoom in segments.",
   },
 ] as const;
 
@@ -64,7 +64,7 @@ export default function () {
   return (
     <div class="flex flex-col p-[1rem] text-[0.875rem] font-[400] flex-1 bg-gray-100 justify-between items-center">
       <div class="flex flex-col items-center">
-        <IconCapLogo class="size-16 mb-1" />
+        <IconCapLogo class="size-14 mb-2" />
         <h1 class="text-[1rem] font-[700] mb-0.5">Permissions Required</h1>
         <p class="text-gray-400">Cap needs permissions to run properly.</p>
       </div>

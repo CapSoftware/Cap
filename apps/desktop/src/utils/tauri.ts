@@ -318,6 +318,25 @@ async sendFeedbackRequest(feedback: string) : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async showAppPermissionsWindow() : Promise<void> {
+    await TAURI_INVOKE("show_app_permissions_window");
+},
+async playStartupAudio() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("play_startup_audio") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async stopStartupAudio() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("stop_startup_audio") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -391,7 +410,7 @@ export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type EditorStateChanged = { playhead_position: number }
 export type Flags = { recordMouse: boolean; split: boolean; pauseResume: boolean; zoom: boolean }
-export type GeneralSettingsStore = { upload_individual_files: boolean; open_editor_after_recording: boolean; hide_dock_icon?: boolean; auto_create_shareable_link?: boolean; enable_notifications?: boolean }
+export type GeneralSettingsStore = { hideDockIcon: boolean; hasCompletedStartup: boolean; enableNotifications: boolean; openEditorAfterRecording: boolean; autoCreateShareableLink: boolean }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
 export type HotkeysConfiguration = { show: boolean }

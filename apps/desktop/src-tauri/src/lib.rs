@@ -39,6 +39,7 @@ use png::{ColorType, Encoder};
 use recording::{
     list_cameras, list_capture_screens, list_capture_windows, InProgressRecording, FPS,
 };
+use rodio::{Decoder, OutputStream, Sink};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,7 @@ use serde_json::json;
 use specta::Type;
 use std::fs::File;
 use std::io::BufWriter;
+use std::io::Cursor;
 use std::io::{BufReader, Write};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{
@@ -2306,6 +2308,12 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command(async)]
+#[specta::specta]
+async fn show_app_permissions_window(app: AppHandle) {
+    CapWindow::Permissions.show(&app).ok();
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
@@ -2394,6 +2402,20 @@ async fn check_notification_permissions(app: &AppHandle) {
     }
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn play_startup_audio(_app: AppHandle, _state: MutableState<'_, App>) -> Result<(), String> {
+    audio::play_startup_music();
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn stop_startup_audio(_state: MutableState<'_, App>) -> Result<(), String> {
+    audio::stop_startup_music();
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -2451,6 +2473,9 @@ pub async fn run() {
             is_camera_window_open,
             seek_to,
             send_feedback_request,
+            show_app_permissions_window,
+            play_startup_audio,
+            stop_startup_audio
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2518,16 +2543,41 @@ pub async fn run() {
             let app_handle = app.handle().clone();
 
             // Add this line to check notification permissions on startup
-            // Fix: Clone the app_handle and move it into the spawned task
             let notification_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 check_notification_permissions(&notification_handle).await;
             });
 
-            if permissions::do_permissions_check(true).necessary_granted() {
-                open_main_window(app_handle.clone());
+            println!("Checking startup completion and permissions...");
+            let permissions = permissions::do_permissions_check(false);
+            println!("Permissions check result: {:?}", permissions);
+
+            let settings = GeneralSettingsStore::get(&app_handle).ok().flatten();
+            let has_completed_startup = settings
+                .as_ref()
+                .map(|s| s.has_completed_startup)
+                .unwrap_or(false);
+
+            if !permissions.screen_recording.permitted() || !permissions.accessibility.permitted() {
+                println!("Required permissions not granted, showing permissions window");
+                CapWindow::Permissions.show(&app_handle).ok();
             } else {
-                permissions::open_permissions_window(app_handle.clone());
+                println!("Permissions granted, showing main window");
+
+                // Create/update settings if needed
+                if settings.is_none() || !has_completed_startup {
+                    if let Err(e) = GeneralSettingsStore::set(
+                        &app_handle,
+                        GeneralSettingsStore {
+                            has_completed_startup: true,
+                            ..Default::default()
+                        },
+                    ) {
+                        println!("Failed to create/update settings: {:?}", e);
+                    }
+                }
+
+                CapWindow::Main.show(&app_handle).ok();
             }
 
             app.manage(Arc::new(RwLock::new(App {

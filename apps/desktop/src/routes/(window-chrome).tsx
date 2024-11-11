@@ -2,6 +2,7 @@ import type { RouteSectionProps } from "@solidjs/router";
 import { onMount, ParentProps, Suspense } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Transition } from "solid-transition-group";
+import { Show } from "solid-js";
 
 import Header from "../components/Header";
 
@@ -18,7 +19,9 @@ export default function (props: RouteSectionProps) {
 
   return (
     <div class="rounded-[1.5rem] bg-gray-100 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden">
-      <Header />
+      <Show when={location.pathname !== "/startup"}>
+        <Header />
+      </Show>
       {/* <Transition
         mode="outin"
         enterActiveClass="transition-opacity duration-100"
