@@ -580,18 +580,33 @@ export function ConfigSidebar() {
         })()}
       >
         {(value) => {
+          const zoomPercentage = () => {
+            const amount = value().segment.amount;
+            return `${amount.toFixed(1)}x`;
+          };
+
+          const zoomAmount = () => {
+            const selection = state.timelineSelection;
+            if (!selection || selection.type !== "zoom") return;
+
+            const segment = project.timeline?.zoomSegments?.[selection.index];
+            return segment?.amount;
+          };
+
           return (
             <div
               data-visible={state.timelineSelection?.type === "zoom"}
               class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-50 z-50 animate-in slide-in-from-bottom-2 fade-in"
             >
-              <div class="flex flex-row justify-between">
-                <EditorButton
-                  onClick={() => setState("timelineSelection", null)}
-                  leftIcon={<IconCapChevronDown />}
-                >
-                  Done
-                </EditorButton>
+              <div class="flex flex-row justify-between items-center">
+                <div class="flex items-center gap-2">
+                  <EditorButton
+                    onClick={() => setState("timelineSelection", null)}
+                    leftIcon={<IconLucideCheck />}
+                  >
+                    Done
+                  </EditorButton>
+                </div>
                 <EditorButton
                   onClick={() => {
                     const index = value().selection.index;
@@ -613,7 +628,10 @@ export function ConfigSidebar() {
                   Delete
                 </EditorButton>
               </div>
-              <Field name="Zoom Amount" icon={<IconCapEnlarge />}>
+              <Field
+                name={`Zoom Amount (${zoomPercentage()})`}
+                icon={<IconLucideSearch />}
+              >
                 <Slider
                   value={[value().segment.amount]}
                   onChange={(v) =>
