@@ -21,7 +21,7 @@ use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_editor::{EditorState, ProjectRecordings};
 use cap_media::sources::CaptureScreen;
 use cap_media::{
-    feeds::{AudioData, AudioFrameBuffer, CameraFeed, CameraFrameSender},
+    feeds::{AudioFrameBuffer, CameraFeed, CameraFrameSender},
     platform::Bounds,
     sources::{AudioInputSource, ScreenCaptureTarget},
 };
@@ -34,7 +34,6 @@ use cap_rendering::{ProjectUniforms, ZOOM_DURATION};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
-use num_traits::ToBytes;
 use png::{ColorType, Encoder};
 use recording::{
     list_cameras, list_capture_screens, list_capture_windows, InProgressRecording, FPS,
@@ -2402,20 +2401,6 @@ async fn check_notification_permissions(app: &AppHandle) {
     }
 }
 
-#[tauri::command]
-#[specta::specta]
-async fn play_startup_audio(_app: AppHandle, _state: MutableState<'_, App>) -> Result<(), String> {
-    audio::play_startup_music();
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn stop_startup_audio(_state: MutableState<'_, App>) -> Result<(), String> {
-    audio::stop_startup_music();
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -2474,8 +2459,6 @@ pub async fn run() {
             seek_to,
             send_feedback_request,
             show_app_permissions_window,
-            play_startup_audio,
-            stop_startup_audio
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2579,6 +2562,8 @@ pub async fn run() {
 
                 CapWindow::Main.show(&app_handle).ok();
             }
+
+            CapWindow::Startup.show(&app_handle).ok();
 
             app.manage(Arc::new(RwLock::new(App {
                 handle: app_handle.clone(),

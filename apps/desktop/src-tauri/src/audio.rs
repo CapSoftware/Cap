@@ -9,8 +9,6 @@ lazy_static::lazy_static! {
 
 #[derive(Clone)]
 pub(crate) enum AudioCommand {
-    PlayStartup,
-    StopStartup,
     PlaySound(Vec<u8>),
 }
 
@@ -22,32 +20,6 @@ fn get_or_init_audio_control() -> mpsc::Sender<AudioCommand> {
         *control = Some(start_audio_thread());
     }
     control.as_ref().unwrap().clone()
-}
-
-pub fn play_startup_music() {
-    println!("Attempting to play startup music...");
-    let control = get_or_init_audio_control();
-
-    let control_clone = control.clone();
-    std::thread::spawn(move || {
-        println!("Sending PlayStartup command...");
-        if let Err(e) = control_clone.send(AudioCommand::PlayStartup) {
-            eprintln!("Failed to send PlayStartup command: {}", e);
-        }
-    });
-}
-
-pub fn stop_startup_music() {
-    println!("Stopping startup music...");
-    let control = get_or_init_audio_control();
-
-    let control_clone = control.clone();
-    std::thread::spawn(move || {
-        println!("Sending StopStartup command...");
-        if let Err(e) = control_clone.send(AudioCommand::StopStartup) {
-            eprintln!("Failed to send StopStartup command: {}", e);
-        }
-    });
 }
 
 fn start_audio_thread() -> mpsc::Sender<AudioCommand> {
@@ -64,38 +36,6 @@ fn start_audio_thread() -> mpsc::Sender<AudioCommand> {
 
                 while let Ok(command) = rx.recv() {
                     match command {
-                        AudioCommand::PlayStartup => {
-                            println!("Processing PlayStartup command");
-                            // Stop any existing startup music
-                            if let Some(sink) = current_startup_sink.take() {
-                                sink.stop();
-                            }
-
-                            match Sink::try_new(&stream_handle) {
-                                Ok(sink) => {
-                                    let bytes = AppSounds::StartupMusic.get_sound_bytes();
-                                    let file = Cursor::new(bytes);
-                                    match rodio::Decoder::new(file) {
-                                        Ok(source) => {
-                                            sink.set_volume(0.5);
-                                            sink.append(source);
-                                            sink.play();
-                                            println!("Successfully started playing startup music");
-                                            current_startup_sink = Some(sink);
-                                        }
-                                        Err(e) => eprintln!("Failed to create decoder: {}", e),
-                                    }
-                                }
-                                Err(e) => eprintln!("Failed to create sink: {}", e),
-                            }
-                        }
-                        AudioCommand::StopStartup => {
-                            println!("Processing StopStartup command");
-                            if let Some(sink) = current_startup_sink.take() {
-                                sink.stop();
-                                println!("Stopped startup music");
-                            }
-                        }
                         AudioCommand::PlaySound(bytes) => {
                             if let Ok(sink) = Sink::try_new(&stream_handle) {
                                 let file = Cursor::new(bytes);
@@ -123,7 +63,6 @@ pub enum AppSounds {
     StopRecording,
     Screenshot,
     Notification,
-    StartupMusic,
 }
 
 impl AppSounds {
@@ -139,9 +78,6 @@ impl AppSounds {
             AppSounds::StopRecording => include_bytes!("../sounds/stop-recording.ogg"),
             AppSounds::Screenshot => include_bytes!("../sounds/screenshot.ogg"),
             AppSounds::Notification => include_bytes!("../sounds/action.ogg"),
-            AppSounds::StartupMusic => {
-                include_bytes!("../sounds/tears-and-fireflies-adi-goldstein.ogg")
-            }
         }
     }
 }

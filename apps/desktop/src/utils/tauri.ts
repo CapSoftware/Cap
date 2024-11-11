@@ -321,22 +321,6 @@ async sendFeedbackRequest(feedback: string) : Promise<Result<null, string>> {
 },
 async showAppPermissionsWindow() : Promise<void> {
     await TAURI_INVOKE("show_app_permissions_window");
-},
-async playStartupAudio() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("play_startup_audio") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-async stopStartupAudio() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("stop_startup_audio") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
 }
 }
 

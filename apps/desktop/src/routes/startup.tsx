@@ -5,20 +5,24 @@ import { createSignal, onMount, onCleanup } from "solid-js";
 import { createStore } from "solid-js/store";
 import { makePersisted } from "@solid-primitives/storage";
 import { generalSettingsStore } from "~/store";
+import { cx } from "cva";
 
-import cloud1 from "./illustrations/cloud-1.png";
-import cloud2 from "./illustrations/cloud-2.png";
-import cloud3 from "./illustrations/cloud-3.png";
+import cloud1 from "../assets/illustrations/cloud-1.png";
+import cloud2 from "../assets/illustrations/cloud-2.png";
+import cloud3 from "../assets/illustrations/cloud-3.png";
+
+import startupAudio from "../assets/tears-and-fireflies-adi-goldstein.mp3";
 
 export default function Startup() {
   const [audioState, setAudioState] = makePersisted(
-    createStore({
-      isMuted: false,
-    }),
+    createStore({ isMuted: false }),
     { name: "audioSettings" }
   );
 
   const [isExiting, setIsExiting] = createSignal(false);
+
+  const audio = new Audio(startupAudio);
+  audio.play();
 
   // Add refs to store animation objects
   let cloud1Animation: Animation | undefined;
@@ -37,7 +41,6 @@ export default function Startup() {
   const handleGetStarted = async () => {
     setIsExiting(true);
     const currentWindow = getCurrentWindow();
-    await commands.stopStartupAudio();
 
     // Cancel ongoing cloud animations
     cloud1Animation?.cancel();
@@ -55,78 +58,59 @@ export default function Startup() {
     }, 600);
   };
 
-  onMount(async () => {
-    // Start playing audio immediately on mount
-    if (!audioState.isMuted) {
-      await commands.playStartupAudio();
-    }
+  onMount(() => {
+    const cloud1El = document.getElementById("cloud-1");
+    const cloud2El = document.getElementById("cloud-2");
+    const cloud3El = document.getElementById("cloud-3");
 
-    // Setup cloud animations
-    const animateClouds = () => {
-      const cloud1El = document.getElementById("cloud-1");
-      const cloud2El = document.getElementById("cloud-2");
-      const cloud3El = document.getElementById("cloud-3");
+    // Top right cloud - gentle diagonal movement
+    cloud1Animation = cloud1El?.animate(
+      [
+        { transform: "translate(0, 0)" },
+        { transform: "translate(-20px, 10px)" },
+        { transform: "translate(0, 0)" },
+      ],
+      {
+        duration: 30000,
+        iterations: Infinity,
+        easing: "linear",
+      }
+    );
 
-      // Top right cloud - gentle diagonal movement
-      cloud1Animation = cloud1El?.animate(
-        [
-          { transform: "translate(0, 0)" },
-          { transform: "translate(-20px, 10px)" },
-          { transform: "translate(0, 0)" },
-        ],
-        {
-          duration: 30000,
-          iterations: Infinity,
-          easing: "linear",
-        }
-      );
+    // Top left cloud - gentle diagonal movement
+    cloud2Animation = cloud2El?.animate(
+      [
+        { transform: "translate(0, 0)" },
+        { transform: "translate(20px, 10px)" },
+        { transform: "translate(0, 0)" },
+      ],
+      {
+        duration: 35000,
+        iterations: Infinity,
+        easing: "linear",
+      }
+    );
 
-      // Top left cloud - gentle diagonal movement
-      cloud2Animation = cloud2El?.animate(
-        [
-          { transform: "translate(0, 0)" },
-          { transform: "translate(20px, 10px)" },
-          { transform: "translate(0, 0)" },
-        ],
-        {
-          duration: 35000,
-          iterations: Infinity,
-          easing: "linear",
-        }
-      );
-
-      // Bottom cloud - slow rise up with subtle horizontal movement
-      cloud3Animation = cloud3El?.animate(
-        [
-          { transform: "translate(-50%, 20px)" },
-          { transform: "translate(-48%, 0)" },
-          { transform: "translate(-50%, 0)" },
-        ],
-        {
-          duration: 60000,
-          iterations: 1,
-          easing: "cubic-bezier(0.4, 0, 0.2, 1)",
-          fill: "forwards",
-        }
-      );
-    };
-
-    animateClouds();
-  });
-
-  onCleanup(async () => {
-    await commands.stopStartupAudio();
+    // Bottom cloud - slow rise up with subtle horizontal movement
+    cloud3Animation = cloud3El?.animate(
+      [
+        { transform: "translate(-50%, 20px)" },
+        { transform: "translate(-48%, 0)" },
+        { transform: "translate(-50%, 0)" },
+      ],
+      {
+        duration: 60000,
+        iterations: 1,
+        easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+        fill: "forwards",
+      }
+    );
   });
 
   const toggleMute = async () => {
-    const newMutedState = !audioState.isMuted;
-    setAudioState({ isMuted: newMutedState });
+    setAudioState("isMuted", (m) => !m);
 
-    if (newMutedState) {
-      await commands.stopStartupAudio();
-    } else {
-      await commands.playStartupAudio();
-    }
+    audio.muted = audioState.isMuted;
   };
 
   return (
@@ -136,11 +120,11 @@ export default function Startup() {
           body {
             background: transparent !important;
           }
-          
+
           .content-container {
             transition: all 600ms cubic-bezier(0.4, 0, 0.2, 1);
           }
-          
+
           .content-container.exiting {
             opacity: 0;
             transform: scale(1.1);
@@ -149,7 +133,7 @@ export default function Startup() {
           .custom-bg {
             transition: all 600ms cubic-bezier(0.4, 0, 0.2, 1);
           }
-          
+
           .custom-bg.exiting {
             filter: brightness(1.5); /* Fade the background to white */
           }
@@ -231,9 +215,10 @@ export default function Startup() {
       <div class={`fade-overlay ${isExiting() ? "exiting" : ""}`} />
 
       <div
-        class={`flex flex-col h-screen custom-bg relative overflow-hidden ${
-          isExiting() ? "exiting" : ""
-        }`}
+        class={cx(
+          "flex flex-col h-screen custom-bg relative overflow-hidden",
+          isExiting() && "exiting"
+        )}
       >
         {/* Add grain overlay */}
         <div class="grain" />
@@ -299,7 +284,7 @@ export default function Startup() {
           <div class="text-center mb-8">
             <div onClick={handleLogoClick} class="cursor-pointer inline-block">
               <IconCapLogo
-                class={`w-20 h-24 mx-auto drop-shadow-[0_0_100px_rgba(0,0,0,0.2)] 
+                class={`w-20 h-24 mx-auto drop-shadow-[0_0_100px_rgba(0,0,0,0.2)]
                   ${isLogoAnimating() ? "logo-bounce" : ""}`}
               />
             </div>
