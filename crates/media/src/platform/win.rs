@@ -5,12 +5,16 @@ use std::path::PathBuf;
 
 use super::{Bounds, CursorShape, Window};
 
-use windows::core::PCWSTR;
+use windows::core::{PCWSTR, PWSTR};
+use windows::Win32::Devices::Display::{
+    DisplayConfigGetDeviceInfo, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+    DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+};
 use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW, HDC, HMONITOR,
-    MONITORINFO, MONITORINFOEXW,
+    MONITORINFOEXW,
 };
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -229,57 +233,66 @@ pub fn get_on_screen_windows() -> Vec<Window> {
 }
 
 pub fn monitor_bounds(id: u32) -> Bounds {
-    let bounds = Bounds::default();
-    let idx = 0u32;
-    let lparams = (id, idx, bounds);
-    unsafe extern "system" fn enum_monitor_proc(
+    let bounds = None::<Bounds>;
+
+    unsafe extern "system" fn monitor_enum_proc(
         hmonitor: HMONITOR,
         _hdc: HDC,
         _lprc_clip: *mut RECT,
         lparam: LPARAM,
     ) -> BOOL {
-        let (target_id, idx, bounds) = &mut *(lparam.0 as *mut (u32, u32, Bounds));
+        let (target_id, bounds) = &mut *(lparam.0 as *mut (u32, Option<Bounds>));
 
         let mut minfo = MONITORINFOEXW::default();
-        minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if !GetMonitorInfoW(
-            hmonitor,
-            &mut minfo as *mut MONITORINFOEXW as *mut MONITORINFO,
+        minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if !GetMonitorInfoW(hmonitor, &mut minfo as *mut MONITORINFOEXW as *mut _).as_bool() {
+            return TRUE;
+        }
+
+        let mut display_device = DISPLAY_DEVICEW::default();
+        display_device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+
+        if !EnumDisplayDevicesW(
+            PWSTR(minfo.szDevice.as_ptr() as _),
+            0,
+            &mut display_device,
+            0,
         )
         .as_bool()
         {
             return TRUE;
-        };
-
-        *idx += 1;
-        if idx != target_id {
-            return TRUE;
         }
 
-        let mi = minfo.monitorInfo;
-        *bounds = Bounds {
-            x: mi.rcMonitor.left as f64,
-            y: mi.rcMonitor.top as f64,
-            width: (mi.rcMonitor.right - mi.rcMonitor.left) as f64,
-            height: (mi.rcMonitor.bottom - mi.rcMonitor.top) as f64,
-        };
+        let id = display_device.StateFlags as u32;
 
-        FALSE
+        if id == *target_id {
+            let rect = minfo.monitorInfo.rcMonitor;
+            *bounds = Some(Bounds {
+                x: rect.left as f64,
+                y: rect.top as f64,
+                width: (rect.right - rect.left) as f64,
+                height: (rect.bottom - rect.top) as f64,
+            });
+            return FALSE;
+        }
+        TRUE
     }
 
+    let mut lparams = (id, bounds);
     let _ = unsafe {
         EnumDisplayMonitors(
             None,
             None,
-            Some(enum_monitor_proc),
-            LPARAM(std::ptr::addr_of!(lparams) as isize),
-        );
+            Some(monitor_enum_proc),
+            LPARAM(core::ptr::addr_of_mut!(lparams) as isize),
+        )
     };
-    bounds
-}
 
+    bounds.unwrap_or_default()
+}
 pub fn window_names() -> HashMap<u32, String> {
     let mut names = HashMap::new();
+
     unsafe extern "system" fn monitor_enum_proc(
         hmonitor: HMONITOR,
         _hdc: HDC,
@@ -288,31 +301,53 @@ pub fn window_names() -> HashMap<u32, String> {
     ) -> BOOL {
         let monitors = &mut *(lparam.0 as *mut HashMap<u32, String>);
 
-        let mut minfo = MONITORINFOEXW::default();
-        minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if !GetMonitorInfoW(
-            hmonitor,
-            &mut minfo as *mut MONITORINFOEXW as *mut MONITORINFO,
+        let mut monitor_info = MONITORINFOEXW::default();
+        monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+
+        if GetMonitorInfoW(hmonitor, &mut monitor_info as *mut MONITORINFOEXW as *mut _) == false {
+            return TRUE;
+        }
+
+        // Get display device
+        let mut display_device = DISPLAY_DEVICEW::default();
+        display_device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+
+        if !EnumDisplayDevicesW(
+            PWSTR(monitor_info.szDevice.as_ptr() as _),
+            0,
+            &mut display_device,
+            0,
         )
         .as_bool()
         {
             return TRUE;
+        }
+
+        let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME {
+            header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+                size: std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32,
+                adapterId: windows::Win32::Foundation::LUID {
+                    LowPart: display_device.StateFlags,
+                    HighPart: 0,
+                },
+                id: 0,
+            },
+            viewGdiDeviceName: [0; 32],
         };
+        let _ = DisplayConfigGetDeviceInfo(&mut source_name.header);
 
-        let mut display_device = DISPLAY_DEVICEW::default();
-        display_device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+        // directly slice with appropriate length, or `PCWSTR::from_raw(display_device.DeviceString.as_ptr()).to_string()`
+        let name = String::from_utf16_lossy(
+            &display_device.DeviceString[..display_device
+                .DeviceString
+                .iter()
+                .position(|&x| x == 0)
+                .unwrap_or(display_device.DeviceString.len())],
+        );
+        println!("Name: {}, Len: {}", name, name.len());
 
-        if !EnumDisplayDevicesW(PCWSTR(minfo.szDevice.as_ptr()), 0, &mut display_device, 0)
-            .as_bool()
-        {
-            return TRUE;
-        };
-
-        let device_name = OsString::from_wide(&display_device.DeviceName)
-            .to_string_lossy()
-            .into_owned();
-        let num = monitors.len() as u32;
-        monitors.insert(num, device_name);
+        monitors.insert(display_device.StateFlags, name);
         TRUE
     }
 
@@ -324,5 +359,6 @@ pub fn window_names() -> HashMap<u32, String> {
             LPARAM(core::ptr::addr_of_mut!(names) as isize),
         )
     };
+
     names
 }
