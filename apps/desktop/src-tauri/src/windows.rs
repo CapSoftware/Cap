@@ -10,6 +10,7 @@ pub enum CapWindow {
     Main,
     Settings { page: Option<String> },
     Editor { project_id: String },
+    ImportVideo,
     Permissions,
     PrevRecordings,
     WindowCaptureOccluder,
@@ -23,6 +24,7 @@ pub enum CapWindowId {
     Main,
     Settings,
     Editor { project_id: String },
+    ImportVideo,
     Permissions,
     PrevRecordings,
     WindowCaptureOccluder,
@@ -36,6 +38,7 @@ impl CapWindowId {
         match label {
             "main" => Self::Main,
             "settings" => Self::Settings,
+            "import-video" => Self::ImportVideo,
             "camera" => Self::Camera,
             "window-capture-occluder" => Self::WindowCaptureOccluder,
             "in-progress-recording" => Self::InProgressRecording,
@@ -53,19 +56,21 @@ impl CapWindowId {
         match self {
             Self::Main => "main".to_string(),
             Self::Settings => "settings".to_string(),
+            Self::ImportVideo => "import-video".to_string(),
             Self::Camera => "camera".to_string(),
             Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
             Self::InProgressRecording => "in-progress-recording".to_string(),
             Self::PrevRecordings => "prev-recordings".to_string(),
-            Self::Editor { project_id } => format!("editor-{}", project_id),
             Self::Permissions => "permissions".to_string(),
             Self::Upgrade => "upgrade".to_string(),
+            Self::Editor { project_id } => format!("editor-{}", project_id),
         }
     }
 
     pub fn title(&self) -> String {
         match self {
             Self::Settings => "Cap Settings".to_string(),
+            Self::ImportVideo => "Cap Import Video".to_string(),
             Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
@@ -97,6 +102,7 @@ impl CapWindowId {
             | Self::WindowCaptureOccluder
             | Self::PrevRecordings => None,
             Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 48.0))),
+            Self::ImportVideo => Some(Some(LogicalPosition::new(14.0, 22.0))),
             _ => Some(None),
         }
     }
@@ -341,6 +347,24 @@ impl CapWindow {
 
                 window
             }
+            Self::ImportVideo => {
+                let mut window_builder = self
+                    .window_builder(app, "/import-video")
+                    .inner_size(500.0, 400.0)
+                    .resizable(false)
+                    .maximized(false)
+                    .shadow(true)
+                    .transparent(true);
+
+                #[cfg(target_os = "macos")]
+                {
+                    window_builder = window_builder
+                        .hidden_title(true)
+                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                }
+
+                window_builder.build()?
+            }
         };
 
         if let Some(position) = id.traffic_lights_position() {
@@ -388,6 +412,7 @@ impl CapWindow {
             CapWindow::Camera { .. } => CapWindowId::Camera,
             CapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             CapWindow::Upgrade => CapWindowId::Upgrade,
+            CapWindow::ImportVideo => CapWindowId::ImportVideo,
         }
     }
 }

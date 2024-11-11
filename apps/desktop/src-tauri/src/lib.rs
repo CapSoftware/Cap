@@ -10,6 +10,7 @@ mod platform;
 mod recording;
 // mod resource;
 mod cursor;
+mod import;
 mod tray;
 mod upload;
 mod web_api;
@@ -33,6 +34,7 @@ use cap_rendering::{ProjectUniforms, ZOOM_DURATION};
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
+use import::import_video_to_project;
 use mp4::Mp4Reader;
 use num_traits::ToBytes;
 use png::{ColorType, Encoder};
@@ -1904,7 +1906,7 @@ async fn upload_screenshot(
         }
 
         if !auth.is_upgraded() {
-            open_upgrade_window(app).await;
+            open_upgrade_window(app.clone()).await;
             return Ok(UploadResult::UpgradeRequired);
         }
     }
@@ -2451,6 +2453,7 @@ pub async fn run() {
             is_camera_window_open,
             seek_to,
             send_feedback_request,
+            import_video_to_project,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
