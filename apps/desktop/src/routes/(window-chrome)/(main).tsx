@@ -99,6 +99,8 @@ export default function () {
         });
       }
     }
+
+    if (ostype() === "macos") commands.positionTrafficLights(null);
   });
 
   setTitlebar("hideMaximize", true);

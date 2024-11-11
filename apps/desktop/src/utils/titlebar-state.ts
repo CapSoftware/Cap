@@ -36,7 +36,6 @@ async function initializeTitlebar() {
     currentWindow.isMaximizable(),
     currentWindow.isClosable(),
   ]);
-  if (ostype() === "macos") commands.positionTrafficLights(null);
 
   setState({ maximized, maximizable, closable });
 
