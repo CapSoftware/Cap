@@ -58,10 +58,10 @@ impl PartialEq<Target> for ScreenCaptureTarget {
 }
 
 pub struct ScreenCaptureSource<T> {
-    options: Options,
-    video_info: VideoInfo,
     target: ScreenCaptureTarget,
-    pub bounds: Bounds,
+    fps: u32,
+    resolution: Resolution,
+    video_info: VideoInfo,
     phantom: std::marker::PhantomData<T>,
 }
 
@@ -73,20 +73,39 @@ impl<T> ScreenCaptureSource<T> {
         fps: Option<u32>,
         resolution: Option<Resolution>,
     ) -> Self {
-        let fps = fps.unwrap_or(Self::DEFAULT_FPS);
         let output_resolution = resolution.unwrap_or(Resolution::Captured);
+        let fps = fps.unwrap_or(Self::DEFAULT_FPS);
+
+        let mut this = Self {
+            target: capture_target.clone(),
+            fps,
+            resolution: output_resolution,
+            video_info: VideoInfo::from_raw(RawVideoFormat::Nv12, 0, 0, fps),
+            phantom: Default::default(),
+        };
+
+        let options = this.create_options();
+
+        let [frame_width, frame_height] = get_output_frame_size(&options);
+
+        this.video_info = VideoInfo::from_raw(RawVideoFormat::Nv12, frame_width, frame_height, fps);
+
+        this
+    }
+
+    fn create_options(&self) -> Options {
         let targets = dbg!(scap::get_all_targets());
 
         let excluded_targets: Vec<scap::Target> = targets
             .iter()
             .filter(|target| {
                 matches!(target, Target::Window(scap_window)
-                    if EXCLUDED_WINDOWS.contains(&scap_window.title.as_str()))
+                if EXCLUDED_WINDOWS.contains(&scap_window.title.as_str()))
             })
             .cloned()
             .collect();
 
-        let (crop_area, bounds) = match capture_target {
+        let (crop_area, bounds) = match &self.target {
             ScreenCaptureTarget::Window(capture_window) => (
                 Some(Area {
                     size: Size {
@@ -105,7 +124,7 @@ impl<T> ScreenCaptureSource<T> {
             }
         };
 
-        let target = match capture_target {
+        let target = match &self.target {
             ScreenCaptureTarget::Window(w) => None,
             ScreenCaptureTarget::Screen(capture_screen) => targets
                 .iter()
@@ -116,26 +135,16 @@ impl<T> ScreenCaptureSource<T> {
                 .cloned(),
         };
 
-        let options = Options {
-            fps,
+        Options {
+            fps: self.fps,
             show_cursor: !FLAGS.zoom,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
             output_type: FrameType::YUVFrame,
-            output_resolution,
+            output_resolution: self.resolution,
             crop_area,
             target,
             ..Default::default()
-        };
-
-        let [frame_width, frame_height] = get_output_frame_size(&options);
-
-        Self {
-            options,
-            target: capture_target.clone(),
-            bounds,
-            video_info: VideoInfo::from_raw(RawVideoFormat::Nv12, frame_width, frame_height, fps),
-            phantom: Default::default(),
         }
     }
 
@@ -218,11 +227,13 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     ) {
         println!("Preparing screen capture source thread...");
 
+        let options = self.create_options();
+
         let maybe_capture_window_id = match &self.target {
             ScreenCaptureTarget::Window(window) => Some(window.id),
             _ => None,
         };
-        let mut capturer = Capturer::new(dbg!(self.options.clone()));
+        let mut capturer = Capturer::new(dbg!(options));
         let mut capturing = false;
         ready_signal.send(Ok(())).unwrap();
 
@@ -355,7 +366,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             ScreenCaptureTarget::Window(window) => Some(window.id),
             _ => None,
         };
-        let mut capturer = Capturer::new(dbg!(self.options.clone()));
+        let mut capturer = Capturer::new(dbg!(self.create_options()));
         let mut capturing = false;
         ready_signal.send(Ok(())).unwrap();
 
