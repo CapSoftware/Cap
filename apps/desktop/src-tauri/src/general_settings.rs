@@ -6,6 +6,7 @@ use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::StoreExt;
 
 #[derive(Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsStore {
     #[serde(default)]
     pub upload_individual_files: bool,

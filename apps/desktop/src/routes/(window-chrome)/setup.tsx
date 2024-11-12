@@ -65,8 +65,9 @@ export default function () {
     setInitialCheck(false);
   };
 
-  const [showStartup, showStartupActions] = createResource(() =>
-    generalSettingsStore.get().then((s) => !s?.hasCompletedStartup)
+  const [showStartup, showStartupActions] = createResource(
+    () => true
+    // generalSettingsStore.get().then((s) => !s?.hasCompletedStartup)
   );
 
   return (
