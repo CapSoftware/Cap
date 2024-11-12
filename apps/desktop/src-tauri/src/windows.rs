@@ -254,7 +254,6 @@ impl CapWindow {
                     .decorations(true)
                     .shadow(true)
                     .always_on_top(true)
-                    .transparent(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(true)
                     .inner_size(width, height)
@@ -263,6 +262,7 @@ impl CapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .visible(false)
+                    .theme(Some(tauri::Theme::Dark))
                     .build()?
             }
             Self::PrevRecordings => {
