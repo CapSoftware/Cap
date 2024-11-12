@@ -227,7 +227,7 @@ pub async fn start(
             None,
         );
         let screen_config = screen_source.info();
-        let screen_bounds = screen_source.bounds;
+        // let screen_bounds = screen_source.bounds;
 
         let output_config = screen_config.scaled(1920, 30);
         let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
