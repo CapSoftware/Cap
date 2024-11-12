@@ -4,6 +4,7 @@
     "jsxImportSource": "solid-js",
     "skipLibCheck": true,
     "emitDeclarationOnly": true,
+    "declaration": true,
     "outDir": "dist"
   }
 }

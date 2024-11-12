@@ -9,7 +9,6 @@ use core_foundation::dictionary::{CFDictionary, CFDictionaryRef}; // Import CFDi
 #[cfg(target_os = "macos")]
 use core_foundation::string::CFString;
 
-
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {

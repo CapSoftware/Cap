@@ -350,7 +350,7 @@ impl AudioResampler {
     }
 
     pub fn flush_frame(&mut self) -> Option<&[u8]> {
-        self.delay?;;
+        self.delay?;
 
         self.delay = self.context.flush(&mut self.output_frame).unwrap();
 

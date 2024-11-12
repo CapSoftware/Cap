@@ -330,8 +330,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        
-
         println!("Preparing screen capture source thread...");
 
         let maybe_capture_window_id = match &self.target {

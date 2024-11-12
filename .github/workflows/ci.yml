@@ -46,8 +46,8 @@ jobs:
         with:
           target: x86_64-unknown-linux-gnu
 
-      # - name: Install desktop deps
-      #   uses: ./.github/actions/install-desktop-deps
+      - name: Install desktop deps
+        uses: ./.github/actions/install-desktop-deps
 
       - name: Run Clippy
         uses: actions-rs-plus/clippy-check@v2
