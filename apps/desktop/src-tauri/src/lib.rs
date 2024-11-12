@@ -2523,7 +2523,6 @@ pub async fn run() {
             let permissions = permissions::do_permissions_check(false);
             println!("Permissions check result: {:?}", permissions);
 
-            CapWindow::Setup.show(&app_handle).ok();
             if !permissions.screen_recording.permitted() || !permissions.accessibility.permitted() {
                 println!("Required permissions not granted, showing permissions window");
                 CapWindow::Setup.show(&app_handle).ok();
