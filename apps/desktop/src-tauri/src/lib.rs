@@ -2266,6 +2266,13 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
 #[tauri::command]
 #[specta::specta]
 fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    // Check settings first
+    if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
+        if settings.disable_auto_open_links {
+            return Ok(());
+        }
+    }
+
     app.shell()
         .open(&url, None)
         .map_err(|e| format!("Failed to open URL: {}", e))?;
@@ -2274,23 +2281,14 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
-async fn set_general_settings(
-    app: AppHandle,
-    settings: GeneralSettingsStore,
-) -> Result<(), String> {
-    GeneralSettingsStore::set(&app, settings)
-}
-
-#[tauri::command]
-#[specta::specta]
 async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
     AuthStore::set(&app, None).map_err(|e| e.to_string())?;
 
-    if let Some(window) = (CapWindowId::Settings).get(&app) {
+    if let Some(window) = CapWindowId::Settings.get(&app) {
         window.close().ok();
     }
 
-    if let Some(window) = (CapWindowId::Camera).get(&app) {
+    if let Some(window) = CapWindowId::Camera.get(&app) {
         window.close().ok();
     }
 
@@ -2377,10 +2375,10 @@ async fn check_notification_permissions(app: &AppHandle) {
                             println!("Notification permission granted");
                         }
                         Ok(_) | Err(_) => {
-                            if let Ok(Some(mut s)) = GeneralSettingsStore::get(app) {
+                            GeneralSettingsStore::update(app, |s| {
                                 s.enable_notifications = false;
-                                GeneralSettingsStore::set(app, s).ok();
-                            }
+                            })
+                            .ok();
                         }
                     }
                 }
@@ -2445,7 +2443,6 @@ pub async fn run() {
             check_upgraded_and_update,
             open_external_link,
             hotkeys::set_hotkey,
-            set_general_settings,
             delete_auth_open_signin,
             reset_camera_permissions,
             reset_microphone_permissions,
@@ -2542,13 +2539,9 @@ pub async fn run() {
 
                 // Create/update settings if needed
                 if settings.is_none() || !has_completed_startup {
-                    if let Err(e) = GeneralSettingsStore::set(
-                        &app_handle,
-                        GeneralSettingsStore {
-                            has_completed_startup: true,
-                            ..Default::default()
-                        },
-                    ) {
+                    if let Err(e) = GeneralSettingsStore::update(&app_handle, |s| {
+                        s.has_completed_startup = true
+                    }) {
                         println!("Failed to create/update settings: {:?}", e);
                     }
                 }
@@ -2680,14 +2673,17 @@ pub async fn run() {
                             let app_handle = app.clone();
                             tokio::spawn(async move {
                                 let _ = remove_editor_instance(&app_handle, project_id).await;
-
                                 tokio::task::yield_now().await;
                             });
+                        }
+                        CapWindowId::Settings { .. } => {
+                            // Don't quit the app when settings window is closed
+                            return;
                         }
                         _ => {}
                     };
 
-                    if let Some(settings) = GeneralSettingsStore::get(app).unwrap() {
+                    if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None) {
                         if settings.hide_dock_icon
                             && app
                                 .webview_windows()

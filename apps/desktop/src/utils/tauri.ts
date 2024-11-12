@@ -273,14 +273,6 @@ async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<Result<nu
     else return { status: "error", error: e  as any };
 }
 },
-async setGeneralSettings(settings: GeneralSettingsStore) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("set_general_settings", { settings }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
 async deleteAuthOpenSignin() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_auth_open_signin") };
@@ -386,12 +378,13 @@ export type CaptureScreen = { id: number; name: string }
 export type CaptureWindow = { id: number; name: string; bounds: Bounds }
 export type Crop = { position: XY<number>; size: XY<number> }
 export type CurrentRecordingChanged = JsonValue<InProgressRecording | null>
-export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: CursorType }
+export type CursorAnimationStyle = "regular" | "slow" | "fast"
+export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: CursorType; animationStyle: CursorAnimationStyle }
 export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type EditorStateChanged = { playhead_position: number }
 export type Flags = { recordMouse: boolean; split: boolean; pauseResume: boolean; zoom: boolean }
-export type GeneralSettingsStore = { hideDockIcon: boolean; hasCompletedStartup: boolean; enableNotifications: boolean; openEditorAfterRecording: boolean; autoCreateShareableLink: boolean }
+export type GeneralSettingsStore = { upload_individual_files?: boolean; open_editor_after_recording?: boolean; hide_dock_icon?: boolean; auto_create_shareable_link?: boolean; enable_notifications?: boolean; disable_auto_open_links?: boolean; has_completed_startup?: boolean }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
 export type HotkeysConfiguration = { show: boolean }

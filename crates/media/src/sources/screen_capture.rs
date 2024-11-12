@@ -1,4 +1,6 @@
 use cap_flags::FLAGS;
+use cidre::cm;
+use core_foundation::base::{kCFAllocatorDefault, CFAllocatorRef};
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
@@ -7,15 +9,17 @@ use scap::{
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    ffi::c_void,
+    path::PathBuf,
+    ptr::{null, null_mut},
+};
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
-    platform::{Bounds, Window},
-};
-use crate::{
     pipeline::{clock::*, control::Control, task::PipelineSourceTask},
-    platform,
+    platform::{self, Bounds, Window},
 };
 
 static EXCLUDED_WINDOWS: [&str; 4] = [
@@ -60,14 +64,15 @@ impl PartialEq<Target> for ScreenCaptureTarget {
     }
 }
 
-pub struct ScreenCaptureSource {
+pub struct ScreenCaptureSource<T> {
     options: Options,
     video_info: VideoInfo,
     target: ScreenCaptureTarget,
     pub bounds: Bounds,
+    phantom: std::marker::PhantomData<T>,
 }
 
-impl ScreenCaptureSource {
+impl<T> ScreenCaptureSource<T> {
     pub const DEFAULT_FPS: u32 = 30;
 
     pub fn init(
@@ -81,13 +86,9 @@ impl ScreenCaptureSource {
 
         let excluded_targets: Vec<scap::Target> = targets
             .iter()
-            .filter(|target| match target {
-                Target::Window(scap_window)
-                    if EXCLUDED_WINDOWS.contains(&scap_window.title.as_str()) =>
-                {
-                    true
-                }
-                _ => false,
+            .filter(|target| {
+                matches!(target, Target::Window(scap_window)
+                    if EXCLUDED_WINDOWS.contains(&scap_window.title.as_str()))
             })
             .cloned()
             .collect();
@@ -141,6 +142,7 @@ impl ScreenCaptureSource {
             target: capture_target.clone(),
             bounds,
             video_info: VideoInfo::from_raw(RawVideoFormat::Nv12, frame_width, frame_height, fps),
+            phantom: Default::default(),
         }
     }
 
@@ -208,7 +210,9 @@ impl ScreenCaptureSource {
     }
 }
 
-impl PipelineSourceTask for ScreenCaptureSource {
+pub struct AVFrameCapture;
+
+impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     type Clock = RealTimeClock<RawNanoseconds>;
     type Output = FFVideo;
 
@@ -290,6 +294,84 @@ impl PipelineSourceTask for ScreenCaptureSource {
                                     }
                                 }
                             };
+                        }
+                        Err(error) => {
+                            eprintln!("Capture error: {error}");
+                            break;
+                        }
+                    }
+                }
+                Some(Control::Pause) => {
+                    println!("Received pause signal");
+                    if capturing {
+                        capturer.stop_capture();
+                        capturing = false;
+                    }
+                }
+                Some(Control::Shutdown) | None => {
+                    println!("Received shutdown signal");
+                    if capturing {
+                        capturer.stop_capture();
+                    }
+                    break;
+                }
+            }
+        }
+
+        println!("Shutting down screen capture source thread.");
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub struct CMSampleBufferCapture;
+
+#[cfg(target_os = "macos")]
+impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
+    type Clock = RealTimeClock<RawNanoseconds>;
+    type Output = screencapturekit::cm_sample_buffer::CMSampleBuffer;
+
+    fn run(
+        &mut self,
+        _: Self::Clock,
+        ready_signal: crate::pipeline::task::PipelineReadySignal,
+        mut control_signal: crate::pipeline::control::PipelineControlSignal,
+        output: Sender<Self::Output>,
+    ) {
+        use cidre::*;
+
+        println!("Preparing screen capture source thread...");
+
+        let maybe_capture_window_id = match &self.target {
+            ScreenCaptureTarget::Window(window) => Some(window.id),
+            _ => None,
+        };
+        let mut capturer = Capturer::new(dbg!(self.options.clone()));
+        let mut capturing = false;
+        ready_signal.send(Ok(())).unwrap();
+
+        loop {
+            match control_signal.last() {
+                Some(Control::Play) => {
+                    if !capturing {
+                        if let Some(window_id) = maybe_capture_window_id {
+                            crate::platform::bring_window_to_focus(window_id);
+                        }
+                        capturer.start_capture();
+                        capturing = true;
+
+                        println!("Screen recording started.");
+                    }
+
+                    match capturer.raw().get_next_pixel_buffer() {
+                        Ok(pixel_buffer) => {
+                            if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
+                                continue;
+                            }
+
+                            if let Err(_) = output.send(pixel_buffer.into()) {
+                                eprintln!("Pipeline is unreachable. Shutting down recording.");
+                                break;
+                            }
                         }
                         Err(error) => {
                             eprintln!("Capture error: {error}");

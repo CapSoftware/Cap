@@ -12,8 +12,10 @@ use wgpu::util::DeviceExt;
 use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
 use cap_project::{
-    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorData,
-    CursorMoveEvent, ProjectConfiguration, XY,
+    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorAnimationStyle,
+    CursorData, CursorMoveEvent, ProjectConfiguration, FAST_SMOOTHING_SAMPLES,
+    FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
+    SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
 };
 
 use image::GenericImageView;
@@ -476,7 +478,8 @@ impl ProjectUniforms {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project);
 
-        let cursor_position = interpolate_cursor_position(&constants.cursor, time);
+        let cursor_position =
+            interpolate_cursor_position(&constants.cursor, time, &project.cursor.animation_style);
 
         let zoom_keyframes = ZoomKeyframes::new(project);
         let current_zoom = zoom_keyframes.get_amount(time as f64);
@@ -1046,12 +1049,20 @@ fn draw_cursor(
     encoder: &mut CommandEncoder,
     view: &wgpu::TextureView,
 ) {
-    let Some(cursor_position) = interpolate_cursor_position(&constants.cursor, time) else {
+    let Some(cursor_position) = interpolate_cursor_position(
+        &constants.cursor,
+        time,
+        &uniforms.project.cursor.animation_style,
+    ) else {
         return;
     };
 
     // Calculate previous position for velocity
-    let prev_position = interpolate_cursor_position(&constants.cursor, time - 1.0 / 30.0);
+    let prev_position = interpolate_cursor_position(
+        &constants.cursor,
+        time - 1.0 / 30.0,
+        &uniforms.project.cursor.animation_style,
+    );
 
     // Calculate velocity in screen space
     let velocity = if let Some(prev_pos) = prev_position {
@@ -1534,41 +1545,118 @@ impl AsyncVideoDecoderHandle {
 fn interpolate_cursor_position(
     cursor: &CursorData,
     time_secs: f32,
+    animation_style: &CursorAnimationStyle,
 ) -> Option<Coord<RawDisplayUVSpace>> {
     let time_ms = (time_secs * 1000.0) as f64;
 
     if cursor.moves.is_empty() {
-        None
-    } else {
-        let moves = &cursor.moves;
+        return None;
+    }
 
-        let mut position = 0;
+    // Get style-specific parameters
+    let (num_samples, velocity_threshold) = match animation_style {
+        CursorAnimationStyle::Slow => (SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD),
+        CursorAnimationStyle::Regular => (REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD),
+        CursorAnimationStyle::Fast => (FAST_SMOOTHING_SAMPLES, FAST_VELOCITY_THRESHOLD),
+    };
 
-        for (i, m) in moves.iter().enumerate() {
-            if m.process_time_ms < time_ms && m.process_time_ms > moves[position].process_time_ms {
-                position = i;
+    // Find the closest move events around current time
+    let mut closest_events: Vec<&CursorMoveEvent> = cursor
+        .moves
+        .iter()
+        .filter(|m| (m.process_time_ms - time_ms).abs() <= 100.0) // Look at events within 100ms
+        .collect();
+
+    closest_events.sort_by(|a, b| {
+        (a.process_time_ms - time_ms)
+            .abs()
+            .partial_cmp(&(b.process_time_ms - time_ms).abs())
+            .unwrap()
+    });
+
+    // Take the nearest events up to num_samples
+    let samples: Vec<(f64, f64, f64)> = closest_events
+        .iter()
+        .take(num_samples)
+        .map(|m| (m.process_time_ms, m.x, m.y))
+        .collect();
+
+    if samples.is_empty() {
+        // Fallback to nearest event if no samples in range
+        let nearest = cursor
+            .moves
+            .iter()
+            .min_by_key(|m| (m.process_time_ms - time_ms).abs() as i64)?;
+        return Some(Coord::new(XY {
+            x: nearest.x.clamp(0.0, 1.0),
+            y: nearest.y.clamp(0.0, 1.0),
+        }));
+    }
+
+    // Calculate velocities between consecutive points
+    let mut velocities = Vec::with_capacity(samples.len() - 1);
+    for i in 0..samples.len() - 1 {
+        let (t1, x1, y1) = samples[i];
+        let (t2, x2, y2) = samples[i + 1];
+        let dt = (t2 - t1).max(1.0); // Avoid division by zero
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let velocity = ((dx * dx + dy * dy) / (dt * dt)).sqrt();
+        velocities.push(velocity);
+    }
+
+    // Apply adaptive smoothing based on velocities and time distance
+    let mut x = 0.0;
+    let mut y = 0.0;
+    let mut total_weight = 0.0;
+
+    for (i, &(t, px, py)) in samples.iter().enumerate() {
+        // Time-based weight with style-specific falloff
+        let time_diff = (t - time_ms).abs();
+        let style_factor = match animation_style {
+            CursorAnimationStyle::Slow => 0.0005,
+            CursorAnimationStyle::Regular => 0.001,
+            CursorAnimationStyle::Fast => 0.002,
+        };
+        let time_weight = 1.0 / (1.0 + time_diff * style_factor);
+
+        // Velocity-based weight
+        let velocity_weight = if i < velocities.len() {
+            let vel = velocities[i];
+            if vel > velocity_threshold {
+                (velocity_threshold / vel).powf(match animation_style {
+                    CursorAnimationStyle::Slow => 1.5,
+                    CursorAnimationStyle::Regular => 1.0,
+                    CursorAnimationStyle::Fast => 0.5,
+                })
+            } else {
+                1.0
             }
-        }
-
-        let m = &moves[position];
-        let next = moves.get(position + 1);
-
-        let (x, y) = if let Some(next) = next {
-            let delta = next.process_time_ms - m.process_time_ms;
-            let progress = (time_ms - m.process_time_ms) / delta;
-            (
-                m.x + (next.x - m.x) * progress,
-                m.y + (next.y - m.y) * progress,
-            )
         } else {
-            (m.x, m.y)
+            1.0
         };
 
-        Some(Coord::new(XY {
-            x: x.clamp(0.0, 1.0),
-            y: y.clamp(0.0, 1.0),
-        }))
+        // Combine weights with style-specific emphasis
+        let weight = match animation_style {
+            CursorAnimationStyle::Slow => time_weight * velocity_weight.powf(1.5),
+            CursorAnimationStyle::Regular => time_weight * velocity_weight,
+            CursorAnimationStyle::Fast => time_weight * velocity_weight.powf(0.5),
+        };
+
+        x += px * weight;
+        y += py * weight;
+        total_weight += weight;
     }
+
+    if total_weight > 0.0 {
+        x /= total_weight;
+        y /= total_weight;
+    }
+
+    Some(Coord::new(XY {
+        x: x.clamp(0.0, 1.0),
+        y: y.clamp(0.0, 1.0),
+    }))
 }
 
 struct CursorPipeline {
@@ -1708,7 +1796,7 @@ impl CursorPipeline {
 
         Self {
             bind_group_layout,
-            render_pipeline,
+            render_pipeline: render_pipeline,
         }
     }
 }

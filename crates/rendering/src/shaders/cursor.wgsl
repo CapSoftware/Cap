@@ -66,39 +66,55 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // Increase number of samples for smoother blur
-    let num_samples = 12;
+    // Increase samples for higher quality blur
+    let num_samples = 16;
     var color_sum = vec4<f32>(0.0);
     var weight_sum = 0.0;
     
+    // Calculate velocity magnitude for adaptive blur strength
+    let velocity_mag = length(uniforms.velocity);
+    let adaptive_blur = uniforms.motion_blur_amount * smoothstep(0.0, 50.0, velocity_mag);
+    
     // Calculate blur direction from velocity
-    let velocity_dir = normalize(uniforms.velocity);
+    var blur_dir = vec2<f32>(0.0);
+    if (velocity_mag > 0.0) {
+        blur_dir = uniforms.velocity / velocity_mag;
+    }
     
-    // Increase the blur trail length
-    let blur_strength = uniforms.motion_blur_amount * 2.0;
+    // Enhanced blur trail
+    let max_blur_offset = 3.0 * adaptive_blur;
     
-    // Sample in both directions from the center
     for (var i = 0; i < num_samples; i++) {
-        // Adjusted sampling pattern for longer trails
-        let t = (f32(i) / f32(num_samples - 1)) * 2.0 - 1.0;  // Range from -1 to 1
-        let weight = 1.0 - abs(t);  // Higher weight in the center
+        // Non-linear sampling for better blur distribution
+        let t = pow(f32(i) / f32(num_samples - 1), 1.5) * 2.0 - 1.0;
         
-        // Calculate sample offset with increased range
-        let offset = velocity_dir * blur_strength * t;
-        let sample_uv = input.uv + offset * uniforms.velocity / uniforms.output_size.xy;
+        // Gaussian-like weight distribution
+        let weight = exp(-3.0 * t * t);
         
-        // Sample the texture
+        // Calculate sample offset with velocity-based scaling
+        let offset = blur_dir * max_blur_offset * t;
+        let sample_uv = input.uv + offset / uniforms.output_size.xy;
+        
+        // Sample with bilinear filtering
         let sample = textureSample(t_cursor, s_cursor, sample_uv);
         
-        // Accumulate weighted color including alpha
+        // Accumulate weighted sample
         color_sum += sample * weight;
         weight_sum += weight;
     }
     
-    // Normalize by total weight
-    var final_color = vec4<f32>(0.0);
-    if (weight_sum > 0.0) {
-        final_color = color_sum / weight_sum;
+    // Normalize the result
+    var final_color = color_sum / weight_sum;
+    
+    // Enhance contrast slightly for fast movements
+    if (velocity_mag > 30.0) {
+        // Create new color with enhanced contrast instead of modifying components
+        final_color = vec4<f32>(
+            pow(final_color.r, 0.95),
+            pow(final_color.g, 0.95),
+            pow(final_color.b, 0.95),
+            final_color.a
+        );
     }
     
     return final_color;

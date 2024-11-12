@@ -6,8 +6,8 @@ use std::{
 
 use ffmpeg::{
     codec,
-    format::{self, context::input::PacketIter},
-    frame, rescale, Codec, Packet, Rational, Rescale, Stream,
+    format::{self},
+    frame, rescale, Codec, Rational, Rescale,
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
@@ -18,13 +18,16 @@ enum VideoDecoderMessage {
     GetFrame(u32, tokio::sync::oneshot::Sender<Option<Arc<Vec<u8>>>>),
 }
 
-fn ts_to_frame(ts: i64, time_base: Rational, frame_rate: Rational) -> u32 {
-    // dbg!((ts, time_base, frame_rate));
-    ((ts * time_base.numerator() as i64 * frame_rate.numerator() as i64)
-        / (time_base.denominator() as i64 * frame_rate.denominator() as i64)) as u32
+fn pts_to_frame(pts: i64, time_base: Rational) -> u32 {
+    (FPS as f64 * ((pts as f64 * time_base.numerator() as f64) / (time_base.denominator() as f64)))
+        .round() as u32
 }
 
 const FRAME_CACHE_SIZE: usize = 50;
+// TODO: Allow dynamic FPS values by either passing it into `spawn`
+// or changing `get_frame` to take the requested time instead of frame number,
+// so that the lookup can be done by PTS instead of frame number.
+const FPS: u32 = 30;
 
 pub struct AsyncVideoDecoder;
 
@@ -90,96 +93,112 @@ impl AsyncVideoDecoder {
 
             let mut temp_frame = ffmpeg::frame::Video::empty();
 
-            let render_more_margin = (FRAME_CACHE_SIZE / 4) as u32;
-
             let mut cache = BTreeMap::<u32, Arc<Vec<u8>>>::new();
             // active frame is a frame that triggered decode.
             // frames that are within render_more_margin of this frame won't trigger decode.
             let mut last_active_frame = None::<u32>;
 
             let mut last_decoded_frame = None::<u32>;
-
-            struct PacketStuff<'a> {
-                packets: PacketIter<'a>,
-                skipped_packet: Option<(Stream<'a>, Packet)>,
-            }
+            let mut last_sent_frame = None::<(u32, DecodedFrame)>;
 
             let mut peekable_requests = PeekableReceiver { rx, peeked: None };
 
             let mut packets = input.packets();
-            // let mut packet_stuff = PacketStuff {
-            //     packets: input.packets(),
-            //     skipped_packet: None,
-            // };
 
             while let Ok(r) = peekable_requests.recv() {
                 match r {
-                    VideoDecoderMessage::GetFrame(frame_number, sender) => {
-                        // println!("retrieving frame {frame_number}");
-
-                        let mut sender = if let Some(cached) = cache.get(&frame_number) {
-                            // println!("sending frame {frame_number} from cache");
+                    VideoDecoderMessage::GetFrame(requested_frame, sender) => {
+                        let mut sender = if let Some(cached) = cache.get(&requested_frame) {
                             sender.send(Some(cached.clone())).ok();
+                            last_sent_frame = Some((requested_frame, cached.clone()));
                             continue;
                         } else {
                             Some(sender)
                         };
 
-                        let cache_min = frame_number.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
-                        let cache_max = frame_number + FRAME_CACHE_SIZE as u32 / 2;
+                        let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                        let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
-                        if frame_number <= 0
-                            || last_decoded_frame
-                                .map(|f| {
-                                    frame_number < f ||
+                        if requested_frame <= 0
+                            || last_sent_frame
+                                .as_ref()
+                                .map(|last| {
+                                    requested_frame < last.0 ||
                                     // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-                                    frame_number - f > FRAME_CACHE_SIZE as u32
+                                    requested_frame - last.0 > FRAME_CACHE_SIZE as u32
                                 })
                                 .unwrap_or(true)
                         {
                             let timestamp_us =
-                                ((frame_number as f32 / frame_rate.numerator() as f32)
+                                ((requested_frame as f32 / frame_rate.numerator() as f32)
                                     * 1_000_000.0) as i64;
                             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
-                            println!("seeking to {position} for frame {frame_number}");
+                            println!("seeking to {position} for frame {requested_frame}");
 
                             decoder.flush();
                             input.seek(position, ..position).unwrap();
                             cache.clear();
                             last_decoded_frame = None;
+                            last_sent_frame = None;
 
                             packets = input.packets();
                         }
 
-                        last_active_frame = Some(frame_number);
+                        // handle when requested_frame == last_decoded_frame or last_decoded_frame > requested_frame.
+                        // the latter can occur when there are skips in frame numbers.
+                        // in future we should alleviate this by using time + pts values instead of frame numbers.
+                        if let Some((_, last_sent_frame)) = last_decoded_frame
+                            .zip(last_sent_frame.as_ref())
+                            .filter(|(last_decoded_frame, last_sent_frame)| {
+                                last_sent_frame.0 < requested_frame
+                                    && requested_frame < *last_decoded_frame
+                            })
+                        {
+                            if let Some(sender) = sender.take() {
+                                sender.send(Some(last_sent_frame.1.clone())).ok();
+                                continue;
+                            }
+                        }
+
+                        last_active_frame = Some(requested_frame);
 
                         loop {
                             if peekable_requests.peek().is_some() {
                                 break;
                             }
                             let Some((stream, packet)) = packets.next() else {
+                                sender.take().map(|s| s.send(None));
                                 break;
                             };
 
                             if stream.index() == input_stream_index {
                                 let start_offset = stream.start_time();
-                                let packet_frame =
-                                    ts_to_frame(packet.pts().unwrap(), time_base, frame_rate);
-                                // println!("sending frame {packet_frame} packet");
 
                                 decoder.send_packet(&packet).ok(); // decode failures are ok, we just fail to return a frame
 
                                 let mut exit = false;
 
                                 while decoder.receive_frame(&mut temp_frame).is_ok() {
-                                    let current_frame = ts_to_frame(
+                                    let current_frame = pts_to_frame(
                                         temp_frame.pts().unwrap() - start_offset,
                                         time_base,
-                                        frame_rate,
                                     );
-                                    // println!("processing frame {current_frame}");
+
                                     last_decoded_frame = Some(current_frame);
+
+                                    // we repeat the similar section as above to do the check per-frame instead of just per-request
+                                    if let Some((_, last_sent_frame)) = last_decoded_frame
+                                        .zip(last_sent_frame.as_ref())
+                                        .filter(|(last_decoded_frame, last_sent_frame)| {
+                                            last_sent_frame.0 <= requested_frame
+                                                && requested_frame < *last_decoded_frame
+                                        })
+                                    {
+                                        if let Some(sender) = sender.take() {
+                                            sender.send(Some(last_sent_frame.1.clone())).ok();
+                                        }
+                                    }
 
                                     let exceeds_cache_bounds = current_frame > cache_max;
                                     let too_small_for_cache_bounds = current_frame < cache_min;
@@ -223,18 +242,22 @@ impl AsyncVideoDecoder {
 
                                     let frame = Arc::new(frame_buffer);
 
-                                    if current_frame == frame_number {
+                                    if current_frame == requested_frame {
                                         if let Some(sender) = sender.take() {
+                                            last_sent_frame = Some((current_frame, frame.clone()));
                                             sender.send(Some(frame.clone())).ok();
+
+                                            break;
                                         }
                                     }
 
                                     if !too_small_for_cache_bounds {
                                         if cache.len() >= FRAME_CACHE_SIZE {
                                             if let Some(last_active_frame) = &last_active_frame {
-                                                let frame = if frame_number > *last_active_frame {
+                                                let frame = if requested_frame > *last_active_frame
+                                                {
                                                     *cache.keys().next().unwrap()
-                                                } else if frame_number < *last_active_frame {
+                                                } else if requested_frame < *last_active_frame {
                                                     *cache.keys().next_back().unwrap()
                                                 } else {
                                                     let min = *cache.keys().min().unwrap();
@@ -265,8 +288,8 @@ impl AsyncVideoDecoder {
                             }
                         }
 
-                        if sender.is_some() {
-                            println!("failed to send frame {frame_number}");
+                        if let Some(s) = sender.take() {
+                            s.send(None);
                         }
                     }
                 }
@@ -283,10 +306,10 @@ pub struct AsyncVideoDecoderHandle {
 }
 
 impl AsyncVideoDecoderHandle {
-    pub async fn get_frame(&self, frame_number: u32) -> Option<Arc<Vec<u8>>> {
+    pub async fn get_frame(&self, time: u32) -> Option<Arc<Vec<u8>>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.sender
-            .send(VideoDecoderMessage::GetFrame(frame_number, tx))
+            .send(VideoDecoderMessage::GetFrame(time, tx))
             .unwrap();
         rx.await.ok().flatten()
     }

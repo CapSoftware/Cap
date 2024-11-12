@@ -33,6 +33,12 @@ const settingsList = [
       "When enabled, a shareable link will be created automatically after stopping the recording. You'll be redirected to the URL while the upload continues in the background.",
   },
   {
+    key: "disable_auto_open_links",
+    label: "Cap Pro: Disable automatic link opening",
+    description:
+      "When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link).",
+  },
+  {
     key: "enable_notifications",
     label: "Enable System Notifications",
     description:
