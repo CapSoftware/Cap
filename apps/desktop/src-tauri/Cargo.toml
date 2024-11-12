@@ -79,6 +79,7 @@ dotenvy_macro = "0.15.7"
 global-hotkey = "0.6.3"
 tauri-plugin-http = "2.0.0-rc.0"
 rand = "0.8.5"
+windows-capture.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
@@ -90,13 +91,13 @@ swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 
 [target.'cfg(target_os= "windows")'.dependencies]
-windows = { version = "0.58.0", features = [
+windows = { workspace = true, features = [
 	"Win32_Foundation",
 	"Win32_System",
 	"Win32_UI_WindowsAndMessaging",
 	"Win32_Graphics_Gdi",
 ] }
-windows-sys = "0.59.0"
+windows-sys = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }

@@ -238,7 +238,7 @@ pub async fn start(
         )?;
         pipeline_builder = pipeline_builder
             .source("screen_capture", screen_source)
-            // .pipe("screen_capture_filter", screen_filter)
+            .pipe("screen_capture_filter", screen_filter)
             .sink("screen_capture_encoder", screen_encoder);
     }
 

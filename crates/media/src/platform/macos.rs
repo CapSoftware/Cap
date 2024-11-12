@@ -251,7 +251,7 @@ pub fn bring_window_to_focus(window_id: u32) {
     }
 }
 
-pub fn window_names() -> HashMap<u32, String> {
+pub fn display_names() -> HashMap<u32, String> {
     use cocoa::appkit::NSScreen;
     use cocoa::base::nil;
     use cocoa::foundation::{NSArray, NSString};

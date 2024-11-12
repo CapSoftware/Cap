@@ -39,7 +39,7 @@ cidre = { git = "https://github.com/yury/cidre", rev = "1e008bec49a0f97aeaaea613
 screencapturekit = "0.2.8"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.58", features = [
+windows = { workspace = true, features = [
 	"Win32_Foundation",
 	"Win32_System",
 	"Win32_System_Threading",
@@ -49,3 +49,4 @@ windows = { version = "0.58", features = [
 	"Win32_UI_HiDpi",
 	"Win32_Media_MediaFoundation",
 ] }
+windows-capture = { workspace = true }

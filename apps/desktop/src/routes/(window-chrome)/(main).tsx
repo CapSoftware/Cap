@@ -490,6 +490,10 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
   optionsEmptyText: string;
   placeholder: string;
 }) {
+  createEffect(() => {
+    console.log([...props.options])
+  
+  })
   return (
     <KSelect<T | null>
       options={props.options ?? []}
@@ -514,7 +518,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
     >
       <KSelect.Trigger<ValidComponent>
         as={
-          props.options.length === 1
+          props.options.length <= 1
             ? (p) => (
                 <button
                   onClick={() => {

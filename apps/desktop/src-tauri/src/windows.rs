@@ -133,11 +133,6 @@ impl CapWindow {
                     .visible(true)
                     .shadow(true);
 
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.decorations(false).shadow(false);
-                }
-
                 let window = window_builder.build()?;
                 window.set_focus().ok();
                 window
@@ -150,13 +145,7 @@ impl CapWindow {
                     .maximized(false)
                     .maximizable(false)
                     .maximized(false)
-                    .theme(Some(tauri::Theme::Light))
-                    .shadow(true);
-
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.decorations(false).shadow(false);
-                }
+                    .theme(Some(tauri::Theme::Light));
 
                 window_builder.build()?
             }
@@ -170,14 +159,6 @@ impl CapWindow {
                     .resizable(true)
                     .maximized(false);
 
-                #[cfg(target_os = "macos")]
-                {
-                    window_builder = window_builder
-                        .hidden_title(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .shadow(true);
-                }
-
                 window_builder.build()?
             }
             Self::Editor { project_id } => {
@@ -187,14 +168,6 @@ impl CapWindow {
                     .maximizable(true)
                     .theme(Some(tauri::Theme::Light));
 
-                #[cfg(target_os = "macos")]
-                {
-                    use tauri::TitleBarStyle;
-                    window_builder = window_builder
-                        .hidden_title(true)
-                        .title_bar_style(TitleBarStyle::Overlay);
-                }
-
                 window_builder.build()?
             }
             Self::Upgrade => {
@@ -203,7 +176,6 @@ impl CapWindow {
                     .inner_size(800.0, 850.0)
                     .resizable(false)
                     .maximized(false)
-                    .shadow(true)
                     .transparent(true);
 
                 window_builder.build()?
@@ -217,7 +189,6 @@ impl CapWindow {
                     .resizable(false)
                     .shadow(false)
                     .fullscreen(false)
-                    .decorations(false)
                     .always_on_top(true)
                     .content_protected(true)
                     .visible_on_all_workspaces(true)
@@ -246,7 +217,6 @@ impl CapWindow {
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .decorations(false)
                     .shadow(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
@@ -366,16 +336,22 @@ impl CapWindow {
         let mut builder = WebviewWindow::builder(app, id.label(), WebviewUrl::App(url.into()))
             .title(id.title())
             .visible(false)
-            .accept_first_mouse(true);
+            .accept_first_mouse(true)
+            .shadow(true);
 
         #[cfg(target_os = "macos")]
         {
             if id.traffic_lights_position().is_some() {
                 builder = builder
                     .hidden_title(true)
-                    .title_bar_style(tauri::TitleBarStyle::Overlay)
-                    .shadow(true);
+                    .title_bar_style(tauri::TitleBarStyle::Overlay);
             }
+        }
+
+        
+        #[cfg(target_os = "windows")]
+        {
+            builder = builder.decorations(false);
         }
 
         builder

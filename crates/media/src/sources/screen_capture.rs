@@ -80,7 +80,7 @@ impl<T> ScreenCaptureSource<T> {
             target: capture_target.clone(),
             fps,
             resolution: output_resolution,
-            video_info: VideoInfo::from_raw(RawVideoFormat::Nv12, 0, 0, fps),
+            video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, fps),
             phantom: Default::default(),
         };
 
@@ -88,7 +88,7 @@ impl<T> ScreenCaptureSource<T> {
 
         let [frame_width, frame_height] = get_output_frame_size(&options);
 
-        this.video_info = VideoInfo::from_raw(RawVideoFormat::Nv12, frame_width, frame_height, fps);
+        this.video_info = VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps);
 
         this
     }
@@ -140,7 +140,7 @@ impl<T> ScreenCaptureSource<T> {
             show_cursor: !FLAGS.zoom,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
-            output_type: FrameType::YUVFrame,
+            output_type: if cfg!(windows) { FrameType::BGRAFrame} else { FrameType::YUVFrame},
             output_resolution: self.resolution,
             crop_area,
             target,
@@ -157,17 +157,15 @@ impl<T> ScreenCaptureSource<T> {
         let screens = scap::get_all_targets().into_iter().filter_map(|t| match t {
             Target::Display(screen) => Some(screen),
             _ => None,
-        });
+        }).collect::<Vec<_>>();
 
-        let names = crate::platform::window_names();
+        let names = crate::platform::display_names();
 
         for (idx, screen) in screens.into_iter().enumerate() {
-            // Handle Target::Screen variant (assuming this is how it's structured in scap)
-            #[cfg(target_os = "macos")]
             targets.push(CaptureScreen {
                 id: screen.id,
                 name: names
-                    .get(&screen.raw_handle.id)
+                    .get(&screen.id)
                     .cloned()
                     .unwrap_or_else(|| format!("Screen {}", idx + 1)),
             });
@@ -262,11 +260,19 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                                     eprintln!("Clock is currently stopped. Dropping frames.");
                                 }
                                 Some(timestamp) => {
+                                    dbg!(frame.width, frame.height, frame.data.len());
+
                                     let mut buffer = FFVideo::new(
                                         self.video_info.pixel_format,
                                         self.video_info.width,
                                         self.video_info.height,
                                     );
+
+                                    dbg!(buffer.planes());
+
+                                    for i in 0..buffer.planes() {
+                                        dbg!(buffer.stride(i), buffer.plane_width(i), buffer.plane_height(i));
+                                    }
                                     buffer.set_pts(Some(timestamp));
 
                                     let bytes_per_pixel = 4;

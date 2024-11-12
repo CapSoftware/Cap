@@ -290,75 +290,16 @@ pub fn monitor_bounds(id: u32) -> Bounds {
 
     bounds.unwrap_or_default()
 }
-pub fn window_names() -> HashMap<u32, String> {
+pub fn display_names() -> HashMap<u32, String> {
     let mut names = HashMap::new();
-
-    unsafe extern "system" fn monitor_enum_proc(
-        hmonitor: HMONITOR,
-        _hdc: HDC,
-        _lprc_clip: *mut RECT,
-        lparam: LPARAM,
-    ) -> BOOL {
-        let monitors = &mut *(lparam.0 as *mut HashMap<u32, String>);
-
-        let mut monitor_info = MONITORINFOEXW::default();
-        monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-
-        if GetMonitorInfoW(hmonitor, &mut monitor_info as *mut MONITORINFOEXW as *mut _) == false {
-            return TRUE;
-        }
-
-        // Get display device
-        let mut display_device = DISPLAY_DEVICEW::default();
-        display_device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
-
-        if !EnumDisplayDevicesW(
-            PWSTR(monitor_info.szDevice.as_ptr() as _),
-            0,
-            &mut display_device,
-            0,
-        )
-        .as_bool()
-        {
-            return TRUE;
-        }
-
-        let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME {
-            header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
-                size: std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32,
-                adapterId: windows::Win32::Foundation::LUID {
-                    LowPart: display_device.StateFlags,
-                    HighPart: 0,
-                },
-                id: 0,
-            },
-            viewGdiDeviceName: [0; 32],
+    
+    for window in windows_capture::monitor::Monitor::enumerate().unwrap_or_default() {
+        let Ok(name) = window.device_string() else {
+            continue;
         };
-        let _ = DisplayConfigGetDeviceInfo(&mut source_name.header);
 
-        // directly slice with appropriate length, or `PCWSTR::from_raw(display_device.DeviceString.as_ptr()).to_string()`
-        let name = String::from_utf16_lossy(
-            &display_device.DeviceString[..display_device
-                .DeviceString
-                .iter()
-                .position(|&x| x == 0)
-                .unwrap_or(display_device.DeviceString.len())],
-        );
-        println!("Name: {}, Len: {}", name, name.len());
-
-        monitors.insert(display_device.StateFlags, name);
-        TRUE
+        names.insert(window.as_raw_hmonitor() as u32, name);
     }
-
-    let _ = unsafe {
-        EnumDisplayMonitors(
-            None,
-            None,
-            Some(monitor_enum_proc),
-            LPARAM(core::ptr::addr_of_mut!(names) as isize),
-        )
-    };
 
     names
 }
