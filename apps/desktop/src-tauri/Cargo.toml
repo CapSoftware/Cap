@@ -79,7 +79,6 @@ dotenvy_macro = "0.15.7"
 global-hotkey = "0.6.3"
 tauri-plugin-http = "2.0.0-rc.0"
 rand = "0.8.5"
-windows-capture.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

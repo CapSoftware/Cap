@@ -1735,7 +1735,6 @@ dependencies = [
  "uuid",
  "wgpu",
  "windows 0.58.0",
- "windows-capture",
  "windows-sys 0.59.0",
 ]
 
