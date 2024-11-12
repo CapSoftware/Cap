@@ -49,31 +49,24 @@ export default function Screenshots() {
   return (
     <div class="flex flex-col w-full h-full divide-y divide-gray-200 pt-1 pb-12">
       <div class="flex-1 overflow-y-auto">
-        <Show
-          when={!fetchScreenshots.isLoading}
-          fallback={
-            <p class="text-center text-gray-500">Loading screenshots...</p>
-          }
-        >
-          <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full">
-            <Show
-              when={fetchScreenshots.data && fetchScreenshots.data.length > 0}
-              fallback={
-                <p class="text-center text-gray-500">No screenshots found</p>
-              }
-            >
-              <For each={fetchScreenshots.data}>
-                {(screenshot) => (
-                  <ScreenshotItem
-                    screenshot={screenshot}
-                    onClick={() => handleScreenshotClick(screenshot)}
-                    onOpenFolder={() => handleOpenFolder(screenshot.path)}
-                  />
-                )}
-              </For>
-            </Show>
-          </ul>
-        </Show>
+        <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full">
+          <Show
+            when={fetchScreenshots.data && fetchScreenshots.data.length > 0}
+            fallback={
+              <p class="text-center text-gray-500">No screenshots found</p>
+            }
+          >
+            <For each={fetchScreenshots.data}>
+              {(screenshot) => (
+                <ScreenshotItem
+                  screenshot={screenshot}
+                  onClick={() => handleScreenshotClick(screenshot)}
+                  onOpenFolder={() => handleOpenFolder(screenshot.path)}
+                />
+              )}
+            </For>
+          </Show>
+        </ul>
       </div>
     </div>
   );

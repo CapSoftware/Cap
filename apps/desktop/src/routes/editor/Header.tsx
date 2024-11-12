@@ -37,18 +37,9 @@ export function Header() {
         ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem] pr-3"
       )}
     >
-      <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]">
-        <div class="flex flex-row items-center gap-[0.375rem]">
-          <div class="size-[1.5rem] rounded-[0.25rem] bg-gray-500 bg-black" />
-          <span>My Workspace</span>
-        </div>
-        <span class="text-gray-400">/</span>
-        <div class="flex flex-row items-center gap-[0.375rem]">
-          <span>Cap Title</span>
-        </div>
-      </div>
+      <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]"></div>
       <div
-        class="flex flex-row gap-4 font-medium items-center"
+        class="flex flex-row gap-2 font-medium items-center"
         data-tauri-drag-region
       >
         <ShareButton />
@@ -197,6 +188,7 @@ function ShareButton() {
         <Button
           disabled={uploadVideo.isPending}
           onClick={() => uploadVideo.mutate()}
+          variant="primary"
           class="flex items-center space-x-1"
         >
           {uploadVideo.isPending ? (

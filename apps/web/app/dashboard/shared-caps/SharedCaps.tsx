@@ -13,7 +13,7 @@ type SharedVideoData = {
   createdAt: Date;
   totalComments: number;
   totalReactions: number;
-  ownerName: string;
+  ownerName: string | null;
 }[];
 
 export const SharedCaps = ({

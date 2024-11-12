@@ -1,3 +1,4 @@
+import "~/styles/timeline.css";
 import { createElementBounds } from "@solid-primitives/bounds";
 import {
   Accessor,
@@ -15,6 +16,7 @@ import { cx } from "cva";
 import { createStore, produce } from "solid-js/store";
 import { mergeRefs } from "@solid-primitives/refs";
 import { createContextProvider } from "@solid-primitives/context";
+import { createMemo } from "solid-js";
 
 import { commands } from "~/utils/tauri";
 import { useEditorContext } from "./context";
@@ -409,6 +411,11 @@ export function Timeline() {
                     {(segment, i) => {
                       const { setTrackState } = useTrackContext();
 
+                      const zoomPercentage = () => {
+                        const amount = segment.amount;
+                        return `${amount.toFixed(1)}x`;
+                      };
+
                       return (
                         <SegmentRoot
                           class="border-red-300 group"
@@ -483,7 +490,7 @@ export function Timeline() {
                             }}
                           />
                           <SegmentContent
-                            class="bg-red-50 cursor-pointer group-hover:bg-opacity-80 transition-colors"
+                            class="bg-red-50 cursor-pointer group-hover:bg-opacity-80 transition-colors flex items-center justify-center"
                             onClick={(e) => {
                               setState("timelineSelection", {
                                 type: "zoom",
@@ -491,7 +498,14 @@ export function Timeline() {
                               });
                               e.stopPropagation();
                             }}
-                          />
+                          >
+                            <div class="text-xs text-gray-500 whitespace-nowrap flex flex-col justify-center items-center gap-1">
+                              <div class="flex items-center gap-1 text-red-300">
+                                <IconLucideSearch class="size-3" />{" "}
+                                {zoomPercentage()}
+                              </div>
+                            </div>
+                          </SegmentContent>
                           <SegmentHandle
                             class="bg-red-300 group-hover:bg-opacity-80 transition-colors"
                             onMouseDown={(downEvent) => {
@@ -610,20 +624,35 @@ function SegmentRoot(
 ) {
   const { duration } = useTimelineContext();
   const { trackBounds, isFreeForm } = useTrackContext();
+  const { state, project } = useEditorContext();
+
+  const isSelected = createMemo(() => {
+    const selection = state.timelineSelection;
+    if (!selection || selection.type !== "zoom") return false;
+
+    const segmentIndex = project.timeline?.zoomSegments?.findIndex(
+      (s) => s.start === props.segment.start && s.end === props.segment.end
+    );
+
+    return segmentIndex === selection.index;
+  });
+
+  const translateX = createMemo(() => {
+    if (!isFreeForm()) return 0;
+    return (props.segment.start / duration()) * (trackBounds.width ?? 0);
+  });
 
   return (
     <div
       {...props}
       class={cx(
         "absolute border rounded-[calc(0.75rem+1px)] h-[3rem] w-full",
-        props.class
+        props.class,
+        isSelected() && "wobble-wrapper"
       )}
       style={{
-        transform: isFreeForm()
-          ? `translateX(${
-              (props.segment.start / duration()) * (trackBounds.width ?? 0)
-            }px)`
-          : undefined,
+        "--segment-x": `${translateX()}px`,
+        transform: isFreeForm() ? "translateX(var(--segment-x))" : undefined,
         width: `${
           (100 * (props.segment.end - props.segment.start)) / duration()
         }%`,
@@ -648,7 +677,7 @@ function SegmentContent(props: ComponentProps<"div">) {
     <div
       {...props}
       class={cx(
-        "relative w-full h-full flex flex-row items-center justify-between px-[0.5rem] py-[0.25rem]",
+        "relative w-full h-full flex flex-row items-center px-[0.5rem] py-[0.25rem]",
         props.class
       )}
     />

@@ -99,8 +99,6 @@ export default function () {
         });
       }
     }
-
-    if (ostype() === "macos") commands.positionTrafficLights(null);
   });
 
   setTitlebar("hideMaximize", true);
@@ -119,9 +117,7 @@ export default function () {
       >
         Feedback
       </Button>
-      <div>
-        <ChangelogButton />
-      </div>
+      <ChangelogButton />
     </div>
   );
 

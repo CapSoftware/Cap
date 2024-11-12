@@ -800,6 +800,7 @@ dependencies = [
  "cap-flags",
  "cap-gpu-converters",
  "cap-project",
+ "cidre",
  "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
@@ -818,6 +819,7 @@ dependencies = [
  "objc2-foundation",
  "ringbuf",
  "scap",
+ "screencapturekit",
  "serde",
  "specta",
  "tempfile",
@@ -995,6 +997,21 @@ dependencies = [
  "wasm-bindgen",
  "windows-targets 0.52.6",
 ]
+
+[[package]]
+name = "cidre"
+version = "0.4.0"
+source = "git+https://github.com/yury/cidre?rev=1e008bec49a0f97aeaaea6130a0ba20fe00aa03b#1e008bec49a0f97aeaaea6130a0ba20fe00aa03b"
+dependencies = [
+ "cidre-macros",
+ "parking_lot",
+ "tokio",
+]
+
+[[package]]
+name = "cidre-macros"
+version = "0.1.0"
+source = "git+https://github.com/yury/cidre?rev=1e008bec49a0f97aeaaea6130a0ba20fe00aa03b#1e008bec49a0f97aeaaea6130a0ba20fe00aa03b"
 
 [[package]]
 name = "clang-sys"

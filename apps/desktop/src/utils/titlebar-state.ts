@@ -37,6 +37,8 @@ async function initializeTitlebar() {
     currentWindow.isClosable(),
   ]);
 
+  commands.positionTrafficLights(null);
+
   setState({ maximized, maximizable, closable });
 
   return await currentWindow.onResized(() => {

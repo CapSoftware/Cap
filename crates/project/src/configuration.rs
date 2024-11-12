@@ -225,12 +225,22 @@ pub enum CursorType {
     Circle,
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum CursorAnimationStyle {
+    #[default]
+    Regular,
+    Slow,
+    Fast,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorConfiguration {
     hide_when_idle: bool,
     pub size: u32,
     r#type: CursorType,
+    pub animation_style: CursorAnimationStyle,
 }
 
 impl Default for CursorConfiguration {
@@ -239,6 +249,7 @@ impl Default for CursorConfiguration {
             hide_when_idle: false,
             size: 100,
             r#type: CursorType::default(),
+            animation_style: CursorAnimationStyle::Regular,
         }
     }
 }
@@ -357,3 +368,11 @@ impl Default for ProjectConfiguration {
         }
     }
 }
+
+pub const SLOW_SMOOTHING_SAMPLES: usize = 24;
+pub const REGULAR_SMOOTHING_SAMPLES: usize = 16;
+pub const FAST_SMOOTHING_SAMPLES: usize = 10;
+
+pub const SLOW_VELOCITY_THRESHOLD: f64 = 0.003;
+pub const REGULAR_VELOCITY_THRESHOLD: f64 = 0.008;
+pub const FAST_VELOCITY_THRESHOLD: f64 = 0.015;

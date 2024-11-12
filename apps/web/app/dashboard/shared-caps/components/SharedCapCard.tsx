@@ -12,7 +12,7 @@ interface SharedCapCardProps {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
-    ownerName: string;
+    ownerName: string | null;
   };
   analytics: number;
   spaceName: string;
@@ -53,11 +53,13 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
       </a>
       <div className="flex flex-col p-4">
         <div className="mb-2">
-          <div>
-            <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
-              {cap.ownerName}
-            </span>
-          </div>
+          {cap.ownerName && (
+            <div>
+              <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
+                {cap.ownerName}
+              </span>
+            </div>
+          )}
           <div>
             <span className="text-[0.875rem] leading-[1.25rem] text-gray-400">
               Shared with {spaceName}

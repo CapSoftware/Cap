@@ -88,8 +88,7 @@ impl<T: PipelineClock> PipelineBuilder<T> {
         // TODO: Shut down tasks if launch failed.
         for (name, task) in tasks.into_iter() {
             // TODO: Wait for these in parallel?
-            task
-                .ready_signal
+            task.ready_signal
                 .recv_async()
                 .await
                 .map_err(|_| MediaError::TaskLaunch(name.clone()))??;

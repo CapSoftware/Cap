@@ -31,18 +31,18 @@ export const presetsStore = {
     await s.set("presets", value);
     await s.save();
   },
-  listen: (fn: (data: PresetsStore | undefined) => void) =>
+  listen: (fn: (data?: PresetsStore | undefined) => void) =>
     store().then((s) => s.onKeyChange<PresetsStore>("presets", fn)),
 };
 
 export const authStore = {
   get: () => store().then((s) => s.get<AuthStore>("auth")),
-  set: async (value: AuthStore | undefined) => {
+  set: async (value?: AuthStore | undefined) => {
     const s = await store();
     await s.set("auth", value);
     await s.save();
   },
-  listen: (fn: (data: AuthStore | undefined) => void) =>
+  listen: (fn: (data?: AuthStore | undefined) => void) =>
     store().then((s) => s.onKeyChange<AuthStore>("presets", fn)),
 };
 
@@ -58,9 +58,14 @@ export const hotkeysStore = {
 export const generalSettingsStore = {
   get: () =>
     store().then((s) => s.get<GeneralSettingsStore>("general_settings")),
-  set: async (value: GeneralSettingsStore) => {
+  set: async (value: Partial<GeneralSettingsStore>) => {
     const s = await store();
-    await s.set("general_settings", value);
+    const current =
+      (await s.get<GeneralSettingsStore>("general_settings")) || {};
+    await s.set("general_settings", {
+      ...current,
+      ...value,
+    });
     await s.save();
   },
 };

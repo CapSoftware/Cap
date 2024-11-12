@@ -9,10 +9,15 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Transition } from "solid-transition-group";
 import titlebarState, { initializeTitlebar } from "~/utils/titlebar-state";
+import { Show } from "solid-js";
 
 import Titlebar from "~/components/titlebar/Titlebar";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { commands } from "~/utils/tauri";
+
+import Header from "../components/Header";
+import { AbsoluteInsetLoader } from "~/components/Loader";
+import { cx } from "cva";
 
 export const route = {
   info: {
@@ -38,11 +43,9 @@ export default function (props: RouteSectionProps) {
   });
 
   return (
-    <div
-      class={`${
-        titlebarState.maximized ? "" : "rounded-[1.5rem] border"
-      } bg-gray-100 border-gray-200 w-screen h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200`}
-    >
+    <div class="bg-gray-100 border-gray-200 w-screen h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200">
+      <Titlebar />
+      {/* breaks sometimes */}
       {/* <Transition
         mode="outin"
         enterActiveClass="transition-opacity duration-100"
@@ -50,16 +53,7 @@ export default function (props: RouteSectionProps) {
         enterClass="opacity-0"
         exitToClass="opacity-0"
         > */}
-      <Suspense
-        fallback={
-          <div class="w-full h-full flex items-center justify-center bg-gray-100">
-            <div class="animate-spin">
-              <IconCapLogo class="size-[4rem]" />
-            </div>
-          </div>
-        }
-      >
-        <Titlebar />
+      <Suspense fallback={<AbsoluteInsetLoader />}>
         <Inner>{props.children}</Inner>
       </Suspense>
       {/* </Transition> */}
@@ -72,5 +66,9 @@ function Inner(props: ParentProps) {
     if (location.pathname !== "/") getCurrentWindow().show();
   });
 
-  return <>{props.children}</>;
+  return (
+    <div class="animate-in fade-in w-full h-full flex flex-col">
+      {props.children}
+    </div>
+  );
 }

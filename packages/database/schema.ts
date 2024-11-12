@@ -53,7 +53,7 @@ export const users = mysqlTable(
     created_at: timestamp("created_at").notNull().defaultNow(),
     updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
     onboarding_completed_at: timestamp("onboarding_completed_at"),
-    customBucket: nanoId("customBucket"),
+    customBucket: nanoIdNullable("customBucket"),
     inviteQuota: int("inviteQuota").notNull().default(1),
   },
   (table) => ({

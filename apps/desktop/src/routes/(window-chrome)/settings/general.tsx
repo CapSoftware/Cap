@@ -9,37 +9,48 @@ import {
 
 const settingsList = [
   {
-    key: "upload_individual_files",
+    key: "uploadIndividualFiles",
     label: "Upload individual recording files when creating shareable link",
     description:
       'Warning: this will cause shareable link uploads to become significantly slower, since all individual recording files will be uploaded. Shows "Download Assets" button in Share page.',
   },
   {
-    key: "open_editor_after_recording",
+    key: "openEditorAfterRecording",
     label: "Open editor automatically after recording stops",
     description:
       "The editor will be shown immediately after you finish recording.",
   },
   {
-    key: "hide_dock_icon",
+    key: "hideDockIcon",
     label: "Hide dock icon",
     description:
       "The dock icon will be hidden when there are no windows available to close.",
   },
   {
-    key: "auto_create_shareable_link",
+    key: "autoCreateShareableLink",
     label: "Cap Pro: Automatically create shareable link after recording",
     description:
       "When enabled, a shareable link will be created automatically after stopping the recording. You'll be redirected to the URL while the upload continues in the background.",
   },
   {
-    key: "enable_notifications",
+    key: "disableAutoOpenLinks",
+    label: "Cap Pro: Disable automatic link opening",
+    description:
+      "When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link).",
+  },
+  {
+    key: "enableNotifications",
     label: "Enable System Notifications",
     description:
       "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
     requiresPermission: true,
   },
-];
+] satisfies Array<{
+  key: keyof GeneralSettingsStore;
+  label: string;
+  description: string;
+  requiresPermission?: boolean;
+}>;
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -54,11 +65,11 @@ export default function GeneralSettings() {
 function Inner(props: { initialStore: GeneralSettingsStore | null }) {
   const [settings, setSettings] = createStore<GeneralSettingsStore>(
     props.initialStore ?? {
-      upload_individual_files: false,
-      open_editor_after_recording: false,
-      hide_dock_icon: false,
-      auto_create_shareable_link: false,
-      enable_notifications: true,
+      uploadIndividualFiles: false,
+      openEditorAfterRecording: false,
+      hideDockIcon: false,
+      autoCreateShareableLink: false,
+      enableNotifications: true,
     }
   );
 
@@ -87,10 +98,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
     }
 
     setSettings(key as keyof GeneralSettingsStore, value);
-    await commands.setGeneralSettings({
-      ...settings,
-      [key]: value,
-    });
+    generalSettingsStore.set({ [key]: value });
   };
 
   return (

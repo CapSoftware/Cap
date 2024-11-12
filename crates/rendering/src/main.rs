@@ -1,4 +1,3 @@
-
 // use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta};
 
 #[tokio::main]

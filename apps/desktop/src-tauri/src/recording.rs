@@ -5,13 +5,12 @@ use serde::Serialize;
 use specta::Type;
 use std::collections::HashMap;
 use std::fs::File;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::path::PathBuf;
 use tokio::sync::oneshot;
 
-use crate::cursor::spawn_cursor_recorder;
 use crate::RecordingOptions;
 
 // TODO: Hacky, please fix
@@ -20,13 +19,13 @@ pub const FPS: u32 = 30;
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_capture_screens() -> Vec<CaptureScreen> {
-    ScreenCaptureSource::list_screens()
+    ScreenCaptureSource::<AVFrameCapture>::list_screens()
 }
 
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_capture_windows() -> Vec<CaptureWindow> {
-    ScreenCaptureSource::list_targets()
+    ScreenCaptureSource::<AVFrameCapture>::list_targets()
 }
 
 #[tauri::command(async)]
@@ -201,22 +200,47 @@ pub async fn start(
     let mut audio_output_path = None;
     let mut camera_output_path = None;
 
-    let screen_source =
-        ScreenCaptureSource::init(dbg!(&recording_options.capture_target), None, None);
-    let screen_config = screen_source.info();
-    let screen_bounds = screen_source.bounds;
+    #[cfg(target_os = "macos")]
+    {
+        let screen_source = ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
+            dbg!(&recording_options.capture_target),
+            None,
+            None,
+        );
+        let screen_config = screen_source.info();
 
-    let output_config = screen_config.scaled(1920, 30);
-    let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
-    let screen_encoder = H264Encoder::init(
-        "screen",
-        output_config,
-        Output::File(display_output_path.clone()),
-    )?;
-    pipeline_builder = pipeline_builder
-        .source("screen_capture", screen_source)
-        .pipe("screen_capture_filter", screen_filter)
-        .sink("screen_capture_encoder", screen_encoder);
+        let output_config = screen_config.scaled(1920, 30);
+        let screen_encoder = cap_media::encoders::H264AVAssetWriterEncoder::init(
+            "screen",
+            output_config,
+            Output::File(display_output_path.clone()),
+        )?;
+        pipeline_builder = pipeline_builder
+            .source("screen_capture", screen_source)
+            .sink("screen_capture_encoder", screen_encoder);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let screen_source = ScreenCaptureSource::<AVFrameCapture>::init(
+            dbg!(&recording_options.capture_target),
+            None,
+            None,
+        );
+        let screen_config = screen_source.info();
+        let screen_bounds = screen_source.bounds;
+
+        let output_config = screen_config.scaled(1920, 30);
+        let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
+        let screen_encoder = H264Encoder::init(
+            "screen",
+            output_config,
+            Output::File(display_output_path.clone()),
+        )?;
+        pipeline_builder = pipeline_builder
+            .source("screen_capture", screen_source)
+            // .pipe("screen_capture_filter", screen_filter)
+            .sink("screen_capture_encoder", screen_encoder);
+    }
 
     if let Some(mic_source) = recording_options
         .audio_input_name
@@ -263,9 +287,11 @@ pub async fn start(
     let stop_signal = Arc::new(AtomicBool::new(false));
 
     // Initialize default values for cursor channels
-    let (mouse_moves, mouse_clicks) = if FLAGS.record_mouse {
-        spawn_cursor_recorder(stop_signal.clone(), screen_bounds, content_dir, cursors_dir)
-    } else {
+    let (mouse_moves, mouse_clicks) =
+    // if FLAGS.record_mouse
+    {
+    //     spawn_cursor_recorder(stop_signal.clone(), screen_bounds, content_dir, cursors_dir)
+    // } else {
         // Create dummy channels that will never receive data
         let (move_tx, move_rx) = oneshot::channel();
         let (click_tx, click_rx) = oneshot::channel();

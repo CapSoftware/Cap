@@ -14,7 +14,7 @@ declare global {
 export function BentoScript({
   user,
 }: {
-  user: typeof users.$inferSelect | null;
+  user?: typeof users.$inferSelect | null;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
