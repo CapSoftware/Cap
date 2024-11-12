@@ -1,49 +1,16 @@
 import { A, type RouteSectionProps, useLocation } from "@solidjs/router";
-import { cx } from "cva";
-import { createResource, For } from "solid-js";
+import { createResource, For, Show } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { getVersion } from "@tauri-apps/api/app";
-import { lazy } from "solid-js";
 
 import { commands } from "~/utils/tauri";
 
-// Lazy load the tab components
-const FeedbackTab = lazy(() => import("./settings/feedback"));
-const GeneralTab = lazy(() => import("./settings/general"));
-const HotkeysTab = lazy(() => import("./settings/hotkeys"));
-const RecordingsTab = lazy(() => import("./settings/recordings"));
-const ScreenshotsTab = lazy(() => import("./settings/screenshots"));
-const ChangelogTab = lazy(() => import("./settings/changelog"));
-
 export default function Settings(props: RouteSectionProps) {
-  const location = useLocation();
-  const currentPath = () => location.pathname.split("/").pop();
-
   const handleSignOut = async () => {
     await commands.deleteAuthOpenSignin();
   };
 
-  const [version] = createResource(async () => getVersion());
-  const versionString = () => version() ?? "0";
-
-  const renderTab = () => {
-    switch (currentPath()) {
-      case "feedback":
-        return <FeedbackTab />;
-      case "general":
-        return <GeneralTab />;
-      case "hotkeys":
-        return <HotkeysTab />;
-      case "recordings":
-        return <RecordingsTab />;
-      case "screenshots":
-        return <ScreenshotsTab />;
-      case "changelog":
-        return <ChangelogTab />;
-      default:
-        return <GeneralTab />;
-    }
-  };
+  const [version] = createResource(() => getVersion());
 
   return (
     <div class="h-[calc(100vh-3rem)] flex flex-row divide-x divide-gray-200 text-[0.875rem] leading-[1.25rem]">
@@ -75,37 +42,31 @@ export default function Settings(props: RouteSectionProps) {
               },
             ]}
           >
-            {(item) => {
-              const isActive = () => currentPath() === item.href;
-              return (
-                <li>
-                  <A
-                    href={item.href}
-                    class={cx(
-                      "rounded-lg h-[2rem] px-[0.375rem] flex flex-row items-center gap-[0.375rem] transition-colors border",
-                      isActive()
-                        ? "bg-blue-50 border-blue-200 text-blue-700"
-                        : "hover:bg-gray-100 border-transparent"
-                    )}
-                  >
-                    <item.icon class="size-[1.25rem]" />
-                    <span>{item.name}</span>
-                  </A>
-                </li>
-              );
-            }}
+            {(item) => (
+              <li>
+                <A
+                  href={item.href}
+                  activeClass="bg-blue-50 border-blue-200 text-blue-700"
+                  inactiveClass="hover:bg-gray-100 border-transparent"
+                  class="rounded-lg h-[2rem] px-[0.375rem] flex flex-row items-center gap-[0.375rem] transition-colors border"
+                >
+                  <item.icon class="size-[1.25rem]" />
+                  <span>{item.name}</span>
+                </A>
+              </li>
+            )}
           </For>
         </ul>
         <div class="p-[0.625rem]">
-          {versionString() !== "0" && (
-            <p class="text-xs text-gray-400 mb-1">v{versionString()}</p>
-          )}
+          <Show when={version()}>
+            {(v) => <p class="text-xs text-gray-400 mb-1">v{v()}</p>}
+          </Show>
           <Button onClick={handleSignOut} variant="secondary" class="w-full">
             Sign Out
           </Button>
         </div>
       </div>
-      <div class="flex-1 bg-gray-50 overflow-y-auto">{renderTab()}</div>
+      <div class="flex-1 bg-gray-50 overflow-y-auto">{props.children}</div>
     </div>
   );
 }
