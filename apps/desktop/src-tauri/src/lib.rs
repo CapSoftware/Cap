@@ -10,6 +10,7 @@ mod platform;
 mod recording;
 // mod resource;
 mod cursor;
+mod import;
 mod tray;
 mod upload;
 mod web_api;
@@ -33,8 +34,9 @@ use cap_rendering::{ProjectUniforms, ZOOM_DURATION};
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
+use import::{get_projects_dir, import_video_to_project};
 use mp4::Mp4Reader;
-use num_traits::ToBytes;
+
 use png::{ColorType, Encoder};
 use recording::{
     list_cameras, list_capture_screens, list_capture_windows, InProgressRecording, FPS,
@@ -306,12 +308,7 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
 
     let id = uuid::Uuid::new_v4().to_string();
 
-    let recording_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap()
-        .join("recordings")
-        .join(format!("{id}.cap"));
+    let recording_dir = get_projects_dir(&app).unwrap().join(format!("{id}.cap"));
 
     // Check if auto_create_shareable_link is true and user is upgraded
     let general_settings = GeneralSettingsStore::get(&app)?;
@@ -1387,11 +1384,8 @@ async fn get_video_metadata(
         video_id
     };
 
-    let video_dir = app
-        .path()
-        .app_data_dir()
+    let video_dir = get_projects_dir(&app)
         .unwrap()
-        .join("recordings")
         .join(format!("{}.cap", video_id));
 
     let screen_video_path = video_dir.join("content").join("display.mp4");
@@ -1904,7 +1898,7 @@ async fn upload_screenshot(
         }
 
         if !auth.is_upgraded() {
-            open_upgrade_window(app).await;
+            open_upgrade_window(app.clone()).await;
             return Ok(UploadResult::UpgradeRequired);
         }
     }
@@ -2458,6 +2452,7 @@ pub async fn run() {
             is_camera_window_open,
             seek_to,
             send_feedback_request,
+            import_video_to_project,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

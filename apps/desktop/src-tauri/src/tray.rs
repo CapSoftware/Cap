@@ -18,6 +18,7 @@ pub enum TrayItem {
     OpenCap,
     StartNewRecording,
     TakeScreenshot,
+    CreateProjectFromVideo,
     PreviousRecordings,
     PreviousScreenshots,
     OpenSettings,
@@ -30,6 +31,7 @@ impl From<TrayItem> for MenuId {
             TrayItem::OpenCap => "open_cap",
             TrayItem::StartNewRecording => "new_recording",
             TrayItem::TakeScreenshot => "take_screenshot",
+            TrayItem::CreateProjectFromVideo => "create_project_from_video",
             TrayItem::PreviousRecordings => "previous_recordings",
             TrayItem::PreviousScreenshots => "previous_screenshots",
             TrayItem::OpenSettings => "open_settings",
@@ -45,6 +47,7 @@ impl From<MenuId> for TrayItem {
             "open_cap" => TrayItem::OpenCap,
             "new_recording" => TrayItem::StartNewRecording,
             "take_screenshot" => TrayItem::TakeScreenshot,
+            "create_project_from_video" => TrayItem::CreateProjectFromVideo,
             "previous_recordings" => TrayItem::PreviousRecordings,
             "previous_screenshots" => TrayItem::PreviousScreenshots,
             "open_settings" => TrayItem::OpenSettings,
@@ -78,6 +81,13 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 app,
                 TrayItem::TakeScreenshot,
                 "Take Screenshot",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(
+                app,
+                TrayItem::CreateProjectFromVideo,
+                "Create Project from Video",
                 true,
                 None::<&str>,
             )?,
@@ -121,6 +131,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
                 TrayItem::TakeScreenshot => {
                     let _ = RequestNewScreenshot.emit(&app_handle);
+                }
+                TrayItem::CreateProjectFromVideo => {
+                    if let Err(e) = CapWindow::ImportVideo.show(&app_handle) {
+                        eprintln!("Failed to show import video window: {:?}", e);
+                    }
                 }
                 TrayItem::PreviousRecordings => {
                     let _ = RequestOpenSettings {
