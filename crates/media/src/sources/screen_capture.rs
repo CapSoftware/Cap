@@ -2,7 +2,7 @@ use cap_flags::FLAGS;
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
-    frame::FrameType,
+    frame::{Frame, FrameType},
     Target,
 };
 use serde::{Deserialize, Serialize};
@@ -239,47 +239,66 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         println!("Screen recording started.");
                     }
 
-                    match capturer.raw().get_next_pixel_buffer() {
-                        Ok(pixel_buffer) => {
-                            if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
+                    match capturer.get_next_frame() {
+                        Ok(Frame::BGRA(frame)) => {
+                            if frame.height == 0 || frame.width == 0 {
                                 continue;
                             }
 
-                            let raw_timestamp = RawNanoseconds(pixel_buffer.display_time());
+                            let raw_timestamp = RawNanoseconds(frame.display_time);
                             match clock.timestamp_for(raw_timestamp) {
                                 None => {
                                     eprintln!("Clock is currently stopped. Dropping frames.");
                                 }
                                 Some(timestamp) => {
-                                    let mut frame = FFVideo::new(
+                                    let mut buffer = FFVideo::new(
                                         self.video_info.pixel_format,
                                         self.video_info.width,
                                         self.video_info.height,
                                     );
-                                    frame.set_pts(Some(timestamp));
+                                    buffer.set_pts(Some(timestamp));
 
-                                    let planes = pixel_buffer.planes();
+                                    let bytes_per_pixel = 4;
+                                    let width_in_bytes = frame.width as usize * bytes_per_pixel;
+                                    let height = frame.height as usize;
 
-                                    for (i, plane) in planes.into_iter().enumerate() {
-                                        let data = plane.data();
+                                    let src_data = &frame.data;
 
-                                        for y in 0..plane.height() {
-                                            let buffer_y_offset = y * plane.bytes_per_row();
-                                            let frame_y_offset = y * frame.stride(i);
+                                    let src_stride = src_data.len() / height;
+                                    let dst_stride = buffer.stride(0);
 
-                                            let num_bytes =
-                                                frame.stride(i).min(plane.bytes_per_row());
+                                    if src_data.len() < src_stride * height {
+                                        eprintln!("Frame data size mismatch.");
+                                        continue;
+                                    }
 
-                                            frame.data_mut(i)
-                                                [frame_y_offset..frame_y_offset + num_bytes]
+                                    if src_stride < width_in_bytes {
+                                        eprintln!(
+                                            "Source stride is less than expected width in bytes."
+                                        );
+                                        continue;
+                                    }
+
+                                    if buffer.data(0).len() < dst_stride * height {
+                                        eprintln!("Destination data size mismatch.");
+                                        continue;
+                                    }
+
+                                    {
+                                        let dst_data = buffer.data_mut(0);
+
+                                        for y in 0..height {
+                                            let src_offset = y * src_stride;
+                                            let dst_offset = y * dst_stride;
+                                            dst_data[dst_offset..dst_offset + width_in_bytes]
                                                 .copy_from_slice(
-                                                    &data[buffer_y_offset
-                                                        ..buffer_y_offset + num_bytes],
+                                                    &src_data
+                                                        [src_offset..src_offset + width_in_bytes],
                                                 );
                                         }
                                     }
 
-                                    if let Err(_) = output.send(frame) {
+                                    if let Err(_) = output.send(buffer) {
                                         eprintln!(
                                             "Pipeline is unreachable. Shutting down recording."
                                         );
@@ -288,6 +307,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                                 }
                             };
                         }
+                        Ok(_) => unreachable!(),
                         Err(error) => {
                             eprintln!("Capture error: {error}");
                             break;
@@ -315,7 +335,6 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub struct CMSampleBufferCapture;
 
 #[cfg(target_os = "macos")]
