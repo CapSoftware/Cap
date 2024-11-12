@@ -20,6 +20,7 @@ import { classNames } from "@cap/utils";
 export const Navbar = ({ auth }: { auth: boolean }) => {
   const pathname = usePathname();
   const isHomePage = pathname === "/";
+  const isSeoPage = pathname.startsWith("/screen-recorder");
   const [showMobileMenu, setShowMobileMenu] = useState(false);
 
   if (
@@ -38,12 +39,12 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
     <>
       <div
         className={`${
-          isHomePage === true
+          isHomePage || isSeoPage
             ? "bg-transparent border-transparent"
             : "bg-white border-gray-200"
         } border-b-[1px] w-full p-4`}
       >
-        <div className="relative z-20 flex justify-between max-w-3xl mx-auto transition-all ">
+        <div className="relative z-20 flex justify-between max-w-3xl mx-auto transition-all">
           <div>
             <a href="/">
               <Logo

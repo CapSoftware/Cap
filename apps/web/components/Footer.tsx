@@ -22,10 +22,10 @@ export const Footer = () => {
     <footer>
       <div
         style={{ boxShadow: "0px 2px 8px rgba(18, 22, 31, 0.02)" }}
-        className="wrapper bg-gray-100 border-[1px] border-gray-200 p-8 md:p-12 rounded-[20px] mb-10 relative overflow-hidden"
+        className="wrapper bg-gray-100 border-[1px] border-gray-200 p-8 lg:p-12 rounded-[20px] mb-10 relative overflow-hidden"
       >
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start justify-between z-10 relative">
-          <div className="space-y-4 md:col-span-6">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start justify-between z-10 relative">
+          <div className="space-y-4 lg:col-span-6">
             <Logo showBeta={true} className="w-[104px] h-auto" />
             <p className="text-gray-500 max-w-md">
               Cap is the open source alternative to Loom. Lightweight, powerful,
@@ -43,7 +43,7 @@ export const Footer = () => {
               </a>
             </div>
           </div>
-          <div className="space-y-4 md:col-span-2">
+          <div className="space-y-4 lg:col-span-2">
             <h3 className="text-lg font-semibold">Product</h3>
             <ul className="space-y-2">
               <li>
@@ -67,7 +67,7 @@ export const Footer = () => {
               </li>
             </ul>
           </div>
-          <div className="space-y-4 md:col-span-2">
+          <div className="space-y-4 lg:col-span-2">
             <h3 className="text-lg font-semibold">Help</h3>
             <ul className="space-y-2">
               <li>
@@ -88,7 +88,7 @@ export const Footer = () => {
               </li>
             </ul>
           </div>
-          <div className="space-y-4 md:col-span-2">
+          <div className="space-y-4 lg:col-span-2">
             <h3 className="text-lg font-semibold">Socials</h3>
             <ul className="space-y-2">
               <li>
@@ -108,6 +108,14 @@ export const Footer = () => {
                 >
                   LinkedIn
                 </a>
+              </li>
+            </ul>
+          </div>
+          <div className="space-y-4 lg:col-span-12">
+            <h3 className="text-lg font-semibold">More</h3>
+            <ul className="space-y-2">
+              <li>
+                <a href="/screen-recorder">Screen Recorder</a>
               </li>
             </ul>
           </div>
