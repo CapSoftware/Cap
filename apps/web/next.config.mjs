@@ -1,5 +1,3 @@
-import million from "million/compiler";
-
 /** @type {import('next').NextConfig} */
 
 import("dotenv").then(({ config }) => config({ path: "../../.env" }));
@@ -87,18 +85,4 @@ const nextConfig = {
   },
 };
 
-const millionConfig = {
-  auto: {
-    rsc: true,
-    skip: [
-      "Parallax",
-      "Toolbar",
-      "react-scroll-parallax",
-      "Record",
-      "ActionButton",
-      "ImageViewer",
-    ],
-  },
-};
-
-export default million.next(nextConfig, millionConfig);
+export default nextConfig;
