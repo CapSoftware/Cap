@@ -6,6 +6,7 @@ use crate::{
 use ffmpeg::{
     codec::{codec::Codec, context, encoder},
     format::{self},
+    software,
     threading::Config,
     Dictionary,
 };
@@ -17,11 +18,13 @@ pub struct H264Encoder {
     encoder: encoder::Video,
     output_ctx: format::context::Output,
     last_pts: Option<i64>,
+    config: VideoInfo,
 }
 
 impl H264Encoder {
     pub fn init(tag: &'static str, config: VideoInfo, output: Output) -> Result<Self, MediaError> {
         let Output::File(destination) = output;
+
         let mut output_ctx = format::output(&destination)?;
 
         let (codec, options) = get_codec_and_options(&config)?;
@@ -37,7 +40,14 @@ impl H264Encoder {
         encoder.set_format(config.pixel_format);
         encoder.set_time_base(config.frame_rate.invert());
         encoder.set_frame_rate(Some(config.frame_rate));
-        encoder.set_bit_rate(5_000_000);
+
+        if codec.name() == "h264_videotoolbox" {
+            encoder.set_bit_rate(1_200_000);
+            encoder.set_max_bit_rate(120_000);
+        } else {
+            encoder.set_bit_rate(8_000_000);
+            encoder.set_max_bit_rate(8_000_000);
+        }
 
         let video_encoder = encoder.open_with(options)?;
 
@@ -52,6 +62,7 @@ impl H264Encoder {
             encoder: video_encoder,
             output_ctx,
             last_pts: None,
+            config,
         })
     }
 
@@ -109,7 +120,9 @@ impl PipelineSinkTask for H264Encoder {
 fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), MediaError> {
     let encoder_name = {
         if cfg!(target_os = "macos") {
-            "h264_videotoolbox"
+            "libx264"
+            // looks terrible rn :(
+            // "h264_videotoolbox"
         } else {
             "libx264"
         }
@@ -117,17 +130,22 @@ fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), Medi
     if let Some(codec) = encoder::find_by_name(encoder_name) {
         let mut options = Dictionary::new();
 
-        let keyframe_interval_secs = 2;
-        let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
-        let keyframe_interval_str = keyframe_interval.to_string();
+        if encoder_name == "h264_videotoolbox" {
+            // options.set("constant_bit_rate", "true");
+            options.set("realtime", "true");
+        } else {
+            let keyframe_interval_secs = 2;
+            let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
+            let keyframe_interval_str = keyframe_interval.to_string();
 
-        options.set("preset", "ultrafast");
-        options.set("tune", "zerolatency");
-        options.set("vsync", "1");
-        options.set("g", &keyframe_interval_str);
-        options.set("keyint_min", &keyframe_interval_str);
-        // TODO: Is it worth limiting quality? Maybe make this configurable
-        // options.set("crf", "23");
+            options.set("preset", "ultrafast");
+            options.set("tune", "zerolatency");
+            options.set("vsync", "1");
+            options.set("g", &keyframe_interval_str);
+            options.set("keyint_min", &keyframe_interval_str);
+            // // TODO: Is it worth limiting quality? Maybe make this configurable
+            // options.set("crf", "14");
+        }
 
         return Ok((codec, options));
     }
