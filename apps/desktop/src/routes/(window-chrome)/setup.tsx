@@ -66,7 +66,7 @@ export default function () {
   };
 
   const [showStartup, showStartupActions] = createResource(() =>
-    generalSettingsStore.get().then((s) => s?.hasCompletedStartup)
+    generalSettingsStore.get().then((s) => !s?.hasCompletedStartup)
   );
 
   return (
