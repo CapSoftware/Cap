@@ -43,6 +43,7 @@ use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
@@ -1017,29 +1018,69 @@ async fn render_to_file_impl(
                 tx
             };
             let mut audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
-                let pipe_path = audio_dir.path().join("audio.pipe");
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
 
-                #[cfg(target_os = "macos")]
-                cap_utils::create_named_pipe(&pipe_path).unwrap();
+                #[cfg(unix)]
+                let pipe_path = {
+                    let pipe_path = audio_dir.path().join("audio.pipe");
+
+                    cap_utils::create_named_pipe(&pipe_path).unwrap();
+
+                    let pipe_path_os_string = pipe_path.clone().into_os_string();
+
+                    tokio::spawn(async move {
+                        let mut file = std::fs::File::create(&pipe_path).unwrap();
+                        println!("audio pipe opened");
+
+                        while let Some(bytes) = rx.recv().await {
+                            file.write_all(&bytes).unwrap();
+                        }
+
+                        println!("done writing to audio pipe");
+                    });
+
+                    pipe_path_os_string
+                };
+
+                // #[cfg(windows)]
+                // let pipe_path = {
+                //     use tokio::net::windows::named_pipe::ClientOptions;
+                //     use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;
+
+                //     let uuid = Uuid::new_v4();
+                //     let pipe_name = format!(r#"\\.\pipe\{uuid}"#);
+
+                //     let client = loop {
+                //         match ClientOptions::new().open(pipe_name) {
+                //             Ok(client) => break client,
+                //             Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => (),
+                //             Err(e) => panic!("{e}"),
+                //         }
+
+                //         time::sleep(Duration::from_millis(50)).await;
+                //     };
+
+                //     tokio::spawn(async move {
+                //         println!("audio pipe opened");
+
+                //         while let Some(bytes) = rx.recv().await {
+                //             client.write_all(&bytes).await.unwrap();
+                //         }
+
+                //         println!("done writing to audio pipe");
+                //     });
+
+                //     PathBuf::from(pipe_name)
+                // };
+
+                #[cfg(windows)]
+                let pipe_path = OsString::new();
 
                 ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
-                    input: pipe_path.clone().into_os_string(),
+                    input: pipe_path,
                     sample_format: "f64le".to_string(),
                     sample_rate: audio_data.info.sample_rate,
                     channels: audio_data.info.channels as u16,
-                });
-
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
-
-                tokio::spawn(async move {
-                    let mut file = std::fs::File::create(&pipe_path).unwrap();
-                    println!("audio pipe opened");
-
-                    while let Some(bytes) = rx.recv().await {
-                        file.write_all(&bytes).unwrap();
-                    }
-
-                    println!("done writing to audio pipe");
                 });
 
                 let buffer = AudioFrameBuffer::new(audio_data.clone());
