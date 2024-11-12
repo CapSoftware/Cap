@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
-use crate::cursor::spawn_cursor_recorder;
 use crate::RecordingOptions;
 
 // TODO: Hacky, please fix

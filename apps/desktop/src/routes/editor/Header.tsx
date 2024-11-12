@@ -150,7 +150,10 @@ function ShareButton() {
     mutationFn: async () => {
       const res = await commands.uploadRenderedVideo(
         videoId,
-        project ? project : presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+        project
+          ? project
+          : presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+        null
       );
       if (res.status !== "ok") throw new Error(res.error);
     },

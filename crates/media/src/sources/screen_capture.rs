@@ -1,6 +1,4 @@
 use cap_flags::FLAGS;
-use cidre::cm;
-use core_foundation::base::{kCFAllocatorDefault, CFAllocatorRef};
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
@@ -9,12 +7,7 @@ use scap::{
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{
-    collections::HashMap,
-    ffi::c_void,
-    path::PathBuf,
-    ptr::{null, null_mut},
-};
+use std::collections::HashMap;
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
@@ -337,7 +330,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        use cidre::*;
+        
 
         println!("Preparing screen capture source thread...");
 

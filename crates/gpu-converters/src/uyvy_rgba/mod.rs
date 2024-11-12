@@ -1,4 +1,4 @@
-use wgpu::{self, util::DeviceExt};
+use wgpu::{self};
 
 use crate::{
     util::{copy_texture_to_buffer_command, read_buffer_to_vec},

@@ -51,8 +51,6 @@ const signInAction = action(async () => {
       throw new Error("Invalid token or expires");
     }
 
-    await authStore.set(null);
-
     await authStore.set({
       token,
       expires,
@@ -66,7 +64,7 @@ const signInAction = action(async () => {
     return redirect("/");
   } catch (error) {
     console.error("Sign in failed:", error);
-    await authStore.set(null);
+    await authStore.set();
     throw error;
   }
 });

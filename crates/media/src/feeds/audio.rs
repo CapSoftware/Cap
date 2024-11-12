@@ -37,7 +37,7 @@ impl AudioData {
         decoder.set_packet_time_base(input_stream.time_base());
 
         let input_info = AudioInfo::from_decoder(&decoder);
-        let mut output_info = input_info.clone();
+        let mut output_info = input_info;
         output_info.sample_format = Self::FORMAT;
 
         let resampler = AudioResampler::new(input_info, output_info)?;
@@ -102,7 +102,7 @@ impl AudioFrameBuffer {
         };
 
         let cursor_diff = new_cursor as isize - self.cursor as isize;
-        if cursor_diff.abs() as usize > (self.data.info.sample_rate as usize) / 5 {
+        if cursor_diff.unsigned_abs() > (self.data.info.sample_rate as usize) / 5 {
             self.cursor = new_cursor;
         }
     }
@@ -181,7 +181,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
 
         // Up to 1 second of pre-rendered audio
         let capacity = (output_info.sample_rate as usize)
-            * (output_info.channels as usize)
+            * output_info.channels
             * output_info.sample_format.bytes();
         let resampled_buffer = HeapRb::new(capacity);
 
@@ -205,7 +205,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     pub fn buffer_reaching_limit(&self) -> bool {
         self.resampled_buffer.vacant_len()
             <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize)
-                * (self.resampler.output.channels as usize)
+                * self.resampler.output.channels
                 * self.resampler.output.sample_format.bytes()
     }
 
@@ -337,7 +337,7 @@ impl AudioResampler {
         *self = Self::new(self.input, self.output).unwrap();
     }
 
-    fn current_frame_data<'a>(&'a self) -> &'a [u8] {
+    fn current_frame_data(&self) -> &[u8] {
         let end = self.output_frame.samples() * self.output.channels * self.output.sample_size();
         &self.output_frame.data(0)[0..end]
     }
@@ -349,10 +349,8 @@ impl AudioResampler {
         self.current_frame_data()
     }
 
-    pub fn flush_frame<'a>(&'a mut self) -> Option<&'a [u8]> {
-        if self.delay.is_none() {
-            return None;
-        };
+    pub fn flush_frame(&mut self) -> Option<&[u8]> {
+        self.delay?;;
 
         self.delay = self.context.flush(&mut self.output_frame).unwrap();
 

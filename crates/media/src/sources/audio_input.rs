@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
-    BufferSize, Device, SampleFormat, Stream, StreamConfig, StreamInstant, SupportedBufferSize,
+    BufferSize, Device, Stream, StreamConfig, StreamInstant,
     SupportedStreamConfig,
 };
 use flume::Sender;

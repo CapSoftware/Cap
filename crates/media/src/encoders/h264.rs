@@ -6,7 +6,6 @@ use crate::{
 use ffmpeg::{
     codec::{codec::Codec, context, encoder},
     format::{self},
-    software,
     threading::Config,
     Dictionary,
 };

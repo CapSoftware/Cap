@@ -1796,7 +1796,7 @@ impl CursorPipeline {
 
         Self {
             bind_group_layout,
-            render_pipeline: render_pipeline,
+            render_pipeline,
         }
     }
 }

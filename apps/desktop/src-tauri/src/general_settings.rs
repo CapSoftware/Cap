@@ -6,6 +6,7 @@ use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_store::StoreExt;
 
 #[derive(Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsStore {
     #[serde(default)]
     pub upload_individual_files: bool,
@@ -15,13 +16,15 @@ pub struct GeneralSettingsStore {
     pub hide_dock_icon: bool,
     #[serde(default)]
     pub auto_create_shareable_link: bool,
-    #[serde(default = "default_enable_notifications")]
+    #[serde(default = "true_b")]
     pub enable_notifications: bool,
     #[serde(default)]
     pub disable_auto_open_links: bool,
+    #[serde(default)]
+    pub has_completed_startup: bool,
 }
 
-fn default_enable_notifications() -> bool {
+fn true_b() -> bool {
     true
 }
 
@@ -39,11 +42,14 @@ impl GeneralSettingsStore {
         }
     }
 
-    pub fn set(app: &AppHandle, settings: Self) -> Result<(), String> {
+    // i don't trust anyone to not overwrite the whole store lols
+    pub fn update(app: &AppHandle, update: impl FnOnce(&mut Self)) -> Result<(), String> {
         let Some(store) = app.get_store("store") else {
             return Err("Store not found".to_string());
         };
 
+        let mut settings = Self::get(app)?.unwrap_or_default();
+        update(&mut settings);
         store.set("general_settings", json!(settings));
         store.save().map_err(|e| e.to_string())
     }

@@ -102,7 +102,7 @@ export default function () {
   });
 
   return (
-    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
+    <>
       <div class="absolute top-3 right-3">
         <div class="flex items-center gap-[0.25rem]">
           <Button
@@ -119,46 +119,49 @@ export default function () {
           </div>
         </div>
       </div>
-      <div class="flex items-center justify-between pb-[0.25rem]">
-        <IconCapLogoFull class="w-[90px] h-auto" />
-        <button
-          type="button"
-          onClick={() => commands.openSettingsWindow("general")}
+
+      <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
+        <div class="flex items-center justify-between pb-[0.25rem]">
+          <IconCapLogoFull class="w-[90px] h-auto" />
+          <button
+            type="button"
+            onClick={() => commands.openSettingsWindow("general")}
+          >
+            <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
+          </button>
+        </div>
+        <TargetSelects options={options.data} />
+        <CameraSelect options={options.data} setOptions={setOptions} />
+        <MicrophoneSelect options={options.data} setOptions={setOptions} />
+        <div class="w-full flex items-center space-x-1">
+          <Button
+            disabled={toggleRecording.isPending}
+            variant={isRecording() ? "destructive" : "primary"}
+            size="md"
+            onClick={() => toggleRecording.mutate()}
+            class="flex-grow"
+          >
+            {isRecording() ? "Stop Recording" : "Start Recording"}
+          </Button>
+          <Button
+            disabled={isRecording()}
+            variant="secondary"
+            size="md"
+            onClick={() => commands.takeScreenshot()}
+          >
+            <IconLucideCamera class="w-[1rem] h-[1rem]" />
+          </Button>
+        </div>
+        <a
+          href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
+          target="_blank"
+          rel="noreferrer"
+          class="text-gray-400 text-[0.875rem] mx-auto hover:text-gray-500 hover:underline"
         >
-          <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-        </button>
+          Open Cap on Web
+        </a>
       </div>
-      <TargetSelects options={options.data} />
-      <CameraSelect options={options.data} setOptions={setOptions} />
-      <MicrophoneSelect options={options.data} setOptions={setOptions} />
-      <div class="w-full flex items-center space-x-1">
-        <Button
-          disabled={toggleRecording.isPending}
-          variant={isRecording() ? "destructive" : "primary"}
-          size="md"
-          onClick={() => toggleRecording.mutate()}
-          class="flex-grow"
-        >
-          {isRecording() ? "Stop Recording" : "Start Recording"}
-        </Button>
-        <Button
-          disabled={isRecording()}
-          variant="secondary"
-          size="md"
-          onClick={() => commands.takeScreenshot()}
-        >
-          <IconLucideCamera class="w-[1rem] h-[1rem]" />
-        </Button>
-      </div>
-      <a
-        href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
-        target="_blank"
-        rel="noreferrer"
-        class="text-gray-400 text-[0.875rem] mx-auto hover:text-gray-500 hover:underline"
-      >
-        Open Cap on Web
-      </a>
-    </div>
+    </>
   );
 }
 
