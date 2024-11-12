@@ -19,7 +19,7 @@ impl H264AVAssetWriterEncoder {
         let Output::File(destination) = output;
 
         let mut asset_writer = av::AssetWriter::with_url_and_file_type(
-            cf::Url::with_path(&destination.as_path(), false)
+            cf::Url::with_path(destination.as_path(), false)
                 .unwrap()
                 .as_ns(),
             av::FileType::mp4(),

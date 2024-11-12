@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
 
 #[cfg(target_os = "macos")]
 use cap_media::platform::{AVAuthorizationStatus, AVMediaType};
@@ -10,7 +9,6 @@ use core_foundation::dictionary::{CFDictionary, CFDictionaryRef}; // Import CFDi
 #[cfg(target_os = "macos")]
 use core_foundation::string::CFString;
 
-use crate::windows::CapWindow;
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]

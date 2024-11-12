@@ -1,4 +1,4 @@
-use cap_gpu_converters::{NV12Input, NV12ToRGBA, UYVYToNV12, UYVYToRGBA};
+use cap_gpu_converters::{NV12Input, NV12ToRGBA, UYVYToRGBA};
 use ffmpeg::software::scaling;
 use flume::{Receiver, Sender, TryRecvError};
 use nokhwa::{utils::*, Camera};

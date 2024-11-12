@@ -38,7 +38,6 @@ use png::{ColorType, Encoder};
 use recording::{
     list_cameras, list_capture_screens, list_capture_windows, InProgressRecording, FPS,
 };
-use rodio::{Decoder, OutputStream, Sink};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -46,7 +45,6 @@ use serde_json::json;
 use specta::Type;
 use std::fs::File;
 use std::io::BufWriter;
-use std::io::Cursor;
 use std::io::{BufReader, Write};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{
