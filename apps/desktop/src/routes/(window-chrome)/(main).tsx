@@ -491,9 +491,14 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
   placeholder: string;
 }) {
   createEffect(() => {
-    console.log([...props.options])
-  
-  })
+    const v = props.value;
+    if (!v) return;
+
+    if (!props.options.some((o) => o.id === v.id)) {
+      props.onChange(props.options[0] ?? null);
+    }
+  });
+
   return (
     <KSelect<T | null>
       options={props.options ?? []}
