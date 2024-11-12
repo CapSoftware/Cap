@@ -129,7 +129,6 @@ impl CapWindow {
                     .center()
                     .focused(true)
                     .maximizable(false)
-                    .transparent(true)
                     .theme(Some(tauri::Theme::Light))
                     .visible(true)
                     .shadow(true);
@@ -150,7 +149,6 @@ impl CapWindow {
                     .resizable(false)
                     .maximized(false)
                     .maximizable(false)
-                    .transparent(true)
                     .maximized(false)
                     .theme(Some(tauri::Theme::Light))
                     .shadow(true);
@@ -170,8 +168,7 @@ impl CapWindow {
                     )
                     .min_inner_size(600.0, 450.0)
                     .resizable(true)
-                    .maximized(false)
-                    .transparent(true);
+                    .maximized(false);
 
                 #[cfg(target_os = "macos")]
                 {
@@ -353,7 +350,6 @@ impl CapWindow {
         };
 
         if let Some(position) = id.traffic_lights_position() {
-            println!("Adding TRAFFIC LIGHTS for {}: {:?}", id.title(), position);
             add_traffic_lights(&window, position);
         }
 

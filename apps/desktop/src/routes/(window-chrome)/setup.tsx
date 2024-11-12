@@ -15,6 +15,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands, OSPermission, type OSPermissionStatus } from "~/utils/tauri";
 import { makePersisted } from "@solid-primitives/storage";
 import { createStore } from "solid-js/store";
+import { setTitlebar } from "~/utils/titlebar-state";
 
 function isPermitted(status?: OSPermissionStatus): boolean {
   return status === "granted" || status === "notNeeded";
@@ -71,71 +72,76 @@ export default function () {
   );
 
   return (
-    <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-100 justify-evenly items-center">
-      {showStartup() && (
-        <Startup
-          onClose={() => {
-            showStartupActions.mutate(false);
+    <>
+      <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-100 justify-evenly items-center">
+        {showStartup() && (
+          <Startup
+            onClose={() => {
+              showStartupActions.mutate(false);
+            }}
+          />
+        )}
+        <div class="flex flex-col items-center">
+          <IconCapLogo class="size-18 mb-3" />
+          <h1 class="text-[1.2rem] font-[700] mb-1">Permissions Required</h1>
+          <p class="text-gray-400">Cap needs permissions to run properly.</p>
+        </div>
+
+        <ul class="flex flex-col gap-4 py-8">
+          <For each={permissions}>
+            {(permission) => {
+              const permissionCheck = () => check()?.[permission.key];
+
+              return (
+                <Show when={permissionCheck() !== "notNeeded"}>
+                  <li class="flex flex-row items-center gap-4">
+                    <div class="flex flex-col flex-[2]">
+                      <span class="font-[500] text-[0.875rem]">
+                        {permission.name} Permission
+                      </span>
+                      <span class="text-gray-400">
+                        {permission.description}
+                      </span>
+                    </div>
+                    <Button
+                      class="flex-1 shrink-0"
+                      onClick={() =>
+                        permissionCheck() !== "denied"
+                          ? requestPermission(permission.key)
+                          : openSettings(permission.key)
+                      }
+                      disabled={isPermitted(permissionCheck())}
+                    >
+                      {permissionCheck() === "granted"
+                        ? "Granted"
+                        : permissionCheck() !== "denied"
+                        ? "Grant Permission"
+                        : "Request Permission"}
+                    </Button>
+                  </li>
+                </Show>
+              );
+            }}
+          </For>
+        </ul>
+
+        <Button
+          class="px-12"
+          size="lg"
+          disabled={
+            permissions.find((p) => !isPermitted(check()?.[p.key])) !==
+            undefined
+          }
+          onClick={() => {
+            commands.openMainWindow().then(() => {
+              getCurrentWindow().close();
+            });
           }}
-        />
-      )}
-      <div class="flex flex-col items-center">
-        <IconCapLogo class="size-18 mb-3" />
-        <h1 class="text-[1.2rem] font-[700] mb-1">Permissions Required</h1>
-        <p class="text-gray-400">Cap needs permissions to run properly.</p>
+        >
+          Continue to Cap
+        </Button>
       </div>
-
-      <ul class="flex flex-col gap-4 py-8">
-        <For each={permissions}>
-          {(permission) => {
-            const permissionCheck = () => check()?.[permission.key];
-
-            return (
-              <Show when={permissionCheck() !== "notNeeded"}>
-                <li class="flex flex-row items-center gap-4">
-                  <div class="flex flex-col flex-[2]">
-                    <span class="font-[500] text-[0.875rem]">
-                      {permission.name} Permission
-                    </span>
-                    <span class="text-gray-400">{permission.description}</span>
-                  </div>
-                  <Button
-                    class="flex-1 shrink-0"
-                    onClick={() =>
-                      permissionCheck() !== "denied"
-                        ? requestPermission(permission.key)
-                        : openSettings(permission.key)
-                    }
-                    disabled={isPermitted(permissionCheck())}
-                  >
-                    {permissionCheck() === "granted"
-                      ? "Granted"
-                      : permissionCheck() !== "denied"
-                      ? "Grant Permission"
-                      : "Request Permission"}
-                  </Button>
-                </li>
-              </Show>
-            );
-          }}
-        </For>
-      </ul>
-
-      <Button
-        class="px-12"
-        size="lg"
-        disabled={
-          permissions.find((p) => !isPermitted(check()?.[p.key])) !== undefined
-        }
-        onClick={() => {
-          commands.openMainWindow().then(() => {
-            getCurrentWindow().close();
-          });
-        }}
-      >
-        Continue to Cap
-      </Button>
-    </div>
+    </>
   );
 }
 
@@ -147,6 +153,7 @@ import startupAudio from "../../assets/tears-and-fireflies-adi-goldstein.mp3";
 import { generalSettingsStore } from "~/store";
 import { Portal } from "solid-js/web";
 import { cx } from "cva";
+import { type as ostype } from "@tauri-apps/plugin-os";
 
 function Startup(props: { onClose: () => void }) {
   const [audioState, setAudioState] = makePersisted(
@@ -248,6 +255,32 @@ function Startup(props: { onClose: () => void }) {
 
     audio.muted = audioState.isMuted;
   };
+
+  setTitlebar("transparent", true);
+  setTitlebar("border", false);
+  setTitlebar("height", "50px");
+  setTitlebar(
+    "items",
+    <div
+      dir={ostype() === "windows" ? "rtl" : "rtl"}
+      class="flex mx-4 items-center gap-[0.25rem]"
+    >
+      <button
+        onClick={toggleMute}
+        class={`text-gray-50 hover:text-gray-200 transition-colors ${
+          isExiting() ? "opacity-0" : ""
+        }`}
+      >
+        {audioState.isMuted ? (
+          <IconLucideVolumeX class="w-6 h-6" />
+        ) : (
+          <IconLucideVolume2 class="w-6 h-6" />
+        )}
+      </button>
+    </div>
+  );
+
+  onCleanup(() => setTitlebar("items", null));
 
   return (
     <Portal>
@@ -353,19 +386,6 @@ function Startup(props: { onClose: () => void }) {
           )}
         >
           <div class="grain" />
-
-          <button
-            onClick={toggleMute}
-            class={`absolute top-5 right-5 z-20 text-gray-50 hover:text-gray-200 transition-colors ${
-              isExiting() ? "opacity-0" : ""
-            }`}
-          >
-            {audioState.isMuted ? (
-              <IconLucideVolumeX class="w-7 h-7" />
-            ) : (
-              <IconLucideVolume2 class="w-7 h-7" />
-            )}
-          </button>
 
           {/* Floating clouds */}
           <div

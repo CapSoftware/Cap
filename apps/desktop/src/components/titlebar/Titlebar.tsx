@@ -1,8 +1,9 @@
 // Credits: tauri-controls
 import { ComponentProps, Match, splitProps, Switch } from "solid-js";
 import { type } from "@tauri-apps/plugin-os";
-import WindowsWindowCaptionControls from "./controls/CaptionControlsWindows11";
+import CaptionControlsWindows11 from "./controls/CaptionControlsWindows11";
 import titlebarState from "~/utils/titlebar-state";
+import { cx } from "cva";
 
 export default function Titlebar() {
   function left() {
@@ -12,11 +13,14 @@ export default function Titlebar() {
 
   return (
     <header
-      class={`z-50 flex flex-row items-center select-none bg-gray-50 space-x-1 shrink-0 border-gray-200 rounded-[inherit] ${
+      class={cx(
+        "flex flex-row items-center select-none space-x-1 shrink-0 border-gray-200 rounded-[inherit]",
+        titlebarState.transparent ? "" : "bg-gray-50",
         titlebarState.border ? "border-b" : ""
-      }`}
+      )}
       style={{
         height: titlebarState.height,
+        "z-index": "999999",
       }}
       data-tauri-drag-region
     >
@@ -42,7 +46,7 @@ function WindowControls(props: ComponentProps<"div">) {
   return (
     <Switch>
       <Match when={ostype === "windows"}>
-        <WindowsWindowCaptionControls
+        <CaptionControlsWindows11
           class={`flex ml-auto ${local.class ?? ""}`}
           {...otherProps}
         />

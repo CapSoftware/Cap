@@ -2,6 +2,7 @@ import { ComponentProps, JSX, Show, splitProps } from "solid-js";
 import { WindowControlButton as ControlButton } from "./WindowControlButton";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import titlebarState from "~/utils/titlebar-state";
+import { cx } from "cva";
 
 export default function (props: ComponentProps<"div">) {
   const [local, otherProps] = splitProps(props, ["class"]);
@@ -18,11 +19,15 @@ export default function (props: ComponentProps<"div">) {
     >
       <ControlButton
         onClick={titlebarState.minimizable ? window.minimize : undefined}
-        class={`max-h-20 w-[46px] rounded-none bg-transparent text-black/90 ${
+        class={cx(
+          "max-h-20 w-[46px] rounded-none bg-transparent",
+          titlebarState.theme === "light"
+            ? "text-black/90 dark:text-white"
+            : "text-gray-50 dark:text-white",
           titlebarState.minimizable
             ? "hover:bg-[#0000000D] active:bg-[#00000008] dark:hover:bg-[#FFFFFF1A] dark:active:bg-[#FFFFFF0D]"
-            : "[&>*]:opacity-50"
-        } dark:text-white`}
+            : "[&>*]:opacity-30"
+        )}
       >
         <icons.minimizeWin />
       </ControlButton>
@@ -35,11 +40,15 @@ export default function (props: ComponentProps<"div">) {
                 : window.maximize
               : undefined
           }
-          class={`max-h-20 w-[46px] rounded-none bg-transparent text-black/90 ${
+          class={cx(
+            "max-h-20 w-[46px] rounded-none bg-transparent",
+            titlebarState.theme === "light"
+              ? "text-black/90 dark:text-white"
+              : "text-gray-50 dark:text-white",
             titlebarState.maximizable
               ? "hover:bg-[#0000000D] active:bg-[#00000008] dark:hover:bg-[#FFFFFF1A] dark:active:bg-[#FFFFFF0D]"
-              : "[&>*]:opacity-45"
-          } dark:text-white`}
+              : "[&>*]:opacity-30"
+          )}
         >
           {titlebarState.maximized ? (
             <icons.maximizeRestoreWin />
@@ -50,11 +59,15 @@ export default function (props: ComponentProps<"div">) {
       </Show>
       <ControlButton
         onClick={titlebarState.closable ? window.close : undefined}
-        class={`max-h-20 w-[46px] rounded-none bg-transparent text-black/90 ${
+        class={cx(
+          "max-h-20 w-[46px] rounded-none bg-transparent",
+          titlebarState.theme === "light"
+            ? "text-black/90 dark:text-white"
+            : "text-gray-50 dark:text-white",
           titlebarState.closable
             ? "hover:bg-[#c42b1c] hover:text-white active:bg-[#c42b1c]/90"
-            : "[&>*]:opacity-25"
-        } dark:text-white`}
+            : "[&>*]:opacity-30"
+        )}
       >
         <icons.closeWin />
       </ControlButton>

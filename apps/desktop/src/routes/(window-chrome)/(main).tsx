@@ -99,27 +99,27 @@ export default function () {
         });
       }
     }
-  });
 
-  setTitlebar("hideMaximize", true);
-  setTitlebar(
-    "items",
-    <div
-      dir={ostype() === "windows" ? "rtl" : "auto"}
-      class="flex mx-3 items-center gap-[0.25rem]"
-    >
-      <Button
-        variant="secondary"
-        size="xs"
-        onClick={() => {
-          commands.openSettingsWindow("feedback");
-        }}
+    setTitlebar("hideMaximize", true);
+    setTitlebar(
+      "items",
+      <div
+        dir={ostype() === "windows" ? "rtl" : "rtl"}
+        class="flex mx-3 items-center gap-[0.25rem]"
       >
-        Feedback
-      </Button>
-      <ChangelogButton />
-    </div>
-  );
+        <Button
+          variant="secondary"
+          size="xs"
+          onClick={() => {
+            commands.openSettingsWindow("feedback");
+          }}
+        >
+          Feedback
+        </Button>
+        <ChangelogButton />
+      </div>
+    );
+  });
 
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">

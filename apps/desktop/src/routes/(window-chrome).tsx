@@ -7,17 +7,13 @@ import {
   Suspense,
 } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Transition } from "solid-transition-group";
-import titlebarState, { initializeTitlebar } from "~/utils/titlebar-state";
-import { Show } from "solid-js";
+import { initializeTitlebar } from "~/utils/titlebar-state";
 
 import Titlebar from "~/components/titlebar/Titlebar";
+
+import { AbsoluteInsetLoader } from "~/components/Loader";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { commands } from "~/utils/tauri";
-
-import Header from "../components/Header";
-import { AbsoluteInsetLoader } from "~/components/Loader";
-import { cx } from "cva";
 
 export const route = {
   info: {
@@ -30,16 +26,12 @@ export default function (props: RouteSectionProps) {
 
   onMount(async () => {
     unlistenResize = await initializeTitlebar();
-    if (ostype() === "macos") commands.invalidateShadow();
+    if (ostype() === "macos") commands.positionTrafficLights(null);
     if (location.pathname === "/") getCurrentWindow().show();
   });
 
   onCleanup(() => {
     unlistenResize?.();
-  });
-
-  createEffect(() => {
-    console.log(`Maximized? ${titlebarState.maximized}`);
   });
 
   return (

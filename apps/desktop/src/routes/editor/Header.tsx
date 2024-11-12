@@ -17,14 +17,15 @@ import { useEditorContext } from "./context";
 import { Dialog, DialogContent } from "./ui";
 
 export function Header() {
-  let unlistenResize: () => void | undefined;
+  let unlistenTitlebar: () => void | undefined;
 
   onMount(async () => {
-    unlistenResize = await initializeTitlebar();
+    unlistenTitlebar = await initializeTitlebar();
+    commands.positionTrafficLights([20.0, 48.0]);
   });
 
   onCleanup(() => {
-    unlistenResize?.();
+    unlistenTitlebar?.();
   });
 
   setTitlebar("border", false);
@@ -34,7 +35,7 @@ export function Header() {
     <div
       class={cx(
         "flex flex-row justify-between items-center w-full cursor-default",
-        ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem] pr-3"
+        ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem] pr-5"
       )}
     >
       <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]"></div>

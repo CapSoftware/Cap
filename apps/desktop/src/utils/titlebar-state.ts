@@ -2,7 +2,6 @@ import { createStore } from "solid-js/store";
 import type { JSX } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "./tauri";
-import { type as ostype } from "@tauri-apps/plugin-os";
 
 export interface TitlebarState {
   height: string;
@@ -14,18 +13,22 @@ export interface TitlebarState {
   minimizable: boolean;
   closable: boolean;
   border: boolean;
+  transparent: boolean;
+  theme: "light" | "dark";
 }
 
 const [state, setState] = createStore<TitlebarState>({
   height: "44px",
   hideMaximize: false,
   order: "platform",
-  items: undefined,
+  items: null,
   maximized: false,
   maximizable: false,
   minimizable: true,
   closable: true,
   border: true,
+  transparent: false,
+  theme: "light",
 });
 
 async function initializeTitlebar() {
