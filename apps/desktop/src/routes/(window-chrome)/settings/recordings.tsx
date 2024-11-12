@@ -1,5 +1,5 @@
 import { createQuery } from "@tanstack/solid-query";
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, Suspense, createSignal } from "solid-js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { commands, events } from "~/utils/tauri";
@@ -62,32 +62,25 @@ export default function Recordings() {
   return (
     <div class="flex flex-col w-full h-full divide-y divide-gray-200 pt-1 pb-12">
       <div class="flex-1 overflow-y-auto">
-        <Show
-          when={!fetchRecordings.isLoading}
-          fallback={
-            <p class="text-center text-gray-500">Loading recordings...</p>
-          }
-        >
-          <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full">
-            <Show
-              when={fetchRecordings.data && fetchRecordings.data.length > 0}
-              fallback={
-                <p class="text-center text-gray-500">No recordings found</p>
-              }
-            >
-              <For each={fetchRecordings.data}>
-                {(recording) => (
-                  <RecordingItem
-                    recording={recording}
-                    onClick={() => handleRecordingClick(recording)}
-                    onOpenFolder={() => handleOpenFolder(recording.path)}
-                    onOpenEditor={() => handleOpenEditor(recording.path)}
-                  />
-                )}
-              </For>
-            </Show>
-          </ul>
-        </Show>
+        <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full">
+          <Show
+            when={fetchRecordings.data && fetchRecordings.data.length > 0}
+            fallback={
+              <p class="text-center text-gray-500">No recordings found</p>
+            }
+          >
+            <For each={fetchRecordings.data}>
+              {(recording) => (
+                <RecordingItem
+                  recording={recording}
+                  onClick={() => handleRecordingClick(recording)}
+                  onOpenFolder={() => handleOpenFolder(recording.path)}
+                  onOpenEditor={() => handleOpenEditor(recording.path)}
+                />
+              )}
+            </For>
+          </Show>
+        </ul>
       </div>
     </div>
   );

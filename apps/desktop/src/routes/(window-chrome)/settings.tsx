@@ -1,5 +1,5 @@
-import { A, type RouteSectionProps, useLocation } from "@solidjs/router";
-import { createResource, For, Show } from "solid-js";
+import { A, type RouteSectionProps } from "@solidjs/router";
+import { createResource, For, Show, Suspense } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { getVersion } from "@tauri-apps/api/app";
 
@@ -66,7 +66,9 @@ export default function Settings(props: RouteSectionProps) {
           </Button>
         </div>
       </div>
-      <div class="flex-1 bg-gray-50 overflow-y-auto">{props.children}</div>
+      <div class="flex-1 bg-gray-50 overflow-y-auto animate-in">
+        <Suspense>{props.children}</Suspense>
+      </div>
     </div>
   );
 }
