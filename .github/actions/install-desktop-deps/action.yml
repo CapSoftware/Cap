@@ -8,4 +8,4 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libxtst-dev libevdev-dev libxdo-dev
+        sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libxtst-dev libevdev-dev libxdo-dev libsoup-3.0-dev
