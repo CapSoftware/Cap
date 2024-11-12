@@ -7,14 +7,10 @@ import { cx } from "cva";
 export default function (props: ComponentProps<"div">) {
   const [local, otherProps] = splitProps(props, ["class"]);
   const window = getCurrentWindow();
-
-  window.isMaximizable().then((v) => {
-    console.log(`label: ${getCurrentWindow().label} maximizable? ${v}`);
-  });
-
+  
   return (
     <div
-      class={`h-full align-baseline select-none *:outline-none ${local.class}`}
+      class={`h-full align-baseline select-none *:outline-none *:transition-all *:duration-200 ${local.class}`}
       {...otherProps}
     >
       <ControlButton

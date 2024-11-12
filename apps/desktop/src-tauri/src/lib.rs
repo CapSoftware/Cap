@@ -2027,7 +2027,9 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
         // Create and use capturer on the main thread
         let mut capturer = Capturer::new(options);
         capturer.start_capture();
-        let frame = capturer.get_next_frame().map_err(|e| format!("Failed to get frame: {}", e))?;
+        let frame = capturer
+            .get_next_frame()
+            .map_err(|e| format!("Failed to get frame: {}", e))?;
         capturer.stop_capture();
 
         // Show main window after taking screenshot
@@ -2058,10 +2060,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         // Convert BGRA to RGBA
         let mut rgba_data = vec![0; bgra_data.len()];
-        for (bgra, rgba) in bgra_data
-            .chunks_exact(4)
-            .zip(rgba_data.chunks_exact_mut(4))
-        {
+        for (bgra, rgba) in bgra_data.chunks_exact(4).zip(rgba_data.chunks_exact_mut(4)) {
             rgba[0] = bgra[2];
             rgba[1] = bgra[1];
             rgba[2] = bgra[0];

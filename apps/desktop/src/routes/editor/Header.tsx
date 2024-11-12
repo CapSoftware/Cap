@@ -33,15 +33,15 @@ export function Header() {
   setTitlebar(
     "items",
     <div
+      data-tauri-drag-region
       class={cx(
-        "flex flex-row justify-between items-center w-full cursor-default",
-        ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem] pr-5"
+        "flex flex-row justify-between items-center w-full cursor-default pr-5",
+        ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem]"
       )}
     >
       <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]"></div>
       <div
         class="flex flex-row gap-2 font-medium items-center"
-        data-tauri-drag-region
       >
         <ShareButton />
         <ExportButton />

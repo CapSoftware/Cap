@@ -91,11 +91,9 @@ impl CapWindowId {
 
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
-            Self::Camera
-            | Self::InProgressRecording
-            | Self::WindowCaptureOccluder
-            | Self::PrevRecordings => None,
+            Self::Camera | Self::WindowCaptureOccluder | Self::PrevRecordings => None,
             Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 48.0))),
+            Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             _ => Some(None),
         }
     }
@@ -253,7 +251,7 @@ impl CapWindow {
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .decorations(false)
+                    .decorations(true)
                     .shadow(true)
                     .always_on_top(true)
                     .transparent(true)
@@ -348,7 +346,6 @@ impl CapWindow {
             }
         }
 
-        
         #[cfg(target_os = "windows")]
         {
             builder = builder.decorations(false);

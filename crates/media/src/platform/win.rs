@@ -290,9 +290,10 @@ pub fn monitor_bounds(id: u32) -> Bounds {
 
     bounds.unwrap_or_default()
 }
+
 pub fn display_names() -> HashMap<u32, String> {
     let mut names = HashMap::new();
-    
+
     for window in windows_capture::monitor::Monitor::enumerate().unwrap_or_default() {
         let Ok(name) = window.device_string() else {
             continue;
