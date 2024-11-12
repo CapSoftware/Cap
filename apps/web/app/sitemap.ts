@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { getBlogPosts } from "@/utils/updates";
+import { seoPages } from "../lib/seo-pages";
 
 async function getPagePaths(
   dir: string
@@ -14,7 +15,8 @@ async function getPagePaths(
       entry.isDirectory() &&
       entry.name !== "dashboard" &&
       !entry.name.startsWith("s") &&
-      entry.name !== "updates"
+      entry.name !== "updates" &&
+      !entry.name.startsWith("[")
     ) {
       const subPaths = await getPagePaths(fullPath);
       paths.push(...subPaths);
@@ -26,7 +28,8 @@ async function getPagePaths(
       const routePath = "/" + relativePath.split(path.sep).slice(1).join("/");
       if (
         !routePath.includes("/dashboard") &&
-        !routePath.split("/").some((segment) => segment.startsWith("s"))
+        !routePath.split("/").some((segment) => segment.startsWith("s")) &&
+        !routePath.includes("[")
       ) {
         const stats = await fs.stat(fullPath);
         paths.push({
@@ -55,8 +58,15 @@ export default async function sitemap() {
     };
   });
 
+  // Add SEO pages
+  const seoRoutes = Object.keys(seoPages).map((slug) => ({
+    path: `/${slug}`,
+    // Set lastModified to current date since these are static pages
+    lastModified: new Date().toISOString(),
+  }));
+
   // Combine routes and ensure '/' is first
-  const allRoutes = [...pagePaths, ...blogRoutes];
+  const allRoutes = [...pagePaths, ...blogRoutes, ...seoRoutes];
   const homeRoute = allRoutes.find((route) => route.path === "/");
   const otherRoutes = allRoutes.filter((route) => route.path !== "/");
 
