@@ -208,9 +208,3 @@ pub fn request_accessibility_permission() {
         }
     }
 }
-
-#[tauri::command]
-#[specta::specta]
-pub fn open_permissions_window(app: AppHandle) {
-    CapWindow::Permissions.show(&app).ok();
-}

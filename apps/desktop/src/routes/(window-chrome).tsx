@@ -18,10 +18,9 @@ export default function (props: RouteSectionProps) {
   });
 
   return (
-    <div class="rounded-[1.5rem] bg-gray-100 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden">
-      <Show when={location.pathname !== "/startup"}>
-        <Header />
-      </Show>
+    <div class="bg-gray-100 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden">
+      <Header />
+      {/* breaks sometimes */}
       {/* <Transition
         mode="outin"
         enterActiveClass="transition-opacity duration-100"
@@ -50,5 +49,9 @@ function Inner(props: ParentProps) {
     if (location.pathname !== "/") getCurrentWindow().show();
   });
 
-  return <>{props.children}</>;
+  return (
+    <div class="animate-in fade-in w-full h-full flex flex-col">
+      {props.children}
+    </div>
+  );
 }

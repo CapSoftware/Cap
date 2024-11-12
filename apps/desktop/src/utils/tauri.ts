@@ -318,9 +318,6 @@ async sendFeedbackRequest(feedback: string) : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
-},
-async showAppPermissionsWindow() : Promise<void> {
-    await TAURI_INVOKE("show_app_permissions_window");
 }
 }
 

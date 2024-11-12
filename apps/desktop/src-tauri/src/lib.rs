@@ -2307,12 +2307,6 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command(async)]
-#[specta::specta]
-async fn show_app_permissions_window(app: AppHandle) {
-    CapWindow::Permissions.show(&app).ok();
-}
-
 #[tauri::command]
 #[specta::specta]
 async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
@@ -2458,7 +2452,6 @@ pub async fn run() {
             is_camera_window_open,
             seek_to,
             send_feedback_request,
-            show_app_permissions_window,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2543,7 +2536,7 @@ pub async fn run() {
 
             if !permissions.screen_recording.permitted() || !permissions.accessibility.permitted() {
                 println!("Required permissions not granted, showing permissions window");
-                CapWindow::Permissions.show(&app_handle).ok();
+                CapWindow::Setup.show(&app_handle).ok();
             } else {
                 println!("Permissions granted, showing main window");
 
@@ -2562,8 +2555,6 @@ pub async fn run() {
 
                 CapWindow::Main.show(&app_handle).ok();
             }
-
-            CapWindow::Startup.show(&app_handle).ok();
 
             app.manage(Arc::new(RwLock::new(App {
                 handle: app_handle.clone(),

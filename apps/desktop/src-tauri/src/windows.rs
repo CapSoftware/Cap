@@ -7,11 +7,10 @@ use tauri::{
 
 #[derive(Clone)]
 pub enum CapWindow {
-    Startup,
+    Setup,
     Main,
     Settings { page: Option<String> },
     Editor { project_id: String },
-    Permissions,
     PrevRecordings,
     WindowCaptureOccluder,
     Camera { ws_port: u16 },
@@ -21,11 +20,11 @@ pub enum CapWindow {
 
 #[derive(Clone)]
 pub enum CapWindowId {
-    Startup,
+    // Contains onboarding + permissions
+    Setup,
     Main,
     Settings,
     Editor { project_id: String },
-    Permissions,
     PrevRecordings,
     WindowCaptureOccluder,
     Camera,
@@ -36,14 +35,13 @@ pub enum CapWindowId {
 impl CapWindowId {
     pub fn from_label(label: &str) -> Self {
         match label {
-            "startup" => Self::Startup,
+            "setup" => Self::Setup,
             "main" => Self::Main,
             "settings" => Self::Settings,
             "camera" => Self::Camera,
             "window-capture-occluder" => Self::WindowCaptureOccluder,
             "in-progress-recording" => Self::InProgressRecording,
             "prev-recordings" => Self::PrevRecordings,
-            "permissions" => Self::Permissions,
             "upgrade" => Self::Upgrade,
             s if s.starts_with("editor-") => Self::Editor {
                 project_id: s.replace("editor-", ""),
@@ -54,14 +52,13 @@ impl CapWindowId {
 
     pub fn label(&self) -> String {
         match self {
-            Self::Startup => "startup".to_string(),
+            Self::Setup => "setup".to_string(),
             Self::Main => "main".to_string(),
             Self::Settings => "settings".to_string(),
             Self::Camera => "camera".to_string(),
             Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
             Self::InProgressRecording => "in-progress-recording".to_string(),
             Self::PrevRecordings => "prev-recordings".to_string(),
-            Self::Permissions => "permissions".to_string(),
             Self::Upgrade => "upgrade".to_string(),
             Self::Editor { project_id } => format!("editor-{}", project_id),
         }
@@ -69,25 +66,20 @@ impl CapWindowId {
 
     pub fn title(&self) -> String {
         match self {
+            Self::Setup => "Cap Setup".to_string(),
             Self::Settings => "Cap Settings".to_string(),
             Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
-            Self::Permissions => "Cap Permissions".to_string(),
             _ => "Cap".to_string(),
         }
     }
 
     pub fn activates_dock(&self) -> bool {
-        match self {
-            Self::Startup
-            | Self::Main
-            | Self::Editor { .. }
-            | Self::Settings
-            | Self::Permissions
-            | Self::Upgrade => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Self::Setup | Self::Main | Self::Editor { .. } | Self::Settings | Self::Upgrade
+        )
     }
 
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
@@ -126,9 +118,9 @@ impl CapWindow {
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
-            Self::Startup => {
+            Self::Setup => {
                 let mut window_builder = self
-                    .window_builder(app, "/startup")
+                    .window_builder(app, "/setup")
                     .inner_size(600.0, 600.0)
                     .resizable(false)
                     .maximized(false)
@@ -200,22 +192,6 @@ impl CapWindow {
                     window_builder = window_builder
                         .hidden_title(true)
                         .title_bar_style(TitleBarStyle::Overlay);
-                }
-
-                window_builder.build()?
-            }
-            Self::Permissions => {
-                let mut window_builder = self
-                    .window_builder(app, "/permissions")
-                    .inner_size(500.0, 425.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .shadow(true)
-                    .transparent(true);
-
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.decorations(false);
                 }
 
                 window_builder.build()?
@@ -406,13 +382,12 @@ impl CapWindow {
 
     pub fn id(&self) -> CapWindowId {
         match self {
-            CapWindow::Startup => CapWindowId::Startup,
+            CapWindow::Setup => CapWindowId::Setup,
             CapWindow::Main => CapWindowId::Main,
             CapWindow::Settings { .. } => CapWindowId::Settings,
             CapWindow::Editor { project_id } => CapWindowId::Editor {
                 project_id: project_id.clone(),
             },
-            CapWindow::Permissions => CapWindowId::Permissions,
             CapWindow::PrevRecordings => CapWindowId::PrevRecordings,
             CapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
             CapWindow::Camera { .. } => CapWindowId::Camera,
