@@ -523,7 +523,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
                   data-selected={props.selected}
                   class={p.class}
                 >
-                  <span class="truncate">{props.options[0].name}</span>
+                  <span class="truncate">{props.placeholder}</span>
                 </button>
               )
             : undefined
