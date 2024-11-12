@@ -30,30 +30,52 @@ type SettingOption<T> = {
 type RecordingSetting = {
   label: string
 } & ({
-  key: "recording_resolution",
-  options: SettingOption<TargetResolution>[],
+  key: "capture_resolution",
+  options: SettingOption<TargetResolution | null>[],
+} | {
+  key: "output_resolution",
+  options: SettingOption<TargetResolution | null>[],
 } | {
   key: "recording_fps",
   options: SettingOption<TargetFPS>[],
 });
 
+const resolutionOptions: SettingOption<TargetResolution>[] = [
+  {
+    label: "720p (1280x720)",
+    value: "_720p",
+  },
+  {
+    label: "1080p (1920x1080)",
+    value: "_1080p",
+  },
+  {
+    label: "4K (3840x2160)",
+    value: "_4K",
+  }
+]
+
 const recordingSettings: RecordingSetting[] = [
   {
-    key: "recording_resolution",
-    label: "Target resolution for screen capturing",
+    key: "capture_resolution",
+    label: "Screen capture resolution",
     options: [
       {
-        label: "720p",
-        value: "_720p",
+        label: "Same as display",
+        value: null,
       },
+      ...resolutionOptions,
+    ],
+  },
+  {
+    key: "output_resolution",
+    label: "Output (scaled) resolution",
+    options: [
       {
-        label: "1080p",
-        value: "_1080p",
+        label: "Same as captured",
+        value: null,
       },
-      {
-        label: "Native resolution",
-        value: "Native",
-      },
+      ...resolutionOptions,
     ],
   },
   {
@@ -68,10 +90,6 @@ const recordingSettings: RecordingSetting[] = [
         label: "60 fps",
         value: "_60",
       },
-      {
-        label: "Native refresh rate",
-        value: "Native",
-      },
     ],
   },
 ];
@@ -81,7 +99,8 @@ function Inner(props: { initialStore: RecordingSettingsStore | null }) {
   const [settings, setSettings] = createStore<RecordingSettingsStore>(
     props.initialStore ?? {
       use_hardware_acceleration: false,
-      recording_resolution: "_1080p",
+      capture_resolution: "_1080p",
+      output_resolution: null,
       recording_fps: "_30",
     }
   );

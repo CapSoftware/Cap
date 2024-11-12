@@ -7,7 +7,7 @@ use cidre::{objc::Obj, *};
 pub struct H264AVAssetWriterEncoder {
     tag: &'static str,
     last_pts: Option<i64>,
-    config: VideoInfo,
+    config: Option<VideoInfo>,
     asset_writer: Retained<av::AssetWriter>,
     video_input: Retained<av::AssetWriterInput>,
     first_timestamp: Option<cm::Time>,
@@ -15,7 +15,11 @@ pub struct H264AVAssetWriterEncoder {
 }
 
 impl H264AVAssetWriterEncoder {
-    pub fn init(tag: &'static str, config: VideoInfo, output: Output) -> Result<Self, MediaError> {
+    pub fn init(
+        tag: &'static str,
+        maybe_config: Option<VideoInfo>,
+        output: Output,
+    ) -> Result<Self, MediaError> {
         let Output::File(destination) = output;
 
         let mut asset_writer = av::AssetWriter::with_url_and_file_type(
@@ -32,15 +36,17 @@ impl H264AVAssetWriterEncoder {
 
         let mut output_settings = assistant.video_settings().unwrap().copy_mut();
 
-        output_settings.insert(
-            av::video_settings_keys::width(),
-            ns::Number::with_u32(config.width).as_id_ref(),
-        );
+        if let Some(config) = maybe_config.as_ref() {
+            output_settings.insert(
+                av::video_settings_keys::width(),
+                ns::Number::with_u32(config.width).as_id_ref(),
+            );
 
-        output_settings.insert(
-            av::video_settings_keys::height(),
-            ns::Number::with_u32(config.height).as_id_ref(),
-        );
+            output_settings.insert(
+                av::video_settings_keys::height(),
+                ns::Number::with_u32(config.height).as_id_ref(),
+            );
+        }
 
         output_settings.insert(
             av::video_settings_keys::compression_props(),
@@ -65,7 +71,7 @@ impl H264AVAssetWriterEncoder {
         Ok(Self {
             tag,
             last_pts: None,
-            config,
+            config: maybe_config,
             asset_writer,
             video_input,
             first_timestamp: None,

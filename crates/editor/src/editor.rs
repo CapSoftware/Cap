@@ -115,6 +115,7 @@ pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
     frame_tx: mpsc::UnboundedSender<SocketMessage>,
     render_constants: Arc<RenderVideoConstants>,
+    fps: u32,
 }
 
 pub struct RendererHandle {
@@ -125,6 +126,7 @@ impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
         frame_tx: mpsc::UnboundedSender<SocketMessage>,
+        fps: u32,
     ) -> RendererHandle {
         let (tx, rx) = mpsc::channel(4);
 
@@ -132,6 +134,7 @@ impl Renderer {
             rx,
             frame_tx,
             render_constants,
+            fps,
         };
 
         tokio::spawn(this.run());
@@ -173,6 +176,7 @@ impl Renderer {
                                 cap_rendering::Background::from(background),
                                 &uniforms,
                                 time, // Pass the actual time value
+                                self.fps,
                             )
                             .await
                             .unwrap();

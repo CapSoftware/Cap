@@ -21,7 +21,7 @@ use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_editor::{EditorState, ProjectRecordings};
 use cap_media::sources::CaptureScreen;
 use cap_media::{
-    feeds::{AudioData, AudioFrameBuffer, CameraFeed, CameraFrameSender},
+    feeds::{AudioFrameBuffer, CameraFeed, CameraFrameSender},
     platform::Bounds,
     sources::{AudioInputSource, ScreenCaptureTarget},
 };
@@ -34,10 +34,10 @@ use cap_rendering::{ProjectUniforms, ZOOM_DURATION};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
-use num_traits::ToBytes;
 use png::{ColorType, Encoder};
 use recording::{
-    list_cameras, list_capture_screens, list_capture_windows, InProgressRecording, FPS,
+    list_cameras, list_capture_screens, list_capture_windows, InProgressRecording,
+    RecordingSettingsStore,
 };
 use scap::capturer::Capturer;
 use scap::frame::Frame;
@@ -338,10 +338,13 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         }
     }
 
+    let recording_settings = RecordingSettingsStore::get(&app)?;
+
     match recording::start(
         id,
         recording_dir,
         &state.start_recording_options,
+        recording_settings,
         state.camera_feed.as_ref(),
     )
     .await
@@ -969,6 +972,7 @@ async fn render_to_file_impl(
     let audio = editor_instance.audio.clone();
     let decoders = editor_instance.decoders.clone();
     let options = editor_instance.render_constants.options.clone();
+    let screen_fps = editor_instance.recordings.display.fps;
 
     let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -997,7 +1001,7 @@ async fn render_to_file_impl(
                 ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawVideoInput {
                     width: output_size.0,
                     height: output_size.1,
-                    fps: 30,
+                    fps: screen_fps,
                     pix_fmt: "rgba",
                     input: pipe_path.clone().into_os_string(),
                 });
@@ -1082,7 +1086,7 @@ async fn render_to_file_impl(
 
                             let audio_info = audio.buffer.info();
                             let estimated_samples_per_frame =
-                                f64::from(audio_info.sample_rate) / f64::from(FPS);
+                                f64::from(audio_info.sample_rate) / f64::from(screen_fps);
                             let samples = estimated_samples_per_frame.ceil() as usize;
 
                             if let Some((_, frame_data)) =
@@ -1158,6 +1162,7 @@ async fn render_to_file_impl(
         decoders,
         editor_instance.cursor.clone(),
         editor_instance.project_path.clone(),
+        screen_fps,
     )
     .await?;
 
@@ -1629,10 +1634,9 @@ async fn render_to_file(
             .await
             .unwrap();
 
-    // 30 FPS (calculated for output video)
-    let total_frames = (duration * 30.0).round() as u32;
-
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let screen_fps = editor_instance.recordings.display.fps as f64;
+    let total_frames = (duration * screen_fps).round() as u32;
 
     render_to_file_impl(
         &editor_instance,

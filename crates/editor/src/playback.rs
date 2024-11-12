@@ -22,8 +22,6 @@ pub struct Playback {
     pub recordings: ProjectRecordings,
 }
 
-const FPS: u32 = 30;
-
 #[derive(Clone, Copy)]
 pub enum PlaybackEvent {
     Start,
@@ -53,6 +51,7 @@ impl Playback {
         tokio::spawn(async move {
             let start = Instant::now();
 
+            let fps = self.recordings.display.fps;
             let mut frame_number = self.start_frame_number + 1;
 
             let duration = self
@@ -68,35 +67,36 @@ impl Playback {
                     audio: audio_data.clone(),
                     stop_rx: stop_rx.clone(),
                     start_frame_number: self.start_frame_number,
-                    duration,
+                    // duration,
+                    fps,
                     project: self.project.clone(),
                 }
                 .spawn();
             };
 
             loop {
-                if frame_number as f64 > FPS as f64 * duration {
+                if frame_number as f64 > fps as f64 * duration {
                     break;
                 };
 
                 let project = self.project.borrow().clone();
 
                 let time = if let Some(timeline) = project.timeline() {
-                    match timeline.get_recording_time(frame_number as f64 / FPS as f64) {
+                    match timeline.get_recording_time(frame_number as f64 / fps as f64) {
                         Some(time) => time,
                         None => break,
                     }
                 } else {
-                    frame_number as f64 / FPS as f64
+                    frame_number as f64 / fps as f64
                 };
 
                 tokio::select! {
                     _ = stop_rx.changed() => {
                        break;
                     },
-                    Some((screen_frame, camera_frame)) = self.decoders.get_frames((time * FPS as f64) as u32) => {
+                    Some((screen_frame, camera_frame)) = self.decoders.get_frames((time * fps as f64) as u32) => {
                         // println!("decoded frame in {:?}", debug.elapsed());
-                        let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32);
+                        let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32, fps);
 
                         self
                             .renderer
@@ -109,7 +109,7 @@ impl Playback {
                             )
                             .await;
 
-                        tokio::time::sleep_until(start + (frame_number - self.start_frame_number) * Duration::from_secs_f32(1.0 / FPS as f32)).await;
+                        tokio::time::sleep_until(start + (frame_number - self.start_frame_number) * Duration::from_secs_f64(1.0 / fps as f64)).await;
 
                         event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
 
@@ -145,7 +145,8 @@ struct AudioPlayback {
     audio: AudioData,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
-    duration: f64,
+    // duration: f64,
+    fps: u32,
     project: watch::Receiver<ProjectConfiguration>,
 }
 
@@ -194,17 +195,15 @@ impl AudioPlayback {
             stop_rx,
             start_frame_number,
             project,
+            fps,
             ..
         } = self;
 
         let mut output_info = AudioInfo::from_stream_config(&supported_config);
         output_info.sample_format = output_info.sample_format.packed();
 
-        // TODO: Get fps and duration from video (once we start supporting other frame rates)
-        // Also, it's a bit weird that self.duration can ever be infinity to begin with, since
-        // pre-recorded videos are obviously a fixed size
         let mut audio_renderer = AudioPlaybackBuffer::new(audio, output_info);
-        let playhead = f64::from(start_frame_number) / f64::from(FPS);
+        let playhead = f64::from(start_frame_number) / fps as f64;
         audio_renderer.set_playhead(playhead, project.borrow().timeline());
 
         // Prerender enough for smooth playback

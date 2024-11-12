@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use cap_project::RecordingMeta;
+use cap_project::{RecordingMeta, TargetFPS};
 use serde::Serialize;
 use specta::Type;
 
@@ -9,6 +9,7 @@ pub struct Video {
     pub duration: f64,
     pub width: u32,
     pub height: u32,
+    pub fps: u32,
 }
 
 impl Video {
@@ -26,6 +27,7 @@ impl Video {
             width: video_decoder.width(),
             height: video_decoder.height(),
             duration: input.duration() as f64 / 1_000_000.0,
+            fps: TargetFPS::round(stream.rate().into()),
         }
     }
 }

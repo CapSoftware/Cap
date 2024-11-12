@@ -177,7 +177,7 @@ fn find_camera(selected_camera: &String) -> Result<CameraInfo, MediaError> {
 fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
     dbg!(info);
 
-    // TODO: Make selected format more flexible
+    // TODO: Make selected format more flexible (also record at higher FPS maybe? Leaving it at 30 is fine for now)
     // let format = RequestedFormat::new::<RgbAFormat>(RequestedFormatType::AbsoluteHighestResolution);
     let format = RequestedFormat::with_formats(
         RequestedFormatType::ClosestIgnoringFormat {

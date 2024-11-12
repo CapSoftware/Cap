@@ -10,8 +10,6 @@ use std::sync::Mutex as StdMutex;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
 
-const FPS: u32 = 30;
-
 pub struct EditorInstance {
     pub project_path: PathBuf,
     pub id: String,
@@ -95,7 +93,11 @@ impl EditorInstance {
             .unwrap(),
         );
 
-        let renderer = Arc::new(editor::Renderer::spawn(render_constants.clone(), frame_tx));
+        let renderer = Arc::new(editor::Renderer::spawn(
+            render_constants.clone(),
+            frame_tx,
+            recordings.display.fps,
+        ));
 
         let (preview_tx, preview_rx) = watch::channel(None);
 
@@ -236,6 +238,8 @@ impl EditorInstance {
         self: Arc<Self>,
         mut preview_rx: watch::Receiver<Option<u32>>,
     ) -> tokio::task::JoinHandle<()> {
+        let fps = self.recordings.display.fps;
+
         tokio::spawn(async move {
             loop {
                 preview_rx.changed().await.unwrap();
@@ -248,14 +252,14 @@ impl EditorInstance {
                 let Some(time) = project
                     .timeline
                     .as_ref()
-                    .map(|timeline| timeline.get_recording_time(frame_number as f64 / FPS as f64))
-                    .unwrap_or(Some(frame_number as f64 / FPS as f64))
+                    .map(|timeline| timeline.get_recording_time(frame_number as f64 / fps as f64))
+                    .unwrap_or(Some(frame_number as f64 / fps as f64))
                 else {
                     continue;
                 };
 
                 let Some((screen_frame, camera_frame)) =
-                    self.decoders.get_frames((time * FPS as f64) as u32).await
+                    self.decoders.get_frames((time * fps as f64) as u32).await
                 else {
                     continue;
                 };
@@ -265,7 +269,7 @@ impl EditorInstance {
                         screen_frame,
                         camera_frame,
                         project.background.source.clone(),
-                        ProjectUniforms::new(&self.render_constants, &project, time as f32),
+                        ProjectUniforms::new(&self.render_constants, &project, time as f32, fps),
                         time as f32, // Add the time parameter
                     )
                     .await;

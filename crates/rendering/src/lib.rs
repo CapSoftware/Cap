@@ -119,6 +119,7 @@ pub async fn render_video_to_channel(
     decoders: RecordingDecoders,
     cursor: Arc<CursorData>,
     project_path: PathBuf, // Add project_path parameter
+    fps: u32,
 ) -> Result<(), String> {
     let constants = RenderVideoConstants::new(options, cursor, project_path).await?;
 
@@ -136,23 +137,23 @@ pub async fn render_video_to_channel(
         let background = Background::from(project.background.source.clone());
 
         loop {
-            if frame_number as f64 > 30_f64 * duration {
+            if frame_number as f64 > fps as f64 * duration {
                 break;
             };
 
             let time = if let Some(timeline) = project.timeline() {
-                match timeline.get_recording_time(frame_number as f64 / 30_f64) {
+                match timeline.get_recording_time(frame_number as f64 / fps as f64) {
                     Some(time) => time,
                     None => break,
                 }
             } else {
-                frame_number as f64 / 30_f64
+                frame_number as f64 / fps as f64
             };
 
-            let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
+            let uniforms = ProjectUniforms::new(&constants, &project, time as f32, fps);
 
             let Some((screen_frame, camera_frame)) =
-                decoders.get_frames((time * 30.0) as u32).await
+                decoders.get_frames((time * fps as f64) as u32).await
             else {
                 break;
             };
@@ -164,6 +165,7 @@ pub async fn render_video_to_channel(
                 background,
                 &uniforms,
                 time as f32,
+                fps,
             )
             .await
             {
@@ -472,6 +474,7 @@ impl ProjectUniforms {
         constants: &RenderVideoConstants,
         project: &ProjectConfiguration,
         time: f32,
+        fps: u32,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project);
@@ -480,7 +483,7 @@ impl ProjectUniforms {
 
         let zoom_keyframes = ZoomKeyframes::new(project);
         let current_zoom = zoom_keyframes.get_amount(time as f64);
-        let prev_zoom = zoom_keyframes.get_amount((time - 1.0 / 30.0) as f64);
+        let prev_zoom = zoom_keyframes.get_amount(time as f64 - 1.0 / (fps as f64));
 
         let velocity = if current_zoom != prev_zoom {
             let scale_change = (current_zoom - prev_zoom) as f32;
@@ -633,7 +636,7 @@ impl ProjectUniforms {
                     let zoom_delta = (current_zoom - prev_zoom).abs() as f32;
 
                     // Calculate a smooth transition factor
-                    let transition_speed = 30.0f32; // Frames per second
+                    let transition_speed = fps as f32; // Frames per second
                     let transition_factor = (zoom_delta * transition_speed).min(1.0);
 
                     // Reduce multiplier from 3.0 to 2.0 for weaker blur
@@ -757,6 +760,7 @@ pub async fn produce_frame(
     background: Background,
     uniforms: &ProjectUniforms,
     time: f32,
+    fps: u32,
 ) -> Result<Vec<u8>, String> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
@@ -886,6 +890,7 @@ pub async fn produce_frame(
             constants,
             uniforms,
             time,
+            fps,
             &mut encoder,
             get_either(texture_views, !output_is_left),
         );
@@ -1043,6 +1048,7 @@ fn draw_cursor(
     constants: &RenderVideoConstants,
     uniforms: &ProjectUniforms,
     time: f32,
+    fps: u32,
     encoder: &mut CommandEncoder,
     view: &wgpu::TextureView,
 ) {
@@ -1051,7 +1057,7 @@ fn draw_cursor(
     };
 
     // Calculate previous position for velocity
-    let prev_position = interpolate_cursor_position(&constants.cursor, time - 1.0 / 30.0);
+    let prev_position = interpolate_cursor_position(&constants.cursor, time - 1.0 / (fps as f32));
 
     // Calculate velocity in screen space
     let velocity = if let Some(prev_pos) = prev_position {

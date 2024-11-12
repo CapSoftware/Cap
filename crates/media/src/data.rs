@@ -210,24 +210,42 @@ impl VideoInfo {
         }
     }
 
-    pub fn scaled(&self, width: u32, fps: u32) -> Self {
-        let (width, height) = match self.width <= width {
-            true => (self.width, self.height),
+    pub fn with_resolution(&self, width: u32) -> Self {
+        match self.width <= width {
+            true => self.clone(),
             false => {
                 let new_width = width & !1;
                 let new_height = (((new_width as f32) * (self.height as f32) / (self.width as f32))
                     .round() as u32)
                     & !1;
-                (new_width, new_height)
-            }
-        };
 
+                Self {
+                    width: new_width,
+                    height: new_height,
+                    ..self.clone()
+                }
+            }
+        }
+    }
+
+    pub fn with_fps(&self, fps: u32) -> Self {
+        Self {
+            frame_rate: FFRational(fps.try_into().unwrap(), 1),
+            ..self.clone()
+        }
+    }
+
+    pub fn with_software_format(&self) -> Self {
+        Self {
+            pixel_format: Pixel::YUV420P,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_hardware_format(&self) -> Self {
         Self {
             pixel_format: Pixel::NV12,
-            width,
-            height,
-            time_base: self.time_base,
-            frame_rate: FFRational(fps.try_into().unwrap(), 1),
+            ..self.clone()
         }
     }
 

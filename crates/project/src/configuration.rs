@@ -51,20 +51,54 @@ impl Default for BackgroundSource {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
 pub enum TargetResolution {
     _720p,
     #[default]
     _1080p,
-    Native,
+    _4K,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+impl TargetResolution {
+    pub fn to_width(&self) -> u32 {
+        match self {
+            TargetResolution::_720p => 1280,
+            TargetResolution::_1080p => 1920,
+            TargetResolution::_4K => 3840,
+        }
+    }
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
 pub enum TargetFPS {
     #[default]
     _30,
     _60,
-    Native,
+}
+
+impl TargetFPS {
+    pub fn to_raw(&self) -> u32 {
+        match self {
+            TargetFPS::_30 => 30,
+            TargetFPS::_60 => 60,
+        }
+    }
+
+    pub fn round(fps: f64) -> u32 {
+        // Common monitor refresh rates
+        match fps.round() {
+            29.0..31.0 => 30,
+            59.0..61.0 => 60,
+            74.0..76.0 => 75,
+            89.0..91.0 => 90,
+            119.0..121.0 => 120,
+            143.0..145.0 => 144,
+            164.0..166.0 => 165,
+            239.0..241.0 => 240,
+            359.0..361.0 => 360,
+            _ => unimplemented!("Unknown refresh rate"),
+        }
+    }
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]

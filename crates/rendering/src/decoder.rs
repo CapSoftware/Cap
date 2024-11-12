@@ -4,6 +4,7 @@ use std::{
     sync::{mpsc, Arc},
 };
 
+use cap_project::TargetFPS;
 use ffmpeg::{
     codec,
     format::{self},
@@ -18,16 +19,16 @@ enum VideoDecoderMessage {
     GetFrame(u32, tokio::sync::oneshot::Sender<Option<Arc<Vec<u8>>>>),
 }
 
-fn pts_to_frame(pts: i64, time_base: Rational) -> u32 {
-    (FPS as f64 * ((pts as f64 * time_base.numerator() as f64) / (time_base.denominator() as f64)))
-        .round() as u32
+fn pts_to_frame(fps: f64, pts: i64, time_base: Rational) -> u32 {
+    (fps * ((pts as f64 * time_base.numerator() as f64) / (time_base.denominator() as f64))).round()
+        as u32
 }
 
 const FRAME_CACHE_SIZE: usize = 50;
 // TODO: Allow dynamic FPS values by either passing it into `spawn`
 // or changing `get_frame` to take the requested time instead of frame number,
 // so that the lookup can be done by PTS instead of frame number.
-const FPS: u32 = 30;
+// const FPS: u32 = 30;
 
 pub struct AsyncVideoDecoder;
 
@@ -53,6 +54,7 @@ impl AsyncVideoDecoder {
             let input_stream_index = input_stream.index();
             let time_base = input_stream.time_base();
             let frame_rate = input_stream.rate();
+            let fps = TargetFPS::round(frame_rate.into());
 
             // Create a decoder for the video stream
             let mut decoder = context.decoder().video().unwrap();
@@ -181,6 +183,7 @@ impl AsyncVideoDecoder {
 
                                 while decoder.receive_frame(&mut temp_frame).is_ok() {
                                     let current_frame = pts_to_frame(
+                                        fps as f64,
                                         temp_frame.pts().unwrap() - start_offset,
                                         time_base,
                                     );
@@ -289,7 +292,7 @@ impl AsyncVideoDecoder {
                         }
 
                         if let Some(s) = sender.take() {
-                            s.send(None);
+                            let _ = s.send(None);
                         }
                     }
                 }

@@ -16,14 +16,29 @@ use tokio::sync::oneshot;
 use crate::cursor::spawn_cursor_recorder;
 use crate::RecordingOptions;
 
-// TODO: Hacky, please fix
-pub const FPS: u32 = 30;
-
-#[derive(Serialize, Deserialize, Type, Default, Debug)]
+#[derive(Serialize, Deserialize, Type, Debug)]
 pub struct RecordingSettingsStore {
     pub use_hardware_acceleration: bool,
-    pub recording_resolution: TargetResolution,
+    #[serde(default = "default_recording_resolution")]
+    pub capture_resolution: Option<TargetResolution>,
+    #[serde(default = "default_recording_resolution")]
+    pub output_resolution: Option<TargetResolution>,
     pub recording_fps: TargetFPS,
+}
+
+fn default_recording_resolution() -> Option<TargetResolution> {
+    Some(TargetResolution::_1080p)
+}
+
+impl Default for RecordingSettingsStore {
+    fn default() -> Self {
+        Self {
+            use_hardware_acceleration: false,
+            capture_resolution: Some(TargetResolution::_1080p),
+            output_resolution: None,
+            recording_fps: TargetFPS::_30,
+        }
+    }
 }
 
 pub type RecordingSettingsState = Mutex<RecordingSettingsStore>;
@@ -234,6 +249,7 @@ pub async fn start(
     id: String,
     recording_dir: PathBuf,
     recording_options: &RecordingOptions,
+    recording_settings: Option<RecordingSettingsStore>,
     camera_feed: Option<&CameraFeed>,
 ) -> Result<InProgressRecording, MediaError> {
     let content_dir = recording_dir.join("content");
@@ -249,16 +265,21 @@ pub async fn start(
     let mut audio_output_path = None;
     let mut camera_output_path = None;
 
-    #[cfg(target_os = "macos")]
-    {
-        let screen_source = ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
+    let settings = recording_settings.unwrap_or_default();
+
+    if settings.use_hardware_acceleration && cfg!(target_os = "macos") {
+        let screen_source = ScreenCaptureSource::<CMSampleBufferCapture>::init(
             dbg!(&recording_options.capture_target),
-            None,
-            None,
+            settings.recording_fps,
+            settings.capture_resolution,
         );
         let screen_config = screen_source.info();
+        let output_config = settings.output_resolution.map(|output| {
+            screen_config
+                .with_resolution(output.to_width())
+                .with_hardware_format()
+        });
 
-        let output_config = screen_config.scaled(1920, 30);
         let screen_encoder = cap_media::encoders::H264AVAssetWriterEncoder::init(
             "screen",
             output_config,
@@ -267,19 +288,20 @@ pub async fn start(
         pipeline_builder = pipeline_builder
             .source("screen_capture", screen_source)
             .sink("screen_capture_encoder", screen_encoder);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
+    } else {
         let screen_source = ScreenCaptureSource::<AVFrameCapture>::init(
             dbg!(&recording_options.capture_target),
-            None,
+            settings.recording_fps,
             None,
         );
         let screen_config = screen_source.info();
-        let screen_bounds = screen_source.bounds;
 
-        let output_config = screen_config.scaled(1920, 30);
+        let mut output_config = screen_config.with_software_format();
+        if let Some(output_resolution) = settings.output_resolution {
+            output_config = output_config.with_resolution(output_resolution.to_width());
+        }
         let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
+
         let screen_encoder = H264Encoder::init(
             "screen",
             output_config,
@@ -312,7 +334,13 @@ pub async fn start(
 
     if let Some(camera_source) = CameraSource::init(camera_feed) {
         let camera_config = camera_source.info();
-        let output_config = camera_config.scaled(1920, 30);
+        // TODO: I'm not sure if there's a point to scaling the camera capture to the same resolution
+        // as the display capture (since it will be scaled down anyway, but matching at least the frame
+        // rate here is easier than trying to sync different frame rates while editing/rendering).
+        // Also, use hardware filters maybe?
+        let output_config = camera_config
+            .with_software_format()
+            .with_fps(settings.recording_fps.to_raw());
         camera_output_path = Some(content_dir.join("camera.mp4"));
 
         let camera_filter = VideoFilter::init("camera", camera_config, output_config)?;

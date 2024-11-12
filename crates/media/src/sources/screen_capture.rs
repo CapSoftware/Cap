@@ -1,4 +1,5 @@
 use cap_flags::FLAGS;
+use cap_project::{TargetFPS, TargetResolution};
 use cidre::cm;
 use core_foundation::base::{kCFAllocatorDefault, CFAllocatorRef};
 use flume::Sender;
@@ -73,15 +74,19 @@ pub struct ScreenCaptureSource<T> {
 }
 
 impl<T> ScreenCaptureSource<T> {
-    pub const DEFAULT_FPS: u32 = 30;
-
     pub fn init(
         capture_target: &ScreenCaptureTarget,
-        fps: Option<u32>,
-        resolution: Option<Resolution>,
+        fps: TargetFPS,
+        resolution: Option<TargetResolution>,
     ) -> Self {
-        let fps = fps.unwrap_or(Self::DEFAULT_FPS);
-        let output_resolution = resolution.unwrap_or(Resolution::Captured);
+        let fps = fps.to_raw();
+        let output_resolution = resolution
+            .map(|target_resolution| match target_resolution {
+                TargetResolution::_720p => Resolution::_720p,
+                TargetResolution::_1080p => Resolution::_1080p,
+                TargetResolution::_4K => Resolution::_2160p,
+            })
+            .unwrap_or(Resolution::Captured);
         let targets = dbg!(scap::get_all_targets());
 
         let excluded_targets: Vec<scap::Target> = targets
