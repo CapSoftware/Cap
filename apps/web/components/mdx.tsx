@@ -1,7 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
-import { MDXRemote } from "next-mdx-remote/rsc";
-import React from "react";
+import { MDXRemote, MDXRemoteProps } from "next-mdx-remote/rsc";
+import React, { PropsWithChildren } from "react";
 import { ReactNode } from "react";
 
 interface TableData {
@@ -76,7 +76,7 @@ function Callout(props: CalloutProps) {
   );
 }
 
-function slugify(str) {
+function slugify(str: string) {
   return str
     .toString()
     .toLowerCase()
@@ -87,8 +87,8 @@ function slugify(str) {
     .replace(/\-\-+/g, "-"); // Replace multiple - with single -
 }
 
-function createHeading(level) {
-  return ({ children }) => {
+function createHeading(level: number) {
+  return ({ children }: { children: string }) => {
     let slug = slugify(children);
     return React.createElement(
       `h${level}`,
@@ -118,7 +118,7 @@ let components = {
   Table,
 };
 
-export function CustomMDX(props) {
+export function CustomMDX(props: any) {
   return (
     <MDXRemote
       {...props}

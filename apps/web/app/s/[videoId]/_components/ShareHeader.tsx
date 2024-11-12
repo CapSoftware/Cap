@@ -16,7 +16,7 @@ export const ShareHeader = ({
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
-  individualFiles: {
+  individualFiles?: {
     fileName: string;
     url: string;
   }[];
@@ -59,6 +59,8 @@ export const ShareHeader = ({
   };
 
   const downloadZip = async () => {
+    if (!individualFiles) return;
+
     setIsDownloading(true);
     const zip = new JSZip();
 

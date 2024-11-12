@@ -7,7 +7,7 @@ import { stripe } from "@cap/utils";
 
 export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
   return {
-    async createUser(userData) {
+    async createUser(userData: any) {
       await db.insert(users).values({
         id: nanoId(),
         email: userData.email,
@@ -88,7 +88,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
     async deleteUser(userId) {
       await db.delete(users).where(eq(users.id, userId));
     },
-    async linkAccount(account) {
+    async linkAccount(account: any) {
       await db.insert(accounts).values({
         id: nanoId(),
         userId: account.userId,
@@ -104,7 +104,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         token_type: account.token_type,
       });
     },
-    async unlinkAccount({ providerAccountId, provider }) {
+    async unlinkAccount({ providerAccountId, provider }: any) {
       await db
         .delete(accounts)
         .where(

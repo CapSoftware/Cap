@@ -1,6 +1,9 @@
 {
   "compilerOptions": {
     "jsx": "preserve",
-    "jsxImportSource": "solid-js"
+    "jsxImportSource": "solid-js",
+    "skipLibCheck": true,
+    "emitDeclarationOnly": true,
+    "outDir": "dist"
   }
 }

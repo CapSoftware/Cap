@@ -107,7 +107,7 @@ export default async function SharedCapsPage({
         ownerId: videos.ownerId,
       })
       .from(videos)
-      .where(eq(videos.id, debugSharedVideos[0].videoId));
+      .where(eq(videos.id, debugSharedVideos[0]!.videoId));
 
     console.log("Debug: Video details:");
     console.log(debugVideos);

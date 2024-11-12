@@ -15,14 +15,14 @@ function parseFrontmatter(fileContent: string) {
   let match = frontmatterRegex.exec(fileContent);
   let frontMatterBlock = match![1];
   let content = fileContent.replace(frontmatterRegex, "").trim();
-  let frontMatterLines = frontMatterBlock.trim().split("\n");
+  let frontMatterLines = frontMatterBlock!.trim().split("\n");
   let metadata: Partial<PostMetadata> = {};
 
   frontMatterLines.forEach((line) => {
     let [key, ...valueArr] = line.split(": ");
     let value = valueArr.join(": ").trim();
     value = value.replace(/^['"](.*)['"]$/, "$1"); // Remove quotes
-    metadata[key.trim() as keyof PostMetadata] = value;
+    metadata[key!.trim() as keyof PostMetadata] = value;
   });
 
   return { metadata: metadata as PostMetadata, content };
