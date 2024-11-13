@@ -417,7 +417,8 @@ pub fn position_traffic_lights(window: tauri::Window, controls_inset: Option<(f6
                             .ns_window()
                             .expect("Failed to get native window handle"),
                     ),
-                    &controls_inset.map(LogicalPosition::from)
+                    &controls_inset
+                        .map(LogicalPosition::from)
                         .unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
                 );
             })
