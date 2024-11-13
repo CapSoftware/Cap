@@ -1,11 +1,19 @@
 import type { RouteSectionProps } from "@solidjs/router";
-import { onMount, ParentProps, Suspense } from "solid-js";
+import {
+  createEffect,
+  onCleanup,
+  onMount,
+  ParentProps,
+  Suspense,
+} from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Transition } from "solid-transition-group";
-import { Show } from "solid-js";
+import { initializeTitlebar } from "~/utils/titlebar-state";
 
-import Header from "../components/Header";
+import Titlebar from "~/components/titlebar/Titlebar";
+
 import { AbsoluteInsetLoader } from "~/components/Loader";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import { commands } from "~/utils/tauri";
 
 export const route = {
   info: {
@@ -14,13 +22,21 @@ export const route = {
 };
 
 export default function (props: RouteSectionProps) {
-  onMount(() => {
+  let unlistenResize: () => void | undefined;
+
+  onMount(async () => {
+    unlistenResize = await initializeTitlebar();
+    if (ostype() === "macos") commands.positionTrafficLights(null);
     if (location.pathname === "/") getCurrentWindow().show();
   });
 
+  onCleanup(() => {
+    unlistenResize?.();
+  });
+
   return (
-    <div class="bg-gray-100 border border-gray-200 w-screen h-screen flex flex-col overflow-hidden relative">
-      <Header />
+    <div class="bg-gray-100 border-gray-200 w-screen h-screen max-h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200">
+      <Titlebar />
       {/* breaks sometimes */}
       {/* <Transition
         mode="outin"
@@ -28,7 +44,7 @@ export default function (props: RouteSectionProps) {
         exitActiveClass="transition-opacity duration-100"
         enterClass="opacity-0"
         exitToClass="opacity-0"
-      > */}
+        > */}
       <Suspense fallback={<AbsoluteInsetLoader />}>
         <Inner>{props.children}</Inner>
       </Suspense>
@@ -43,7 +59,7 @@ function Inner(props: ParentProps) {
   });
 
   return (
-    <div class="animate-in fade-in w-full h-full flex flex-col">
+    <div class="animate-in fade-in flex-1 flex flex-col overflow-y-hidden">
       {props.children}
     </div>
   );

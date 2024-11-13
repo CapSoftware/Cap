@@ -310,6 +310,9 @@ async sendFeedbackRequest(feedback: string) : Promise<Result<null, string>> {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+async positionTrafficLights(controlsInset: [number, number] | null) : Promise<void> {
+    await TAURI_INVOKE("position_traffic_lights", { controlsInset });
 }
 }
 

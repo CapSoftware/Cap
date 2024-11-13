@@ -59,8 +59,16 @@ impl AudioInputSource {
                 .supported_input_configs()
                 .map_err(|error| eprintln!("Error: {error}"))
                 .ok()
-                .and_then(|mut configs| {
-                    configs.find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
+                .and_then(|configs| {
+                    let mut configs = configs.collect::<Vec<_>>();
+                    configs.sort_by(|a, b| {
+                        b.sample_format()
+                            .sample_size()
+                            .cmp(&a.sample_format().sample_size())
+                    });
+                    configs
+                        .into_iter()
+                        .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
                 })
                 .and_then(|config| {
                     device
@@ -102,6 +110,7 @@ impl AudioInputSource {
         let sample_format = self.config.sample_format();
 
         let data_callback = move |data: &cpal::Data, info: &cpal::InputCallbackInfo| {
+            println!("data_callback");
             let capture_time = info.timestamp().capture;
 
             let Ok(output) = output.try_lock() else {

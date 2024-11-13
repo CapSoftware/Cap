@@ -1,7 +1,14 @@
 import { Button } from "@cap/ui-solid";
 import { cx } from "cva";
-import { Match, Show, Switch, createResource } from "solid-js";
-import { platform } from "@tauri-apps/plugin-os";
+import {
+  Match,
+  Show,
+  Switch,
+  createResource,
+  onCleanup,
+  onMount,
+} from "solid-js";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { createStore, reconcile } from "solid-js/store";
 
 import { type RenderProgress, commands } from "~/utils/tauri";
@@ -10,32 +17,47 @@ import { useEditorContext } from "./context";
 import { Dialog, DialogContent } from "./ui";
 
 export function Header() {
-  const [os] = createResource(() => platform());
+  let unlistenTitlebar: () => void | undefined;
 
-  return (
-    <header
-      class={cx(
-        "flex flex-row justify-between items-center",
-        os() === "macos" && "pl-[4.3rem]"
-      )}
+  onMount(async () => {
+    unlistenTitlebar = await initializeTitlebar();
+    commands.positionTrafficLights([20.0, 48.0]);
+  });
+
+  onCleanup(() => {
+    unlistenTitlebar?.();
+  });
+
+  setTitlebar("border", false);
+  setTitlebar("height", "4.5rem");
+  setTitlebar(
+    "items",
+    <div
       data-tauri-drag-region
+      class={cx(
+        "flex flex-row justify-between items-center w-full cursor-default pr-5",
+        ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem]"
+      )}
     >
       <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]"></div>
       <div
         class="flex flex-row gap-2 font-medium items-center"
-        data-tauri-drag-region
       >
         <ShareButton />
         <ExportButton />
       </div>
-    </header>
+    </div>
   );
+
+  return <Titlebar />;
 }
 
 import { Channel } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { createMutation } from "@tanstack/solid-query";
+import Titlebar from "~/components/titlebar/Titlebar";
+import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
 
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();

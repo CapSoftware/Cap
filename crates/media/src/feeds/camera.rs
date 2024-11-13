@@ -79,49 +79,14 @@ impl CameraFeed {
     }
 
     pub fn list_cameras() -> Vec<String> {
-        #[cfg(target_os = "windows")]
-        {
-            use windows::Win32::Media::MediaFoundation::{MFStartup, MFSTARTUP_FULL};
-            use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
-
-            // On Windows, wrap the entire operation in a catch_unwind to prevent crashes
-            match std::panic::catch_unwind(|| {
-                // Initialize COM and Media Foundation
-                unsafe {
-                    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-                    let _ = MFStartup(0x20070, MFSTARTUP_FULL);
-                }
-
-                match nokhwa::query(ApiBackend::Auto) {
-                    Ok(cameras) => cameras
-                        .into_iter()
-                        .map(|i| i.human_name().to_string())
-                        .collect::<Vec<String>>(),
-                    Err(e) => {
-                        error!("Failed to query cameras: {}", e);
-                        Vec::new()
-                    }
-                }
-            }) {
-                Ok(cameras) => cameras,
-                Err(e) => {
-                    error!("Camera query panicked: {:?}", e);
-                    Vec::new()
-                }
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            match nokhwa::query(ApiBackend::Auto) {
-                Ok(cameras) => cameras
-                    .into_iter()
-                    .map(|i| i.human_name().to_string())
-                    .collect(),
-                Err(e) => {
-                    error!("Failed to query cameras: {}", e);
-                    Vec::new()
-                }
+        match nokhwa::query(ApiBackend::Auto) {
+            Ok(cameras) => cameras
+                .into_iter()
+                .map(|i| i.human_name().to_string())
+                .collect::<Vec<String>>(),
+            Err(e) => {
+                eprintln!("Failed to query cameras: {}", e);
+                Vec::new()
             }
         }
     }
@@ -316,6 +281,19 @@ fn run_camera_feed(
         // Actual data capture
         match camera.frame() {
             Ok(raw_buffer) => {
+                let raw_buffer = if let FrameFormat::MJPEG = raw_buffer.source_frame_format() {
+                    let rgba_buffer = raw_buffer
+                        .decode_image::<nokhwa::pixel_format::RgbAFormat>()
+                        .unwrap();
+                    nokhwa::Buffer::new_from_cow(
+                        raw_buffer.resolution(),
+                        rgba_buffer.into_vec().into(),
+                        FrameFormat::MJPEG,
+                    )
+                } else {
+                    raw_buffer
+                };
+
                 let converter = converter.get_or_insert_with(|| {
                     let mut format = camera.camera_format();
                     format.set_format(raw_buffer.source_frame_format());
@@ -382,7 +360,7 @@ pub enum HwConverter {
 impl FrameConverter {
     fn build(camera_format: CameraFormat) -> Self {
         let format = match camera_format.format() {
-            FrameFormat::MJPEG => RawVideoFormat::Mjpeg,
+            FrameFormat::MJPEG => RawVideoFormat::Rgba,
             FrameFormat::YUYV => RawVideoFormat::Uyvy,
             FrameFormat::NV12 => RawVideoFormat::Nv12,
             FrameFormat::GRAY => RawVideoFormat::Gray,

@@ -55,7 +55,7 @@ use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-use tokio::task;
+use tokio::io::AsyncWriteExt;
 use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
@@ -987,59 +987,17 @@ async fn render_to_file_impl(
 
             let audio_dir = tempfile::tempdir().unwrap();
             let video_dir = tempfile::tempdir().unwrap();
-
-            let video_tx = {
-                let pipe_path = video_dir.path().join("video.pipe");
-                #[cfg(target_os = "macos")]
-                cap_utils::create_named_pipe(&pipe_path).unwrap();
-
-                ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawVideoInput {
-                    width: output_size.0,
-                    height: output_size.1,
-                    fps: 30,
-                    pix_fmt: "rgba",
-                    input: pipe_path.clone().into_os_string(),
-                });
-
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
-
-                tokio::spawn(async move {
-                    let mut file = std::fs::File::create(&pipe_path).unwrap();
-                    println!("video pipe opened");
-
-                    while let Some(bytes) = rx.recv().await {
-                        file.write_all(&bytes).unwrap();
-                    }
-
-                    println!("done writing to video pipe");
-                });
-
-                tx
-            };
             let mut audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
-                let pipe_path = audio_dir.path().join("audio.pipe");
+                let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
 
-                #[cfg(target_os = "macos")]
-                cap_utils::create_named_pipe(&pipe_path).unwrap();
+                let pipe_path =
+                    cap_utils::create_channel_named_pipe(rx, audio_dir.path().join("audio.pipe"));
 
                 ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
-                    input: pipe_path.clone().into_os_string(),
+                    input: pipe_path,
                     sample_format: "f64le".to_string(),
                     sample_rate: audio_data.info.sample_rate,
                     channels: audio_data.info.channels as u16,
-                });
-
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
-
-                tokio::spawn(async move {
-                    let mut file = std::fs::File::create(&pipe_path).unwrap();
-                    println!("audio pipe opened");
-
-                    while let Some(bytes) = rx.recv().await {
-                        file.write_all(&bytes).unwrap();
-                    }
-
-                    println!("done writing to audio pipe");
                 });
 
                 let buffer = AudioFrameBuffer::new(audio_data.clone());
@@ -1049,6 +1007,23 @@ async fn render_to_file_impl(
                 })
             } else {
                 None
+            };
+
+            let video_tx = {
+                let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
+
+                let pipe_path =
+                    cap_utils::create_channel_named_pipe(rx, video_dir.path().join("video.pipe"));
+
+                ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawVideoInput {
+                    width: output_size.0,
+                    height: output_size.1,
+                    fps: 30,
+                    pix_fmt: "rgba",
+                    input: pipe_path,
+                });
+
+                tx
             };
 
             ffmpeg
@@ -1968,31 +1943,79 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
 
     std::fs::create_dir_all(&recording_dir).map_err(|e| e.to_string())?;
 
-    // Take screenshot using scap with optimized settings
-    let options = scap::capturer::Options {
-        fps: 1,
-        output_type: scap::frame::FrameType::BGRAFrame,
-        show_highlight: false,
-        ..Default::default()
-    };
+    // Capture the screenshot synchronously before any await points
+    let (width, height, bgra_data) = {
+        // Take screenshot using scap with optimized settings
+        let options = scap::capturer::Options {
+            fps: 1,
+            output_type: scap::frame::FrameType::BGRAFrame,
+            show_highlight: false,
+            ..Default::default()
+        };
 
-    if let Some(window) = CapWindowId::Main.get(&app) {
-        window.hide().ok();
-    }
+        // Hide main window before taking screenshot
+        if let Some(window) = CapWindowId::Main.get(&app) {
+            window.hide().ok();
+        }
 
-    let mut capturer = Capturer::new(options);
-    capturer.start_capture();
+        // Create and use capturer on the main thread
+        let mut capturer = Capturer::new(options);
+        capturer.start_capture();
+        let frame = capturer
+            .get_next_frame()
+            .map_err(|e| format!("Failed to get frame: {}", e))?;
+        capturer.stop_capture();
 
-    let frame = match capturer.get_next_frame() {
-        Ok(frame) => frame,
-        Err(e) => return Err(format!("Failed to get frame: {}", e)),
-    };
+        // Show main window after taking screenshot
+        if let Some(window) = CapWindowId::Main.get(&app) {
+            window.show().ok();
+        }
 
-    capturer.stop_capture();
+        match frame {
+            Frame::BGRA(bgra_frame) => Ok((
+                bgra_frame.width as u32,
+                bgra_frame.height as u32,
+                bgra_frame.data,
+            )),
+            _ => Err("Unexpected frame type".to_string()),
+        }
+    }?;
 
-    if let Frame::BGRA(bgra_frame) = frame {
-        let width = bgra_frame.width as u32;
-        let height = bgra_frame.height as u32;
+    let now = chrono::Local::now();
+    let screenshot_name = format!(
+        "Cap {} at {}.png",
+        now.format("%Y-%m-%d"),
+        now.format("%H.%M.%S")
+    );
+    let screenshot_path = recording_dir.join(&screenshot_name);
+
+    let app_handle = app.clone();
+    let recording_dir = recording_dir.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        // Convert BGRA to RGBA
+        let mut rgba_data = vec![0; bgra_data.len()];
+        for (bgra, rgba) in bgra_data.chunks_exact(4).zip(rgba_data.chunks_exact_mut(4)) {
+            rgba[0] = bgra[2];
+            rgba[1] = bgra[1];
+            rgba[2] = bgra[0];
+            rgba[3] = bgra[3];
+        }
+
+        // Create file and PNG encoder
+        let file = File::create(&screenshot_path).map_err(|e| e.to_string())?;
+        let w = &mut BufWriter::new(file);
+
+        let mut encoder = Encoder::new(w, width, height);
+        encoder.set_color(ColorType::Rgba);
+        encoder.set_compression(png::Compression::Fast);
+        let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+
+        // Write image data
+        writer
+            .write_image_data(&rgba_data)
+            .map_err(|e| e.to_string())?;
+
+        AppSounds::Screenshot.play();
 
         let now = chrono::Local::now();
         let screenshot_name = format!(
@@ -2000,81 +2023,34 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             now.format("%Y-%m-%d"),
             now.format("%H.%M.%S")
         );
-        let screenshot_path = recording_dir.join(&screenshot_name);
 
-        // Perform image processing and saving asynchronously
-        let app_handle = app.clone();
-        task::spawn_blocking(move || -> Result<(), String> {
-            // Convert BGRA to RGBA
-            let mut rgba_data = vec![0; bgra_frame.data.len()];
-            for (bgra, rgba) in bgra_frame
-                .data
-                .chunks_exact(4)
-                .zip(rgba_data.chunks_exact_mut(4))
-            {
-                rgba[0] = bgra[2];
-                rgba[1] = bgra[1];
-                rgba[2] = bgra[0];
-                rgba[3] = bgra[3];
-            }
+        use cap_project::*;
+        RecordingMeta {
+            project_path: recording_dir.clone(),
+            sharing: None,
+            pretty_name: screenshot_name,
+            display: Display {
+                path: screenshot_path.clone(),
+            },
+            camera: None,
+            audio: None,
+            segments: vec![],
+            cursor: None,
+        }
+        .save_for_project();
 
-            // Create file and PNG encoder
-            let file = File::create(&screenshot_path).map_err(|e| e.to_string())?;
-            let w = &mut BufWriter::new(file);
-
-            let mut encoder = Encoder::new(w, width, height);
-            encoder.set_color(ColorType::Rgba);
-            encoder.set_compression(png::Compression::Fast);
-            let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-
-            // Write image data
-            writer
-                .write_image_data(&rgba_data)
-                .map_err(|e| e.to_string())?;
-
-            AppSounds::Screenshot.play();
-
-            if let Some(window) = CapWindowId::Main.get(&app) {
-                window.show().ok();
-            }
-
-            let now = chrono::Local::now();
-            let screenshot_name = format!(
-                "Cap {} at {}.png",
-                now.format("%Y-%m-%d"),
-                now.format("%H.%M.%S")
-            );
-
-            use cap_project::*;
-            RecordingMeta {
-                project_path: recording_dir.clone(),
-                sharing: None,
-                pretty_name: screenshot_name,
-                display: Display {
-                    path: screenshot_path.clone(),
-                },
-                camera: None,
-                audio: None,
-                segments: vec![],
-                cursor: None,
-            }
-            .save_for_project();
-
-            NewScreenshotAdded {
-                path: screenshot_path,
-            }
-            .emit(&app_handle)
-            .ok();
-
-            Ok(())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+        NewScreenshotAdded {
+            path: screenshot_path,
+        }
+        .emit(&app_handle)
+        .ok();
 
         Ok(())
-    } else {
-        Err("Unexpected frame type".to_string())
-    }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))??;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2447,6 +2423,7 @@ pub async fn run() {
             is_camera_window_open,
             seek_to,
             send_feedback_request,
+            windows::position_traffic_lights,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

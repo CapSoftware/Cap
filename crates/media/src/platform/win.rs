@@ -1,16 +1,20 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{c_void, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
 use super::{Bounds, CursorShape, Window};
 
-use windows::core::PCWSTR;
+use windows::core::{PCWSTR, PWSTR};
+use windows::Win32::Devices::Display::{
+    DisplayConfigGetDeviceInfo, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+    DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
+};
 use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW, HDC, HMONITOR,
-    MONITORINFO, MONITORINFOEXW,
+    MONITORINFOEXW,
 };
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -26,7 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 #[inline]
 pub fn bring_window_to_focus(window_id: u32) {
-    let _ = unsafe { SetForegroundWindow(HWND(window_id as isize)) };
+    let _ = unsafe { SetForegroundWindow(HWND(window_id as *mut c_void)) };
 }
 
 pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
@@ -62,28 +66,28 @@ pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
 /// Keeps handles to default cursor.
 /// Read more: [MS Doc - About Cursors](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)
 pub struct DefaultCursors {
-    arrow: isize,
-    ibeam: isize,
-    wait: isize,
-    cross: isize,
-    up_arrow: isize,
-    size_nwse: isize,
-    size_nesw: isize,
-    size_we: isize,
-    size_ns: isize,
-    size_all: isize,
-    no: isize,
-    hand: isize,
-    appstarting: isize,
-    help: isize,
-    pin: isize,
-    person: isize,
+    arrow: *mut c_void,
+    ibeam: *mut c_void,
+    wait: *mut c_void,
+    cross: *mut c_void,
+    up_arrow: *mut c_void,
+    size_nwse: *mut c_void,
+    size_nesw: *mut c_void,
+    size_we: *mut c_void,
+    size_ns: *mut c_void,
+    size_all: *mut c_void,
+    no: *mut c_void,
+    hand: *mut c_void,
+    appstarting: *mut c_void,
+    help: *mut c_void,
+    pin: *mut c_void,
+    person: *mut c_void,
 }
 
 impl Default for DefaultCursors {
     fn default() -> Self {
         #[inline]
-        fn load_cursor(lpcursorname: PCWSTR) -> isize {
+        fn load_cursor(lpcursorname: PCWSTR) -> *mut c_void {
             unsafe { LoadCursorW(None, lpcursorname) }
                 .expect("Failed to load default system cursors")
                 .0
@@ -112,7 +116,7 @@ impl Default for DefaultCursors {
 
 unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
     let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)?;
-    if handle.is_invalid() || handle.0 == 0 {
+    if handle.is_invalid() {
         tracing::error!("Invalid PID {}", pid);
     }
     let mut lpexename = [0u16; 1024];
@@ -135,7 +139,7 @@ pub fn get_on_screen_windows() -> Vec<Window> {
     let mut windows = Vec::<Window>::new();
 
     unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        if hwnd.0 == 0 {
+        if hwnd.is_invalid() {
             return TRUE;
         }
         let windows = &mut *(lparam.0 as *mut Vec<Window>);
@@ -229,100 +233,74 @@ pub fn get_on_screen_windows() -> Vec<Window> {
 }
 
 pub fn monitor_bounds(id: u32) -> Bounds {
-    let bounds = Bounds::default();
-    let idx = 0u32;
-    let lparams = (id, idx, bounds);
-    unsafe extern "system" fn enum_monitor_proc(
-        hmonitor: HMONITOR,
-        _hdc: HDC,
-        _lprc_clip: *mut RECT,
-        lparam: LPARAM,
-    ) -> BOOL {
-        let (target_id, idx, bounds) = &mut *(lparam.0 as *mut (u32, u32, Bounds));
+    let bounds = None::<Bounds>;
 
-        let mut minfo = MONITORINFOEXW::default();
-        minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if !GetMonitorInfoW(
-            hmonitor,
-            &mut minfo as *mut MONITORINFOEXW as *mut MONITORINFO,
-        )
-        .as_bool()
-        {
-            return TRUE;
-        };
-
-        *idx += 1;
-        if idx != target_id {
-            return TRUE;
-        }
-
-        let mi = minfo.monitorInfo;
-        *bounds = Bounds {
-            x: mi.rcMonitor.left as f64,
-            y: mi.rcMonitor.top as f64,
-            width: (mi.rcMonitor.right - mi.rcMonitor.left) as f64,
-            height: (mi.rcMonitor.bottom - mi.rcMonitor.top) as f64,
-        };
-
-        FALSE
-    }
-
-    let _ = unsafe {
-        EnumDisplayMonitors(
-            None,
-            None,
-            Some(enum_monitor_proc),
-            LPARAM(std::ptr::addr_of!(lparams) as isize),
-        );
-    };
-    bounds
-}
-
-pub fn window_names() -> HashMap<u32, String> {
-    let mut names = HashMap::new();
     unsafe extern "system" fn monitor_enum_proc(
         hmonitor: HMONITOR,
         _hdc: HDC,
         _lprc_clip: *mut RECT,
         lparam: LPARAM,
     ) -> BOOL {
-        let monitors = &mut *(lparam.0 as *mut HashMap<u32, String>);
+        let (target_id, bounds) = &mut *(lparam.0 as *mut (u32, Option<Bounds>));
 
         let mut minfo = MONITORINFOEXW::default();
-        minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if !GetMonitorInfoW(
-            hmonitor,
-            &mut minfo as *mut MONITORINFOEXW as *mut MONITORINFO,
-        )
-        .as_bool()
-        {
+        minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if !GetMonitorInfoW(hmonitor, &mut minfo as *mut MONITORINFOEXW as *mut _).as_bool() {
             return TRUE;
-        };
+        }
 
         let mut display_device = DISPLAY_DEVICEW::default();
         display_device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
 
-        if !EnumDisplayDevicesW(PCWSTR(minfo.szDevice.as_ptr()), 0, &mut display_device, 0)
-            .as_bool()
+        if !EnumDisplayDevicesW(
+            PWSTR(minfo.szDevice.as_ptr() as _),
+            0,
+            &mut display_device,
+            0,
+        )
+        .as_bool()
         {
             return TRUE;
-        };
+        }
 
-        let device_name = OsString::from_wide(&display_device.DeviceName)
-            .to_string_lossy()
-            .into_owned();
-        let num = monitors.len() as u32;
-        monitors.insert(num, device_name);
+        let id = display_device.StateFlags as u32;
+
+        if id == *target_id {
+            let rect = minfo.monitorInfo.rcMonitor;
+            *bounds = Some(Bounds {
+                x: rect.left as f64,
+                y: rect.top as f64,
+                width: (rect.right - rect.left) as f64,
+                height: (rect.bottom - rect.top) as f64,
+            });
+            return FALSE;
+        }
         TRUE
     }
 
+    let mut lparams = (id, bounds);
     let _ = unsafe {
         EnumDisplayMonitors(
             None,
             None,
             Some(monitor_enum_proc),
-            LPARAM(core::ptr::addr_of_mut!(names) as isize),
+            LPARAM(core::ptr::addr_of_mut!(lparams) as isize),
         )
     };
+
+    bounds.unwrap_or_default()
+}
+
+pub fn display_names() -> HashMap<u32, String> {
+    let mut names = HashMap::new();
+
+    for window in windows_capture::monitor::Monitor::enumerate().unwrap_or_default() {
+        let Ok(name) = window.device_string() else {
+            continue;
+        };
+
+        names.insert(window.as_raw_hmonitor() as u32, name);
+    }
+
     names
 }

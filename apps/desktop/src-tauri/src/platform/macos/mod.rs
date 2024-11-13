@@ -1,11 +1,14 @@
 use std::ffi::c_void;
 
+use cocoa::{
+    base::{id, nil},
+    foundation::NSString,
+};
 use core_graphics::{
     base::boolean_t,
     display::{CFDictionaryRef, CGRect},
-    window::{kCGWindowBounds, kCGWindowOwnerPID},
 };
-use objc::{msg_send, sel, sel_impl};
+use objc::{class, msg_send, sel, sel_impl};
 
 pub mod delegates;
 
@@ -34,176 +37,6 @@ pub fn set_window_level(window: tauri::Window, level: u32) {
             .expect("Failed to get native window handle") as cocoa::base::id;
         let _: () = msg_send![ns_win, setLevel: level];
     });
-}
-
-pub fn get_on_screen_windows() -> Vec<Window> {
-    use core_foundation::{
-        array::CFArrayGetCount,
-        base::FromVoid,
-        dictionary::CFDictionaryGetValue,
-        number::{kCFNumberIntType, CFNumberGetValue, CFNumberRef},
-        string::CFString,
-    };
-    use core_graphics::{
-        display::CFArrayGetValueAtIndex,
-        window::{
-            kCGNullWindowID, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
-            kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
-            CGWindowListCopyWindowInfo,
-        },
-    };
-
-    let mut array = vec![];
-
-    unsafe {
-        let cf_win_array = CGWindowListCopyWindowInfo(
-            kCGWindowListExcludeDesktopElements | kCGWindowListOptionOnScreenOnly,
-            kCGNullWindowID,
-        );
-
-        if cf_win_array.is_null() {
-            return array;
-        }
-
-        let count = CFArrayGetCount(cf_win_array);
-
-        for i in 0..count {
-            let window_cf_dictionary_ref =
-                CFArrayGetValueAtIndex(cf_win_array, i) as CFDictionaryRef;
-
-            if window_cf_dictionary_ref.is_null() {
-                continue;
-            }
-
-            let level = {
-                let level_ref =
-                    CFDictionaryGetValue(window_cf_dictionary_ref, kCGWindowLayer as *const c_void);
-                if level_ref.is_null() {
-                    continue;
-                }
-
-                let mut value: u32 = 0;
-                let is_success = CFNumberGetValue(
-                    level_ref as CFNumberRef,
-                    kCFNumberIntType,
-                    &mut value as *mut _ as *mut c_void,
-                );
-
-                if !is_success {
-                    continue;
-                }
-
-                value
-            };
-
-            let bounds = {
-                let value_ref = CFDictionaryGetValue(
-                    window_cf_dictionary_ref,
-                    kCGWindowBounds as *const c_void,
-                );
-                if value_ref.is_null() {
-                    continue;
-                }
-
-                let rect: CGRect = {
-                    let mut rect = std::mem::zeroed();
-                    CGRectMakeWithDictionaryRepresentation(value_ref.cast(), &mut rect);
-                    rect
-                };
-
-                Bounds {
-                    x: rect.origin.x as u32,
-                    y: rect.origin.y as u32,
-                    width: rect.size.width as u32,
-                    height: rect.size.height as u32,
-                }
-            };
-
-            let window_number = {
-                let level_ref = CFDictionaryGetValue(
-                    window_cf_dictionary_ref,
-                    kCGWindowNumber as *const c_void,
-                );
-                if level_ref.is_null() {
-                    continue;
-                }
-
-                let mut value: u32 = 0;
-                let is_success = CFNumberGetValue(
-                    level_ref as CFNumberRef,
-                    kCFNumberIntType,
-                    &mut value as *mut _ as *mut c_void,
-                );
-
-                if !is_success {
-                    continue;
-                }
-
-                value
-            };
-
-            let process_id = {
-                let value_ref = CFDictionaryGetValue(
-                    window_cf_dictionary_ref,
-                    kCGWindowOwnerPID as *const c_void,
-                );
-                if value_ref.is_null() {
-                    continue;
-                }
-
-                let mut value: u32 = 0;
-                let is_success = CFNumberGetValue(
-                    value_ref as CFNumberRef,
-                    kCFNumberIntType,
-                    &mut value as *mut _ as *mut c_void,
-                );
-
-                if !is_success {
-                    continue;
-                }
-
-                value
-            };
-
-            let name = {
-                let value_ref =
-                    CFDictionaryGetValue(window_cf_dictionary_ref, kCGWindowName as *const c_void);
-                if value_ref.is_null() {
-                    String::new()
-                } else {
-                    CFString::from_void(value_ref).to_string()
-                }
-            };
-
-            let owner_name = {
-                let value_ref = CFDictionaryGetValue(
-                    window_cf_dictionary_ref,
-                    kCGWindowOwnerName as *const c_void,
-                );
-                if value_ref.is_null() {
-                    String::new()
-                } else {
-                    CFString::from_void(value_ref).to_string()
-                }
-            };
-
-            if owner_name == "Window Server" {
-                continue;
-            }
-
-            if level == 0 && !name.is_empty() {
-                array.push(Window {
-                    name,
-                    owner_name,
-                    process_id,
-                    window_number,
-                    bounds,
-                });
-            }
-        }
-    }
-
-    array
 }
 
 pub fn get_ns_window_number(ns_window: *mut c_void) -> isize {
@@ -235,4 +68,16 @@ pub fn write_string_to_pasteboard(string: &str) {
             NSPasteboard::writeObjects(pasteboard, objects);
         });
     }
+}
+
+/// Makes the background of the WKWebView layer transparent.
+/// This differs from Tauri's implementation as it does not change the window background which causes performance performance issues and artifacts when shadows are enabled on the window.
+/// Use Tauri's implementation to make the window itself transparent.
+pub fn make_webview_transparent(target: &tauri::WebviewWindow) -> tauri::Result<()> {
+    target.with_webview(|webview| unsafe {
+        let wkwebview = webview.inner() as id;
+        let no: id = msg_send![class!(NSNumber), numberWithBool:0];
+        // [https://developer.apple.com/documentation/webkit/webview/1408486-drawsbackground]
+        let _: id = msg_send![wkwebview, setValue:no forKey: NSString::alloc(nil).init_str("drawsBackground")];
+    })
 }

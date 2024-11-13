@@ -181,8 +181,6 @@ impl ApplyFFmpegArgs for FFmpegRawVideoInput {
             command.args(["-r", &self.fps.to_string()]);
         }
 
-        dbg!(PathBuf::from(&self.input).exists());
-
         // if self.offset != 0.0 {
         //     command.args(["-itsoffset", &self.offset.to_string()]);
         // }

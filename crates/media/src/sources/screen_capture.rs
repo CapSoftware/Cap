@@ -2,7 +2,7 @@ use cap_flags::FLAGS;
 use flume::Sender;
 use scap::{
     capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
-    frame::FrameType,
+    frame::{Frame, FrameType},
     Target,
 };
 use serde::{Deserialize, Serialize};
@@ -58,10 +58,10 @@ impl PartialEq<Target> for ScreenCaptureTarget {
 }
 
 pub struct ScreenCaptureSource<T> {
-    options: Options,
-    video_info: VideoInfo,
     target: ScreenCaptureTarget,
-    pub bounds: Bounds,
+    fps: u32,
+    resolution: Resolution,
+    video_info: VideoInfo,
     phantom: std::marker::PhantomData<T>,
 }
 
@@ -73,20 +73,39 @@ impl<T> ScreenCaptureSource<T> {
         fps: Option<u32>,
         resolution: Option<Resolution>,
     ) -> Self {
-        let fps = fps.unwrap_or(Self::DEFAULT_FPS);
         let output_resolution = resolution.unwrap_or(Resolution::Captured);
+        let fps = fps.unwrap_or(Self::DEFAULT_FPS);
+
+        let mut this = Self {
+            target: capture_target.clone(),
+            fps,
+            resolution: output_resolution,
+            video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, fps),
+            phantom: Default::default(),
+        };
+
+        let options = this.create_options();
+
+        let [frame_width, frame_height] = get_output_frame_size(&options);
+
+        this.video_info = VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps);
+
+        this
+    }
+
+    fn create_options(&self) -> Options {
         let targets = dbg!(scap::get_all_targets());
 
         let excluded_targets: Vec<scap::Target> = targets
             .iter()
             .filter(|target| {
                 matches!(target, Target::Window(scap_window)
-                    if EXCLUDED_WINDOWS.contains(&scap_window.title.as_str()))
+                if EXCLUDED_WINDOWS.contains(&scap_window.title.as_str()))
             })
             .cloned()
             .collect();
 
-        let (crop_area, bounds) = match capture_target {
+        let (crop_area, bounds) = match &self.target {
             ScreenCaptureTarget::Window(capture_window) => (
                 Some(Area {
                     size: Size {
@@ -105,7 +124,7 @@ impl<T> ScreenCaptureSource<T> {
             }
         };
 
-        let target = match capture_target {
+        let target = match &self.target {
             ScreenCaptureTarget::Window(w) => None,
             ScreenCaptureTarget::Screen(capture_screen) => targets
                 .iter()
@@ -116,26 +135,20 @@ impl<T> ScreenCaptureSource<T> {
                 .cloned(),
         };
 
-        let options = Options {
-            fps,
+        Options {
+            fps: self.fps,
             show_cursor: !FLAGS.zoom,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
-            output_type: FrameType::YUVFrame,
-            output_resolution,
+            output_type: if cfg!(windows) {
+                FrameType::BGRAFrame
+            } else {
+                FrameType::YUVFrame
+            },
+            output_resolution: self.resolution,
             crop_area,
             target,
             ..Default::default()
-        };
-
-        let [frame_width, frame_height] = get_output_frame_size(&options);
-
-        Self {
-            options,
-            target: capture_target.clone(),
-            bounds,
-            video_info: VideoInfo::from_raw(RawVideoFormat::Nv12, frame_width, frame_height, fps),
-            phantom: Default::default(),
         }
     }
 
@@ -145,20 +158,21 @@ impl<T> ScreenCaptureSource<T> {
         }
 
         let mut targets = vec![];
-        let screens = scap::get_all_targets().into_iter().filter_map(|t| match t {
-            Target::Display(screen) => Some(screen),
-            _ => None,
-        });
+        let screens = scap::get_all_targets()
+            .into_iter()
+            .filter_map(|t| match t {
+                Target::Display(screen) => Some(screen),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
-        let names = crate::platform::window_names();
+        let names = crate::platform::display_names();
 
         for (idx, screen) in screens.into_iter().enumerate() {
-            // Handle Target::Screen variant (assuming this is how it's structured in scap)
-            #[cfg(target_os = "macos")]
             targets.push(CaptureScreen {
                 id: screen.id,
                 name: names
-                    .get(&screen.raw_handle.id)
+                    .get(&screen.id)
                     .cloned()
                     .unwrap_or_else(|| format!("Screen {}", idx + 1)),
             });
@@ -218,11 +232,13 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     ) {
         println!("Preparing screen capture source thread...");
 
+        let options = self.create_options();
+
         let maybe_capture_window_id = match &self.target {
             ScreenCaptureTarget::Window(window) => Some(window.id),
             _ => None,
         };
-        let mut capturer = Capturer::new(dbg!(self.options.clone()));
+        let mut capturer = Capturer::new(dbg!(options));
         let mut capturing = false;
         ready_signal.send(Ok(())).unwrap();
 
@@ -239,47 +255,66 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         println!("Screen recording started.");
                     }
 
-                    match capturer.raw().get_next_pixel_buffer() {
-                        Ok(pixel_buffer) => {
-                            if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
+                    match capturer.get_next_frame() {
+                        Ok(Frame::BGRA(frame)) => {
+                            if frame.height == 0 || frame.width == 0 {
                                 continue;
                             }
 
-                            let raw_timestamp = RawNanoseconds(pixel_buffer.display_time());
+                            let raw_timestamp = RawNanoseconds(frame.display_time);
                             match clock.timestamp_for(raw_timestamp) {
                                 None => {
                                     eprintln!("Clock is currently stopped. Dropping frames.");
                                 }
                                 Some(timestamp) => {
-                                    let mut frame = FFVideo::new(
+                                    let mut buffer = FFVideo::new(
                                         self.video_info.pixel_format,
                                         self.video_info.width,
                                         self.video_info.height,
                                     );
-                                    frame.set_pts(Some(timestamp));
+                                    buffer.set_pts(Some(timestamp));
 
-                                    let planes = pixel_buffer.planes();
+                                    let bytes_per_pixel = 4;
+                                    let width_in_bytes = frame.width as usize * bytes_per_pixel;
+                                    let height = frame.height as usize;
 
-                                    for (i, plane) in planes.into_iter().enumerate() {
-                                        let data = plane.data();
+                                    let src_data = &frame.data;
 
-                                        for y in 0..plane.height() {
-                                            let buffer_y_offset = y * plane.bytes_per_row();
-                                            let frame_y_offset = y * frame.stride(i);
+                                    let src_stride = src_data.len() / height;
+                                    let dst_stride = buffer.stride(0);
 
-                                            let num_bytes =
-                                                frame.stride(i).min(plane.bytes_per_row());
+                                    if src_data.len() < src_stride * height {
+                                        eprintln!("Frame data size mismatch.");
+                                        continue;
+                                    }
 
-                                            frame.data_mut(i)
-                                                [frame_y_offset..frame_y_offset + num_bytes]
+                                    if src_stride < width_in_bytes {
+                                        eprintln!(
+                                            "Source stride is less than expected width in bytes."
+                                        );
+                                        continue;
+                                    }
+
+                                    if buffer.data(0).len() < dst_stride * height {
+                                        eprintln!("Destination data size mismatch.");
+                                        continue;
+                                    }
+
+                                    {
+                                        let dst_data = buffer.data_mut(0);
+
+                                        for y in 0..height {
+                                            let src_offset = y * src_stride;
+                                            let dst_offset = y * dst_stride;
+                                            dst_data[dst_offset..dst_offset + width_in_bytes]
                                                 .copy_from_slice(
-                                                    &data[buffer_y_offset
-                                                        ..buffer_y_offset + num_bytes],
+                                                    &src_data
+                                                        [src_offset..src_offset + width_in_bytes],
                                                 );
                                         }
                                     }
 
-                                    if let Err(_) = output.send(frame) {
+                                    if let Err(_) = output.send(buffer) {
                                         eprintln!(
                                             "Pipeline is unreachable. Shutting down recording."
                                         );
@@ -288,6 +323,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                                 }
                             };
                         }
+                        Ok(_) => unreachable!(),
                         Err(error) => {
                             eprintln!("Capture error: {error}");
                             break;
@@ -315,7 +351,6 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub struct CMSampleBufferCapture;
 
 #[cfg(target_os = "macos")]
@@ -336,7 +371,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             ScreenCaptureTarget::Window(window) => Some(window.id),
             _ => None,
         };
-        let mut capturer = Capturer::new(dbg!(self.options.clone()));
+        let mut capturer = Capturer::new(dbg!(self.create_options()));
         let mut capturing = false;
         ready_signal.send(Ok(())).unwrap();
 

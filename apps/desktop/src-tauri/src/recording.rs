@@ -227,7 +227,7 @@ pub async fn start(
             None,
         );
         let screen_config = screen_source.info();
-        let screen_bounds = screen_source.bounds;
+        // let screen_bounds = screen_source.bounds;
 
         let output_config = screen_config.scaled(1920, 30);
         let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
@@ -238,7 +238,7 @@ pub async fn start(
         )?;
         pipeline_builder = pipeline_builder
             .source("screen_capture", screen_source)
-            // .pipe("screen_capture_filter", screen_filter)
+            .pipe("screen_capture_filter", screen_filter)
             .sink("screen_capture_encoder", screen_encoder);
     }
 

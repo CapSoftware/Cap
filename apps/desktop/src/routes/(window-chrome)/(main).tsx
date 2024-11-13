@@ -47,11 +47,12 @@ import {
 
 const getAuth = cache(async () => {
   const value = await authStore.get();
-  if (!value) return redirect("/signin");
+  if (!value && !import.meta.env.TAURI_ENV_DEBUG) return redirect("/signin");
   const res = await fetch(`${clientEnv.VITE_SERVER_URL}/api/desktop/plan`, {
-    headers: { authorization: `Bearer ${value.token}` },
+    headers: { authorization: `Bearer ${value?.token}` },
   });
-  if (res.status !== 200) return redirect("/signin");
+  if (res.status !== 200 && !import.meta.env.TAURI_ENV_DEBUG)
+    return redirect("/signin");
   return value;
 }, "getAuth");
 
@@ -99,69 +100,70 @@ export default function () {
         });
       }
     }
+
+    setTitlebar("hideMaximize", true);
+    setTitlebar(
+      "items",
+      <div
+        dir={ostype() === "windows" ? "rtl" : "rtl"}
+        class="flex mx-2 items-center gap-[0.3rem]"
+      >
+        <Button
+          variant="secondary"
+          size="xs"
+          onClick={() => {
+            commands.openSettingsWindow("feedback");
+          }}
+        >
+          Feedback
+        </Button>
+        <ChangelogButton />
+      </div>
+    );
   });
 
   return (
-    <>
-      <div class="absolute top-3 right-3">
-        <div class="flex items-center gap-[0.25rem]">
-          <Button
-            variant="secondary"
-            size="xs"
-            onClick={() => {
-              commands.openSettingsWindow("feedback");
-            }}
-          >
-            Feedback
-          </Button>
-          <div>
-            <ChangelogButton />
-          </div>
-        </div>
-      </div>
-
-      <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
-        <div class="flex items-center justify-between pb-[0.25rem]">
-          <IconCapLogoFull class="w-[90px] h-auto" />
-          <button
-            type="button"
-            onClick={() => commands.openSettingsWindow("general")}
-          >
-            <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-          </button>
-        </div>
-        <TargetSelects options={options.data} />
-        <CameraSelect options={options.data} setOptions={setOptions} />
-        <MicrophoneSelect options={options.data} setOptions={setOptions} />
-        <div class="w-full flex items-center space-x-1">
-          <Button
-            disabled={toggleRecording.isPending}
-            variant={isRecording() ? "destructive" : "primary"}
-            size="md"
-            onClick={() => toggleRecording.mutate()}
-            class="flex-grow"
-          >
-            {isRecording() ? "Stop Recording" : "Start Recording"}
-          </Button>
-          <Button
-            disabled={isRecording()}
-            variant="secondary"
-            size="md"
-            onClick={() => commands.takeScreenshot()}
-          >
-            <IconLucideCamera class="w-[1rem] h-[1rem]" />
-          </Button>
-        </div>
-        <a
-          href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
-          target="_blank"
-          rel="noreferrer"
-          class="text-gray-400 text-[0.875rem] mx-auto hover:text-gray-500 hover:underline"
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
+      <div class="flex items-center justify-between pb-[0.25rem]">
+        <IconCapLogoFull class="w-[90px] h-auto" />
+        <button
+          type="button"
+          onClick={() => commands.openSettingsWindow("general")}
         >
-          Open Cap on Web
-        </a>
+          <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
+        </button>
       </div>
-    </>
+      <TargetSelects options={options.data} />
+      <CameraSelect options={options.data} setOptions={setOptions} />
+      <MicrophoneSelect options={options.data} setOptions={setOptions} />
+      <div class="w-full flex items-center space-x-1">
+        <Button
+          disabled={toggleRecording.isPending}
+          variant={isRecording() ? "destructive" : "primary"}
+          size="md"
+          onClick={() => toggleRecording.mutate()}
+          class="flex-grow"
+        >
+          {isRecording() ? "Stop Recording" : "Start Recording"}
+        </Button>
+        <Button
+          disabled={isRecording()}
+          variant="secondary"
+          size="md"
+          onClick={() => commands.takeScreenshot()}
+        >
+          <IconLucideCamera class="w-[1rem] h-[1rem]" />
+        </Button>
+      </div>
+      <a
+        href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
+        target="_blank"
+        rel="noreferrer"
+        class="text-gray-400 text-[0.875rem] mx-auto hover:text-gray-500 hover:underline"
+      >
+        Open Cap on Web
+      </a>
+    </div>
   );
 }
 
@@ -189,6 +191,8 @@ function useRequestPermission() {
 import * as dialog from "@tauri-apps/plugin-dialog";
 import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
+import titlebarState, { setTitlebar } from "~/utils/titlebar-state";
+import { type as ostype } from "@tauri-apps/plugin-os";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -487,6 +491,15 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
   optionsEmptyText: string;
   placeholder: string;
 }) {
+  createEffect(() => {
+    const v = props.value;
+    if (!v) return;
+
+    if (!props.options.some((o) => o.id === v.id)) {
+      props.onChange(props.options[0] ?? null);
+    }
+  });
+
   return (
     <KSelect<T | null>
       options={props.options ?? []}
@@ -511,7 +524,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
     >
       <KSelect.Trigger<ValidComponent>
         as={
-          props.options.length === 1
+          props.options.length <= 1
             ? (p) => (
                 <button
                   onClick={() => {
@@ -520,7 +533,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
                   data-selected={props.selected}
                   class={p.class}
                 >
-                  <span class="truncate">{props.options[0].name}</span>
+                  <span class="truncate">{props.placeholder}</span>
                 </button>
               )
             : undefined
@@ -657,11 +670,11 @@ function ChangelogButton() {
 
   return (
     <button type="button" onClick={handleChangelogClick} class="relative">
-      <IconLucideBell class="w-[1.15rem] h-[1.15rem] text-gray-400 hover:text-gray-500" />
+      <IconLucideBell class="size-[1.10rem] text-gray-400 hover:text-gray-500" />
       {changelogState.hasUpdate && (
         <div
           style={{ "background-color": "#FF4747" }}
-          class="block z-10 absolute top-0 right-0 w-2 h-2 rounded-full animate-bounce"
+          class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
         />
       )}
     </button>

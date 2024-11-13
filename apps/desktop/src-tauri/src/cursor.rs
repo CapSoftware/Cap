@@ -185,131 +185,132 @@ fn get_cursor_image_data() -> Option<Vec<u8>> {
 
 #[cfg(windows)]
 fn get_cursor_image_data() -> Option<Vec<u8>> {
-    use windows::Win32::Foundation::{BOOL, HWND, POINT};
-    use windows::Win32::Graphics::Gdi::{
-        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC,
-        DeleteObject, GetDC, GetObjectA, ReleaseDC, SelectObject, BITMAP, BITMAPINFO,
-        BITMAPINFOHEADER, DIB_RGB_COLORS, SRCCOPY,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::{GetCursorInfo, CURSORINFO, CURSORINFO_FLAGS};
-    use windows::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
+    return None;
+    // use windows::Win32::Foundation::{BOOL, HWND, POINT};
+    // use windows::Win32::Graphics::Gdi::{
+    //     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC,
+    //     DeleteObject, GetDC, GetObjectA, ReleaseDC, SelectObject, BITMAP, BITMAPINFO,
+    //     BITMAPINFOHEADER, DIB_RGB_COLORS, SRCCOPY,
+    // };
+    // use windows::Win32::UI::WindowsAndMessaging::{GetCursorInfo, CURSORINFO, CURSORINFO_FLAGS};
+    // use windows::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
 
-    unsafe {
-        // Get cursor info
-        let mut cursor_info = CURSORINFO {
-            cbSize: std::mem::size_of::<CURSORINFO>() as u32,
-            flags: CURSORINFO_FLAGS(0),
-            hCursor: Default::default(),
-            ptScreenPos: POINT::default(),
-        };
+    // unsafe {
+    //     // Get cursor info
+    //     let mut cursor_info = CURSORINFO {
+    //         cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+    //         flags: CURSORINFO_FLAGS(0),
+    //         hCursor: Default::default(),
+    //         ptScreenPos: POINT::default(),
+    //     };
 
-        // Handle Result return type
-        if GetCursorInfo(&mut cursor_info).is_err() {
-            return None;
-        }
+    //     // Handle Result return type
+    //     if GetCursorInfo(&mut cursor_info).is_err() {
+    //         return None;
+    //     }
 
-        // If no cursor, return None
-        if cursor_info.hCursor.is_invalid() {
-            return None;
-        }
+    //     // If no cursor, return None
+    //     if cursor_info.hCursor.is_invalid() {
+    //         return None;
+    //     }
 
-        // Get icon info
-        let mut icon_info = ICONINFO::default();
-        // Handle Result return type
-        if GetIconInfo(cursor_info.hCursor, &mut icon_info).is_err() {
-            return None;
-        }
+    //     // Get icon info
+    //     let mut icon_info = ICONINFO::default();
+    //     // Handle Result return type
+    //     if GetIconInfo(cursor_info.hCursor, &mut icon_info).is_err() {
+    //         return None;
+    //     }
 
-        // Get bitmap info
-        let mut bitmap = BITMAP::default();
-        if GetObjectA(
-            icon_info.hbmColor,
-            std::mem::size_of::<BITMAP>() as i32,
-            Some(&mut bitmap as *mut _ as *mut _),
-        ) == 0
-        {
-            return None;
-        }
+    //     // Get bitmap info
+    //     let mut bitmap = BITMAP::default();
+    //     if GetObjectA(
+    //         icon_info.hbmColor,
+    //         std::mem::size_of::<BITMAP>() as i32,
+    //         Some(&mut bitmap as *mut _ as *mut _),
+    //     ) == 0
+    //     {
+    //         return None;
+    //     }
 
-        // Create compatible DC
-        let screen_dc = GetDC(HWND(0));
-        let mem_dc = CreateCompatibleDC(screen_dc);
+    //     // Create compatible DC
+    //     let screen_dc = GetDC(HWND(0));
+    //     let mem_dc = CreateCompatibleDC(screen_dc);
 
-        // Create bitmap info header
-        let bi = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: bitmap.bmWidth,
-            biHeight: -bitmap.bmHeight, // Negative height for top-down bitmap
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: 0,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        };
+    //     // Create bitmap info header
+    //     let bi = BITMAPINFOHEADER {
+    //         biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+    //         biWidth: bitmap.bmWidth,
+    //         biHeight: -bitmap.bmHeight, // Negative height for top-down bitmap
+    //         biPlanes: 1,
+    //         biBitCount: 32,
+    //         biCompression: 0,
+    //         biSizeImage: 0,
+    //         biXPelsPerMeter: 0,
+    //         biYPelsPerMeter: 0,
+    //         biClrUsed: 0,
+    //         biClrImportant: 0,
+    //     };
 
-        let bitmap_info = BITMAPINFO {
-            bmiHeader: bi,
-            bmiColors: [Default::default()],
-        };
+    //     let bitmap_info = BITMAPINFO {
+    //         bmiHeader: bi,
+    //         bmiColors: [Default::default()],
+    //     };
 
-        // Create DIB section
-        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let dib = CreateDIBSection(mem_dc, &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0);
+    //     // Create DIB section
+    //     let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    //     let dib = CreateDIBSection(mem_dc, &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0);
 
-        if dib.is_err() {
-            return None;
-        }
+    //     if dib.is_err() {
+    //         return None;
+    //     }
 
-        let dib = dib.unwrap();
+    //     let dib = dib.unwrap();
 
-        // Select DIB into DC
-        let old_bitmap = SelectObject(mem_dc, dib);
+    //     // Select DIB into DC
+    //     let old_bitmap = SelectObject(mem_dc, dib);
 
-        // Copy cursor image
-        if BitBlt(
-            mem_dc,
-            0,
-            0,
-            bitmap.bmWidth,
-            bitmap.bmHeight,
-            screen_dc,
-            cursor_info.ptScreenPos.x,
-            cursor_info.ptScreenPos.y,
-            SRCCOPY,
-        )
-        .is_err()
-        {
-            return None;
-        }
+    //     // Copy cursor image
+    //     if BitBlt(
+    //         mem_dc,
+    //         0,
+    //         0,
+    //         bitmap.bmWidth,
+    //         bitmap.bmHeight,
+    //         screen_dc,
+    //         cursor_info.ptScreenPos.x,
+    //         cursor_info.ptScreenPos.y,
+    //         SRCCOPY,
+    //     )
+    //     .is_err()
+    //     {
+    //         return None;
+    //     }
 
-        // Get image data
-        let size = (bitmap.bmWidth * bitmap.bmHeight * 4) as usize;
-        let mut image_data = vec![0u8; size];
-        std::ptr::copy_nonoverlapping(bits, image_data.as_mut_ptr() as *mut _, size);
+    //     // Get image data
+    //     let size = (bitmap.bmWidth * bitmap.bmHeight * 4) as usize;
+    //     let mut image_data = vec![0u8; size];
+    //     std::ptr::copy_nonoverlapping(bits, image_data.as_mut_ptr() as *mut _, size);
 
-        // Cleanup
-        SelectObject(mem_dc, old_bitmap);
-        DeleteObject(dib);
-        DeleteDC(mem_dc);
-        ReleaseDC(HWND(0), screen_dc);
-        DeleteObject(icon_info.hbmColor);
-        DeleteObject(icon_info.hbmMask);
+    //     // Cleanup
+    //     SelectObject(mem_dc, old_bitmap);
+    //     DeleteObject(dib);
+    //     DeleteDC(mem_dc);
+    //     ReleaseDC(HWND(0), screen_dc);
+    //     DeleteObject(icon_info.hbmColor);
+    //     DeleteObject(icon_info.hbmMask);
 
-        // Convert to PNG format
-        let image =
-            image::RgbaImage::from_raw(bitmap.bmWidth as u32, bitmap.bmHeight as u32, image_data)?;
+    //     // Convert to PNG format
+    //     let image =
+    //         image::RgbaImage::from_raw(bitmap.bmWidth as u32, bitmap.bmHeight as u32, image_data)?;
 
-        let mut png_data = Vec::new();
-        image
-            .write_to(
-                &mut std::io::Cursor::new(&mut png_data),
-                image::ImageFormat::Png,
-            )
-            .ok()?;
+    //     let mut png_data = Vec::new();
+    //     image
+    //         .write_to(
+    //             &mut std::io::Cursor::new(&mut png_data),
+    //             image::ImageFormat::Png,
+    //         )
+    //         .ok()?;
 
-        Some(png_data)
-    }
+    //     Some(png_data)
+    // }
 }

@@ -142,20 +142,22 @@ function Inner() {
   });
 
   return (
-    <div
-      class="p-5 flex flex-col gap-4 w-screen h-screen bg-gray-50 rounded-lg leading-5 animate-in fade-in"
-      data-tauri-drag-region
-    >
+    <>
       <Header />
-      <div class="rounded-2xl overflow-hidden  shadow border flex-1 flex flex-col divide-y bg-white">
-        <div class="flex flex-row flex-1 divide-x overflow-y-hidden">
-          <Player />
-          <ConfigSidebar />
+      <div
+        class="p-5 pt-0 flex flex-col gap-4 w-screen h-screen bg-gray-50 rounded-lg leading-5 animate-in fade-in"
+        data-tauri-drag-region
+      >
+        <div class="rounded-2xl overflow-hidden  shadow border flex-1 flex flex-col divide-y bg-white">
+          <div class="flex flex-row flex-1 divide-x overflow-y-hidden">
+            <Player />
+            <ConfigSidebar />
+          </div>
+          <Timeline />
         </div>
-        <Timeline />
+        <Dialogs />
       </div>
-      <Dialogs />
-    </div>
+    </>
   );
 }
 
