@@ -49,13 +49,14 @@ rustflags = [
   const res = await fetch(`${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS[os][arch]}`);
   const body = await res.blob();
 
-  if (os === "darwin") {
-    await fs.writeFile(
-      `${__root}/native-deps.tar.xz`,
-      Buffer.from(await body.arrayBuffer())
-    );
-    await exec(`tar xf ${__root}/native-deps.tar.xz -C ${nativeDeps}`);
+  await fs.writeFile(
+    `${__root}/native-deps.tar.xz`,
+    Buffer.from(await body.arrayBuffer())
+  );
 
+  await exec(`tar xf ${__root}/native-deps.tar.xz -C ${nativeDeps}`);
+
+  if (os === "darwin") {
     await symlinkSharedLibsMacOS(nativeDeps).catch((e) => {
       console.error(`Failed to symlink shared libs.`);
       throw e;
@@ -75,6 +76,7 @@ rustflags = [
         4
       )
     );
+  } else if (os === "windows") {
   }
 }
 
@@ -89,7 +91,7 @@ const NATIVE_DEPS_ASSETS = {
     aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
   },
   windows: {
-    x86_64: "native-deps-x86_64-windows-gnu.tar.xz ",
+    x86_64: "native-deps-x86_64-windows-gnu.tar.xz",
     aarch64: "native-deps-aarch64-windows-gnu.tar.xz",
   },
 };
