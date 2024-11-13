@@ -14,6 +14,7 @@ const __dirname = path.dirname(__filename);
 
 const __root = path.resolve(path.join(__dirname, ".."));
 const nativeDeps = path.join(__root, "native-deps");
+const srcTauri = path.join(__root, "apps/desktop/src-tauri");
 
 async function main() {
   await fs.mkdir(path.join(__root, ".cargo"), { recursive: true });
@@ -63,7 +64,7 @@ rustflags = [
     });
 
     await fs.writeFile(
-      `${__root}/apps/desktop/src-tauri/tauri.macos.conf.json`,
+      `${srcTauri}/tauri.macos.conf.json`,
       JSON.stringify(
         {
           bundle: {
@@ -77,6 +78,25 @@ rustflags = [
       )
     );
   } else if (os === "windows") {
+    const binFiles = await fs.readdir(path.join(nativeDeps, "bin"));
+
+    await fs.writeFile(
+      `${srcTauri}/tauri.windows.conf.json`,
+      JSON.stringify(
+        {
+          bundle: {
+            resources: binFiles.filter(
+              (f) =>
+                f.endsWith(".dll") && (f.startsWith("av") || f.startsWith("sw"))
+            ),
+          },
+        },
+        null,
+        4
+      )
+    );
+
+    console.log();
   }
 }
 
