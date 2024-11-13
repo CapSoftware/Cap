@@ -68,7 +68,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           export TARGET_TRIPLE=aarch64-apple-darwin
-          node ${{ github.workspace }}/.github/prebuild.js aarch64
+          node ${{ github.workspace }}/.github/prebuild.js darwin aarch64
           pnpm tauri build --target aarch64-apple-darwin --debug
         env:
           CI: false

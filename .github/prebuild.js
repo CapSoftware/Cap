@@ -68,7 +68,7 @@ rustflags = [
   await fs.rm(nativeDeps, { recursive: true, force: true });
   await fs.mkdir(nativeDeps, { recursive: true });
   const res = await fetch(
-    `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS.Darwin[process.argv[2]]}`
+    `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS[process.argv[2]][process.argv[3]]}`
   );
   const body = await res.blob();
 
@@ -105,8 +105,12 @@ const NATIVE_DEPS_URL =
   "https://github.com/spacedriveapp/native-deps/releases/latest/download";
 
 const NATIVE_DEPS_ASSETS = {
-  Darwin: {
+  darwin: {
     x86_64: "native-deps-x86_64-darwin-apple.tar.xz",
     aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
+  },
+  windows: {
+    x86_64: "native-deps-x86_64-windows-gnu.tar.xz ",
+    aarch64: "native-deps-aarch64-windows-gnu.tar.xz",
   },
 };
