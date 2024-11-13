@@ -37,25 +37,19 @@ export default function (props: RouteSectionProps) {
               },
             ]}
           >
-            {(item) => {
-              const isActive = () => location.pathname.includes(item.href);
-              return (
-                <li>
-                  <A
-                    href={item.href}
-                    class={cx(
-                      "rounded-lg h-[2rem] px-[0.375rem] flex flex-row items-center gap-[0.375rem] transition-colors border",
-                      isActive()
-                        ? "bg-blue-50 border-blue-200 text-blue-700"
-                        : "hover:bg-gray-100 border-transparent"
-                    )}
-                  >
-                    <item.icon class="size-[1.25rem]" />
-                    <span>{item.name}</span>
-                  </A>
-                </li>
-              );
-            }}
+            {(item) => (
+              <li>
+                <A
+                  href={item.href}
+                  activeClass="bg-blue-50 border-blue-200 text-blue-700"
+                  inactiveClass="hover:bg-gray-100 border-transparent"
+                  class="rounded-lg h-[2rem] px-[0.375rem] flex flex-row items-center gap-[0.375rem] transition-colors border"
+                >
+                  <item.icon class="size-[1.25rem]" />
+                  <span>{item.name}</span>
+                </A>
+              </li>
+            )}
           </For>
         </ul>
         <div class="p-[0.625rem]">

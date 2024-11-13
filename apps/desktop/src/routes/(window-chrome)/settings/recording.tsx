@@ -3,7 +3,12 @@ import { createStore } from "solid-js/store";
 import { Select as KSelect } from "@kobalte/core/select";
 import { recordingSettingsStore } from "~/store";
 import { createCurrentRecordingQuery } from "~/utils/queries";
-import { commands, type RecordingSettingsStore, TargetResolution, TargetFPS } from "~/utils/tauri";
+import {
+  commands,
+  type RecordingSettingsStore,
+  TargetResolution,
+  TargetFPS,
+} from "~/utils/tauri";
 import {
   MenuItem,
   MenuItemList,
@@ -23,22 +28,26 @@ export default function RecordingSettings() {
 }
 
 type SettingOption<T> = {
-  label: string,
-  value: T,
-}
+  label: string;
+  value: T;
+};
 
 type RecordingSetting = {
-  label: string
-} & ({
-  key: "capture_resolution",
-  options: SettingOption<TargetResolution | null>[],
-} | {
-  key: "output_resolution",
-  options: SettingOption<TargetResolution | null>[],
-} | {
-  key: "recording_fps",
-  options: SettingOption<TargetFPS>[],
-});
+  label: string;
+} & (
+  | {
+      key: "capture_resolution";
+      options: SettingOption<TargetResolution | null>[];
+    }
+  | {
+      key: "output_resolution";
+      options: SettingOption<TargetResolution | null>[];
+    }
+  | {
+      key: "recording_fps";
+      options: SettingOption<TargetFPS>[];
+    }
+);
 
 const resolutionOptions: SettingOption<TargetResolution>[] = [
   {
@@ -52,8 +61,8 @@ const resolutionOptions: SettingOption<TargetResolution>[] = [
   {
     label: "4K (3840x2160)",
     value: "_4K",
-  }
-]
+  },
+];
 
 const recordingSettings: RecordingSetting[] = [
   {
@@ -105,7 +114,10 @@ function Inner(props: { initialStore: RecordingSettingsStore | null }) {
     }
   );
 
-  const handleChange = async <K extends keyof RecordingSettingsStore>(key: K, value: RecordingSettingsStore[K]) => {
+  const handleChange = async <K extends keyof RecordingSettingsStore>(
+    key: K,
+    value: RecordingSettingsStore[K]
+  ) => {
     console.log(`Handling settings change for ${key}: ${value}`);
 
     setSettings(key, value);
@@ -114,11 +126,15 @@ function Inner(props: { initialStore: RecordingSettingsStore | null }) {
       [key]: value,
     });
     if (result.status === "error") console.error(result.error);
-  }
+  };
 
-  const settingOption = (setting: RecordingSetting): typeof setting.options[0] => {
-    return setting.options.find((option) => option.value === settings[setting.key])!;
-  }
+  const settingOption = (setting: RecordingSetting) => {
+    return (
+      setting.options.find(
+        (option) => option.value === settings[setting.key]
+      ) ?? null
+    );
+  };
 
   const recordingInProgress = !!currentRecording.data;
 
@@ -140,25 +156,30 @@ function Inner(props: { initialStore: RecordingSettingsStore | null }) {
               {(setting) => (
                 <div class="space-y-2 py-3">
                   <p>{setting.label}</p>
-                  <KSelect<typeof setting.options[0]>
+                  <KSelect<(typeof setting.options)[0]>
                     options={setting.options}
                     optionValue="value"
                     optionTextValue="value"
                     value={settingOption(setting)}
                     disabled={recordingInProgress}
                     onChange={(option) => {
-                      handleChange(setting.key, option!.value)
+                      handleChange(setting.key, option?.value ?? null);
                     }}
+                    allowDuplicateSelectionEvents={false}
                     itemComponent={(props) => (
-                      <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
+                      <MenuItem<typeof KSelect.Item>
+                        as={KSelect.Item}
+                        item={props.item}
+                      >
                         <KSelect.ItemLabel class="flex-1">
                           {props.item.rawValue.label}
                         </KSelect.ItemLabel>
                       </MenuItem>
                     )}
+                    placeholder={setting.options[0].label}
                   >
                     <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
-                      <KSelect.Value<typeof setting.options[0]> class="">
+                      <KSelect.Value<(typeof setting.options)[0]> class="">
                         {(state) => <span>{state.selectedOption().label}</span>}
                       </KSelect.Value>
                     </KSelect.Trigger>
