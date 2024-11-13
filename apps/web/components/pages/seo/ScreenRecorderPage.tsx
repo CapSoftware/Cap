@@ -1,6 +1,6 @@
 "use client";
 
-import { SeoPageTemplate } from "../seo/SeoPageTemplate";
+import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
 
 export const screenRecorderContent = {
   title: "Screen Recorder: High-Quality, User-Friendly, and 100% Free Locally",

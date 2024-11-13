@@ -117,6 +117,9 @@ export const Footer = () => {
               <li>
                 <a href="/screen-recorder">Screen Recorder</a>
               </li>
+              <li>
+                <a href="/free-screen-recorder">Free Screen Recorder</a>
+              </li>
             </ul>
           </div>
         </div>
