@@ -1,14 +1,4 @@
-#[cfg(windows)]
-use tokio::net::windows::named_pipe;
-
-#[cfg(unix)]
-pub fn create_named_pipe(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    use nix::sys::stat;
-    use nix::unistd;
-    std::fs::remove_file(path).ok();
-    unistd::mkfifo(path, stat::Mode::S_IRWXU)?;
-    Ok(())
-}
+use std::{ffi::OsString, path::PathBuf};
 
 #[cfg(windows)]
 pub fn get_last_win32_error_formatted() -> String {
@@ -41,8 +31,64 @@ pub fn format_error_message(error_code: u32) -> String {
     }
 }
 
-// Windows named pipes must be in the format "\\.\pipe\name"
-#[cfg(windows)]
-fn named_pipe_to_path(name: &str) -> std::ffi::OsString {
-    format!(r"\\.\pipe\{}", name).into()
+#[cfg(unix)]
+fn create_named_pipe(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    use nix::sys::stat;
+    use nix::unistd;
+    std::fs::remove_file(path).ok();
+    unistd::mkfifo(path, stat::Mode::S_IRWXU)?;
+    Ok(())
+}
+
+pub fn create_channel_named_pipe(
+    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    _unix_path: PathBuf,
+) -> OsString {
+    #[cfg(unix)]
+    {
+        create_named_pipe(&_unix_path).unwrap();
+
+        tokio::spawn(async move {
+            let mut file = std::fs::File::create(&_unix_path).unwrap();
+            println!("video pipe opened");
+
+            while let Some(bytes) = rx.recv().await {
+                file.write_all(&bytes).unwrap();
+            }
+
+            println!("done writing to video pipe");
+        });
+
+        _unix_path.into_os_string()
+    }
+
+    #[cfg(windows)]
+    {
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::windows::named_pipe::ServerOptions;
+
+        let uuid = uuid::Uuid::new_v4();
+        let pipe_name = format!(r#"\\.\pipe\{uuid}"#);
+
+        let mut server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .unwrap();
+
+        tokio::spawn({
+            async move {
+                println!("video pipe opened");
+
+                server.connect().await.unwrap();
+
+                while let Some(bytes) = rx.recv().await {
+                    server.write_all(&bytes).await.unwrap();
+                }
+
+                println!("done writing to video pipe");
+            }
+        });
+
+        pipe_name.into()
+    }
 }

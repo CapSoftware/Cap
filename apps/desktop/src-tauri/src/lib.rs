@@ -56,12 +56,14 @@ use tauri::{AppHandle, LogicalPosition, Manager, Runtime, State, WindowEvent};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
+use tokio::io::AsyncWriteExt;
 use tokio::task;
 use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
 };
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
+use uuid::Uuid;
 use windows::{CapWindow, CapWindowId};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -988,93 +990,11 @@ async fn render_to_file_impl(
 
             let audio_dir = tempfile::tempdir().unwrap();
             let video_dir = tempfile::tempdir().unwrap();
-
-            let video_tx = {
-                let pipe_path = video_dir.path().join("video.pipe");
-                #[cfg(target_os = "macos")]
-                cap_utils::create_named_pipe(&pipe_path).unwrap();
-
-                ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawVideoInput {
-                    width: output_size.0,
-                    height: output_size.1,
-                    fps: 30,
-                    pix_fmt: "rgba",
-                    input: pipe_path.clone().into_os_string(),
-                });
-
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
-
-                tokio::spawn(async move {
-                    let mut file = std::fs::File::create(&pipe_path).unwrap();
-                    println!("video pipe opened");
-
-                    while let Some(bytes) = rx.recv().await {
-                        file.write_all(&bytes).unwrap();
-                    }
-
-                    println!("done writing to video pipe");
-                });
-
-                tx
-            };
             let mut audio = if let Some(audio_data) = audio.lock().unwrap().as_ref() {
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
+                let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
 
-                #[cfg(unix)]
-                let pipe_path = {
-                    let pipe_path = audio_dir.path().join("audio.pipe");
-
-                    cap_utils::create_named_pipe(&pipe_path).unwrap();
-
-                    let pipe_path_os_string = pipe_path.clone().into_os_string();
-
-                    tokio::spawn(async move {
-                        let mut file = std::fs::File::create(&pipe_path).unwrap();
-                        println!("audio pipe opened");
-
-                        while let Some(bytes) = rx.recv().await {
-                            file.write_all(&bytes).unwrap();
-                        }
-
-                        println!("done writing to audio pipe");
-                    });
-
-                    pipe_path_os_string
-                };
-
-                // #[cfg(windows)]
-                // let pipe_path = {
-                //     use tokio::net::windows::named_pipe::ClientOptions;
-                //     use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;
-
-                //     let uuid = Uuid::new_v4();
-                //     let pipe_name = format!(r#"\\.\pipe\{uuid}"#);
-
-                //     let client = loop {
-                //         match ClientOptions::new().open(pipe_name) {
-                //             Ok(client) => break client,
-                //             Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => (),
-                //             Err(e) => panic!("{e}"),
-                //         }
-
-                //         time::sleep(Duration::from_millis(50)).await;
-                //     };
-
-                //     tokio::spawn(async move {
-                //         println!("audio pipe opened");
-
-                //         while let Some(bytes) = rx.recv().await {
-                //             client.write_all(&bytes).await.unwrap();
-                //         }
-
-                //         println!("done writing to audio pipe");
-                //     });
-
-                //     PathBuf::from(pipe_name)
-                // };
-
-                #[cfg(windows)]
-                let pipe_path = OsString::new();
+                let pipe_path =
+                    cap_utils::create_channel_named_pipe(rx, audio_dir.path().join("audio.pipe"));
 
                 ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
                     input: pipe_path,
@@ -1090,6 +1010,23 @@ async fn render_to_file_impl(
                 })
             } else {
                 None
+            };
+
+            let video_tx = {
+                let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
+
+                let pipe_path =
+                    cap_utils::create_channel_named_pipe(rx, video_dir.path().join("video.pipe"));
+
+                ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawVideoInput {
+                    width: output_size.0,
+                    height: output_size.1,
+                    fps: 30,
+                    pix_fmt: "rgba",
+                    input: pipe_path,
+                });
+
+                tx
             };
 
             ffmpeg
