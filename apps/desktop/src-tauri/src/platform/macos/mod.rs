@@ -83,17 +83,3 @@ pub fn make_webview_transparent(target: &tauri::WebviewWindow) -> tauri::Result<
         let _: id = msg_send![wkwebview, setValue:no forKey: NSString::alloc(nil).init_str("drawsBackground")];
     })
 }
-
-pub fn invalidate_shadow(window: tauri::Window) {
-    if let Some(nswindow) = unsafe {
-        window
-            .ns_window()
-            .expect("Failed to get native window handle")
-            .cast::<objc2_app_kit::NSWindow>()
-            .as_ref()
-    } {
-        unsafe {
-            nswindow.invalidateShadow();
-        }
-    }
-}

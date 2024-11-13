@@ -5,7 +5,7 @@ use tauri::{
     AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
 
-const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(14.0, 22.0);
+const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
 #[derive(Clone)]
 pub enum CapWindow {
@@ -187,6 +187,7 @@ impl CapWindow {
                     .resizable(false)
                     .shadow(false)
                     .fullscreen(false)
+                    .decorations(false)
                     .always_on_top(true)
                     .content_protected(true)
                     .visible_on_all_workspaces(true)
@@ -399,13 +400,6 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
             })
             .ok();
     }
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn invalidate_shadow(window: tauri::Window) {
-    #[cfg(target_os = "macos")]
-    crate::platform::invalidate_shadow(window);
 }
 
 #[tauri::command]

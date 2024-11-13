@@ -18,7 +18,7 @@ export interface TitlebarState {
 }
 
 const [state, setState] = createStore<TitlebarState>({
-  height: "44px",
+  height: "36px",
   hideMaximize: false,
   order: "platform",
   items: null,

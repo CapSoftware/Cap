@@ -35,7 +35,7 @@ export default function (props: RouteSectionProps) {
   });
 
   return (
-    <div class="bg-gray-100 border-gray-200 w-screen h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200">
+    <div class="bg-gray-100 border-gray-200 w-screen h-screen max-h-screen flex flex-col overflow-hidden transition-[border-radius] duration-200">
       <Titlebar />
       {/* breaks sometimes */}
       {/* <Transition
@@ -59,7 +59,7 @@ function Inner(props: ParentProps) {
   });
 
   return (
-    <div class="animate-in fade-in w-full h-full flex flex-col">
+    <div class="animate-in fade-in flex-1 flex flex-col overflow-y-hidden">
       {props.children}
     </div>
   );

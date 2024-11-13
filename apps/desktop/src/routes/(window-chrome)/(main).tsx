@@ -51,7 +51,8 @@ const getAuth = cache(async () => {
   const res = await fetch(`${clientEnv.VITE_SERVER_URL}/api/desktop/plan`, {
     headers: { authorization: `Bearer ${value?.token}` },
   });
-  if (res.status !== 200 && !import.meta.env.TAURI_ENV_DEBUG) return redirect("/signin");
+  if (res.status !== 200 && !import.meta.env.TAURI_ENV_DEBUG)
+    return redirect("/signin");
   return value;
 }, "getAuth");
 
@@ -105,7 +106,7 @@ export default function () {
       "items",
       <div
         dir={ostype() === "windows" ? "rtl" : "rtl"}
-        class="flex mx-3 items-center gap-[0.25rem]"
+        class="flex mx-2 items-center gap-[0.3rem]"
       >
         <Button
           variant="secondary"
@@ -669,11 +670,11 @@ function ChangelogButton() {
 
   return (
     <button type="button" onClick={handleChangelogClick} class="relative">
-      <IconLucideBell class="w-[1.15rem] h-[1.15rem] text-gray-400 hover:text-gray-500" />
+      <IconLucideBell class="size-[1.10rem] text-gray-400 hover:text-gray-500" />
       {changelogState.hasUpdate && (
         <div
           style={{ "background-color": "#FF4747" }}
-          class="block z-10 absolute top-0 right-0 w-2 h-2 rounded-full animate-bounce"
+          class="block z-10 absolute top-0 right-0 size-1.5 rounded-full animate-bounce"
         />
       )}
     </button>

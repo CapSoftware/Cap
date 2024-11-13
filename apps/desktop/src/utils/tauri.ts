@@ -313,9 +313,6 @@ async sendFeedbackRequest(feedback: string) : Promise<Result<null, string>> {
 },
 async positionTrafficLights(controlsInset: [number, number] | null) : Promise<void> {
     await TAURI_INVOKE("position_traffic_lights", { controlsInset });
-},
-async invalidateShadow() : Promise<void> {
-    await TAURI_INVOKE("invalidate_shadow");
 }
 }
 
