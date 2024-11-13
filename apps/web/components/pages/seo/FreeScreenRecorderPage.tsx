@@ -13,9 +13,9 @@ export const freeScreenRecorderContent = {
 
   features: [
     {
-      title: "Completely Free",
+      title: "Professional-Grade Software",
       description:
-        "Enjoy full access to Cap’s professional-grade screen recording features without any cost.",
+        "Get access to professional <a href='/screen-recording-software'>screen recording software</a> features completely free.",
     },
     {
       title: "High-Quality Video Capture",
@@ -52,7 +52,7 @@ export const freeScreenRecorderContent = {
     {
       title: "Professional Presentations",
       description:
-        "Capture high-quality presentations and demos to share with clients and colleagues.",
+        "Capture high-quality presentations and demos using our powerful <a href='/screen-recorder'>screen recording software</a> to share with clients and colleagues.",
     },
     {
       title: "Educational Content",
@@ -71,12 +71,12 @@ export const freeScreenRecorderContent = {
     {
       question: "Is Cap really free?",
       answer:
-        "Yes, Cap is completely free, with no hidden fees. You get access to professional-grade screen recording tools without a subscription.",
+        "Yes, Cap is completely free, with no hidden fees. You get access to professional-grade <a href='/screen-recorder'>screen recording</a> tools without a subscription.",
     },
     {
       question: "How long can I record for on the free plan?",
       answer:
-        "Cap’s free plan allows for unlimited recording time, so you can capture your screen without interruptions.",
+        "Cap's free plan allows for unlimited recording time, so you can capture your screen without interruptions. Whether you're on <a href='/screen-recorder-mac'>Mac</a> or Windows, there are no time limits.",
     },
     {
       question: "Can I store my recordings in the cloud?",

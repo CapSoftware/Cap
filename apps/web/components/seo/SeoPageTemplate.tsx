@@ -4,6 +4,15 @@ import { Button } from "@cap/ui";
 import { SeoPageContent } from "@/components/seo/types";
 import { useEffect } from "react";
 
+const renderHTML = (content: string) => {
+  const styledContent = content.replace(
+    /<a\s/g,
+    '<a class="font-semibold text-gray-500" '
+  );
+
+  return <span dangerouslySetInnerHTML={{ __html: styledContent }} />;
+};
+
 export const SeoPageTemplate = ({
   content,
   showVideo = true,
@@ -125,7 +134,7 @@ export const SeoPageTemplate = ({
               {content.featuresTitle}
             </h2>
             <p className="text-lg text-gray-600">
-              {content.featuresDescription}
+              {renderHTML(content.featuresDescription)}
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -134,7 +143,9 @@ export const SeoPageTemplate = ({
                 <h3 className="text-xl mb-3 text-gray-500 font-medium">
                   {feature.title}
                 </h3>
-                <p className="text-gray-600">{feature.description}</p>
+                <p className="text-gray-600">
+                  {renderHTML(feature.description)}
+                </p>
               </div>
             ))}
           </div>
@@ -147,7 +158,7 @@ export const SeoPageTemplate = ({
               {content.useCasesTitle}
             </h2>
             <p className="text-lg text-gray-600">
-              {content.useCasesDescription}
+              {renderHTML(content.useCasesDescription)}
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -156,7 +167,9 @@ export const SeoPageTemplate = ({
                 <h3 className="text-xl mb-3 text-gray-500 font-medium">
                   {useCase.title}
                 </h3>
-                <p className="text-gray-600">{useCase.description}</p>
+                <p className="text-gray-600">
+                  {renderHTML(useCase.description)}
+                </p>
               </div>
             ))}
           </div>
@@ -173,7 +186,7 @@ export const SeoPageTemplate = ({
             {content.faqs.map((faq, index) => (
               <div key={index} className="max-w-2xl mx-auto my-8">
                 <h2 className="text-xl text-gray-500 mb-2">{faq.question}</h2>
-                <p className="text-lg">{faq.answer}</p>
+                <p className="text-lg">{renderHTML(faq.answer)}</p>
               </div>
             ))}
           </div>

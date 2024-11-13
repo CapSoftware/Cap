@@ -27,7 +27,8 @@
       "@/app/*": ["app/*"],
       "@/components/*": ["components/*"],
       "@/pages/*": ["components/pages/*"],
-      "@/utils/*": ["utils/*"]
+      "@/utils/*": ["utils/*"],
+      "@/lib/*": ["lib/*"]
     }
   },
 

@@ -23,9 +23,14 @@ export const screenRecorderContent = {
         "Capture crystal-clear footage with smooth frame rates and synchronized audio.",
     },
     {
+      title: "Cross-Platform Support",
+      description:
+        "Whether you need to <a href='/screen-recorder-mac'>screen record on Mac</a> or Windows, Cap works perfectly on both platforms.",
+    },
+    {
       title: "Completely Free",
       description:
-        "Enjoy professional-grade screen recording without any cost or subscription fees. The local version of Cap is 100% free with no usage limits.",
+        "Enjoy professional-grade screen recording without any cost or subscription fees. Try our <a href='/free-screen-recorder'>free screen recorder</a> today.",
     },
     {
       title: "Unlimited Cloud Storage",
@@ -36,6 +41,11 @@ export const screenRecorderContent = {
       title: "Advanced Team Collaboration",
       description:
         "Boost team productivity with features designed for efficient collaboration and easy sharing.",
+    },
+    {
+      title: "Professional Software",
+      description:
+        "Cap is professional-grade <a href='/screen-recording-software'>screen recording software</a> that's both powerful and easy to use.",
     },
   ],
 
@@ -86,7 +96,7 @@ export const screenRecorderContent = {
     {
       question: "What platforms does Cap support?",
       answer:
-        "Cap is compatible with macOS and Windows, making it versatile for any user or team.",
+        "Cap is compatible with <a href='/screen-recorder-mac'>macOS</a> and Windows, making it versatile for any user or team. Our <a href='/free-screen-recorder'>free screen recorder</a> works great on both platforms.",
     },
     {
       question: "How does Cap improve team productivity?",

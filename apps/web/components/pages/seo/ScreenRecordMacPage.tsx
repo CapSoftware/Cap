@@ -15,7 +15,7 @@ export const screenRecordMacContent = {
     {
       title: "Optimized for macOS",
       description:
-        "Cap is fully optimized for Mac, delivering smooth performance and seamless integration with macOS.",
+        "Cap is fully optimized for Mac, delivering smooth performance and seamless integration with macOS. Looking for a <a href='/free-screen-recorder'>free screen recorder</a>? Cap works great on Mac!",
     },
     {
       title: "High-Quality Video Capture",
@@ -37,6 +37,11 @@ export const screenRecordMacContent = {
       description:
         "Save and share your recordings effortlessly with Cap’s built-in export options for Mac.",
     },
+    {
+      title: "Professional Tools",
+      description:
+        "Access professional <a href='/screen-recording-software'>screen recording software</a> features optimized for Mac.",
+    },
   ],
 
   useCasesTitle: "Popular Uses for Cap’s Screen Recorder on Mac",
@@ -47,7 +52,7 @@ export const screenRecordMacContent = {
     {
       title: "Creating Tutorials",
       description:
-        "Easily create detailed tutorials or training videos on your Mac.",
+        "Easily create detailed tutorials or training videos on your Mac using our professional <a href='/screen-recorder'>screen recording software</a>.",
     },
     {
       title: "Professional Presentations",
@@ -71,7 +76,7 @@ export const screenRecordMacContent = {
     {
       question: "Is Cap compatible with macOS?",
       answer:
-        "Yes, Cap is fully compatible with macOS and optimized to work seamlessly on Mac devices.",
+        "Yes, Cap is fully compatible with macOS and optimized to work seamlessly on Mac devices. If you're looking for a <a href='/free-screen-recorder'>free screen recorder</a>, Cap is perfect for Mac users.",
     },
     {
       question: "Can I record my screen with audio on Mac?",

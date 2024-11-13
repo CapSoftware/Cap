@@ -16,11 +16,12 @@ import Link from "next/link";
 import { useState } from "react";
 import { Menu, X } from "lucide-react";
 import { classNames } from "@cap/utils";
+import { seoPages } from "../lib/seo-pages";
 
 export const Navbar = ({ auth }: { auth: boolean }) => {
   const pathname = usePathname();
   const isHomePage = pathname === "/";
-  const isSeoPage = pathname.startsWith("/screen-recorder");
+  const isSeoPage = pathname.slice(1) in seoPages;
   const [showMobileMenu, setShowMobileMenu] = useState(false);
 
   if (
