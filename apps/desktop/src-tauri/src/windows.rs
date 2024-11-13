@@ -138,7 +138,7 @@ impl CapWindow {
             Self::Main => {
                 let mut window_builder = self
                     .window_builder(app, "/")
-                    .inner_size(300.0, 375.0)
+                    .inner_size(300.0, 360.0)
                     .resizable(false)
                     .maximized(false)
                     .maximizable(false)
@@ -252,7 +252,6 @@ impl CapWindow {
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .decorations(true)
                     .shadow(true)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)

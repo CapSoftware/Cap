@@ -140,7 +140,11 @@ impl<T> ScreenCaptureSource<T> {
             show_cursor: !FLAGS.zoom,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
-            output_type: if cfg!(windows) { FrameType::BGRAFrame} else { FrameType::YUVFrame},
+            output_type: if cfg!(windows) {
+                FrameType::BGRAFrame
+            } else {
+                FrameType::YUVFrame
+            },
             output_resolution: self.resolution,
             crop_area,
             target,
@@ -154,10 +158,13 @@ impl<T> ScreenCaptureSource<T> {
         }
 
         let mut targets = vec![];
-        let screens = scap::get_all_targets().into_iter().filter_map(|t| match t {
-            Target::Display(screen) => Some(screen),
-            _ => None,
-        }).collect::<Vec<_>>();
+        let screens = scap::get_all_targets()
+            .into_iter()
+            .filter_map(|t| match t {
+                Target::Display(screen) => Some(screen),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         let names = crate::platform::display_names();
 
@@ -260,19 +267,11 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                                     eprintln!("Clock is currently stopped. Dropping frames.");
                                 }
                                 Some(timestamp) => {
-                                    dbg!(frame.width, frame.height, frame.data.len());
-
                                     let mut buffer = FFVideo::new(
                                         self.video_info.pixel_format,
                                         self.video_info.width,
                                         self.video_info.height,
                                     );
-
-                                    dbg!(buffer.planes());
-
-                                    for i in 0..buffer.planes() {
-                                        dbg!(buffer.stride(i), buffer.plane_width(i), buffer.plane_height(i));
-                                    }
                                     buffer.set_pts(Some(timestamp));
 
                                     let bytes_per_pixel = 4;

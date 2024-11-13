@@ -19,6 +19,7 @@ pub enum RawVideoFormat {
     Nv12,
     Gray,
     YUYV420,
+    Rgba,
 }
 
 pub fn ffmpeg_sample_format_for(sample_format: SampleFormat) -> Option<Sample> {
@@ -202,6 +203,7 @@ impl VideoInfo {
                 RawVideoFormat::Nv12 => Pixel::NV12,
                 RawVideoFormat::Gray => Pixel::GRAY8,
                 RawVideoFormat::YUYV420 => Pixel::YUV420P,
+                RawVideoFormat::Rgba => Pixel::RGBA,
             },
             width,
             height,
