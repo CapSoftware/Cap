@@ -3,7 +3,7 @@ Allow: /
 
 # Disallow dashboard and any routes starting with 's'
 Disallow: /dashboard
-Disallow: /s
+Disallow: /s/
 
 # Allow crawling of updates
 Allow: /updates/
