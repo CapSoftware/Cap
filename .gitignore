@@ -32,5 +32,6 @@ pnpm-lock.yaml
 .zed
 .output
 .vinxi
-native-deps
+native-deps*
 apps/storybook/storybook-static
+tauri.*.conf.json

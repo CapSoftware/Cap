@@ -146,7 +146,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           export TARGET_TRIPLE=${{ matrix.settings.target }}
-          node ${{ github.workspace }}/.github/prebuild.js ${{ matrix.settings.prebuild }}
+          node ${{ github.workspace }}/.github/prebuild.js darwin ${{ matrix.settings.prebuild }}
           pnpm tauri build --target ${{ matrix.settings.target }} --config src-tauri/tauri.conf.prod.json
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740
