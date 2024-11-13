@@ -18,4 +18,4 @@ runs:
           libayatana-appindicator3-dev \
           librsvg2-dev \
           libpipewire-0.3-dev \
-          ffmpeg clang libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev pkg-config
+          ffmpeg clang libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev pkg-config libasound2-dev
