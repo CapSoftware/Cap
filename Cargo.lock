@@ -812,7 +812,7 @@ dependencies = [
  "futures",
  "indexmap 2.5.0",
  "nokhwa",
- "nokhwa-bindings-macos 0.2.0 (git+https://github.com/CapSoftware/nokhwa?rev=c5c7e2298764)",
+ "nokhwa-bindings-macos",
  "num-traits",
  "objc",
  "objc-foundation",
@@ -4085,9 +4085,9 @@ dependencies = [
  "flume 0.10.14",
  "image 0.24.9",
  "nokhwa-bindings-linux",
- "nokhwa-bindings-macos 0.2.0 (git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b)",
+ "nokhwa-bindings-macos",
  "nokhwa-bindings-windows",
- "nokhwa-core 0.1.0 (git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b)",
+ "nokhwa-core",
  "paste",
  "serde",
  "thiserror",
@@ -4098,7 +4098,7 @@ name = "nokhwa-bindings-linux"
 version = "0.1.0"
 source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
 dependencies = [
- "nokhwa-core 0.1.0 (git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b)",
+ "nokhwa-core",
  "v4l",
  "v4l2-sys-mit",
 ]
@@ -4113,22 +4113,7 @@ dependencies = [
  "core-media-sys",
  "core-video-sys",
  "flume 0.10.14",
- "nokhwa-core 0.1.0 (git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b)",
- "objc",
- "once_cell",
-]
-
-[[package]]
-name = "nokhwa-bindings-macos"
-version = "0.2.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=c5c7e2298764#c5c7e2298764ddf122c2ec0206a8aa7ba80257f0"
-dependencies = [
- "block",
- "cocoa-foundation 0.1.2",
- "core-media-sys",
- "core-video-sys",
- "flume 0.10.14",
- "nokhwa-core 0.1.0 (git+https://github.com/CapSoftware/nokhwa?rev=c5c7e2298764)",
+ "nokhwa-core",
  "objc",
  "once_cell",
 ]
@@ -4138,7 +4123,7 @@ name = "nokhwa-bindings-windows"
 version = "0.4.0"
 source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
 dependencies = [
- "nokhwa-core 0.1.0 (git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b)",
+ "nokhwa-core",
  "once_cell",
  "windows 0.43.0",
 ]
@@ -4152,16 +4137,6 @@ dependencies = [
  "image 0.24.9",
  "mozjpeg",
  "serde",
- "thiserror",
-]
-
-[[package]]
-name = "nokhwa-core"
-version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=c5c7e2298764#c5c7e2298764ddf122c2ec0206a8aa7ba80257f0"
-dependencies = [
- "bytes",
- "image 0.24.9",
  "thiserror",
 ]
 
