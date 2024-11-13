@@ -29,7 +29,7 @@ export function Header() {
   });
 
   setTitlebar("border", false);
-  setTitlebar("height", "4.5rem");
+  setTitlebar("height", "4rem");
   setTitlebar(
     "items",
     <div

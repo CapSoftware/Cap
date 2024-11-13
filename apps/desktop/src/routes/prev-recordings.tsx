@@ -310,7 +310,7 @@ export default function () {
                         </Show>
                         <div
                           class={cx(
-                            "w-full h-full absolute inset-0 transition-all",
+                            "w-full h-full absolute inset-0 transition-all  rounded-[7px]",
                             isLoading() || showUpgradeTooltip()
                               ? "opacity-100"
                               : "opacity-0 group-hover:opacity-100",
