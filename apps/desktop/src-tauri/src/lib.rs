@@ -43,7 +43,6 @@ use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::ffi::OsString;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
@@ -52,18 +51,16 @@ use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
     time::Duration,
 };
-use tauri::{AppHandle, LogicalPosition, Manager, Runtime, State, WindowEvent};
+use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::io::AsyncWriteExt;
-use tokio::task;
 use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
 };
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
-use uuid::Uuid;
 use windows::{CapWindow, CapWindowId};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]

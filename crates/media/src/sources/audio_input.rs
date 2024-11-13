@@ -62,9 +62,13 @@ impl AudioInputSource {
                 .and_then(|configs| {
                     let mut configs = configs.collect::<Vec<_>>();
                     configs.sort_by(|a, b| {
-                        b.sample_format().sample_size().cmp(&a.sample_format().sample_size())
+                        b.sample_format()
+                            .sample_size()
+                            .cmp(&a.sample_format().sample_size())
                     });
-                    configs.into_iter().find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
+                    configs
+                        .into_iter()
+                        .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
                 })
                 .and_then(|config| {
                     device

@@ -1,14 +1,12 @@
 use std::ffi::c_void;
 
 use cocoa::{
-    appkit::NSColor,
     base::{id, nil},
     foundation::NSString,
 };
 use core_graphics::{
     base::boolean_t,
     display::{CFDictionaryRef, CGRect},
-    window::{kCGWindowBounds, kCGWindowOwnerPID},
 };
 use objc::{class, msg_send, sel, sel_impl};
 
