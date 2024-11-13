@@ -112,13 +112,16 @@ export const Footer = () => {
             </ul>
           </div>
           <div className="space-y-4 lg:col-span-12">
-            <h3 className="text-lg font-semibold">More</h3>
+            <h3 className="text-lg font-semibold">Additional Links</h3>
             <ul className="space-y-2">
               <li>
                 <a href="/screen-recorder">Screen Recorder</a>
               </li>
               <li>
                 <a href="/free-screen-recorder">Free Screen Recorder</a>
+              </li>
+              <li>
+                <a href="/screen-recorder-mac">Screen Recorder for Mac</a>
               </li>
             </ul>
           </div>
