@@ -1,6 +1,8 @@
 import { seoPages } from "@/lib/seo-pages";
 import { MetadataRoute } from "next";
 
+export const dynamic = 'force-dynamic';
+
 export default function robots(): MetadataRoute.Robots {
   // Get all SEO page slugs
   const seoPageSlugs = Object.keys(seoPages);
