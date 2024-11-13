@@ -25,6 +25,7 @@ static EXCLUDED_WINDOWS: [&str; 4] = [
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CaptureWindow {
     pub id: u32,
+    pub owner_name: String,
     pub name: String,
     pub bounds: Bounds,
 }
@@ -180,7 +181,7 @@ impl<T> ScreenCaptureSource<T> {
         targets
     }
 
-    pub fn list_targets() -> Vec<CaptureWindow> {
+    pub fn list_windows() -> Vec<CaptureWindow> {
         if !scap::has_permission() {
             return vec![];
         }
@@ -200,10 +201,8 @@ impl<T> ScreenCaptureSource<T> {
                         .get(&window.id)
                         .map(|platform_window| CaptureWindow {
                             id: window.id,
-                            name: format!(
-                                "{} - {}",
-                                platform_window.owner_name, platform_window.name
-                            ),
+                            owner_name: platform_window.owner_name.clone(),
+                            name: platform_window.name.clone(),
                             bounds: platform_window.bounds,
                         })
                 }

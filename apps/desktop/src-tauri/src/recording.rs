@@ -25,7 +25,7 @@ pub fn list_capture_screens() -> Vec<CaptureScreen> {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_capture_windows() -> Vec<CaptureWindow> {
-    ScreenCaptureSource::<AVFrameCapture>::list_targets()
+    ScreenCaptureSource::<AVFrameCapture>::list_windows()
 }
 
 #[tauri::command(async)]

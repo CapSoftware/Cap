@@ -191,7 +191,7 @@ export function MenuItem<T extends ValidComponent = "button">(
       {...props}
       class={cx(
         props.class,
-        "flex flex-row shrink-0 items-center gap-[0.375rem] px-[0.675rem] h-[2rem] rounded-[0.5rem] outline-none text-nowrap overflow-hidden text-ellipsis w-full max-w-full",
+        "flex flex-row shrink-0 items-center gap-[0.375rem] px-[0.675rem] py-[0.375rem] rounded-[0.5rem] outline-none text-nowrap overflow-hidden text-ellipsis w-full max-w-full",
         "text-[0.875rem] text-gray-400 disabled:text-gray-400 ui-highlighted:bg-gray-100 ui-highlighted:text-gray-500"
       )}
     />

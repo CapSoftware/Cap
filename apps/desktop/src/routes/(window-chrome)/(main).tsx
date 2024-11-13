@@ -1,5 +1,5 @@
 import { Button } from "@cap/ui-solid";
-import { Select as KSelect } from "@kobalte/core/select";
+import { Select as KSelect, SelectRootProps } from "@kobalte/core/select";
 import { cache, createAsync, redirect, useNavigate } from "@solidjs/router";
 import {
   createMutation,
@@ -9,6 +9,7 @@ import {
 import { getVersion } from "@tauri-apps/api/app";
 import { cx } from "cva";
 import {
+  JSX,
   Show,
   type ValidComponent,
   createEffect,
@@ -275,6 +276,12 @@ function TargetSelects(props: {
         placeholder="Window"
         optionsEmptyText="No windows found"
         selected={props.options?.captureTarget.variant === "window"}
+        itemComponent={(props) => (
+          <div class="flex-1 flex flex-col overflow-x-hidden">
+            <div class="w-full truncate">{props.item.rawValue?.name}</div>
+            <div class="w-full text-xs">{props.item.rawValue?.owner_name}</div>
+          </div>
+        )}
       />
     </div>
   );
@@ -490,6 +497,11 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
   selected: boolean;
   optionsEmptyText: string;
   placeholder: string;
+  itemComponent?: (
+    props: Parameters<
+      NonNullable<SelectRootProps<T | null>["itemComponent"]>
+    >[0]
+  ) => JSX.Element;
 }) {
   createEffect(() => {
     const v = props.value;
@@ -506,11 +518,11 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
       optionValue="id"
       optionTextValue="name"
       gutter={8}
-      itemComponent={(props) => (
-        <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
-          <KSelect.ItemLabel class="flex-1">
-            {props.item.rawValue?.name}
-          </KSelect.ItemLabel>
+      itemComponent={(itemProps) => (
+        <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={itemProps.item}>
+          {/* <KSelect.ItemLabel class="flex-1"> */}
+          {props?.itemComponent?.(itemProps) ?? itemProps.item.rawValue?.name}
+          {/* </KSelect.ItemLabel> */}
         </MenuItem>
       )}
       placement="bottom"
@@ -567,7 +579,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
               <div class="p-2 text-gray-500">{props.optionsEmptyText}</div>
             }
           >
-            <KSelect.Listbox class="max-h-52 max-w-64" as={MenuItemList} />
+            <KSelect.Listbox class="max-h-52 max-w-[17rem]" as={MenuItemList} />
           </Show>
         </PopperContent>
       </KSelect.Portal>
