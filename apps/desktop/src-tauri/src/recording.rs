@@ -186,6 +186,7 @@ pub async fn start(
     recording_dir: PathBuf,
     recording_options: &RecordingOptions,
     camera_feed: Option<&CameraFeed>,
+    audio_input_feed: Option<&AudioInputFeed>,
 ) -> Result<InProgressRecording, MediaError> {
     let content_dir = recording_dir.join("content");
     let cursors_dir = content_dir.join("cursors");
@@ -242,11 +243,7 @@ pub async fn start(
             .sink("screen_capture_encoder", screen_encoder);
     }
 
-    if let Some(mic_source) = recording_options
-        .audio_input_name
-        .as_ref()
-        .and_then(|name| AudioInputSource::init(name))
-    {
+    if let Some(mic_source) = audio_input_feed.map(AudioInputSource::init) {
         let mic_config = mic_source.info();
         audio_output_path = Some(content_dir.join("audio-input.mp3"));
 
@@ -263,7 +260,7 @@ pub async fn start(
             .sink("microphone_encoder", mic_encoder);
     }
 
-    if let Some(camera_source) = CameraSource::init(camera_feed) {
+    if let Some(camera_source) = camera_feed.map(CameraSource::init) {
         let camera_config = camera_source.info();
         let output_config = camera_config.scaled(1920, 30);
         camera_output_path = Some(content_dir.join("camera.mp4"));

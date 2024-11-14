@@ -14,11 +14,11 @@ pub struct CameraSource {
 }
 
 impl CameraSource {
-    pub fn init(camera_feed: Option<&CameraFeed>) -> Option<Self> {
-        camera_feed.map(|feed| Self {
+    pub fn init(feed: &CameraFeed) -> Self {
+        Self {
             feed_connection: feed.create_connection(),
             video_info: feed.video_info(),
-        })
+        }
     }
 
     pub fn info(&self) -> VideoInfo {
@@ -82,6 +82,7 @@ impl PipelineSourceTask for CameraSource {
         output: Sender<Self::Output>,
     ) {
         println!("Preparing camera source thread...");
+
         let mut frames_rx: Option<Receiver<RawCameraFrame>> = None;
         ready_signal.send(Ok(())).unwrap();
 
@@ -119,6 +120,6 @@ impl PipelineSourceTask for CameraSource {
             }
         }
 
-        println!("Shutting down screen capture source thread.");
+        println!("Shutting down camera source thread.");
     }
 }

@@ -320,6 +320,7 @@ async positionTrafficLights(controlsInset: [number, number] | null) : Promise<vo
 
 
 export const events = __makeEvents__<{
+audioInputLevelChange: AudioInputLevelChange,
 authenticationInvalid: AuthenticationInvalid,
 currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
@@ -338,6 +339,7 @@ requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
 showCapturesPanel: ShowCapturesPanel
 }>({
+audioInputLevelChange: "audio-input-level-change",
 authenticationInvalid: "authentication-invalid",
 currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
@@ -366,6 +368,7 @@ showCapturesPanel: "show-captures-panel"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
+export type AudioInputLevelChange = number
 export type AudioMeta = { path: string }
 export type AuthStore = { token: string; expires: number; plan: Plan | null }
 export type AuthenticationInvalid = null

@@ -18,7 +18,7 @@ import {
   createSignal,
   onMount,
 } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, produce } from "solid-js/store";
 import { fetch } from "@tauri-apps/plugin-http";
 
 import { authStore } from "~/store";
@@ -422,7 +422,15 @@ function MicrophoneSelect(props: {
       ...props.options,
       audioInputName: item.deviceId !== "" ? item.name : null,
     });
+    if (!item.deviceId) setSamples();
   };
+
+  const [samples, setSamples] = createSignal<number | undefined>();
+
+  events.audioInputLevelChange.listen((sample) => {
+    if (!props.options?.audioInputName) setSamples();
+    else setSamples(sample.payload);
+  });
 
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch">
@@ -452,7 +460,19 @@ function MicrophoneSelect(props: {
           setOpen(isOpen);
         }}
       >
-        <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+        <KSelect.Trigger class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10">
+          <Show when={samples()}>
+            {(s) => (
+              <div
+                class="bg-blue-100 opacity-50 left-0 inset-y-0 absolute -z-10 transition-[right] duration-100"
+                style={{
+                  right: `${
+                    Math.pow(1 - Math.max(s() + 40, 0) / 40, 0.5) * 100
+                  }%`,
+                }}
+              />
+            )}
+          </Show>
           <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
           <KSelect.Value<{
             name: string;

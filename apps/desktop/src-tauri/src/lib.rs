@@ -9,6 +9,7 @@ mod permissions;
 mod platform;
 mod recording;
 // mod resource;
+mod audio_meter;
 mod cursor;
 mod tray;
 mod upload;
@@ -19,11 +20,12 @@ use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_editor::{EditorState, ProjectRecordings};
+use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::sources::CaptureScreen;
 use cap_media::{
     feeds::{AudioFrameBuffer, CameraFeed, CameraFrameSender},
     platform::Bounds,
-    sources::{AudioInputSource, ScreenCaptureTarget},
+    sources::ScreenCaptureTarget,
 };
 use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
@@ -90,6 +92,10 @@ pub struct App {
     camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<CameraFeed>,
+    #[serde(skip)]
+    audio_input_feed: Option<AudioInputFeed>,
+    #[serde(skip)]
+    audio_input_tx: AudioInputSamplesSender,
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
@@ -167,16 +173,16 @@ impl App {
             _ => {}
         }
 
-        match &new_options.camera_label {
+        match new_options.camera_label() {
             Some(camera_label) => {
-                if self.camera_feed.is_none() {
-                    self.camera_feed = CameraFeed::init(camera_label, self.camera_tx.clone())
+                if let Some(camera_feed) = self.camera_feed.as_mut() {
+                    camera_feed
+                        .switch_cameras(camera_label)
                         .await
                         .map_err(|error| eprintln!("{error}"))
                         .ok();
-                } else if let Some(camera_feed) = self.camera_feed.as_mut() {
-                    camera_feed
-                        .switch_cameras(camera_label)
+                } else {
+                    self.camera_feed = CameraFeed::init(camera_label, self.camera_tx.clone())
                         .await
                         .map_err(|error| eprintln!("{error}"))
                         .ok();
@@ -184,6 +190,31 @@ impl App {
             }
             None => {
                 self.camera_feed = None;
+            }
+        }
+
+        match new_options.audio_input_name() {
+            Some(audio_input_name) => {
+                if let Some(audio_input_feed) = self.audio_input_feed.as_mut() {
+                    audio_input_feed
+                        .switch_input(audio_input_name)
+                        .await
+                        .map_err(|error| eprintln!("{error}"))
+                        .ok();
+                } else {
+                    self.audio_input_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
+                        .await
+                        .map_err(|error| eprintln!("{error}"))
+                    {
+                        feed.add_sender(self.audio_input_tx.clone()).await.unwrap();
+                        Some(feed)
+                    } else {
+                        None
+                    };
+                }
+            }
+            None => {
+                self.audio_input_feed = None;
             }
         }
 
@@ -241,6 +272,9 @@ pub struct NewNotification {
     body: String,
     is_error: bool,
 }
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct AudioInputLevelChange(f64);
 
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
@@ -342,6 +376,7 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         recording_dir,
         &state.start_recording_options,
         state.camera_feed.as_ref(),
+        state.audio_input_feed.as_ref(),
     )
     .await
     {
@@ -1672,13 +1707,13 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
     }
 
     // TODO: Check - is this necessary? `spawn_blocking` is quite a bit of overhead.
-    tokio::task::spawn_blocking(|| {
-        let devices = AudioInputSource::get_devices();
+    // tokio::task::spawn_blocking(|| {
+    let devices = AudioInputFeed::list_devices();
 
-        devices.keys().cloned().collect()
-    })
-    .await
-    .map_err(|_| ())
+    Ok(devices.keys().cloned().collect())
+    // })
+    // .await
+    // .map_err(|_| ())
 }
 
 #[tauri::command(async)]
@@ -2442,7 +2477,8 @@ pub async fn run() {
             RequestNewScreenshot,
             RequestOpenSettings,
             NewNotification,
-            AuthenticationInvalid
+            AuthenticationInvalid,
+            AudioInputLevelChange
         ])
         .typ::<ProjectConfiguration>()
         .typ::<AuthStore>()
@@ -2460,6 +2496,8 @@ pub async fn run() {
 
     let (camera_tx, camera_rx) = CameraFeed::create_channel();
     let camera_ws_port = camera::create_camera_ws(camera_rx.clone()).await;
+
+    let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 
     tauri::async_runtime::set(tokio::runtime::Handle::current());
 
@@ -2509,11 +2547,31 @@ pub async fn run() {
                 CapWindow::Main.show(&app_handle).ok();
             }
 
+            let mut time_window = audio_meter::VolumeMeter::new(0.2);
+            tokio::spawn({
+                let app_handle = app_handle.clone();
+                async move {
+                    while let Ok(samples) = audio_input_rx.recv_async().await {
+                        let floats = audio_meter::samples_to_f64(&samples);
+
+                        let db = audio_meter::db_fs(floats);
+
+                        time_window.push(samples.info.timestamp().capture, db);
+
+                        let max = time_window.max();
+
+                        AudioInputLevelChange(max).emit(&app_handle).ok();
+                    }
+                }
+            });
+
             app.manage(Arc::new(RwLock::new(App {
                 handle: app_handle.clone(),
                 camera_tx,
                 camera_ws_port,
                 camera_feed: None,
+                audio_input_tx,
+                audio_input_feed: None,
                 start_recording_options: RecordingOptions {
                     capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
                         id: 1,
