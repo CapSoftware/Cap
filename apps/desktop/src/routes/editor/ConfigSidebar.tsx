@@ -82,9 +82,9 @@ export function ConfigSidebar() {
   return (
     <KTabs
       value={selectedTab()}
-      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden w-[25.5rem] z-10 bg-gray-50 relative"
+      class="flex flex-col shrink-0 overflow-x-hidden overflow-y-hidden flex-1 max-w-[25.5rem] z-10 bg-gray-50 relative"
     >
-      <KTabs.List class="h-[3.5rem] flex flex-row divide-x divide-gray-200 text-black/50 text-lg relative z-40 overflow-x-auto border-b border-gray-200">
+      <KTabs.List class="h-[3.5rem] flex flex-row divide-x divide-gray-200 text-black/50 text-lg relative z-40 overflow-x-auto border-b border-gray-200 shrink-0">
         <For
           each={[
             { id: "background" as const, icon: IconCapImage },
@@ -265,7 +265,7 @@ export function ConfigSidebar() {
               </KTabs.Content>
               <KTabs.Content
                 value="gradient"
-                class="flex flex-row items-center gap-[1.5rem]"
+                class="flex flex-row items-center justify-between"
               >
                 <Show
                   when={
@@ -303,7 +303,7 @@ export function ConfigSidebar() {
                           }}
                         />
                         <div
-                          class="rounded-full size-12 bg-gray-50 border border-gray-200 relative p-1 flex flex-col items-center cursor-ns-resize"
+                          class="rounded-full size-12 bg-gray-50 border border-gray-200 relative p-1 flex flex-col items-center cursor-ns-resize shrink-0"
                           style={{ transform: `rotate(${angle()}deg)` }}
                           onMouseDown={(downEvent) => {
                             const start = angle();
@@ -454,15 +454,17 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
-          <Field name="Size During Zoom" icon={<IconCapEnlarge />}>
-            <Slider
-              value={[project.camera.zoom_size ?? 20]}
-              onChange={(v) => setProject("camera", "zoom_size", v[0])}
-              minValue={10}
-              maxValue={60}
-              step={0.1}
-            />
-          </Field>
+          {window.FLAGS.zoom && (
+            <Field name="Size During Zoom" icon={<IconCapEnlarge />}>
+              <Slider
+                value={[project.camera.zoom_size ?? 20]}
+                onChange={(v) => setProject("camera", "zoom_size", v[0])}
+                minValue={10}
+                maxValue={60}
+                step={0.1}
+              />
+            </Field>
+          )}
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
               value={[project.camera.rounding ?? 100.0]}
@@ -532,51 +534,53 @@ export function ConfigSidebar() {
               step={1}
             />
           </Field>
-          <Field name="Animation Style" icon={<IconLucideRabbit />}>
-            <RadioGroup
-              defaultValue="regular"
-              value={project.cursor.animationStyle}
-              onChange={(value) => {
-                console.log("Changing animation style to:", value);
-                setProject(
-                  "cursor",
-                  "animationStyle",
-                  value as CursorAnimationStyle
-                );
-              }}
-              class="flex flex-col gap-2"
-            >
-              {(
-                Object.entries(CURSOR_ANIMATION_STYLES) as [
-                  CursorAnimationStyle,
-                  string
-                ][]
-              ).map(([value, label]) => (
-                <RadioGroup.Item value={value} class="flex items-center">
-                  <RadioGroup.ItemInput class="peer sr-only" />
-                  <RadioGroup.ItemControl
-                    class={cx(
-                      "w-4 h-4 rounded-full border border-gray-300 mr-2",
-                      "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
-                      "after:transition-colors after:duration-200",
-                      "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
-                      "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
-                      "peer-disabled:opacity-50"
-                    )}
-                  />
-                  <span
-                    class={cx(
-                      "text-gray-500",
-                      "peer-checked:text-gray-900",
-                      "peer-disabled:opacity-50"
-                    )}
-                  >
-                    {label}
-                  </span>
-                </RadioGroup.Item>
-              ))}
-            </RadioGroup>
-          </Field>
+          {window.FLAGS.zoom && (
+            <Field name="Animation Style" icon={<IconLucideRabbit />}>
+              <RadioGroup
+                defaultValue="regular"
+                value={project.cursor.animationStyle}
+                onChange={(value) => {
+                  console.log("Changing animation style to:", value);
+                  setProject(
+                    "cursor",
+                    "animationStyle",
+                    value as CursorAnimationStyle
+                  );
+                }}
+                class="flex flex-col gap-2"
+              >
+                {(
+                  Object.entries(CURSOR_ANIMATION_STYLES) as [
+                    CursorAnimationStyle,
+                    string
+                  ][]
+                ).map(([value, label]) => (
+                  <RadioGroup.Item value={value} class="flex items-center">
+                    <RadioGroup.ItemInput class="peer sr-only" />
+                    <RadioGroup.ItemControl
+                      class={cx(
+                        "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                        "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                        "after:transition-colors after:duration-200",
+                        "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                        "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
+                        "peer-disabled:opacity-50"
+                      )}
+                    />
+                    <span
+                      class={cx(
+                        "text-gray-500",
+                        "peer-checked:text-gray-900",
+                        "peer-disabled:opacity-50"
+                      )}
+                    >
+                      {label}
+                    </span>
+                  </RadioGroup.Item>
+                ))}
+              </RadioGroup>
+            </Field>
+          )}
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
           <Field name="Hotkeys" icon={<IconCapHotkeys />}>
