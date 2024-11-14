@@ -14,13 +14,12 @@ export default function Titlebar() {
   return (
     <header
       class={cx(
-        "flex flex-row items-center select-none space-x-1 shrink-0 border-gray-200 rounded-[inherit]",
+        "flex flex-row items-center z-50 select-none space-x-1 shrink-0 border-gray-200",
         titlebarState.transparent ? "" : "bg-gray-50",
         titlebarState.border ? "border-b" : ""
       )}
       style={{
         height: titlebarState.height,
-        "z-index": "999999",
       }}
       data-tauri-drag-region
     >
