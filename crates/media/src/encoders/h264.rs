@@ -22,7 +22,7 @@ pub struct H264Encoder {
 
 impl H264Encoder {
     pub fn init(tag: &'static str, config: VideoInfo, output: Output) -> Result<Self, MediaError> {
-        let Output::File(destination) = output;
+        let Output::File(ref destination) = output;
 
         let mut output_ctx = format::output(&destination)?;
 
@@ -65,21 +65,99 @@ impl H264Encoder {
         })
     }
 
-    fn queue_frame(&mut self, frame: FFVideo) {
+    pub fn init_append(
+        tag: &'static str,
+        config: VideoInfo,
+        output: Output,
+    ) -> Result<Self, MediaError> {
+        let Output::File(destination) = output;
+
+        // Create a temporary context to read the last PTS from the existing file
+        let mut input_ctx = format::input(&destination)?;
+        let stream = input_ctx
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .unwrap();
+        let last_pts = stream.duration();
+
+        // Open output context
+        let mut output_ctx = format::output(&destination)?;
+
+        let (codec, options) = get_codec_and_options(&config)?;
+        let mut encoder_ctx = context::Context::new_with_codec(codec);
+        encoder_ctx.set_threading(Config::count(4));
+        let mut encoder = encoder_ctx.encoder().video()?;
+
+        encoder.set_width(config.width);
+        encoder.set_height(config.height);
+        encoder.set_format(config.pixel_format);
+        encoder.set_time_base(config.frame_rate.invert());
+        encoder.set_frame_rate(Some(config.frame_rate));
+
+        if codec.name() == "h264_videotoolbox" {
+            encoder.set_bit_rate(1_200_000);
+            encoder.set_max_bit_rate(120_000);
+        } else {
+            encoder.set_bit_rate(8_000_000);
+            encoder.set_max_bit_rate(8_000_000);
+        }
+
+        let video_encoder = encoder.open_with(options)?;
+
+        // Find or create video stream
+        let stream_index = output_ctx
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .map(|s| s.index())
+            .unwrap_or_else(|| {
+                let stream = output_ctx.add_stream(codec).unwrap();
+                stream.index()
+            });
+
+        let mut output_stream = output_ctx.stream_mut(stream_index).unwrap();
+        output_stream.set_time_base(config.frame_rate.invert());
+        output_stream.set_parameters(&video_encoder);
+
+        // Write header if this is a new file
+        if std::fs::metadata(&destination).map_or(true, |m| m.len() == 0) {
+            output_ctx.write_header()?;
+        }
+
+        Ok(Self {
+            tag,
+            encoder: video_encoder,
+            output_ctx,
+            last_pts: Some(last_pts), // Set the last PTS from the existing file
+            config,
+        })
+    }
+
+    fn queue_frame(&mut self, mut frame: FFVideo) {
+        // If we have a last PTS, offset the new frame's PTS
+        if let Some(last_pts) = self.last_pts {
+            if let Some(current_pts) = frame.pts() {
+                frame.set_pts(Some(current_pts + last_pts));
+            }
+        }
+
         self.encoder.send_frame(&frame).unwrap();
     }
 
     fn process_frame(&mut self) {
         let mut encoded_packet = FFPacket::empty();
 
-        // TODO: Handle errors that are not EGAIN/"needs more data"
         while self.encoder.receive_packet(&mut encoded_packet).is_ok() {
             encoded_packet.set_stream(0);
+
+            if let Some(last_pts) = self.last_pts {
+                encoded_packet.set_pts(Some(last_pts));
+            }
+
             encoded_packet.rescale_ts(
                 self.encoder.time_base(),
                 self.output_ctx.stream(0).unwrap().time_base(),
             );
-            // TODO: Possibly move writing to disk to its own file, to increase encoding throughput?
+
             encoded_packet
                 .write_interleaved(&mut self.output_ctx)
                 .unwrap();

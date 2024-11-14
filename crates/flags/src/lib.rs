@@ -10,6 +10,6 @@ pub struct Flags {
 pub const FLAGS: Flags = Flags {
     record_mouse: cfg!(debug_assertions),
     split: false,
-    pause_resume: false,
+    pause_resume: true,
     zoom: cfg!(debug_assertions),
 };

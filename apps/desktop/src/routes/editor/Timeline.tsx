@@ -62,8 +62,27 @@ export function Timeline() {
 
   const xPadding = 12;
 
-  const segments = () =>
-    project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
+  const segments = () => {
+    if (!project.timeline?.segments || project.timeline.segments.length === 0) {
+      return [{ start: 0, end: duration(), timescale: 1 }];
+    }
+
+    return project.timeline.segments;
+  };
+
+  const isInPause = (time: number) => {
+    const segments = project.timeline?.segments || [];
+    if (segments.length < 2) return false;
+
+    for (let i = 0; i < segments.length - 1; i += 2) {
+      const segmentEnd = segments[i].end;
+      const nextSegmentStart = segments[i + 1].start;
+      if (time >= segmentEnd && time <= nextSegmentStart) {
+        return true;
+      }
+    }
+    return false;
+  };
 
   if (window.FLAGS.zoom)
     if (
@@ -137,7 +156,10 @@ export function Timeline() {
         </Show>
         <Show when={!split()}>
           <div
-            class="w-px bg-red-300 absolute top-4 bottom-0 z-10 pointer-events-none"
+            class={cx(
+              "w-px absolute top-4 bottom-0 z-10 pointer-events-none",
+              isInPause(playbackTime()) ? "bg-gray-300" : "bg-red-300"
+            )}
             style={{
               left: `${xPadding}px`,
               transform: `translateX(${Math.min(
@@ -147,7 +169,12 @@ export function Timeline() {
               )}px)`,
             }}
           >
-            <div class="size-2 bg-red-300 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]" />
+            <div
+              class={cx(
+                "size-2 rounded-full -mt-2 -ml-[calc(0.25rem-0.5px)]",
+                isInPause(playbackTime()) ? "bg-gray-300" : "bg-red-300"
+              )}
+            />
           </div>
         </Show>
         <TrackRoot ref={setTimelineRef} isFreeForm={false}>

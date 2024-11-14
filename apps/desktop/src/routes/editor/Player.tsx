@@ -94,6 +94,21 @@ export function Player() {
         await commands.stopPlayback(videoId);
         setPlaying(false);
       } else {
+        const segments = project.timeline?.segments || [];
+        if (segments.length > 1) {
+          for (let i = 0; i < segments.length - 1; i += 2) {
+            const segmentEnd = segments[i].end;
+            const nextSegmentStart = segments[i + 1].start;
+            if (
+              playbackTime() >= segmentEnd &&
+              playbackTime() < nextSegmentStart
+            ) {
+              await commands.seekTo(videoId, nextSegmentStart);
+              break;
+            }
+          }
+        }
+
         await commands.startPlayback(videoId);
         setPlaying(true);
       }
@@ -109,6 +124,19 @@ export function Player() {
       await handlePlayPauseClick();
     }
   });
+
+  const formatTimeWithStatus = (time: number) => {
+    const timeStr = formatTime(time);
+    const segments = project.timeline?.segments || [];
+    if (segments.length > 1) {
+      for (let i = 0; i < segments.length - 1; i += 2) {
+        if (time >= segments[i].end && time <= segments[i + 1].start) {
+          return <span class="text-gray-400">{timeStr}</span>;
+        }
+      }
+    }
+    return timeStr;
+  };
 
   return (
     <div class="flex flex-col divide-y flex-1">
@@ -220,7 +248,7 @@ export function Player() {
       <div class="flex flex-row items-center p-[0.75rem] z-10 bg-gray-50">
         <div class="flex-1" />
         <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
-          <span>{formatTime(playbackTime())}</span>
+          <span>{formatTimeWithStatus(playbackTime())}</span>
           <button type="button" disabled>
             <IconCapFrameFirst class="size-[1.2rem]" />
           </button>

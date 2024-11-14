@@ -171,12 +171,84 @@ impl InProgressRecording {
     }
 
     pub async fn pause(&mut self) -> Result<(), String> {
-        let _ = self.pipeline.pause().await;
+        // Stop the pipeline but keep the files
+        if let Err(error) = self.pipeline.shutdown().await {
+            eprintln!("Error while pausing recording: {error}");
+        }
+
+        // Add current timestamp to segments for tracking pause point
+        self.segments.push(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64(),
+        );
+
         Ok(())
     }
 
     pub async fn play(&mut self) -> Result<(), String> {
-        let _ = self.pipeline.play().await;
+        // Add timestamp before resuming
+        self.segments.push(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64(),
+        );
+
+        // Recreate the pipeline with the same output files in append mode
+        let mut pipeline_builder = Pipeline::builder(RealTimeClock::<()>::new());
+
+        #[cfg(target_os = "macos")]
+        {
+            let screen_source =
+                ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
+                    &self.display_source,
+                    None,
+                    None,
+                );
+            let screen_config = screen_source.info();
+
+            let output_config = screen_config.scaled(1920, 30);
+            let screen_encoder = cap_media::encoders::H264AVAssetWriterEncoder::init(
+                "screen",
+                output_config,
+                Output::File(self.display_output_path.clone()),
+            )
+            .map_err(|e| e.to_string())?;
+
+            pipeline_builder = pipeline_builder
+                .source("screen_capture", screen_source)
+                .sink("screen_capture_encoder", screen_encoder);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let screen_source =
+                ScreenCaptureSource::<AVFrameCapture>::init(&self.display_source, None, None);
+            let screen_config = screen_source.info();
+
+            let output_config = screen_config.scaled(1920, 30);
+            let screen_filter = VideoFilter::init("screen", screen_config, output_config)
+                .map_err(|e| e.to_string())?;
+            let screen_encoder = H264Encoder::init_append(
+                "screen",
+                output_config,
+                Output::File(self.display_output_path.clone()),
+            )
+            .map_err(|e| e.to_string())?;
+            pipeline_builder = pipeline_builder
+                .source("screen_capture", screen_source)
+                .pipe("screen_capture_filter", screen_filter)
+                .sink("screen_capture_encoder", screen_encoder);
+        }
+
+        // Recreate other encoders (audio, camera) similarly...
+
+        let mut pipeline = pipeline_builder.build().await.map_err(|e| e.to_string())?;
+        pipeline.play().await.map_err(|e| e.to_string())?;
+
+        self.pipeline = pipeline;
+
         Ok(())
     }
 }

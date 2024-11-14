@@ -1,3 +1,4 @@
+use crate::MediaError;
 use cap_flags::FLAGS;
 use flume::Sender;
 use scap::{
@@ -237,7 +238,18 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
             ScreenCaptureTarget::Window(window) => Some(window.id),
             _ => None,
         };
-        let mut capturer = Capturer::new(dbg!(options));
+
+        let mut capturer = match Capturer::build(dbg!(options)) {
+            Ok(capturer) => capturer,
+            Err(e) => {
+                eprintln!("Failed to build capturer: {}", e);
+                ready_signal
+                    .send(Err(MediaError::Any("Failed to build capturer")))
+                    .unwrap();
+                return;
+            }
+        };
+
         let mut capturing = false;
         ready_signal.send(Ok(())).unwrap();
 
@@ -248,10 +260,20 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         if let Some(window_id) = maybe_capture_window_id {
                             crate::platform::bring_window_to_focus(window_id);
                         }
-                        capturer.start_capture();
-                        capturing = true;
 
-                        println!("Screen recording started.");
+                        // Recreate capturer when resuming
+                        match Capturer::build(self.create_options()) {
+                            Ok(new_capturer) => {
+                                capturer = new_capturer;
+                                capturer.start_capture();
+                                capturing = true;
+                                println!("Screen recording resumed.");
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to rebuild capturer: {}", e);
+                                break;
+                            }
+                        }
                     }
 
                     match capturer.get_next_frame() {
@@ -278,7 +300,6 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                                     let height = frame.height as usize;
 
                                     let src_data = &frame.data;
-
                                     let src_stride = src_data.len() / height;
                                     let dst_stride = buffer.stride(0);
 
@@ -301,7 +322,6 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
                                     {
                                         let dst_data = buffer.data_mut(0);
-
                                         for y in 0..height {
                                             let src_offset = y * src_stride;
                                             let dst_offset = y * dst_stride;
