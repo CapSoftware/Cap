@@ -43,7 +43,15 @@
     "externalBin": ["../../../target/binaries/ffmpeg"],
     "macOS": {
       "dmg": {
-        "background": "./src-tauri/icons/dmg-background.png"
+        "background": "assets/dmg-background.png",
+        "appPosition": {
+          "x": 180,
+          "y": 140
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 140
+        }
       }
     }
   }
