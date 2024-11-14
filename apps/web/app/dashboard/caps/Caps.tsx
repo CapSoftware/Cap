@@ -35,10 +35,6 @@ export const Caps = ({
   const limit = 15;
   const totalPages = Math.ceil(count / limit);
 
-  if (!activeSpace && (user?.name === undefined || user?.name === "")) {
-    replace("/onboarding");
-  }
-
   useEffect(() => {
     const fetchAnalytics = async () => {
       const analyticsData: Record<string, number> = {};

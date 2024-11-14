@@ -50,7 +50,9 @@ export const PricingPage = () => {
     const data = await response.json();
 
     if (data.auth === false) {
-      push(`/login?next=/pricing?plan=${planId}`);
+      localStorage.setItem("pendingPriceId", planId);
+      push(`/login?next=/pricing`);
+      return;
     }
 
     if (data.subscription === true) {

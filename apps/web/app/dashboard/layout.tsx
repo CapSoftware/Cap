@@ -32,6 +32,10 @@ export default async function DashboardLayout({
     redirect("/login");
   }
 
+  if (!user.name || user.name.length <= 1) {
+    redirect("/onboarding");
+  }
+
   const spacesWithMembers = await db
     .select({
       space: spaces,
