@@ -12,50 +12,68 @@ const relevantEvents = new Set([
 ]);
 
 // Helper function to find user with retries
-async function findUserWithRetry(email: string, userId?: string, maxRetries = 3): Promise<typeof users.$inferSelect | null> {
+async function findUserWithRetry(email: string, userId?: string, maxRetries = 5): Promise<typeof users.$inferSelect | null> {
   for (let i = 0; i < maxRetries; i++) {
-    console.log(`Attempt ${i + 1} to find user (email: ${email}, userId: ${userId})`);
+    console.log(`[Attempt ${i + 1}/${maxRetries}] Looking for user:`, { email, userId });
     
     try {
-      let user;
-      
+      // Try finding by userId first if available
       if (userId) {
-        user = await db
+        console.log(`Attempting to find user by ID: ${userId}`);
+        const userById = await db
           .select()
           .from(users)
           .where(eq(users.id, userId))
           .limit(1)
-          .then(rows => rows[0] || null);
-      } else if (email) {
-        user = await db
+          .then(rows => rows[0] ?? null);
+        
+        if (userById) {
+          console.log(`Found user by ID: ${userId}`);
+          return userById;
+        }
+        console.log(`No user found by ID: ${userId}`);
+      }
+
+      // If not found by ID or no ID provided, try email
+      if (email) {
+        console.log(`Attempting to find user by email: ${email}`);
+        const userByEmail = await db
           .select()
           .from(users)
           .where(eq(users.email, email))
           .limit(1)
-          .then(rows => rows[0] || null);
+          .then(rows => rows[0] ?? null);
+        
+        if (userByEmail) {
+          console.log(`Found user by email: ${email}`);
+          return userByEmail;
+        }
+        console.log(`No user found by email: ${email}`);
       }
       
-      if (user) {
-        console.log(`User found on attempt ${i + 1}`);
-        return user;
-      }
-      
-      // Wait before retrying, with exponential backoff
+      // If we reach here, no user was found on this attempt
       if (i < maxRetries - 1) {
-        const delay = Math.pow(2, i) * 1000; // 1s, 2s, 4s
-        console.log(`Waiting ${delay}ms before retry`);
+        const delay = Math.pow(2, i) * 3000; // 3s, 6s, 12s, 24s, 48s
+        console.log(`No user found on attempt ${i + 1}. Waiting ${delay}ms before retry...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     } catch (error) {
-      console.error(`Error finding user on attempt ${i + 1}:`, error);
-      // Continue to next retry
+      console.error(`Error during attempt ${i + 1}:`, error);
+      // If this is not the last attempt, continue to next retry
+      if (i < maxRetries - 1) {
+        const delay = Math.pow(2, i) * 3000;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
     }
   }
   
+  console.log('All attempts exhausted. No user found.');
   return null;
 }
 
 export const POST = async (req: Request) => {
+  console.log('Webhook received');
   const buf = await req.text();
   const sig = req.headers.get("Stripe-Signature") as string;
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -76,12 +94,23 @@ export const POST = async (req: Request) => {
   if (relevantEvents.has(event.type)) {
     try {
       if (event.type === "checkout.session.completed") {
+        console.log('Processing checkout.session.completed event');
         const session = event.data.object as Stripe.Checkout.Session;
+        console.log('Session data:', {
+          id: session.id,
+          customerId: session.customer,
+          subscriptionId: session.subscription
+        });
+
         const customer = await stripe.customers.retrieve(
           session.customer as string
         );
+        console.log('Retrieved customer:', {
+          id: customer.id,
+          email: 'email' in customer ? customer.email : undefined,
+          metadata: 'metadata' in customer ? customer.metadata : undefined
+        });
         
-        // Get potential user identifiers
         let foundUserId;
         let customerEmail;
         
@@ -92,29 +121,43 @@ export const POST = async (req: Request) => {
           customerEmail = customer.email;
         }
 
-        console.log("Looking for user with:", { foundUserId, customerEmail });
+        console.log("Starting user lookup with:", { foundUserId, customerEmail });
         
         // Try to find user with retries
         const dbUser = await findUserWithRetry(customerEmail as string, foundUserId);
         
         if (!dbUser) {
-          console.log("No user found after retries");
-          // Instead of failing, we'll store the subscription info and retry later
-          // You might want to implement a queue system for this in production
+          console.log("No user found after all retries. Returning 202 to allow retry.");
           return new Response("User not found, webhook will be retried", {
-            status: 202, // Accepted but not processed
+            status: 202,
           });
         }
 
-        console.log("Found user:", dbUser.id);
+        console.log("Successfully found user:", {
+          userId: dbUser.id,
+          email: dbUser.email,
+          name: dbUser.name
+        });
 
         const subscription = await stripe.subscriptions.retrieve(
           session.subscription as string
         );
+        console.log('Retrieved subscription:', {
+          id: subscription.id,
+          status: subscription.status
+        });
+
         const inviteQuota = subscription.items.data.reduce(
           (total, item) => total + (item.quantity || 1),
           0
         );
+
+        console.log('Updating user in database with:', {
+          subscriptionId: session.subscription,
+          status: subscription.status,
+          customerId: customer.id,
+          inviteQuota
+        });
 
         await db
           .update(users)
@@ -126,7 +169,7 @@ export const POST = async (req: Request) => {
           })
           .where(eq(users.id, dbUser.id));
         
-        console.log("User updated successfully", { userId: dbUser.id, inviteQuota });
+        console.log("Successfully updated user in database");
       }
 
       if (event.type === "customer.subscription.updated") {
@@ -258,7 +301,7 @@ export const POST = async (req: Request) => {
 
       return NextResponse.json({ received: true });
     } catch (error) {
-      console.log("❌ Webhook handler failed:", error);
+      console.error("❌ Webhook handler failed:", error);
       return new Response(
         'Webhook error: "Webhook handler failed. View logs."',
         { status: 400 }
