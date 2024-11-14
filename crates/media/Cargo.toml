@@ -26,6 +26,7 @@ tempfile = "3.12.0"
 thiserror = "1.0"
 tracing = "0.1"
 futures = "0.3.31"
+tokio.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26.0"

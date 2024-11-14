@@ -57,7 +57,7 @@ impl CameraFeed {
     }
 
     pub async fn init(
-        selected_camera: &String,
+        selected_camera: &str,
         rgba_data: Sender<Vec<u8>>,
     ) -> Result<CameraFeed, MediaError> {
         println!("Selected camera: {:?}", selected_camera);
@@ -95,14 +95,14 @@ impl CameraFeed {
         self.video_info
     }
 
-    pub async fn switch_cameras(&mut self, camera_name: &String) -> Result<(), MediaError> {
+    pub async fn switch_cameras(&mut self, camera_name: &str) -> Result<(), MediaError> {
         let current_camera_name = self.camera_info.human_name();
         if camera_name != &current_camera_name {
             let (result_tx, result_rx) = flume::bounded::<CameraSwitchResult>(1);
 
             let _ = self
                 .control
-                .send_async(CameraControl::Switch(camera_name.clone(), result_tx))
+                .send_async(CameraControl::Switch(camera_name.to_string(), result_tx))
                 .await;
 
             let (camera_info, video_info) = result_rx
@@ -130,13 +130,13 @@ impl Drop for CameraFeed {
     }
 }
 
-fn find_camera(selected_camera: &String) -> Result<CameraInfo, MediaError> {
+fn find_camera(selected_camera: &str) -> Result<CameraInfo, MediaError> {
     let all_cameras = nokhwa::query(ApiBackend::Auto)?;
 
     all_cameras
         .into_iter()
         .find(|c| &c.human_name() == selected_camera)
-        .ok_or(MediaError::DeviceUnreachable(selected_camera.clone()))
+        .ok_or(MediaError::DeviceUnreachable(selected_camera.to_string()))
 }
 
 fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {

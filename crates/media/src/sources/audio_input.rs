@@ -1,12 +1,10 @@
-use std::sync::{Arc, Mutex};
-
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Device, Stream, StreamConfig, StreamInstant, SupportedStreamConfig};
-use flume::Sender;
+use cpal::{Device, StreamInstant, SupportedStreamConfig};
+use flume::{Receiver, Sender};
 use indexmap::IndexMap;
 
+use crate::feeds::{AudioInputConnection, AudioInputFeed, AudioInputSamples};
 use crate::{
-    data::{ffmpeg_sample_format_for, AudioInfo, FFAudio},
+    data::{AudioInfo, FFAudio},
     pipeline::{
         clock::{LocalTimestamp, RealTimeClock},
         control::Control,
@@ -24,132 +22,58 @@ impl LocalTimestamp for StreamInstant {
 }
 
 pub struct AudioInputSource {
-    device: Device,
-    device_name: String,
-    config: SupportedStreamConfig,
+    feed_connection: AudioInputConnection,
+    audio_info: AudioInfo,
 }
 
 impl AudioInputSource {
-    pub fn init(selected_audio_input: &str) -> Option<Self> {
-        println!("Selected audio input: {selected_audio_input}",);
-
-        Self::get_devices()
-            .swap_remove_entry(selected_audio_input)
-            .map(|(device_name, (device, config))| {
-                println!("Using audio device: {}", device_name);
-
-                Self {
-                    device,
-                    device_name,
-                    config,
-                }
-            })
+    pub fn init(feed: &AudioInputFeed) -> Self {
+        Self {
+            feed_connection: feed.create_connection(),
+            audio_info: feed.audio_info(),
+        }
     }
 
     pub fn info(&self) -> AudioInfo {
-        AudioInfo::from_stream_config(&self.config)
+        self.audio_info
     }
 
-    pub fn get_devices() -> AudioInputDeviceMap {
-        let host = cpal::default_host();
-        let mut device_map = IndexMap::new();
-
-        let get_usable_device = |device: Device| {
-            device
-                .supported_input_configs()
-                .map_err(|error| eprintln!("Error: {error}"))
-                .ok()
-                .and_then(|configs| {
-                    let mut configs = configs.collect::<Vec<_>>();
-                    configs.sort_by(|a, b| {
-                        b.sample_format()
-                            .sample_size()
-                            .cmp(&a.sample_format().sample_size())
-                    });
-                    configs
-                        .into_iter()
-                        .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
-                })
-                .and_then(|config| {
-                    device
-                        .name()
-                        .ok()
-                        .map(|name| (name, device, config.with_max_sample_rate()))
-                })
-        };
-
-        if let Some((name, device, config)) =
-            host.default_input_device().and_then(get_usable_device)
-        {
-            device_map.insert(name, (device, config));
-        }
-
-        match host.input_devices() {
-            Ok(devices) => {
-                for (name, device, config) in devices.filter_map(get_usable_device) {
-                    device_map.entry(name).or_insert((device, config));
+    fn process_frame(
+        &self,
+        clock: &mut RealTimeClock<StreamInstant>,
+        output: &Sender<FFAudio>,
+        samples: AudioInputSamples,
+    ) -> Result<(), MediaError> {
+        match clock.timestamp_for(samples.info.timestamp().capture) {
+            None => {
+                eprintln!("Clock is currently stopped. Dropping frames.");
+            }
+            Some(timestamp) => {
+                let frame = self.audio_info.wrap_frame(&samples.data, timestamp);
+                if let Err(_) = output.send(frame) {
+                    return Err(MediaError::Any("Pipeline is unreachable! Stopping capture"));
                 }
             }
-            Err(error) => {
-                eprintln!("Could not access audio input devices");
-                eprintln!("{error}");
-            }
         }
 
-        device_map
+        Ok(())
     }
 
-    pub fn build_stream(
+    fn pause_and_drain_frames(
         &self,
-        mut clock: RealTimeClock<StreamInstant>,
-        output: Arc<Mutex<Option<Sender<FFAudio>>>>,
-    ) -> Result<Stream, MediaError> {
-        let audio_info = self.info();
-        let mut stream_config: StreamConfig = self.config.clone().into();
-        stream_config.buffer_size = BufferSize::Fixed(audio_info.buffer_size);
-        let sample_format = self.config.sample_format();
+        clock: &mut RealTimeClock<StreamInstant>,
+        output: &Sender<FFAudio>,
+        frames_rx: Receiver<AudioInputSamples>,
+    ) {
+        let frames: Vec<AudioInputSamples> = frames_rx.drain().collect();
+        drop(frames_rx);
 
-        let data_callback = move |data: &cpal::Data, info: &cpal::InputCallbackInfo| {
-            println!("data_callback");
-            let capture_time = info.timestamp().capture;
-
-            let Ok(output) = output.try_lock() else {
-                return;
-            };
-            let Some(output) = output.as_ref() else {
-                return;
-            };
-
-            let Some(timestamp) = clock.timestamp_for(capture_time) else {
-                eprintln!("Clock is currently stopped. Dropping samples.");
-                return;
-            };
-
-            let buffer = audio_info.wrap_frame(data.bytes(), timestamp.try_into().unwrap());
-            // TODO(PJ): Send error when I bring error infra back online
-            output.send(buffer).unwrap();
-            // if let Err(_) = output.send(buffer) {
-            //     tracing::debug!("Pipeline is unreachable. Recording will shut down.");
-            // }
-        };
-
-        let error_callback = |err| {
-            // TODO: Handle errors such as device being disconnected. Some kind of fallback or pop-up?
-            eprintln!("An error occurred on the audio stream: {}", err);
-        };
-
-        self.device
-            .build_input_stream_raw(
-                &stream_config,
-                sample_format,
-                data_callback,
-                error_callback,
-                None,
-            )
-            .map_err(|error| {
-                eprintln!("Error while preparing audio capture: {error}");
-                MediaError::TaskLaunch("Failed to start audio capture".into())
-            })
+        for frame in frames {
+            if let Err(error) = self.process_frame(clock, output, frame) {
+                eprintln!("{error}");
+                break;
+            }
+        }
     }
 }
 
@@ -161,49 +85,50 @@ impl PipelineSourceTask for AudioInputSource {
     // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
-        clock: Self::Clock,
+        mut clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
         println!("Preparing audio input source thread...");
 
-        let output = Arc::new(Mutex::new(Some(output)));
+        let mut samples_rx: Option<Receiver<AudioInputSamples>> = None;
+        ready_signal.send(Ok(())).unwrap();
 
-        match self.build_stream(clock.clone(), output.clone()) {
-            Err(error) => ready_signal.send(Err(error)).unwrap(),
-            Ok(stream) => {
-                println!("Using audio input device {}", self.device_name);
-                ready_signal.send(Ok(())).unwrap();
+        loop {
+            match control_signal.last() {
+                Some(Control::Play) => {
+                    let samples = samples_rx.get_or_insert_with(|| self.feed_connection.attach());
 
-                loop {
-                    // TODO: Handle these more gracefully than crashing (e.g. if user unplugged mic between pausing and resuming).
-                    // Some kind of error stream?
-                    match control_signal.blocking_last() {
-                        Some(Control::Play) => {
-                            stream
-                                .play()
-                                .expect("Failed to start audio input recording");
-                            println!("Audio input recording started.");
-                        }
-                        Some(Control::Pause) => {
-                            stream
-                                .pause()
-                                .expect("Failed to pause audio input recording");
-                        }
-                        Some(Control::Shutdown) | None => {
-                            if let Err(error) = stream.pause() {
-                                eprintln!("Error while stopping audio stream: {error}");
+                    match samples.recv() {
+                        Ok(samples) => {
+                            if let Err(error) = self.process_frame(&mut clock, &output, samples) {
+                                eprintln!("{error}");
+                                break;
                             }
-                            output.lock().unwrap().take();
-                            drop(stream);
+                        }
+                        Err(_) => {
+                            eprintln!("Lost connection with the camera feed");
                             break;
                         }
                     }
                 }
-
-                println!("Shutting down audio input source thread.")
+                Some(Control::Pause) => {
+                    // TODO: This blocks to process frames in the queue, which may delay resumption
+                    // Some way to prevent this from delaying the listen loop?
+                    if let Some(rx) = samples_rx.take() {
+                        self.pause_and_drain_frames(&mut clock, &output, rx);
+                    }
+                }
+                Some(Control::Shutdown) | None => {
+                    if let Some(rx) = samples_rx.take() {
+                        self.pause_and_drain_frames(&mut clock, &output, rx);
+                    }
+                    break;
+                }
             }
         }
+
+        println!("Shutting down audio input source thread.");
     }
 }
