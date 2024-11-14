@@ -16,22 +16,25 @@ export const POST = async (req: Request) => {
   const sig = req.headers.get("Stripe-Signature") as string;
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   let event: Stripe.Event;
+  
   try {
-    if (!sig || !webhookSecret) return;
+    if (!sig || !webhookSecret) {
+      console.log("❌ Missing webhook secret or signature");
+      return new Response("Missing webhook secret or signature", { status: 400 });
+    }
     event = stripe.webhooks.constructEvent(buf, sig, webhookSecret);
     console.log(`✅ Event received: ${event.type}`);
   } catch (err: any) {
     console.log(`❌ Error message: ${err.message}`);
-    return new Response(`Webhook Error: ${err.message}`, {
-      status: 400,
-    });
+    return new Response(`Webhook Error: ${err.message}`, { status: 400 });
   }
+
   if (relevantEvents.has(event.type)) {
     try {
       if (event.type === "checkout.session.completed") {
-        console.log("Processing checkout.session.completed event");
+        const session = event.data.object as Stripe.Checkout.Session;
         const customer = await stripe.customers.retrieve(
-          event.data.object.customer as string
+          session.customer as string
         );
         let foundUserId;
         if ("metadata" in customer) {
@@ -67,22 +70,18 @@ export const POST = async (req: Request) => {
           }
         }
 
-        const user = await db
+        const userResult = await db
           .select()
           .from(users)
           .where(eq(users.id, foundUserId));
 
-        if (!user) {
-          console.log(
-            "No user found in database for checkout.session.completed event"
-          );
-          return new Response("No user found", {
-            status: 400,
-          });
+        if (!userResult || userResult.length === 0) {
+          console.log("No user found in database");
+          return new Response("No user found", { status: 400 });
         }
 
         const subscription = await stripe.subscriptions.retrieve(
-          event.data.object.subscription as string
+          session.subscription as string
         );
         const inviteQuota = subscription.items.data.reduce(
           (total, item) => total + (item.quantity || 1),
@@ -92,20 +91,19 @@ export const POST = async (req: Request) => {
         await db
           .update(users)
           .set({
-            stripeSubscriptionId: event.data.object.subscription as string,
-            stripeSubscriptionStatus: event.data.object.status,
+            stripeSubscriptionId: session.subscription as string,
+            stripeSubscriptionStatus: session.status,
             inviteQuota: inviteQuota,
           })
           .where(eq(users.id, foundUserId));
-        console.log(
-          "User updated successfully for checkout.session.completed event"
-        );
+        
+        console.log("User updated successfully", { foundUserId, inviteQuota });
       }
 
       if (event.type === "customer.subscription.updated") {
-        console.log("Processing customer.subscription.updated event");
+        const subscription = event.data.object as Stripe.Subscription;
         const customer = await stripe.customers.retrieve(
-          event.data.object.customer as string
+          subscription.customer as string
         );
         let foundUserId;
         if ("metadata" in customer) {
@@ -141,21 +139,16 @@ export const POST = async (req: Request) => {
           }
         }
 
-        const user = await db
+        const userResult = await db
           .select()
           .from(users)
           .where(eq(users.id, foundUserId));
 
-        if (!user) {
-          console.log(
-            "No user found in database for customer.subscription.updated event"
-          );
-          return new Response("No user found", {
-            status: 400,
-          });
+        if (!userResult || userResult.length === 0) {
+          console.log("No user found in database");
+          return new Response("No user found", { status: 400 });
         }
 
-        const subscription = event.data.object as Stripe.Subscription;
         const inviteQuota = subscription.items.data.reduce(
           (total, item) => total + (item.quantity || 1),
           0
@@ -164,20 +157,19 @@ export const POST = async (req: Request) => {
         await db
           .update(users)
           .set({
-            stripeSubscriptionId: event.data.object.id,
-            stripeSubscriptionStatus: event.data.object.status,
+            stripeSubscriptionId: subscription.id,
+            stripeSubscriptionStatus: subscription.status,
             inviteQuota: inviteQuota,
           })
           .where(eq(users.id, foundUserId));
-        console.log(
-          "User updated successfully for customer.subscription.updated event"
-        );
+        
+        console.log("User updated successfully", { foundUserId, inviteQuota });
       }
 
       if (event.type === "customer.subscription.deleted") {
-        console.log("Processing customer.subscription.deleted event");
+        const subscription = event.data.object as Stripe.Subscription;
         const customer = await stripe.customers.retrieve(
-          event.data.object.customer as string
+          subscription.customer as string
         );
         let foundUserId;
         if ("metadata" in customer) {
@@ -213,48 +205,38 @@ export const POST = async (req: Request) => {
           }
         }
 
-        const user = await db
+        const userResult = await db
           .select()
           .from(users)
           .where(eq(users.id, foundUserId));
 
-        if (!user) {
-          console.log(
-            "No user found in database for customer.subscription.deleted event"
-          );
-          return new Response("No user found", {
-            status: 400,
-          });
+        if (!userResult || userResult.length === 0) {
+          console.log("No user found in database");
+          return new Response("No user found", { status: 400 });
         }
 
         await db
           .update(users)
           .set({
-            stripeSubscriptionId: event.data.object.id,
-            stripeSubscriptionStatus: event.data.object.status,
-            inviteQuota: 1, // Reset to default quota when subscription is deleted
+            stripeSubscriptionId: subscription.id,
+            stripeSubscriptionStatus: subscription.status,
+            inviteQuota: 1, // Reset to default quota
           })
           .where(eq(users.id, foundUserId));
-        console.log(
-          "User updated successfully for customer.subscription.deleted event"
-        );
+        
+        console.log("User updated successfully", { foundUserId, inviteQuota: 1 });
       }
+
+      return NextResponse.json({ received: true });
     } catch (error) {
-      console.log("❌ Webhook handler failed. View logs.");
+      console.log("❌ Webhook handler failed:", error);
       return new Response(
         'Webhook error: "Webhook handler failed. View logs."',
-        {
-          status: 400,
-        }
+        { status: 400 }
       );
     }
-  } else {
-    console.log(`Unrecognised event: ${event.type}`);
-    return new Response(`Unrecognised event: ${event.type}`, {
-      status: 400,
-    });
   }
 
-  console.log("✅ Webhook processed successfully");
-  return NextResponse.json({ received: true });
+  console.log(`Unrecognised event: ${event.type}`);
+  return new Response(`Unrecognised event: ${event.type}`, { status: 400 });
 };
