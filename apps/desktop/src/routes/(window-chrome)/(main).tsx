@@ -397,6 +397,8 @@ function MicrophoneSelect(props: {
   options: ReturnType<typeof createOptionsQuery>["options"]["data"];
   setOptions: ReturnType<typeof createOptionsQuery>["setOptions"];
 }) {
+  const DB_SCALE = 40;
+
   const devices = createQuery(() => listAudioDevices);
   const permissions = createQuery(() => getPermissions);
   const currentRecording = createCurrentRecordingQuery();
@@ -422,15 +424,24 @@ function MicrophoneSelect(props: {
       ...props.options,
       audioInputName: item.deviceId !== "" ? item.name : null,
     });
-    if (!item.deviceId) setSamples();
+    if (!item.deviceId) setDbs();
   };
 
-  const [samples, setSamples] = createSignal<number | undefined>();
+  // raw db level
+  const [dbs, setDbs] = createSignal<number | undefined>();
 
-  events.audioInputLevelChange.listen((sample) => {
-    if (!props.options?.audioInputName) setSamples();
-    else setSamples(sample.payload);
+  createEffect(() => {
+    if (!props.options?.audioInputName) setDbs();
   });
+
+  events.audioInputLevelChange.listen((dbs) => {
+    if (!props.options?.audioInputName) setDbs();
+    else setDbs(dbs.payload);
+  });
+
+  // visual audio level from 0 -> 1
+  const audioLevel = () =>
+    Math.pow(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE, 0.5);
 
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch">
@@ -461,14 +472,12 @@ function MicrophoneSelect(props: {
         }}
       >
         <KSelect.Trigger class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10">
-          <Show when={samples()}>
+          <Show when={dbs()}>
             {(s) => (
               <div
                 class="bg-blue-100 opacity-50 left-0 inset-y-0 absolute -z-10 transition-[right] duration-100"
                 style={{
-                  right: `${
-                    Math.pow(1 - Math.max(s() + 40, 0) / 40, 0.5) * 100
-                  }%`,
+                  right: `${audioLevel() * 100}%`,
                 }}
               />
             )}

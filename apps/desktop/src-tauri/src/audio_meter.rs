@@ -1,18 +1,39 @@
-use cap_media::feeds::AudioInputSamples;
+use cap_media::feeds::{AudioInputSamples, AudioInputSamplesReceiver};
 use cpal::{SampleFormat, StreamInstant};
 use keyed_priority_queue::KeyedPriorityQueue;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::time::Duration;
+use tauri::AppHandle;
+use tauri_specta::Event;
 
-pub const MAX_AMPLITUDE_F32: f64 = (u16::MAX / 2) as f64; // i16 max value
-pub const ZERO_AMPLITUDE: u16 = 0;
-pub const TERMINAL_WIDTH: f64 = 0.8;
-pub const MIN_DB: f64 = -96.0;
+const MAX_AMPLITUDE_F32: f64 = (u16::MAX / 2) as f64; // i16 max value
+const ZERO_AMPLITUDE: u16 = 0;
+const MIN_DB: f64 = -96.0;
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct AudioInputLevelChange(f64);
+
+pub fn spawn_event_emitter(app_handle: AppHandle, audio_input_rx: AudioInputSamplesReceiver) {
+    let mut time_window = VolumeMeter::new(0.2);
+    tokio::spawn(async move {
+        while let Ok(samples) = audio_input_rx.recv_async().await {
+            let floats = samples_to_f64(&samples);
+
+            let db = db_fs(floats);
+
+            time_window.push(samples.info.timestamp().capture, db);
+
+            let max = time_window.max();
+
+            AudioInputLevelChange(max).emit(&app_handle).ok();
+        }
+    });
+}
 
 // https://github.com/cgbur/meter/blob/master/src/time_window.rs
-pub(crate) struct VolumeMeter {
-    pub(crate) keep_secs: f32,
+struct VolumeMeter {
     keep_duration: Duration, // secs
     maxes: KeyedPriorityQueue<StreamInstant, MinNonNan>,
     times: VecDeque<StreamInstant>,
@@ -22,7 +43,6 @@ impl VolumeMeter {
     pub fn new(keep_secs: f32) -> Self {
         Self {
             keep_duration: Duration::from_secs_f32(keep_secs),
-            keep_secs,
             maxes: KeyedPriorityQueue::new(),
             times: Default::default(),
         }
@@ -80,7 +100,7 @@ impl Ord for MinNonNan {
 
 use cpal::Sample;
 
-pub fn db_fs(data: impl Iterator<Item = f64>) -> f64 {
+fn db_fs(data: impl Iterator<Item = f64>) -> f64 {
     let max = data
         .map(|f| f.to_sample::<i16>().unsigned_abs())
         .max()
@@ -89,7 +109,7 @@ pub fn db_fs(data: impl Iterator<Item = f64>) -> f64 {
     (20.0 * (max as f64 / MAX_AMPLITUDE_F32).log10()).clamp(MIN_DB, 0.0)
 }
 
-pub fn samples_to_f64(samples: &AudioInputSamples) -> impl Iterator<Item = f64> + use<'_> {
+fn samples_to_f64(samples: &AudioInputSamples) -> impl Iterator<Item = f64> + use<'_> {
     samples
         .data
         .chunks(samples.format.sample_size())

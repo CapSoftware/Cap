@@ -273,9 +273,6 @@ pub struct NewNotification {
     is_error: bool,
 }
 
-#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct AudioInputLevelChange(f64);
-
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
 #[tauri::command]
@@ -1706,14 +1703,7 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
         return Ok(vec![]);
     }
 
-    // TODO: Check - is this necessary? `spawn_blocking` is quite a bit of overhead.
-    // tokio::task::spawn_blocking(|| {
-    let devices = AudioInputFeed::list_devices();
-
-    Ok(devices.keys().cloned().collect())
-    // })
-    // .await
-    // .map_err(|_| ())
+    Ok(AudioInputFeed::list_devices().keys().cloned().collect())
 }
 
 #[tauri::command(async)]
@@ -2478,7 +2468,7 @@ pub async fn run() {
             RequestOpenSettings,
             NewNotification,
             AuthenticationInvalid,
-            AudioInputLevelChange
+            audio_meter::AudioInputLevelChange
         ])
         .typ::<ProjectConfiguration>()
         .typ::<AuthStore>()
@@ -2547,23 +2537,7 @@ pub async fn run() {
                 CapWindow::Main.show(&app_handle).ok();
             }
 
-            let mut time_window = audio_meter::VolumeMeter::new(0.2);
-            tokio::spawn({
-                let app_handle = app_handle.clone();
-                async move {
-                    while let Ok(samples) = audio_input_rx.recv_async().await {
-                        let floats = audio_meter::samples_to_f64(&samples);
-
-                        let db = audio_meter::db_fs(floats);
-
-                        time_window.push(samples.info.timestamp().capture, db);
-
-                        let max = time_window.max();
-
-                        AudioInputLevelChange(max).emit(&app_handle).ok();
-                    }
-                }
-            });
+            audio_meter::spawn_event_emitter(app_handle.clone(), audio_input_rx);
 
             app.manage(Arc::new(RwLock::new(App {
                 handle: app_handle.clone(),
