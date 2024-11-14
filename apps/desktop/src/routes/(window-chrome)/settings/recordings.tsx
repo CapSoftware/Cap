@@ -18,7 +18,7 @@ export default function Recordings() {
     queryFn: async () => {
       const result = await commands
         .listRecordings()
-        .then(
+        .catch(
           () =>
             Promise.resolve([]) as ReturnType<typeof commands.listRecordings>
         );
