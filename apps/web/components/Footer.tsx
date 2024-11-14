@@ -111,7 +111,7 @@ export const Footer = () => {
               </li>
             </ul>
           </div>
-          <div className="space-y-4 sm:col-span-6 lg:col-span-5">
+          <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-5">
             <h3 className="text-lg font-semibold">Additional Links</h3>
             <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <li>
