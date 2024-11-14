@@ -68,7 +68,7 @@ export default function Page() {
 
   const checkUpgradeStatus = async () => {
     const result = await commands.checkUpgradedAndUpdate();
-    if (result.status === "ok" && result.data === true) {
+    if (result) {
       setUpgradeComplete(true);
     }
   };

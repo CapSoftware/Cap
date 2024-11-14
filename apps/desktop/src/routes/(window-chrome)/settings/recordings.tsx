@@ -16,32 +16,28 @@ export default function Recordings() {
   const fetchRecordings = createQuery(() => ({
     queryKey: ["recordings"],
     queryFn: async () => {
-      try {
-        const result = await commands.listRecordings();
-        if (result.status === "ok") {
-          const recordings = await Promise.all(
-            result.data.map(async (file) => {
-              const [id, path, meta] = file;
-              const thumbnailPath = `${path}/screenshots/display.jpg`;
+      const result = await commands
+        .listRecordings()
+        .catch(
+          () =>
+            Promise.resolve([]) as ReturnType<typeof commands.listRecordings>
+        );
 
-              return {
-                id,
-                path,
-                prettyName: meta.pretty_name,
-                isNew: false,
-                thumbnailPath,
-              };
-            })
-          );
-          return recordings;
-        } else {
-          console.error("Failed to list recordings:", result.error);
-          return [];
-        }
-      } catch (error) {
-        console.error("Error fetching recordings:", error);
-        return [];
-      }
+      const recordings = await Promise.all(
+        result.map(async (file) => {
+          const [id, path, meta] = file;
+          const thumbnailPath = `${path}/screenshots/display.jpg`;
+
+          return {
+            id,
+            path,
+            prettyName: meta.pretty_name,
+            isNew: false,
+            thumbnailPath,
+          };
+        })
+      );
+      return recordings;
     },
   }));
 

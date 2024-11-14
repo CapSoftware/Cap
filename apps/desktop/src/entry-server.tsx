@@ -17,7 +17,7 @@ export default createHandler(() => (
           ></script>
           {assets}
         </head>
-        <body class="w-full h-full select-none cursor-default">
+        <body class="w-screen h-screen select-none cursor-default">
           <div id="app" class="h-full">
             {children}
           </div>

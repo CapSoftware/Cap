@@ -19,18 +19,20 @@ export const Footer = () => {
     return null;
 
   return (
-    <footer>
+    <footer className="p-5">
       <div
         style={{ boxShadow: "0px 2px 8px rgba(18, 22, 31, 0.02)" }}
-        className="wrapper bg-gray-100 border-[1px] border-gray-200 p-8 lg:p-12 rounded-[20px] mb-10 relative overflow-hidden"
+        className="mx-auto max-w-[1400px] bg-gray-100 border-[1px] border-gray-200 p-8 lg:p-12 rounded-[20px] mb-10 relative overflow-hidden"
       >
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start justify-between z-10 relative">
-          <div className="space-y-4 col-span-12 lg:col-span-6">
+        <div className="sm:grid space-y-8 sm:space-y-0 grid-cols-1 lg:grid-cols-12 gap-8 sm:items-start sm:justify-between z-10 relative">
+          <div className="space-y-2 sm:space-y-4 col-span-12 lg:col-span-6">
             <Logo showBeta={true} className="w-[104px] h-auto" />
-            <p className="text-gray-500 max-w-md">
-              Cap is the open source alternative to Loom. Lightweight, powerful,
-              and stunning. Record and share in seconds.
-            </p>
+            <div className="w-full">
+              <p className="text-gray-500">
+                Cap is the open source alternative to Loom. Lightweight,
+                powerful, and stunning. Record and share in seconds.
+              </p>
+            </div>
             <p className="text-gray-400">
               © Cap Software, Inc. {new Date().getFullYear()}.
             </p>
@@ -111,7 +113,7 @@ export const Footer = () => {
               </li>
             </ul>
           </div>
-          <div className="space-y-4 sm:col-span-6 lg:col-span-5">
+          <div className="space-y-4 col-span-12 sm:col-span-6 lg:col-span-5">
             <h3 className="text-lg font-semibold">Additional Links</h3>
             <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <li>

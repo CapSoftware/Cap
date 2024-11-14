@@ -16,25 +16,26 @@ export default function Screenshots() {
   const fetchScreenshots = createQuery(() => ({
     queryKey: ["screenshots"],
     queryFn: async () => {
-      const result = await commands.listScreenshots();
-      if (result.status === "ok") {
-        const screenshots = await Promise.all(
-          result.data.map(async (file) => {
-            const [id, pngPath, meta] = file;
-
-            return {
-              id,
-              path: pngPath,
-              prettyName: meta.pretty_name,
-              isNew: false,
-              thumbnailPath: pngPath,
-            };
-          })
+      const result = await commands
+        .listScreenshots()
+        .catch(
+          () =>
+            Promise.resolve([]) as ReturnType<typeof commands.listScreenshots>
         );
-        return screenshots;
-      } else {
-        return [];
-      }
+      const screenshots = await Promise.all(
+        result.map(async (file) => {
+          const [id, pngPath, meta] = file;
+
+          return {
+            id,
+            path: pngPath,
+            prettyName: meta.pretty_name,
+            isNew: false,
+            thumbnailPath: pngPath,
+          };
+        })
+      );
+      return screenshots;
     },
   }));
 

@@ -7,7 +7,14 @@ import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    mutations: {
+      onError: (e) =>
+        alert("An error occured, here are the details:\n" + e.message),
+    },
+  },
+});
 
 export default function App() {
   return (

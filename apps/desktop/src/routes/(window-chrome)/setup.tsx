@@ -68,9 +68,11 @@ export default function () {
     setInitialCheck(false);
   };
 
-  const [showStartup, showStartupActions] = createResource(
-    () => true
-    // generalSettingsStore.get().then((s) => !s?.hasCompletedStartup)
+  const [showStartup, showStartupActions] = createResource(() =>
+    generalSettingsStore.get().then((s) => {
+      if (s === undefined) return true;
+      return !s.hasCompletedStartup;
+    })
   );
 
   return (
@@ -438,7 +440,7 @@ function Startup(props: { onClose: () => void }) {
                   ${isLogoAnimating() ? "logo-bounce" : ""}`}
                 />
               </div>
-              <h1 class="text-5xl md:text-5xl font-bold font-medium text-gray-50 mb-4 drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
+              <h1 class="text-5xl md:text-5xl font-bold text-gray-50 mb-4 drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
                 Welcome to Cap
               </h1>
               <p class="text-2xl text-gray-50/70 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">

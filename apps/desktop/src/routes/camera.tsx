@@ -110,7 +110,12 @@ export default function () {
 
       const currentWindow = getCurrentWindow();
       currentWindow.setSize(new LogicalSize(windowSize, windowHeight));
-      currentWindow.setPosition(new LogicalPosition(width, height));
+      currentWindow.setPosition(
+        new LogicalPosition(
+          width + monitor.position.toLogical(scalingFactor).x,
+          height + monitor.position.toLogical(scalingFactor).y
+        )
+      );
 
       return { width, height, size: windowSize };
     }
@@ -192,7 +197,7 @@ export default function () {
                       const aspectRatio =
                         latestFrame().width / latestFrame().height;
 
-                      const windowWidth = windowSize()?.size ?? 0;
+                      const windowWidth = windowSize.latest?.size ?? 0;
 
                       const size = (() => {
                         if (aspectRatio > 1)

@@ -22,18 +22,12 @@ export const listScreens = queryOptions({
 
 const getOptions = queryOptions({
   queryKey: ["recordingOptions"] as const,
-  queryFn: async () => {
-    const o = await commands.getRecordingOptions();
-    if (o.status === "ok") return o.data;
-  },
+  queryFn: () => commands.getRecordingOptions(),
 });
 
 const getCurrentRecording = queryOptions({
   queryKey: ["currentRecording"] as const,
-  queryFn: async () => {
-    const o = await commands.getCurrentRecording();
-    if (o.status === "ok") return o.data[0];
-  },
+  queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
 });
 
 const listVideoDevices = queryOptions({
@@ -57,9 +51,8 @@ export function createVideoDevicesQuery() {
 export const listAudioDevices = queryOptions({
   queryKey: ["audioDevices"] as const,
   queryFn: async () => {
-    const r = await commands.listAudioDevices();
-    if (r.status === "ok")
-      return r.data.map((name) => ({ name, deviceId: name }));
+    const devices = await commands.listAudioDevices();
+    return devices.map((name) => ({ name, deviceId: name }));
   },
   reconcile: "name",
   refetchInterval: 1000,
@@ -99,9 +92,7 @@ export function createOptionsQuery() {
   const options = createQuery(() => ({
     ...getOptions,
     select: (data) => {
-      if (data && state) {
-        return { ...data, ...state };
-      }
+      return { ...data, ...state };
     },
   }));
 

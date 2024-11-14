@@ -824,6 +824,7 @@ dependencies = [
  "specta",
  "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
  "windows 0.58.0",
  "windows-capture",
@@ -1672,7 +1673,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.0-beta.9-audio-rc"
+version = "0.3.0-beta.9"
 dependencies = [
  "anyhow",
  "axum",
@@ -1689,6 +1690,7 @@ dependencies = [
  "cocoa 0.26.0",
  "core-foundation 0.10.0",
  "core-graphics 0.24.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "device_query",
  "dotenvy_macro",
  "fast_image_resize",
@@ -1699,6 +1701,7 @@ dependencies = [
  "global-hotkey",
  "image 0.25.2",
  "indexmap 2.5.0",
+ "keyed_priority_queue",
  "mp4",
  "nix 0.29.0",
  "num-traits",
@@ -3440,6 +3443,15 @@ dependencies = [
  "bitflags 2.6.0",
  "serde",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "keyed_priority_queue"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ee7893dab2e44ae5f9d0173f26ff4aa327c10b01b06a72b52dd9405b628640d"
+dependencies = [
+ "indexmap 2.5.0",
 ]
 
 [[package]]
