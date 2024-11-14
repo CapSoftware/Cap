@@ -156,6 +156,7 @@ import { generalSettingsStore } from "~/store";
 import { Portal } from "solid-js/web";
 import { cx } from "cva";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import Titlebar from "~/components/titlebar/Titlebar";
 
 function Startup(props: { onClose: () => void }) {
   const [audioState, setAudioState] = makePersisted(
@@ -286,7 +287,7 @@ function Startup(props: { onClose: () => void }) {
 
   return (
     <Portal>
-      <div class="absolute inset-0 z-50">
+      <div class="absolute inset-0 z-40">
         <style>
           {`
           body {
