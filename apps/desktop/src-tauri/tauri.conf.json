@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "node scripts/prepareSidecars.js && pnpm localdev",
     "devUrl": "http://localhost:3001",
-    "beforeBuildCommand": "node scripts/prepareSidecars.js && pnpm build",
+    "beforeBuildCommand": "node scripts/prepareSidecars.js && pnpm turbo build --filter @cap/desktop",
     "frontendDist": "../.output/public"
   },
   "app": {
@@ -40,6 +40,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["../../../target/binaries/ffmpeg"]
+    "externalBin": ["../../../target/binaries/ffmpeg"],
+    "macOS": {
+      "dmg": {
+        "background": "./src-tauri/icons/dmg-background.png"
+      }
+    }
   }
 }

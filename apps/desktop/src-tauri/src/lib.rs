@@ -380,7 +380,7 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         Ok(recording) => state.set_current_recording(recording),
         Err(error) => {
             eprintln!("{error}");
-            return Err("Failed to set up recording".into());
+            return Err(format!("Failed to set up recording: {error}"));
         }
     };
 
@@ -2470,6 +2470,7 @@ pub async fn run() {
             AuthenticationInvalid,
             audio_meter::AudioInputLevelChange
         ])
+        .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
         .typ::<AuthStore>()
         .typ::<hotkeys::HotkeysStore>()

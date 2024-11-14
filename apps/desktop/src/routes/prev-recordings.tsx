@@ -82,9 +82,12 @@ export default function () {
   const allMedia = createMemo(() => [...recordings, ...screenshots]);
 
   return (
-    <div class="w-screen h-[100vh] bg-transparent relative" style={{
-      "scrollbar-color": "auto transparent"
-    }}>
+    <div
+      class="w-screen h-[100vh] bg-transparent relative"
+      style={{
+        "scrollbar-color": "auto transparent",
+      }}
+    >
       <div class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto">
         <div class="pt-12 w-full flex flex-col gap-4">
           <TransitionGroup
@@ -99,7 +102,7 @@ export default function () {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
                 const normalizedPath = media.path.replace(/\\/g, "/");
                 const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
-                
+
                 const type = media.type ?? "recording";
                 const fileId =
                   type === "recording"
@@ -123,16 +126,12 @@ export default function () {
                 const copyMedia = createMutation(() => ({
                   mutationFn: async () => {
                     if (isRecording) {
-                      const res = await commands.copyRenderedVideoToClipboard(
+                      await commands.copyRenderedVideoToClipboard(
                         mediaId,
                         presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
                       );
-                      if (res.status !== "ok") throw new Error(res.error);
                     } else {
-                      const res = await commands.copyScreenshotToClipboard(
-                        media.path
-                      );
-                      if (res.status !== "ok") throw new Error(res.error);
+                      await commands.copyScreenshotToClipboard(media.path);
                     }
                   },
                 }));
@@ -156,19 +155,14 @@ export default function () {
                       ? suggestedName
                       : `${suggestedName}${extension}`;
 
-                    const savePathResult = await commands.saveFileDialog(
+                    const savePath = await commands.saveFileDialog(
                       fullFileName,
                       fileType
                     );
 
-                    if (
-                      savePathResult.status !== "ok" ||
-                      !savePathResult.data
-                    ) {
+                    if (!savePath) {
                       return false;
                     }
-
-                    const savePath = savePathResult.data;
 
                     if (isRecording) {
                       const renderedPath = await commands.getRenderedVideo(
@@ -176,29 +170,13 @@ export default function () {
                         presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
                       );
 
-                      if (renderedPath.status !== "ok" || !renderedPath.data) {
+                      if (!renderedPath) {
                         throw new Error("Failed to get rendered video path");
                       }
 
-                      const copyResult = await commands.copyFileToPath(
-                        renderedPath.data,
-                        savePath
-                      );
-                      if (copyResult.status !== "ok") {
-                        throw new Error(
-                          `Failed to copy file: ${copyResult.error}`
-                        );
-                      }
+                      await commands.copyFileToPath(renderedPath, savePath);
                     } else {
-                      const copyResult = await commands.copyFileToPath(
-                        media.path,
-                        savePath
-                      );
-                      if (copyResult.status !== "ok") {
-                        throw new Error(
-                          `Failed to copy file: ${copyResult.error}`
-                        );
-                      }
+                      await commands.copyFileToPath(media.path, savePath);
                     }
 
                     return true;
@@ -206,7 +184,7 @@ export default function () {
                 }));
                 const uploadMedia = createMutation(() => ({
                   mutationFn: async () => {
-                    let res: Result<UploadResult, string>;
+                    let res: UploadResult;
                     if (isRecording) {
                       res = await commands.uploadRenderedVideo(
                         mediaId,
@@ -217,11 +195,7 @@ export default function () {
                       res = await commands.uploadScreenshot(media.path);
                     }
 
-                    if (res.status === "error") {
-                      throw new Error(res.error);
-                    }
-
-                    switch (res.data) {
+                    switch (res) {
                       case "NotAuthenticated":
                         throw new Error("Not authenticated");
                       case "PlanCheckFailed":
@@ -239,17 +213,14 @@ export default function () {
 
                 const [metadata] = createResource(async () => {
                   if (isRecording) {
-                    const result = await commands.getVideoMetadata(
-                      media.path,
-                      null
-                    );
+                    const result = await commands
+                      .getVideoMetadata(media.path, null)
+                      .catch((e) => {
+                        console.error(`Failed to get metadata: ${e}`);
+                      });
+                    if (!result) return;
 
-                    if (result.status !== "ok") {
-                      console.error(`Failed to get metadata: ${result.status}`);
-                      return;
-                    }
-
-                    const [duration, size] = result.data;
+                    const [duration, size] = result;
                     console.log(
                       `Metadata for ${media.path}: duration=${duration}, size=${size}`
                     );

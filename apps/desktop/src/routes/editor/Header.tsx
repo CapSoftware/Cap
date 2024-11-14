@@ -40,9 +40,7 @@ export function Header() {
       )}
     >
       <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]"></div>
-      <div
-        class="flex flex-row gap-2 font-medium items-center"
-      >
+      <div class="flex flex-row gap-2 font-medium items-center">
         <ShareButton />
         <ExportButton />
       </div>
@@ -170,14 +168,13 @@ function ShareButton() {
 
   const uploadVideo = createMutation(() => ({
     mutationFn: async () => {
-      const res = await commands.uploadRenderedVideo(
+      await commands.uploadRenderedVideo(
         videoId,
         project
           ? project
           : presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
         null
       );
-      if (res.status !== "ok") throw new Error(res.error);
     },
     onSuccess: () => metaActions.refetch(),
   }));

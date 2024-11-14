@@ -5,61 +5,26 @@
 
 
 export const commands = {
-async getRecordingOptions() : Promise<Result<RecordingOptions, null>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("get_recording_options") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async getRecordingOptions() : Promise<RecordingOptions> {
+    return await TAURI_INVOKE("get_recording_options");
 },
-async setRecordingOptions(options: RecordingOptions) : Promise<Result<null, null>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("set_recording_options", { options }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async setRecordingOptions(options: RecordingOptions) : Promise<null> {
+    return await TAURI_INVOKE("set_recording_options", { options });
 },
-async startRecording() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("start_recording") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async startRecording() : Promise<null> {
+    return await TAURI_INVOKE("start_recording");
 },
-async stopRecording() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("stop_recording") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async stopRecording() : Promise<null> {
+    return await TAURI_INVOKE("stop_recording");
 },
-async pauseRecording() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("pause_recording") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async pauseRecording() : Promise<null> {
+    return await TAURI_INVOKE("pause_recording");
 },
-async resumeRecording() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("resume_recording") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async resumeRecording() : Promise<null> {
+    return await TAURI_INVOKE("resume_recording");
 },
-async takeScreenshot() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("take_screenshot") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async takeScreenshot() : Promise<null> {
+    return await TAURI_INVOKE("take_screenshot");
 },
 async listCameras() : Promise<string[]> {
     return await TAURI_INVOKE("list_cameras");
@@ -70,13 +35,8 @@ async listCaptureWindows() : Promise<CaptureWindow[]> {
 async listCaptureScreens() : Promise<CaptureScreen[]> {
     return await TAURI_INVOKE("list_capture_screens");
 },
-async listAudioDevices() : Promise<Result<string[], null>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("list_audio_devices") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async listAudioDevices() : Promise<string[]> {
+    return await TAURI_INVOKE("list_audio_devices");
 },
 async showPreviousRecordingsWindow() : Promise<void> {
     await TAURI_INVOKE("show_previous_recordings_window");
@@ -84,91 +44,41 @@ async showPreviousRecordingsWindow() : Promise<void> {
 async closePreviousRecordingsWindow() : Promise<void> {
     await TAURI_INVOKE("close_previous_recordings_window");
 },
-async setFakeWindowBounds(name: string, bounds: Bounds) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("set_fake_window_bounds", { name, bounds }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async setFakeWindowBounds(name: string, bounds: Bounds) : Promise<null> {
+    return await TAURI_INVOKE("set_fake_window_bounds", { name, bounds });
 },
-async removeFakeWindow(name: string) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("remove_fake_window", { name }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async removeFakeWindow(name: string) : Promise<null> {
+    return await TAURI_INVOKE("remove_fake_window", { name });
 },
 async focusCapturesPanel() : Promise<void> {
     await TAURI_INVOKE("focus_captures_panel");
 },
-async getCurrentRecording() : Promise<Result<JsonValue<InProgressRecording | null>, null>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("get_current_recording") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async getCurrentRecording() : Promise<JsonValue<InProgressRecording | null>> {
+    return await TAURI_INVOKE("get_current_recording");
 },
 async renderToFile(outputPath: string, videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<void> {
     await TAURI_INVOKE("render_to_file", { outputPath, videoId, project, progressChannel });
 },
-async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<Result<string, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("get_rendered_video", { videoId, project }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<string> {
+    return await TAURI_INVOKE("get_rendered_video", { videoId, project });
 },
-async copyFileToPath(src: string, dst: string) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("copy_file_to_path", { src, dst }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async copyFileToPath(src: string, dst: string) : Promise<null> {
+    return await TAURI_INVOKE("copy_file_to_path", { src, dst });
 },
-async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguration) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("copy_rendered_video_to_clipboard", { videoId, project }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguration) : Promise<null> {
+    return await TAURI_INVOKE("copy_rendered_video_to_clipboard", { videoId, project });
 },
-async copyScreenshotToClipboard(path: string) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("copy_screenshot_to_clipboard", { path }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async copyScreenshotToClipboard(path: string) : Promise<null> {
+    return await TAURI_INVOKE("copy_screenshot_to_clipboard", { path });
 },
-async openFilePath(path: string) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("open_file_path", { path }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async openFilePath(path: string) : Promise<null> {
+    return await TAURI_INVOKE("open_file_path", { path });
 },
-async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<Result<[number, number], string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("get_video_metadata", { videoId, videoType }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<[number, number]> {
+    return await TAURI_INVOKE("get_video_metadata", { videoId, videoType });
 },
-async createEditorInstance(videoId: string) : Promise<Result<SerializedEditorInstance, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("create_editor_instance", { videoId }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async createEditorInstance(videoId: string) : Promise<SerializedEditorInstance> {
+    return await TAURI_INVOKE("create_editor_instance", { videoId });
 },
 async startPlayback(videoId: string) : Promise<void> {
     await TAURI_INVOKE("start_playback", { videoId });
@@ -200,21 +110,11 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
 async requestPermission(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("request_permission", { permission });
 },
-async uploadRenderedVideo(videoId: string, project: ProjectConfiguration, preCreatedVideo: PreCreatedVideo | null) : Promise<Result<UploadResult, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("upload_rendered_video", { videoId, project, preCreatedVideo }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async uploadRenderedVideo(videoId: string, project: ProjectConfiguration, preCreatedVideo: PreCreatedVideo | null) : Promise<UploadResult> {
+    return await TAURI_INVOKE("upload_rendered_video", { videoId, project, preCreatedVideo });
 },
-async uploadScreenshot(screenshotPath: string) : Promise<Result<UploadResult, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("upload_screenshot", { screenshotPath }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async uploadScreenshot(screenshotPath: string) : Promise<UploadResult> {
+    return await TAURI_INVOKE("upload_screenshot", { screenshotPath });
 },
 async getRecordingMeta(id: string, fileType: string) : Promise<RecordingMeta> {
     return await TAURI_INVOKE("get_recording_meta", { id, fileType });
@@ -225,77 +125,32 @@ async openUpgradeWindow() : Promise<void> {
 async openSettingsWindow(page: string) : Promise<void> {
     await TAURI_INVOKE("open_settings_window", { page });
 },
-async saveFileDialog(fileName: string, fileType: string) : Promise<Result<string | null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("save_file_dialog", { fileName, fileType }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async saveFileDialog(fileName: string, fileType: string) : Promise<string | null> {
+    return await TAURI_INVOKE("save_file_dialog", { fileName, fileType });
 },
-async listRecordings() : Promise<Result<([string, string, RecordingMeta])[], string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("list_recordings") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async listRecordings() : Promise<([string, string, RecordingMeta])[]> {
+    return await TAURI_INVOKE("list_recordings");
 },
-async listScreenshots() : Promise<Result<([string, string, RecordingMeta])[], string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("list_screenshots") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async listScreenshots() : Promise<([string, string, RecordingMeta])[]> {
+    return await TAURI_INVOKE("list_screenshots");
 },
-async checkUpgradedAndUpdate() : Promise<Result<boolean, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("check_upgraded_and_update") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async checkUpgradedAndUpdate() : Promise<boolean> {
+    return await TAURI_INVOKE("check_upgraded_and_update");
 },
-async openExternalLink(url: string) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("open_external_link", { url }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async openExternalLink(url: string) : Promise<null> {
+    return await TAURI_INVOKE("open_external_link", { url });
 },
-async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<Result<null, null>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("set_hotkey", { action, hotkey }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<null> {
+    return await TAURI_INVOKE("set_hotkey", { action, hotkey });
 },
-async deleteAuthOpenSignin() : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("delete_auth_open_signin") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async deleteAuthOpenSignin() : Promise<null> {
+    return await TAURI_INVOKE("delete_auth_open_signin");
 },
-async resetCameraPermissions() : Promise<Result<null, null>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("reset_camera_permissions") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async resetCameraPermissions() : Promise<null> {
+    return await TAURI_INVOKE("reset_camera_permissions");
 },
-async resetMicrophonePermissions() : Promise<Result<null, null>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("reset_microphone_permissions") };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async resetMicrophonePermissions() : Promise<null> {
+    return await TAURI_INVOKE("reset_microphone_permissions");
 },
 async isCameraWindowOpen() : Promise<boolean> {
     return await TAURI_INVOKE("is_camera_window_open");
@@ -303,13 +158,8 @@ async isCameraWindowOpen() : Promise<boolean> {
 async seekTo(videoId: string, frameNumber: number) : Promise<void> {
     await TAURI_INVOKE("seek_to", { videoId, frameNumber });
 },
-async sendFeedbackRequest(feedback: string) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("send_feedback_request", { feedback }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
+async sendFeedbackRequest(feedback: string) : Promise<null> {
+    return await TAURI_INVOKE("send_feedback_request", { feedback });
 },
 async positionTrafficLights(controlsInset: [number, number] | null) : Promise<void> {
     await TAURI_INVOKE("position_traffic_lights", { controlsInset });

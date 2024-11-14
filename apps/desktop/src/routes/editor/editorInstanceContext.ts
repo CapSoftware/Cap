@@ -18,10 +18,9 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
 
     const [editorInstance] = createResource(async () => {
       const instance = await commands.createEditorInstance(props.videoId);
-      if (instance.status !== "ok") throw new Error("Failed to start editor");
 
       const [ws, isConnected] = createImageDataWS(
-        instance.data.framesSocketUrl,
+        instance.framesSocketUrl,
         setLatestFrame
       );
 
@@ -33,7 +32,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
         }
       });
 
-      return instance.data;
+      return instance;
     });
 
     return {

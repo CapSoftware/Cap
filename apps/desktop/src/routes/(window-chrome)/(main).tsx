@@ -84,6 +84,9 @@ export default function () {
         await commands.stopRecording();
       }
     },
+    onError: (e) => {
+      alert("An error occurred, here are the details:\n" + e.toString());
+    },
   }));
 
   createAsync(() => getAuth());
