@@ -127,10 +127,10 @@ function ExportButton() {
               {(state) => (
                 <Button
                   onClick={() => {
-                    commands.openInFinder(state().path);
+                    commands.openFilePath(state().path);
                   }}
                 >
-                  Open in Finder
+                  Open in {ostype() === "macos" ? "Finder" : "File Explorer"}
                 </Button>
               )}
             </Show>

@@ -263,6 +263,7 @@ impl CapWindow {
                     )
                     .visible(false)
                     .theme(Some(tauri::Theme::Dark))
+                    .skip_taskbar(true)
                     .build()?
             }
             Self::PrevRecordings => {
