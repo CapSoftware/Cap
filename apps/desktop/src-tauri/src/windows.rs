@@ -92,7 +92,7 @@ impl CapWindowId {
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
             Self::Camera | Self::WindowCaptureOccluder | Self::PrevRecordings => None,
-            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 48.0))),
+            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.5))),
             Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             _ => Some(None),
         }

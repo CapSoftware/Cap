@@ -21,7 +21,7 @@ export function Header() {
 
   onMount(async () => {
     unlistenTitlebar = await initializeTitlebar();
-    commands.positionTrafficLights([20.0, 48.0]);
+    commands.positionTrafficLights([20.0, 40.5]);
   });
 
   onCleanup(() => {
@@ -63,9 +63,9 @@ function ExportButton() {
   const [state, setState] = createStore<
     | { open: false; type: "idle" }
     | ({ open: boolean } & (
-        | { type: "inProgress"; progress: number; totalFrames: number }
-        | { type: "finished"; path: string }
-      ))
+      | { type: "inProgress"; progress: number; totalFrames: number }
+      | { type: "finished"; path: string }
+    ))
   >({ open: false, type: "idle" });
 
   return (
