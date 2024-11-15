@@ -20,7 +20,8 @@ pub struct GeneralSettingsStore {
     pub enable_notifications: bool,
     #[serde(default)]
     pub disable_auto_open_links: bool,
-    #[serde(default)]
+    // first launch: store won't exist so show startup
+    #[serde(default = "true_b")]
     pub has_completed_startup: bool,
 }
 
