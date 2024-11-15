@@ -15,6 +15,7 @@ import {
   createSignal,
   onCleanup,
   startTransition,
+  onMount,
 } from "solid-js";
 import Tooltip from "@corvu/tooltip";
 import { Button } from "@cap/ui-solid";
@@ -34,6 +35,26 @@ type MediaEntry = {
   type?: "recording" | "screenshot";
 };
 
+type ProgressState =
+  | {
+      type: "idle";
+    }
+  | {
+      type: "copying" | "saving";
+      progress: number;
+      message: string;
+      mediaPath?: string;
+      stage?: "rendering";
+    }
+  | {
+      type: "uploading";
+      renderProgress: number;
+      uploadProgress: number;
+      message: string;
+      mediaPath?: string;
+      stage: "rendering" | "uploading";
+    };
+
 export default function () {
   const presets = createPresets();
   const [recordings, setRecordings] = makePersisted(
@@ -44,6 +65,45 @@ export default function () {
     createStore<MediaEntry[]>([]),
     { name: "screenshots-store" }
   );
+  const [progressState, setProgressState] = createStore<ProgressState>({
+    type: "idle",
+  });
+
+  onMount(async () => {
+    const unlisten = await events.uploadProgress.listen((event) => {
+      if (progressState.type === "uploading") {
+        if (event.payload.stage === "rendering") {
+          setProgressState({
+            type: "uploading",
+            renderProgress: Math.round(event.payload.progress * 100),
+            uploadProgress: 0,
+            message: event.payload.message,
+            mediaPath: progressState.mediaPath,
+            stage: "rendering",
+          });
+        } else {
+          setProgressState({
+            type: "uploading",
+            renderProgress: 100,
+            uploadProgress: Math.round(event.payload.progress * 100),
+            message: event.payload.message,
+            mediaPath: progressState.mediaPath,
+            stage: "uploading",
+          });
+
+          if (event.payload.progress === 1) {
+            setTimeout(() => {
+              setProgressState({ type: "idle" });
+            }, 1000);
+          }
+        }
+      }
+    });
+
+    onCleanup(() => {
+      unlisten();
+    });
+  });
 
   const addMediaEntry = (path: string, type?: "recording" | "screenshot") => {
     const setMedia = type === "screenshot" ? setScreenshots : setRecordings;
@@ -125,86 +185,173 @@ export default function () {
 
                 const copyMedia = createMutation(() => ({
                   mutationFn: async () => {
-                    if (isRecording) {
-                      await commands.copyRenderedVideoToClipboard(
-                        mediaId,
-                        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                      );
-                    } else {
-                      await commands.copyScreenshotToClipboard(media.path);
+                    setProgressState({
+                      type: "copying",
+                      progress: 0,
+                      message: "Preparing to render...",
+                      mediaPath: media.path,
+                      stage: "rendering",
+                    });
+
+                    try {
+                      if (isRecording) {
+                        await commands.getRenderedVideo(
+                          mediaId,
+                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                        );
+
+                        await commands.copyRenderedVideoToClipboard(
+                          mediaId,
+                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                        );
+                      } else {
+                        await commands.copyScreenshotToClipboard(media.path);
+                      }
+
+                      setProgressState({
+                        type: "copying",
+                        progress: 100,
+                        message: "Copied successfully!",
+                        mediaPath: media.path,
+                      });
+
+                      setTimeout(() => {
+                        setProgressState({ type: "idle" });
+                      }, 1000);
+                    } catch (error) {
+                      setProgressState({ type: "idle" });
+                      throw error;
                     }
                   },
                 }));
 
                 const saveMedia = createMutation(() => ({
                   mutationFn: async () => {
-                    const meta = recordingMeta.data;
-                    if (!meta) {
-                      throw new Error("Recording metadata not available");
-                    }
+                    setProgressState({
+                      type: "saving",
+                      progress: 0,
+                      message: "Preparing to render...",
+                      mediaPath: media.path,
+                      stage: "rendering",
+                    });
 
-                    const defaultName = isRecording
-                      ? "Cap Recording"
-                      : media.path.split(".cap/")[1];
-                    const suggestedName = meta.pretty_name || defaultName;
-
-                    const fileType = isRecording ? "recording" : "screenshot";
-                    const extension = isRecording ? ".mp4" : ".png";
-
-                    const fullFileName = suggestedName.endsWith(extension)
-                      ? suggestedName
-                      : `${suggestedName}${extension}`;
-
-                    const savePath = await commands.saveFileDialog(
-                      fullFileName,
-                      fileType
-                    );
-
-                    if (!savePath) {
-                      return false;
-                    }
-
-                    if (isRecording) {
-                      const renderedPath = await commands.getRenderedVideo(
-                        mediaId,
-                        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                      );
-
-                      if (!renderedPath) {
-                        throw new Error("Failed to get rendered video path");
+                    try {
+                      const meta = recordingMeta.data;
+                      if (!meta) {
+                        throw new Error("Recording metadata not available");
                       }
 
-                      await commands.copyFileToPath(renderedPath, savePath);
-                    } else {
-                      await commands.copyFileToPath(media.path, savePath);
-                    }
+                      const defaultName = isRecording
+                        ? "Cap Recording"
+                        : media.path.split(".cap/")[1];
+                      const suggestedName = meta.pretty_name || defaultName;
 
-                    return true;
+                      const fileType = isRecording ? "recording" : "screenshot";
+                      const extension = isRecording ? ".mp4" : ".png";
+
+                      const fullFileName = suggestedName.endsWith(extension)
+                        ? suggestedName
+                        : `${suggestedName}${extension}`;
+
+                      const savePath = await commands.saveFileDialog(
+                        fullFileName,
+                        fileType
+                      );
+
+                      if (!savePath) {
+                        setProgressState({ type: "idle" });
+                        return false;
+                      }
+
+                      if (isRecording) {
+                        const renderedPath = await commands.getRenderedVideo(
+                          mediaId,
+                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                        );
+
+                        if (!renderedPath) {
+                          throw new Error("Failed to get rendered video path");
+                        }
+
+                        await commands.copyFileToPath(renderedPath, savePath);
+                      } else {
+                        await commands.copyFileToPath(media.path, savePath);
+                      }
+
+                      setProgressState({
+                        type: "saving",
+                        progress: 100,
+                        message: "Saved successfully!",
+                        mediaPath: media.path,
+                      });
+
+                      setTimeout(() => {
+                        setProgressState({ type: "idle" });
+                      }, 1000);
+
+                      return true;
+                    } catch (error) {
+                      setProgressState({ type: "idle" });
+                      throw error;
+                    }
                   },
                 }));
                 const uploadMedia = createMutation(() => ({
                   mutationFn: async () => {
-                    let res: UploadResult;
-                    if (isRecording) {
-                      res = await commands.uploadRenderedVideo(
-                        mediaId,
-                        presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
-                        null
-                      );
-                    } else {
-                      res = await commands.uploadScreenshot(media.path);
+                    if (recordingMeta.data?.sharing) {
+                      setProgressState({
+                        type: "copying",
+                        progress: 100,
+                        message: "Link copied to clipboard!",
+                        mediaPath: media.path,
+                      });
+
+                      setTimeout(() => {
+                        setProgressState({ type: "idle" });
+                      }, 1000);
+
+                      return;
                     }
 
-                    switch (res) {
-                      case "NotAuthenticated":
-                        throw new Error("Not authenticated");
-                      case "PlanCheckFailed":
-                        throw new Error("Plan check failed");
-                      case "UpgradeRequired":
-                        throw new Error("Upgrade required");
-                      default:
-                        // Success case, do nothing
-                        break;
+                    setProgressState({
+                      type: "uploading",
+                      renderProgress: 0,
+                      uploadProgress: 0,
+                      message: "Preparing to render...",
+                      mediaPath: media.path,
+                      stage: "rendering",
+                    });
+
+                    try {
+                      let res: UploadResult;
+                      if (isRecording) {
+                        await commands.getRenderedVideo(
+                          mediaId,
+                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                        );
+
+                        res = await commands.uploadRenderedVideo(
+                          mediaId,
+                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+                          null
+                        );
+                      } else {
+                        res = await commands.uploadScreenshot(media.path);
+                      }
+
+                      switch (res) {
+                        case "NotAuthenticated":
+                          throw new Error("Not authenticated");
+                        case "PlanCheckFailed":
+                          throw new Error("Plan check failed");
+                        case "UpgradeRequired":
+                          throw new Error("Upgrade required");
+                        default:
+                          break;
+                      }
+                    } catch (error) {
+                      setProgressState({ type: "idle" });
+                      throw error;
                     }
                   },
                   onSuccess: () =>
@@ -260,6 +407,7 @@ export default function () {
                         )}
                         style={{
                           "border-color": "rgba(255, 255, 255, 0.2)",
+                          "pointer-events": "auto",
                         }}
                       >
                         <Show
@@ -279,9 +427,64 @@ export default function () {
                             onError={() => setImageExists(false)}
                           />
                         </Show>
+
+                        <Show
+                          when={
+                            progressState.type !== "idle" &&
+                            progressState.mediaPath === media.path
+                          }
+                        >
+                          <div class="absolute inset-0 bg-gray-500/95 flex items-center justify-center z-[999999] pointer-events-auto">
+                            <div class="w-[80%] text-center">
+                              <h3 class="text-sm font-medium mb-3 text-gray-50">
+                                <Switch>
+                                  <Match
+                                    when={progressState.type === "copying"}
+                                  >
+                                    {progressState.stage === "rendering"
+                                      ? "Rendering video"
+                                      : "Copying to clipboard"}
+                                  </Match>
+                                  <Match when={progressState.type === "saving"}>
+                                    {progressState.stage === "rendering"
+                                      ? "Rendering video"
+                                      : "Saving file"}
+                                  </Match>
+                                  <Match
+                                    when={progressState.type === "uploading"}
+                                  >
+                                    {progressState.stage === "rendering"
+                                      ? "Rendering video"
+                                      : "Creating shareable link"}
+                                  </Match>
+                                </Switch>
+                              </h3>
+
+                              <div class="w-full bg-gray-700 rounded-full h-1.5 mb-2">
+                                <div
+                                  class="bg-blue-300 h-1.5 rounded-full transition-all duration-200"
+                                  style={{
+                                    width: `${
+                                      progressState.type === "uploading"
+                                        ? progressState.stage === "rendering"
+                                          ? progressState.renderProgress
+                                          : progressState.uploadProgress
+                                        : progressState.progress
+                                    }%`,
+                                  }}
+                                />
+                              </div>
+
+                              <p class="text-xs text-gray-50 mt-2">
+                                {progressState.message}
+                              </p>
+                            </div>
+                          </div>
+                        </Show>
+
                         <div
                           class={cx(
-                            "w-full h-full absolute inset-0 transition-all",
+                            "w-full h-full absolute inset-0 transition-all duration-150 pointer-events-auto",
                             isLoading() || showUpgradeTooltip()
                               ? "opacity-100"
                               : "opacity-0 group-hover:opacity-100",
@@ -316,6 +519,19 @@ export default function () {
                               tooltipText="Edit"
                               tooltipPlacement="right"
                               onClick={() => {
+                                const setMedia = isRecording
+                                  ? setRecordings
+                                  : setScreenshots;
+                                setMedia(
+                                  produce((state) => {
+                                    const index = state.findIndex(
+                                      (entry) => entry.path === media.path
+                                    );
+                                    if (index !== -1) {
+                                      state.splice(index, 1);
+                                    }
+                                  })
+                                );
                                 commands.openEditor(mediaId);
                               }}
                             >
@@ -367,7 +583,7 @@ export default function () {
                             </Switch>
                           </TooltipIconButton>
                           <TooltipIconButton
-                            class="absolute right-3 bottom-3 z-20"
+                            class="absolute right-3 bottom-3 z-[998]"
                             tooltipText={
                               recordingMeta.data?.sharing
                                 ? "Copy Shareable Link"
@@ -377,9 +593,7 @@ export default function () {
                                 ? "Upgrade Required"
                                 : "Create Shareable Link"
                             }
-                            forceOpen={
-                              uploadMedia.isPending || showUpgradeTooltip()
-                            }
+                            forceOpen={showUpgradeTooltip()}
                             tooltipPlacement="left"
                             onClick={() => {
                               uploadMedia.mutate(undefined, {
@@ -535,7 +749,7 @@ const TooltipIconButton = (
             color: "white",
             "border-radius": "8px",
             "font-size": "12px",
-            "z-index": "1000",
+            "z-index": "15",
           }}
         >
           {props.tooltipText}

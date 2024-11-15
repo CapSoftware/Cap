@@ -187,7 +187,8 @@ requestOpenSettings: RequestOpenSettings,
 requestRestartRecording: RequestRestartRecording,
 requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
-showCapturesPanel: ShowCapturesPanel
+showCapturesPanel: ShowCapturesPanel,
+uploadProgress: UploadProgress
 }>({
 audioInputLevelChange: "audio-input-level-change",
 authenticationInvalid: "authentication-invalid",
@@ -206,7 +207,8 @@ requestOpenSettings: "request-open-settings",
 requestRestartRecording: "request-restart-recording",
 requestStartRecording: "request-start-recording",
 requestStopRecording: "request-stop-recording",
-showCapturesPanel: "show-captures-panel"
+showCapturesPanel: "show-captures-panel",
+uploadProgress: "upload-progress"
 })
 
 /** user-defined constants **/
@@ -278,6 +280,7 @@ export type SharingMeta = { id: string; link: string }
 export type ShowCapturesPanel = null
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments?: ZoomSegment[] }
 export type TimelineSegment = { timescale: number; start: number; end: number }
+export type UploadProgress = { stage: string; progress: number; message: string }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
 export type Video = { duration: number; width: number; height: number }
 export type VideoType = "screen" | "output"
