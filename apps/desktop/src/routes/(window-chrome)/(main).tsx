@@ -48,12 +48,12 @@ import {
 
 const getAuth = cache(async () => {
   const value = await authStore.get();
-  if (!value && !import.meta.env.TAURI_ENV_DEBUG) return redirect("/signin");
+  const local = import.meta.env.VITE_LOCAL_MODE === "true";
+  if (!value && !local) return redirect("/signin");
   const res = await fetch(`${clientEnv.VITE_SERVER_URL}/api/desktop/plan`, {
     headers: { authorization: `Bearer ${value?.token}` },
   });
-  if (res.status !== 200 && !import.meta.env.TAURI_ENV_DEBUG)
-    return redirect("/signin");
+  if (res.status !== 200 && !local) return redirect("/signin");
   return value;
 }, "getAuth");
 
