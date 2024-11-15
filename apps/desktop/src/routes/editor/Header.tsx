@@ -115,7 +115,9 @@ function ExportButton() {
       <Dialog.Root
         open={state.open}
         onOpenChange={(o) => {
-          if (!o) setState(reconcile({ ...state, open: false }));
+          if (state.type !== "inProgress" && !o) {
+            setState(reconcile({ ...state, open: false }));
+          }
         }}
       >
         <DialogContent

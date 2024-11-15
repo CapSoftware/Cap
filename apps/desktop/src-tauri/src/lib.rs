@@ -1540,7 +1540,7 @@ fn show_previous_recordings_window(app: AppHandle) {
         let state = app.state::<FakeWindowBounds>();
 
         loop {
-            sleep(Duration::from_millis(1000 / 60)).await;
+            sleep(Duration::from_millis(1000 / 10)).await;
 
             let map = state.0.read().await;
             let Some(windows) = map.get("prev-recordings") else {
@@ -1549,7 +1549,7 @@ fn show_previous_recordings_window(app: AppHandle) {
             };
 
             let window_position = window.outer_position().unwrap();
-            let mouse_position = window.cursor_position().unwrap(); // TODO(Ilya): Panics on Windows
+            let mouse_position = window.cursor_position().unwrap();
             let scale_factor = window.scale_factor().unwrap();
 
             let mut ignore = true;
@@ -1572,6 +1572,16 @@ fn show_previous_recordings_window(app: AppHandle) {
             }
 
             window.set_ignore_cursor_events(ignore).ok();
+
+            if !ignore {
+                if !window.is_focused().unwrap_or(false) {
+                    window.set_focus().ok();
+                }
+            } else {
+                if window.is_focused().unwrap_or(false) {
+                    window.set_ignore_cursor_events(true).ok();
+                }
+            }
         }
     });
 }
@@ -1719,6 +1729,13 @@ async fn open_settings_window(app: AppHandle, page: String) {
     CapWindow::Settings { page: Some(page) }.show(&app);
 }
 
+#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+pub struct UploadProgress {
+    stage: String,
+    progress: f64,
+    message: String,
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn upload_rendered_video(
@@ -1728,7 +1745,6 @@ async fn upload_rendered_video(
     pre_created_video: Option<PreCreatedVideo>,
 ) -> Result<UploadResult, String> {
     let Ok(Some(mut auth)) = AuthStore::get(&app) else {
-        // Sign out and redirect to sign in
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
         return Ok(UploadResult::NotAuthenticated);
     };
@@ -1767,60 +1783,34 @@ async fn upload_rendered_video(
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
     let mut meta = editor_instance.meta();
 
-    let share_link = if let Some(sharing) = meta.sharing {
+    if let Some(sharing) = meta.sharing {
         notifications::send_notification(
             &app,
             notifications::NotificationType::ShareableLinkCopied,
         );
-        sharing.link
-    } else if let Some(pre_created) = pre_created_video {
-        // Use the pre-created video information
-        let output_path = match get_rendered_video_impl(editor_instance.clone(), project).await {
-            Ok(path) => path,
-            Err(e) => return Err(format!("Failed to get rendered video: {}", e)),
-        };
-
-        match upload_video(
-            &app,
-            video_id.clone(),
-            output_path,
-            false,
-            Some(pre_created.config),
-        )
-        .await
-        {
-            Ok(_) => {
-                meta.sharing = Some(SharingMeta {
-                    link: pre_created.link.clone(),
-                    id: pre_created.id.clone(),
-                });
-                meta.save_for_project();
-                RecordingMetaChanged { id: video_id }.emit(&app).ok();
-
-                // Don't send notification here if it was pre-created
-                let general_settings = GeneralSettingsStore::get(&app)?;
-                if !general_settings
-                    .map(|settings| settings.auto_create_shareable_link)
-                    .unwrap_or(false)
-                {
-                    notifications::send_notification(
-                        &app,
-                        notifications::NotificationType::ShareableLinkCopied,
-                    );
-                }
-                pre_created.link
-            }
-            Err(e) => {
-                notifications::send_notification(
-                    &app,
-                    notifications::NotificationType::UploadFailed,
-                );
-                return Err(e);
-            }
-        }
+        Ok(UploadResult::Success(sharing.link))
     } else {
+        // Emit initial rendering progress
+        UploadProgress {
+            stage: "rendering".to_string(),
+            progress: 0.0,
+            message: "Preparing video...".to_string(),
+        }
+        .emit(&app)
+        .ok();
+
         let output_path = match get_rendered_video_impl(editor_instance.clone(), project).await {
-            Ok(path) => path,
+            Ok(path) => {
+                // Emit rendering complete
+                UploadProgress {
+                    stage: "rendering".to_string(),
+                    progress: 1.0,
+                    message: "Rendering complete".to_string(),
+                }
+                .emit(&app)
+                .ok();
+                path
+            }
             Err(e) => {
                 notifications::send_notification(
                     &app,
@@ -1830,8 +1820,34 @@ async fn upload_rendered_video(
             }
         };
 
-        match upload_video(&app, video_id.clone(), output_path, false, None).await {
+        // Start upload progress
+        UploadProgress {
+            stage: "uploading".to_string(),
+            progress: 0.0,
+            message: "Starting upload...".to_string(),
+        }
+        .emit(&app)
+        .ok();
+
+        let result = match upload_video(
+            &app,
+            video_id.clone(),
+            output_path,
+            false,
+            pre_created_video.map(|v| v.config),
+        )
+        .await
+        {
             Ok(uploaded_video) => {
+                // Emit upload complete
+                UploadProgress {
+                    stage: "uploading".to_string(),
+                    progress: 1.0,
+                    message: "Upload complete!".to_string(),
+                }
+                .emit(&app)
+                .ok();
+
                 meta.sharing = Some(SharingMeta {
                     link: uploaded_video.link.clone(),
                     id: uploaded_video.id.clone(),
@@ -1843,22 +1859,23 @@ async fn upload_rendered_video(
                     &app,
                     notifications::NotificationType::ShareableLinkCopied,
                 );
-                uploaded_video.link
+
+                #[cfg(target_os = "macos")]
+                platform::write_string_to_pasteboard(&uploaded_video.link);
+
+                Ok(UploadResult::Success(uploaded_video.link))
             }
             Err(e) => {
                 notifications::send_notification(
                     &app,
                     notifications::NotificationType::UploadFailed,
                 );
-                return Err(e);
+                Err(e)
             }
-        }
-    };
+        };
 
-    #[cfg(target_os = "macos")]
-    platform::write_string_to_pasteboard(&share_link);
-
-    Ok(UploadResult::Success(share_link))
+        result
+    }
 }
 
 #[tauri::command]
@@ -2457,7 +2474,8 @@ pub async fn run() {
             RequestOpenSettings,
             NewNotification,
             AuthenticationInvalid,
-            audio_meter::AudioInputLevelChange
+            audio_meter::AudioInputLevelChange,
+            UploadProgress,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()

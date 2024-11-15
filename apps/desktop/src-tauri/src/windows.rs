@@ -276,6 +276,7 @@ impl CapWindow {
                     .shadow(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
+                    .accept_first_mouse(true)
                     .content_protected(true)
                     .inner_size(
                         350.0,

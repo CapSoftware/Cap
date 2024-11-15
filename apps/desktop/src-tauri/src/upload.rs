@@ -1,14 +1,17 @@
 // credit @filleduchaos
 
+use futures::stream;
 use image::codecs::jpeg::JpegEncoder;
 use image::ImageReader;
 use reqwest::{multipart::Form, StatusCode};
 use std::path::PathBuf;
 use tauri::AppHandle;
+use tauri_specta::Event;
 use tokio::task;
 
 use crate::web_api::{self, ManagerExt};
 
+use crate::UploadProgress;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -140,11 +143,51 @@ pub async fn upload_video(
     let file_bytes = tokio::fs::read(&file_path)
         .await
         .map_err(|e| format!("Failed to read file: {}", e))?;
-    let file_part = reqwest::multipart::Part::bytes(file_bytes)
-        .file_name(file_name.clone())
-        .mime_str("video/mp4")
-        .map_err(|e| format!("Error setting MIME type: {}", e))?;
-    form = form.part("file", file_part);
+
+    let total_size = file_bytes.len() as f64;
+
+    // Wrap file_bytes in an Arc for shared ownership
+    let file_bytes = std::sync::Arc::new(file_bytes);
+
+    // Create a stream that reports progress
+    let file_part =
+        {
+            let progress_counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let app_handle = app.clone();
+            let file_bytes = file_bytes.clone();
+
+            let stream = stream::iter((0..file_bytes.len()).step_by(1024 * 1024).map(
+                move |start| {
+                    let end = (start + 1024 * 1024).min(file_bytes.len());
+                    let chunk = file_bytes[start..end].to_vec();
+
+                    let current = progress_counter
+                        .fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::SeqCst)
+                        as f64;
+
+                    // Emit progress every chunk
+                    UploadProgress {
+                        stage: "uploading".to_string(),
+                        progress: current / total_size,
+                        message: format!("{:.0}%", (current / total_size * 100.0)),
+                    }
+                    .emit(&app_handle)
+                    .ok();
+
+                    Ok::<Vec<u8>, std::io::Error>(chunk)
+                },
+            ));
+
+            reqwest::multipart::Part::stream_with_length(
+                reqwest::Body::wrap_stream(stream),
+                total_size as u64,
+            )
+            .file_name(file_name.clone())
+            .mime_str("video/mp4")
+            .map_err(|e| format!("Error setting MIME type: {}", e))?
+        };
+
+    let mut form = form.part("file", file_part);
 
     // Prepare screenshot upload
     let screenshot_path = file_path
@@ -182,6 +225,15 @@ pub async fn upload_video(
         video_upload.map_err(|e| format!("Failed to send upload file request: {}", e))?;
 
     if response.status().is_success() {
+        // Final progress update
+        UploadProgress {
+            stage: "uploading".to_string(),
+            progress: 1.0,
+            message: "100%".to_string(),
+        }
+        .emit(app)
+        .ok();
+
         println!("Video uploaded successfully");
 
         if let Some(Ok(screenshot_response)) = screenshot_result {
