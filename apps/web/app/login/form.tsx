@@ -18,6 +18,30 @@ export function LoginForm() {
     error && toast.error(error);
   }, [searchParams]);
 
+  useEffect(() => {
+    const pendingPriceId = localStorage.getItem("pendingPriceId");
+    if (emailSent && pendingPriceId) {
+      // Clear the pending price ID
+      localStorage.removeItem("pendingPriceId");
+
+      // Wait a bit to ensure the user is created
+      setTimeout(async () => {
+        const response = await fetch(`/api/settings/billing/subscribe`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ priceId: pendingPriceId }),
+        });
+        const data = await response.json();
+
+        if (data.url) {
+          window.location.href = data.url;
+        }
+      }, 2000); // Wait 2 seconds after email is sent
+    }
+  }, [emailSent]);
+
   return (
     <>
       <form

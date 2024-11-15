@@ -2521,8 +2521,14 @@ pub async fn run() {
             let permissions = permissions::do_permissions_check(false);
             println!("Permissions check result: {:?}", permissions);
 
-            if !permissions.screen_recording.permitted() || !permissions.accessibility.permitted() {
-                println!("Required permissions not granted, showing permissions window");
+            if !permissions.screen_recording.permitted()
+                || !permissions.accessibility.permitted()
+                || GeneralSettingsStore::get(app.handle())
+                    .ok()
+                    .flatten()
+                    .map(|s| !s.has_completed_startup)
+                    .unwrap_or(false)
+            {
                 CapWindow::Setup.show(&app_handle).ok();
             } else {
                 println!("Permissions granted, showing main window");

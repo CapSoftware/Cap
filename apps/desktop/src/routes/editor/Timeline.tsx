@@ -234,7 +234,7 @@ export function Timeline() {
                     });
                   }}
                 />
-                <SegmentContent class="bg-blue-50">
+                <SegmentContent class="bg-blue-50 justify-between">
                   <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
                     {formatTime(segment.start)}
                   </span>

@@ -46,7 +46,10 @@ export default function (props: RouteSectionProps) {
         exitToClass="opacity-0"
         > */}
       <Suspense fallback={<AbsoluteInsetLoader />}>
-        <Inner>{props.children}</Inner>
+        <Inner>
+          {/* prevents flicker idk */}
+          <Suspense>{props.children}</Suspense>
+        </Inner>
       </Suspense>
       {/* </Transition> */}
     </div>

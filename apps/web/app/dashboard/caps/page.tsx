@@ -11,6 +11,7 @@ import {
 import { desc, eq, sql, count, or } from "drizzle-orm";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { Metadata } from "next";
+import { redirect } from "next/navigation";
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
@@ -23,10 +24,19 @@ export default async function CapsPage({
 }: {
   searchParams: { [key: string]: string | string[] | undefined };
 }) {
+  const user = await getCurrentUser();
+
+  if (!user || !user.id) {
+    redirect("/login");
+  }
+
+  if (!user.name || user.name.length <= 1) {
+    redirect("/onboarding");
+  }
+
+  const userId = user.id;
   const page = Number(searchParams.page) || 1;
   const limit = Number(searchParams.limit) || 15;
-  const user = await getCurrentUser();
-  const userId = user?.id as string;
   const offset = (page - 1) * limit;
 
   const totalCountResult = await db
@@ -86,6 +96,7 @@ export default async function CapsPage({
   const processedVideoData = videoData.map((video) => ({
     ...video,
     sharedSpaces: video.sharedSpaces.filter((space) => space.id !== null),
+    ownerName: video.ownerName ?? "",
   }));
 
   return (

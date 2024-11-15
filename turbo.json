@@ -4,7 +4,7 @@
   "globalDotEnv": [".env"],
   "pipeline": {
     "build": {
-      "inputs": ["**/*.ts", "!src-tauri/**", "!node_modules/**"],
+      "inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
       "dependsOn": ["^build"],
       "outputs": [".next/**", "!.next/cache/**"],
       "dotEnv": [
