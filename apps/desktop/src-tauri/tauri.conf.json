@@ -1,5 +1,5 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "Cap - Development",
   "identifier": "so.cap.desktop.dev",
   "mainBinaryName": "Cap - Development",
@@ -56,12 +56,11 @@
     },
     "windows": {
       "nsis": {
-        "headerImage": "assets/nsis-headerImage.bmp",
-        "sidebarImage": "assets/nsis-sidebarImage.bmp"
+        "headerImage": "assets/nsis-header.bmp",
+        "sidebarImage": "assets/nsis-sidebar.bmp"
       },
       "wix": {
-        "bannerPath": "assets/wix-bannerPath.bmp",
-        "version": "0.3.0"
+        "bannerPath": "assets/wix-banner.bmp"
       }
     }
   }
