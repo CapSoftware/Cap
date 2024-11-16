@@ -1,4 +1,4 @@
-import { ComponentProps, createEffect, JSX, Show, splitProps } from "solid-js";
+import { ComponentProps, JSX, Show, splitProps } from "solid-js";
 import { WindowControlButton as ControlButton } from "./WindowControlButton";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import titlebarState from "~/utils/titlebar-state";
@@ -7,10 +7,6 @@ import { cx } from "cva";
 export default function (props: ComponentProps<"div">) {
   const [local, otherProps] = splitProps(props, ["class"]);
   const window = getCurrentWindow();
-
-  createEffect(() => {
-    console.log(`Maximizable? ${titlebarState.maximizable}`);
-  });
 
   return (
     <div

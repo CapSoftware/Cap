@@ -66,7 +66,7 @@ export default function Settings(props: RouteSectionProps) {
           </Button>
         </div>
       </div>
-      <div class="flex-1 bg-gray-50 overflow-y-hidden animate-in !scrollbar-thin">
+      <div class="flex-1 bg-gray-50 overflow-y-hidden animate-in">
         <Suspense>{props.children}</Suspense>
       </div>
     </div>
