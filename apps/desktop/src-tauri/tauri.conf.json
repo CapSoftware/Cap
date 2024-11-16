@@ -57,7 +57,8 @@
     "windows": {
       "nsis": {
         "headerImage": "assets/nsis-header.bmp",
-        "sidebarImage": "assets/nsis-sidebar.bmp"
+        "sidebarImage": "assets/nsis-sidebar.bmp",
+        "installerIcon": "icons/icon.ico"
       },
       "wix": {
         "bannerPath": "assets/wix-banner.bmp"
