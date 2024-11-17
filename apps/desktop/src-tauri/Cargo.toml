@@ -67,6 +67,7 @@ fast_image_resize = "4.2.1"
 png = "0.17.13"
 device_query = "2.1.0"
 base64 = "0.22.1"
+sentry = { version = "0.34.0", features = ["anyhow"] }
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
