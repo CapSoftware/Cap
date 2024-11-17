@@ -31,15 +31,14 @@ use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
     ZoomSegment,
 };
+use cap_recording::{InProgressRecording, RecordingOptions};
 use cap_rendering::{ProjectUniforms, ZOOM_DURATION};
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use png::{ColorType, Encoder};
-use recording::{
-    list_cameras, list_capture_screens, list_capture_windows, InProgressRecording, FPS,
-};
+use recording::{list_cameras, list_capture_screens, list_capture_windows};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -64,24 +63,6 @@ use tokio::{
 };
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use windows::{CapWindow, CapWindowId};
-
-#[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordingOptions {
-    capture_target: ScreenCaptureTarget,
-    camera_label: Option<String>,
-    audio_input_name: Option<String>,
-}
-
-impl RecordingOptions {
-    fn camera_label(&self) -> Option<&str> {
-        self.camera_label.as_deref()
-    }
-
-    fn audio_input_name(&self) -> Option<&str> {
-        self.audio_input_name.as_deref()
-    }
-}
 
 #[derive(specta::Type, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,11 +139,11 @@ impl App {
 
     async fn set_start_recording_options(&mut self, new_options: RecordingOptions) {
         match CapWindowId::Camera.get(&self.handle) {
-            Some(window) if new_options.camera_label.is_none() => {
+            Some(window) if new_options.camera_label().is_none() => {
                 println!("closing camera window");
                 window.close().ok();
             }
-            None if new_options.camera_label.is_some() => {
+            None if new_options.camera_label().is_some() => {
                 println!("creating camera window");
                 CapWindow::Camera {
                     ws_port: self.camera_ws_port,
@@ -368,7 +349,7 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         }
     }
 
-    match recording::start(
+    match cap_recording::start(
         id,
         recording_dir,
         &state.start_recording_options,
@@ -1088,7 +1069,7 @@ async fn render_to_file_impl(
 
                             let audio_info = audio.buffer.info();
                             let estimated_samples_per_frame =
-                                f64::from(audio_info.sample_rate) / f64::from(FPS);
+                                f64::from(audio_info.sample_rate) / f64::from(cap_recording::FPS);
                             let samples = estimated_samples_per_frame.ceil() as usize;
 
                             if let Some((_, frame_data)) =
@@ -1577,10 +1558,8 @@ fn show_previous_recordings_window(app: AppHandle) {
                 if !window.is_focused().unwrap_or(false) {
                     window.set_focus().ok();
                 }
-            } else {
-                if window.is_focused().unwrap_or(false) {
-                    window.set_ignore_cursor_events(true).ok();
-                }
+            } else if window.is_focused().unwrap_or(false) {
+                window.set_ignore_cursor_events(true).ok();
             }
         }
     });
@@ -1829,7 +1808,7 @@ async fn upload_rendered_video(
         .emit(&app)
         .ok();
 
-        let result = match upload_video(
+        match upload_video(
             &app,
             video_id.clone(),
             output_path,
@@ -1872,9 +1851,7 @@ async fn upload_rendered_video(
                 );
                 Err(e)
             }
-        };
-
-        result
+        }
     }
 }
 

@@ -138,7 +138,7 @@ pub async fn upload_video(
         },
     )?;
 
-    let (upload_url, mut form) = presigned_s3_url(app, body).await?;
+    let (upload_url, form) = presigned_s3_url(app, body).await?;
 
     let file_bytes = tokio::fs::read(&file_path)
         .await
@@ -187,7 +187,7 @@ pub async fn upload_video(
             .map_err(|e| format!("Error setting MIME type: {}", e))?
         };
 
-    let mut form = form.part("file", file_part);
+    let form = form.part("file", file_part);
 
     // Prepare screenshot upload
     let screenshot_path = file_path
