@@ -20,6 +20,7 @@ import {
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { fetch } from "@tauri-apps/plugin-http";
+import { Tooltip } from "@kobalte/core";
 
 import { authStore } from "~/store";
 import { clientEnv } from "~/utils/env";
@@ -127,12 +128,41 @@ export default function () {
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
       <div class="flex items-center justify-between pb-[0.25rem]">
         <IconCapLogoFull class="w-[90px] h-auto" />
-        <button
-          type="button"
-          onClick={() => commands.openSettingsWindow("general")}
-        >
-          <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-        </button>
+        <div class="flex items-center space-x-2">
+          <Tooltip.Root openDelay={0}>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                onClick={() => commands.openSettingsWindow("recordings")}
+              >
+                <IconLucideSquarePlay class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+                Previous Recordings
+                <Tooltip.Arrow class="fill-gray-500" />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+
+          <Tooltip.Root openDelay={0}>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                onClick={() => commands.openSettingsWindow("general")}
+              >
+                <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+                Settings
+                <Tooltip.Arrow class="fill-gray-500" />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+        </div>
       </div>
       <TargetSelects options={options.data} />
       <CameraSelect options={options.data} setOptions={setOptions} />

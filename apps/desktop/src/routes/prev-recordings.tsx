@@ -21,12 +21,20 @@ import Tooltip from "@corvu/tooltip";
 import { Button } from "@cap/ui-solid";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { TransitionGroup } from "solid-transition-group";
-import { createStore, produce } from "solid-js/store";
 import { makePersisted } from "@solid-primitives/storage";
+import { Channel } from "@tauri-apps/api/core";
 
-import { commands, events, Result, UploadResult } from "~/utils/tauri";
+import {
+  commands,
+  events,
+  Result,
+  UploadResult,
+  type RenderProgress,
+} from "~/utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
+import { progressState, setProgressState } from "~/store/progress";
+import { createStore, produce } from "solid-js/store";
 
 type MediaEntry = {
   path: string;
@@ -34,26 +42,6 @@ type MediaEntry = {
   isNew: boolean;
   type?: "recording" | "screenshot";
 };
-
-type ProgressState =
-  | {
-      type: "idle";
-    }
-  | {
-      type: "copying" | "saving";
-      progress: number;
-      message: string;
-      mediaPath?: string;
-      stage?: "rendering";
-    }
-  | {
-      type: "uploading";
-      renderProgress: number;
-      uploadProgress: number;
-      message: string;
-      mediaPath?: string;
-      stage: "rendering" | "uploading";
-    };
 
 export default function () {
   const presets = createPresets();
@@ -65,12 +53,12 @@ export default function () {
     createStore<MediaEntry[]>([]),
     { name: "screenshots-store" }
   );
-  const [progressState, setProgressState] = createStore<ProgressState>({
-    type: "idle",
-  });
 
   onMount(async () => {
+    console.log("Setting up event listeners");
+
     const unlisten = await events.uploadProgress.listen((event) => {
+      console.log("Upload progress event:", event.payload);
       if (progressState.type === "uploading") {
         if (event.payload.stage === "rendering") {
           setProgressState({
@@ -94,13 +82,14 @@ export default function () {
           if (event.payload.progress === 1) {
             setTimeout(() => {
               setProgressState({ type: "idle" });
-            }, 1000);
+            }, 1500);
           }
         }
       }
     });
 
     onCleanup(() => {
+      console.log("Cleaning up event listeners");
       unlisten();
     });
   });
@@ -188,6 +177,8 @@ export default function () {
                     setProgressState({
                       type: "copying",
                       progress: 0,
+                      renderProgress: 0,
+                      totalFrames: 0,
                       message: "Preparing to render...",
                       mediaPath: media.path,
                       stage: "rendering",
@@ -195,15 +186,66 @@ export default function () {
 
                     try {
                       if (isRecording) {
-                        await commands.getRenderedVideo(
+                        const output_path = await commands.getRenderedVideo(
                           mediaId,
                           presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
                         );
 
-                        await commands.copyRenderedVideoToClipboard(
-                          mediaId,
-                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                        );
+                        if (output_path) {
+                          await commands.copyRenderedVideoToClipboard(
+                            mediaId,
+                            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                          );
+                        } else {
+                          console.log("Setting up render progress channel");
+                          const progress = new Channel<RenderProgress>();
+                          progress.onmessage = (p) => {
+                            console.log("Progress channel message:", p);
+                            if (
+                              p.type === "FrameRendered" &&
+                              progressState.type === "copying"
+                            ) {
+                              console.log(
+                                "Frame rendered in copy:",
+                                p.current_frame,
+                                "Current state:",
+                                progressState
+                              );
+                              setProgressState({
+                                ...progressState,
+                                renderProgress: p.current_frame,
+                              });
+                            }
+                            if (
+                              p.type === "EstimatedTotalFrames" &&
+                              progressState.type === "copying"
+                            ) {
+                              console.log(
+                                "Got total frames in copy:",
+                                p.total_frames
+                              );
+                              setProgressState({
+                                ...progressState,
+                                totalFrames: p.total_frames,
+                              });
+                            }
+                          };
+
+                          console.log("Starting render to file");
+                          await commands.renderToFile(
+                            output_path,
+                            mediaId,
+                            presets.getDefaultConfig() ??
+                              DEFAULT_PROJECT_CONFIG,
+                            progress
+                          );
+                          console.log("Render to file completed");
+
+                          await commands.copyRenderedVideoToClipboard(
+                            mediaId,
+                            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                          );
+                        }
                       } else {
                         await commands.copyScreenshotToClipboard(media.path);
                       }
@@ -217,8 +259,9 @@ export default function () {
 
                       setTimeout(() => {
                         setProgressState({ type: "idle" });
-                      }, 1000);
+                      }, 1500);
                     } catch (error) {
+                      console.error("Error in copy media:", error);
                       setProgressState({ type: "idle" });
                       throw error;
                     }
@@ -230,6 +273,8 @@ export default function () {
                     setProgressState({
                       type: "saving",
                       progress: 0,
+                      renderProgress: 0,
+                      totalFrames: 0,
                       message: "Preparing to render...",
                       mediaPath: media.path,
                       stage: "rendering",
@@ -264,16 +309,42 @@ export default function () {
                       }
 
                       if (isRecording) {
-                        const renderedPath = await commands.getRenderedVideo(
+                        const progress = new Channel<RenderProgress>();
+                        progress.onmessage = (p) => {
+                          if (
+                            p.type === "FrameRendered" &&
+                            progressState.type === "saving"
+                          ) {
+                            setProgressState({
+                              ...progressState,
+                              renderProgress: p.current_frame,
+                            });
+                          }
+                          if (
+                            p.type === "EstimatedTotalFrames" &&
+                            progressState.type === "saving"
+                          ) {
+                            console.log("Total frames: ", p.total_frames);
+                            setProgressState({
+                              ...progressState,
+                              totalFrames: p.total_frames,
+                            });
+                          }
+                        };
+
+                        const output_path = await commands.getRenderedVideo(
                           mediaId,
                           presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
                         );
 
-                        if (!renderedPath) {
-                          throw new Error("Failed to get rendered video path");
-                        }
+                        await commands.renderToFile(
+                          output_path,
+                          mediaId,
+                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+                          progress
+                        );
 
-                        await commands.copyFileToPath(renderedPath, savePath);
+                        await commands.copyFileToPath(output_path, savePath);
                       } else {
                         await commands.copyFileToPath(media.path, savePath);
                       }
@@ -287,7 +358,7 @@ export default function () {
 
                       setTimeout(() => {
                         setProgressState({ type: "idle" });
-                      }, 1000);
+                      }, 1500);
 
                       return true;
                     } catch (error) {
@@ -308,7 +379,7 @@ export default function () {
 
                       setTimeout(() => {
                         setProgressState({ type: "idle" });
-                      }, 1000);
+                      }, 1500);
 
                       return;
                     }
@@ -325,9 +396,53 @@ export default function () {
                     try {
                       let res: UploadResult;
                       if (isRecording) {
-                        await commands.getRenderedVideo(
+                        const progress = new Channel<RenderProgress>();
+                        progress.onmessage = (p) => {
+                          console.log("Upload render progress:", p);
+                          if (
+                            p.type === "FrameRendered" &&
+                            progressState.type === "uploading"
+                          ) {
+                            console.log(
+                              "Frame rendered in upload:",
+                              p.current_frame,
+                              "Current state:",
+                              progressState
+                            );
+                            setProgressState({
+                              ...progressState,
+                              renderProgress: Math.round(
+                                (p.current_frame /
+                                  (progressState.totalFrames || 1)) *
+                                  100
+                              ),
+                            });
+                          }
+                          if (
+                            p.type === "EstimatedTotalFrames" &&
+                            progressState.type === "uploading"
+                          ) {
+                            console.log(
+                              "Got total frames in upload:",
+                              p.total_frames
+                            );
+                            setProgressState({
+                              ...progressState,
+                              totalFrames: p.total_frames,
+                            });
+                          }
+                        };
+
+                        const output_path = await commands.getRenderedVideo(
                           mediaId,
                           presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                        );
+
+                        await commands.renderToFile(
+                          output_path,
+                          mediaId,
+                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+                          progress
                         );
 
                         res = await commands.uploadRenderedVideo(
@@ -441,36 +556,75 @@ export default function () {
                                   <Match
                                     when={progressState.type === "copying"}
                                   >
-                                    {progressState.stage === "rendering"
-                                      ? "Rendering video"
-                                      : "Copying to clipboard"}
+                                    {(state) => (
+                                      <h3 class="text-sm font-medium mb-3 text-gray-50">
+                                        {state.stage === "rendering"
+                                          ? "Rendering video"
+                                          : "Copying to clipboard"}
+                                      </h3>
+                                    )}
                                   </Match>
                                   <Match when={progressState.type === "saving"}>
-                                    {progressState.stage === "rendering"
-                                      ? "Rendering video"
-                                      : "Saving file"}
+                                    {(state) => (
+                                      <h3 class="text-sm font-medium mb-3 text-gray-50">
+                                        {state.stage === "rendering"
+                                          ? "Rendering video"
+                                          : "Saving file"}
+                                      </h3>
+                                    )}
                                   </Match>
                                   <Match
                                     when={progressState.type === "uploading"}
                                   >
-                                    {progressState.stage === "rendering"
-                                      ? "Rendering video"
-                                      : "Creating shareable link"}
+                                    {(state) => (
+                                      <h3 class="text-sm font-medium mb-3 text-gray-50">
+                                        {state.stage === "rendering"
+                                          ? "Rendering video"
+                                          : "Creating shareable link"}
+                                      </h3>
+                                    )}
                                   </Match>
                                 </Switch>
                               </h3>
 
-                              <div class="w-full bg-gray-700 rounded-full h-1.5 mb-2">
+                              <div class="w-full bg-gray-200/20 rounded-full h-2.5 mb-2">
                                 <div
-                                  class="bg-blue-300 h-1.5 rounded-full transition-all duration-200"
+                                  class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                                   style={{
-                                    width: `${
-                                      progressState.type === "uploading"
-                                        ? progressState.stage === "rendering"
-                                          ? progressState.renderProgress
-                                          : progressState.uploadProgress
-                                        : progressState.progress
-                                    }%`,
+                                    width: `${(() => {
+                                      if (
+                                        !progressState ||
+                                        progressState.type === "idle"
+                                      )
+                                        return 0;
+
+                                      if (progressState.type === "uploading") {
+                                        return progressState.stage ===
+                                          "rendering"
+                                          ? Math.min(
+                                              progressState.renderProgress || 0,
+                                              100
+                                            )
+                                          : Math.min(
+                                              progressState.uploadProgress || 0,
+                                              100
+                                            );
+                                      }
+
+                                      if (progressState.stage === "rendering") {
+                                        return Math.min(
+                                          ((progressState.renderProgress || 0) /
+                                            (progressState.totalFrames || 1)) *
+                                            100,
+                                          100
+                                        );
+                                      }
+
+                                      return Math.min(
+                                        progressState.progress || 0,
+                                        100
+                                      );
+                                    })()}%`,
                                   }}
                                 />
                               </div>
@@ -556,7 +710,6 @@ export default function () {
                                 ? "Copying to Clipboard"
                                 : "Copy to Clipboard"
                             }
-                            forceOpen={copyMedia.isPending}
                             tooltipPlacement="left"
                             onClick={() => copyMedia.mutate()}
                             disabled={
@@ -593,7 +746,6 @@ export default function () {
                                 ? "Upgrade Required"
                                 : "Create Shareable Link"
                             }
-                            forceOpen={showUpgradeTooltip()}
                             tooltipPlacement="left"
                             onClick={() => {
                               uploadMedia.mutate(undefined, {
@@ -719,7 +871,6 @@ const TooltipIconButton = (
   props: ComponentProps<"button"> & {
     tooltipText: string;
     tooltipPlacement: string;
-    forceOpen?: boolean;
   }
 ) => {
   const [isOpen, setIsOpen] = createSignal(false);
@@ -729,7 +880,7 @@ const TooltipIconButton = (
       placement={props.tooltipPlacement as "top" | "bottom" | "left" | "right"}
       openDelay={0}
       closeDelay={0}
-      open={props.forceOpen || isOpen()}
+      open={isOpen()}
       onOpenChange={setIsOpen}
       hoverableContent={false}
       floatingOptions={{

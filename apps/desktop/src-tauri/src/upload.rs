@@ -39,6 +39,15 @@ impl S3UploadMeta {
     pub fn aws_bucket(&self) -> &str {
         &self.aws_bucket
     }
+
+    pub fn new(id: String, user_id: String, aws_region: String, aws_bucket: String) -> Self {
+        Self {
+            id,
+            user_id,
+            aws_region,
+            aws_bucket,
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -114,7 +123,7 @@ pub async fn upload_video(
     let client = reqwest::Client::new();
     let s3_config = match existing_config {
         Some(config) => config,
-        None => get_s3_config(app, false).await?,
+        None => get_s3_config(app, false, Some(video_id)).await?,
     };
 
     let file_key = if is_individual {
@@ -278,8 +287,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-
-    let s3_config = get_s3_config(app, true).await?;
+    let s3_config = get_s3_config(app, true, None).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -345,8 +353,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .to_string();
 
     let client = reqwest::Client::new();
-
-    let s3_config = get_s3_config(app, false).await?;
+    let s3_config = get_s3_config(app, false, None).await?;
 
     let file_key = format!("{}/{}/{}", s3_config.user_id, s3_config.id, file_name);
 
@@ -412,9 +419,18 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     ))
 }
 
-pub async fn get_s3_config(app: &AppHandle, is_screenshot: bool) -> Result<S3UploadMeta, String> {
+pub async fn get_s3_config(
+    app: &AppHandle,
+    is_screenshot: bool,
+    video_id: Option<String>,
+) -> Result<S3UploadMeta, String> {
     let origin = "http://tauri.localhost";
-    let config_url = web_api::make_url(if is_screenshot {
+    let config_url = web_api::make_url(if let Some(id) = video_id {
+        format!(
+            "/api/desktop/video/create?origin={}&recordingMode=desktopMP4&videoId={}",
+            origin, id
+        )
+    } else if is_screenshot {
         format!(
             "/api/desktop/video/create?origin={}&recordingMode=desktopMP4&isScreenshot=true",
             origin

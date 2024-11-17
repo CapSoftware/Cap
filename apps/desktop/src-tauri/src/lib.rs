@@ -353,7 +353,7 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         if let Ok(Some(auth)) = AuthStore::get(&app) {
             if auth.is_upgraded() {
                 // Pre-create the video and get the shareable link
-                if let Ok(s3_config) = get_s3_config(&app, false).await {
+                if let Ok(s3_config) = get_s3_config(&app, false, None).await {
                     let link = web_api::make_url(format!("/s/{}", s3_config.id()));
 
                     state.pre_created_video = Some(PreCreatedVideo {
@@ -816,22 +816,24 @@ async fn get_rendered_video(
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-
-    get_rendered_video_impl(editor_instance, project).await
+    get_rendered_video_impl(editor_instance, project, false).await
 }
 
 async fn get_rendered_video_impl(
     editor_instance: Arc<EditorInstance>,
     project: ProjectConfiguration,
+    force_render: bool,
 ) -> Result<PathBuf, String> {
     let output_path = editor_instance
         .project_path
         .join("output")
         .join("result.mp4");
 
-    if !output_path.exists() {
-        render_to_file_impl(&editor_instance, project, output_path.clone(), |_| {}).await?;
+    if !force_render && output_path.exists() {
+        return Ok(output_path);
     }
+
+    render_to_file_impl(&editor_instance, project, output_path.clone(), |_| {}).await?;
 
     Ok(output_path)
 }
@@ -1301,7 +1303,7 @@ async fn copy_rendered_video_to_clipboard(
     println!("copying");
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
 
-    let output_path = match get_rendered_video_impl(editor_instance, project).await {
+    let output_path = match get_rendered_video_impl(editor_instance, project, false).await {
         Ok(path) => {
             println!("Successfully retrieved rendered video path: {:?}", path);
             path
@@ -1761,21 +1763,16 @@ async fn upload_rendered_video(
 
     // Check if user has an upgraded plan
     if !auth.is_upgraded() {
-        // Fetch and update plan information
         match AuthStore::fetch_and_update_plan(&app).await {
-            Ok(_) => {
-                // Refresh auth information after update
-                match AuthStore::get(&app) {
-                    Ok(Some(updated_auth)) => {
-                        auth = updated_auth;
-                    }
-                    Ok(None) => {
-                        // Auth was invalidated during plan check
-                        return Ok(UploadResult::NotAuthenticated);
-                    }
-                    Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
+            Ok(_) => match AuthStore::get(&app) {
+                Ok(Some(updated_auth)) => {
+                    auth = updated_auth;
                 }
-            }
+                Ok(None) => {
+                    return Ok(UploadResult::NotAuthenticated);
+                }
+                Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
+            },
             Err(e) => {
                 if e.contains("Authentication expired") {
                     return Ok(UploadResult::NotAuthenticated);
@@ -1793,99 +1790,91 @@ async fn upload_rendered_video(
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
     let mut meta = editor_instance.meta();
 
-    if let Some(sharing) = meta.sharing {
-        notifications::send_notification(
-            &app,
-            notifications::NotificationType::ShareableLinkCopied,
-        );
-        Ok(UploadResult::Success(sharing.link))
-    } else {
-        // Emit initial rendering progress
-        UploadProgress {
-            stage: "rendering".to_string(),
-            progress: 0.0,
-            message: "Preparing video...".to_string(),
-        }
-        .emit(&app)
-        .ok();
-
-        let output_path = match get_rendered_video_impl(editor_instance.clone(), project).await {
-            Ok(path) => {
-                // Emit rendering complete
-                UploadProgress {
-                    stage: "rendering".to_string(),
-                    progress: 1.0,
-                    message: "Rendering complete".to_string(),
-                }
-                .emit(&app)
-                .ok();
-                path
-            }
-            Err(e) => {
-                notifications::send_notification(
-                    &app,
-                    notifications::NotificationType::UploadFailed,
-                );
-                return Err(format!("Failed to get rendered video: {}", e));
-            }
-        };
-
-        // Start upload progress
-        UploadProgress {
-            stage: "uploading".to_string(),
-            progress: 0.0,
-            message: "Starting upload...".to_string(),
-        }
-        .emit(&app)
-        .ok();
-
-        let result = match upload_video(
-            &app,
-            video_id.clone(),
-            output_path,
-            false,
-            pre_created_video.map(|v| v.config),
-        )
-        .await
-        {
-            Ok(uploaded_video) => {
-                // Emit upload complete
-                UploadProgress {
-                    stage: "uploading".to_string(),
-                    progress: 1.0,
-                    message: "Upload complete!".to_string(),
-                }
-                .emit(&app)
-                .ok();
-
-                meta.sharing = Some(SharingMeta {
-                    link: uploaded_video.link.clone(),
-                    id: uploaded_video.id.clone(),
-                });
-                meta.save_for_project();
-                RecordingMetaChanged { id: video_id }.emit(&app).ok();
-
-                notifications::send_notification(
-                    &app,
-                    notifications::NotificationType::ShareableLinkCopied,
-                );
-
-                #[cfg(target_os = "macos")]
-                platform::write_string_to_pasteboard(&uploaded_video.link);
-
-                Ok(UploadResult::Success(uploaded_video.link))
-            }
-            Err(e) => {
-                notifications::send_notification(
-                    &app,
-                    notifications::NotificationType::UploadFailed,
-                );
-                Err(e)
-            }
-        };
-
-        result
+    // Emit initial rendering progress
+    UploadProgress {
+        stage: "rendering".to_string(),
+        progress: 0.0,
+        message: "Preparing video...".to_string(),
     }
+    .emit(&app)
+    .ok();
+
+    let output_path = match get_rendered_video_impl(editor_instance.clone(), project, false).await {
+        Ok(path) => {
+            // Emit rendering complete
+            UploadProgress {
+                stage: "rendering".to_string(),
+                progress: 1.0,
+                message: "Rendering complete".to_string(),
+            }
+            .emit(&app)
+            .ok();
+            path
+        }
+        Err(e) => {
+            notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
+            return Err(format!("Failed to get rendered video: {}", e));
+        }
+    };
+
+    // Start upload progress
+    UploadProgress {
+        stage: "uploading".to_string(),
+        progress: 0.0,
+        message: "Starting upload...".to_string(),
+    }
+    .emit(&app)
+    .ok();
+
+    let s3_config = if let Some(pre_created) = pre_created_video {
+        pre_created.config
+    } else {
+        get_s3_config(&app, false, None).await?
+    };
+
+    let result = match upload_video(
+        &app,
+        video_id.clone(),
+        output_path,
+        false,
+        Some(s3_config.clone()),
+    )
+    .await
+    {
+        Ok(uploaded_video) => {
+            // Emit upload complete
+            UploadProgress {
+                stage: "uploading".to_string(),
+                progress: 1.0,
+                message: "Upload complete!".to_string(),
+            }
+            .emit(&app)
+            .ok();
+
+            meta.sharing = Some(SharingMeta {
+                link: uploaded_video.link.clone(),
+                id: uploaded_video.id.clone(),
+            });
+            meta.save_for_project();
+            RecordingMetaChanged { id: video_id }.emit(&app).ok();
+
+            notifications::send_notification(
+                &app,
+                notifications::NotificationType::ShareableLinkCopied,
+            );
+
+            #[cfg(target_os = "macos")]
+            platform::write_string_to_pasteboard(&uploaded_video.link);
+
+            Ok(UploadResult::Success(uploaded_video.link))
+        }
+        Err(e) => {
+            notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
+            Err(e)
+        }
+    };
+
+    result
 }
 
 #[tauri::command]
@@ -2466,6 +2455,7 @@ pub async fn run() {
             seek_to,
             send_feedback_request,
             windows::position_traffic_lights,
+            reupload_rendered_video,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2857,4 +2847,121 @@ async fn send_feedback_request(app: AppHandle, feedback: String) -> Result<(), S
     }
 
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn reupload_rendered_video(
+    app: AppHandle,
+    video_id: String,
+    project: ProjectConfiguration,
+) -> Result<UploadResult, String> {
+    let Ok(Some(mut auth)) = AuthStore::get(&app) else {
+        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+        return Ok(UploadResult::NotAuthenticated);
+    };
+
+    // Check if user has an upgraded plan
+    if !auth.is_upgraded() {
+        match AuthStore::fetch_and_update_plan(&app).await {
+            Ok(_) => match AuthStore::get(&app) {
+                Ok(Some(updated_auth)) => {
+                    auth = updated_auth;
+                }
+                Ok(None) => {
+                    return Ok(UploadResult::NotAuthenticated);
+                }
+                Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
+            },
+            Err(e) => {
+                if e.contains("Authentication expired") {
+                    return Ok(UploadResult::NotAuthenticated);
+                }
+                return Ok(UploadResult::PlanCheckFailed);
+            }
+        }
+
+        if !auth.is_upgraded() {
+            open_upgrade_window(app).await;
+            return Ok(UploadResult::UpgradeRequired);
+        }
+    }
+
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let meta = editor_instance.meta();
+
+    let Some(sharing) = meta.sharing.clone() else {
+        return Err("No sharing metadata found".to_string());
+    };
+
+    // Emit initial rendering progress
+    UploadProgress {
+        stage: "rendering".to_string(),
+        progress: 0.0,
+        message: "Preparing video...".to_string(),
+    }
+    .emit(&app)
+    .ok();
+
+    // Pass true to force_render to ensure we create a new video
+    let output_path = match get_rendered_video_impl(editor_instance.clone(), project, true).await {
+        Ok(path) => {
+            // Emit rendering complete
+            UploadProgress {
+                stage: "rendering".to_string(),
+                progress: 1.0,
+                message: "Rendering complete".to_string(),
+            }
+            .emit(&app)
+            .ok();
+            path
+        }
+        Err(e) => {
+            notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
+            return Err(format!("Failed to get rendered video: {}", e));
+        }
+    };
+
+    // Start upload progress
+    UploadProgress {
+        stage: "uploading".to_string(),
+        progress: 0.0,
+        message: "Starting upload...".to_string(),
+    }
+    .emit(&app)
+    .ok();
+
+    // Get S3 config with the existing video ID
+    let s3_config = get_s3_config(&app, false, Some(sharing.id)).await?;
+
+    let result = match upload_video(&app, video_id.clone(), output_path, false, Some(s3_config))
+        .await
+    {
+        Ok(uploaded_video) => {
+            // Emit upload complete
+            UploadProgress {
+                stage: "uploading".to_string(),
+                progress: 1.0,
+                message: "Upload complete!".to_string(),
+            }
+            .emit(&app)
+            .ok();
+
+            notifications::send_notification(
+                &app,
+                notifications::NotificationType::ShareableLinkCopied,
+            );
+
+            #[cfg(target_os = "macos")]
+            platform::write_string_to_pasteboard(&uploaded_video.link);
+
+            Ok(UploadResult::Success(sharing.link)) // Use existing sharing link
+        }
+        Err(e) => {
+            notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
+            Err(e)
+        }
+    };
+
+    result
 }
