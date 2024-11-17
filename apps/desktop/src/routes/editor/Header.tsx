@@ -21,7 +21,7 @@ export function Header() {
 
   onMount(async () => {
     unlistenTitlebar = await initializeTitlebar();
-    commands.positionTrafficLights([20.0, 48.0]);
+    commands.positionTrafficLights([20.0, 40.5]);
   });
 
   onCleanup(() => {
@@ -29,7 +29,7 @@ export function Header() {
   });
 
   setTitlebar("border", false);
-  setTitlebar("height", "4.5rem");
+  setTitlebar("height", "4rem");
   setTitlebar(
     "items",
     <div
@@ -63,9 +63,9 @@ function ExportButton() {
   const [state, setState] = createStore<
     | { open: false; type: "idle" }
     | ({ open: boolean } & (
-        | { type: "inProgress"; progress: number; totalFrames: number }
-        | { type: "finished"; path: string }
-      ))
+      | { type: "inProgress"; progress: number; totalFrames: number }
+      | { type: "finished"; path: string }
+    ))
   >({ open: false, type: "idle" });
 
   return (
@@ -127,10 +127,10 @@ function ExportButton() {
               {(state) => (
                 <Button
                   onClick={() => {
-                    commands.openInFinder(state().path);
+                    commands.openFilePath(state().path);
                   }}
                 >
-                  Open in Finder
+                  Open in {ostype() === "macos" ? "Finder" : "File Explorer"}
                 </Button>
               )}
             </Show>

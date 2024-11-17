@@ -14,6 +14,13 @@ pub struct FFmpegProcess {
 
 impl FFmpegProcess {
     pub fn spawn(mut command: Command) -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
         let mut cmd = command.stdin(Stdio::piped()).spawn().unwrap_or_else(|e| {
             println!("Failed to start FFmpeg: {}", e);
             println!("Command: {:?}", command);

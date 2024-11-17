@@ -949,7 +949,7 @@ async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(
 
 #[tauri::command]
 #[specta::specta]
-async fn open_file_path(app: AppHandle, path: PathBuf) -> Result<(), String> {
+async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
     let path_str = path.to_str().ok_or("Invalid path")?;
 
     #[cfg(target_os = "windows")]
@@ -1693,16 +1693,6 @@ async fn set_project_config(app: AppHandle, video_id: String, config: ProjectCon
     editor_instance.project_config.0.send(config).ok();
 }
 
-#[tauri::command(async)]
-#[specta::specta]
-fn open_in_finder(path: PathBuf) {
-    Command::new("open")
-        .arg("-R")
-        .arg(path)
-        .spawn()
-        .expect("Failed to open in Finder");
-}
-
 #[tauri::command]
 #[specta::specta]
 async fn list_audio_devices() -> Result<Vec<String>, ()> {
@@ -2441,7 +2431,6 @@ pub async fn run() {
             start_playback,
             stop_playback,
             set_playhead_position,
-            open_in_finder,
             set_project_config,
             open_editor,
             open_main_window,
@@ -2519,6 +2508,9 @@ pub async fn run() {
     }
 
     builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = CapWindow::Main.show(&app);
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())

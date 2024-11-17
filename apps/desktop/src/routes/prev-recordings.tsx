@@ -37,23 +37,23 @@ type MediaEntry = {
 
 type ProgressState =
   | {
-      type: "idle";
-    }
+    type: "idle";
+  }
   | {
-      type: "copying" | "saving";
-      progress: number;
-      message: string;
-      mediaPath?: string;
-      stage?: "rendering";
-    }
+    type: "copying" | "saving";
+    progress: number;
+    message: string;
+    mediaPath?: string;
+    stage?: "rendering";
+  }
   | {
-      type: "uploading";
-      renderProgress: number;
-      uploadProgress: number;
-      message: string;
-      mediaPath?: string;
-      stage: "rendering" | "uploading";
-    };
+    type: "uploading";
+    renderProgress: number;
+    uploadProgress: number;
+    message: string;
+    mediaPath?: string;
+    stage: "rendering" | "uploading";
+  };
 
 export default function () {
   const presets = createPresets();
@@ -168,9 +168,9 @@ export default function () {
                   type === "recording"
                     ? mediaId
                     : normalizedPath
-                        .split("screenshots/")[1]
-                        .split("/")[0]
-                        .replace(".cap", "");
+                      .split("screenshots/")[1]
+                      .split("/")[0]
+                      .replace(".cap", "");
                 const isRecording = type !== "screenshot";
 
                 const recordingMeta = createQuery(() => ({
@@ -464,13 +464,12 @@ export default function () {
                                 <div
                                   class="bg-blue-300 h-1.5 rounded-full transition-all duration-200"
                                   style={{
-                                    width: `${
-                                      progressState.type === "uploading"
+                                    width: `${progressState.type === "uploading"
                                         ? progressState.stage === "rendering"
                                           ? progressState.renderProgress
                                           : progressState.uploadProgress
                                         : progressState.progress
-                                    }%`,
+                                      }%`,
                                   }}
                                 />
                               </div>
@@ -484,7 +483,7 @@ export default function () {
 
                         <div
                           class={cx(
-                            "w-full h-full absolute inset-0 transition-all duration-150 pointer-events-auto",
+                            "w-full h-full absolute inset-0 transition-all duration-150 pointer-events-auto rounded-[7px]",
                             isLoading() || showUpgradeTooltip()
                               ? "opacity-100"
                               : "opacity-0 group-hover:opacity-100",
@@ -588,10 +587,10 @@ export default function () {
                               recordingMeta.data?.sharing
                                 ? "Copy Shareable Link"
                                 : uploadMedia.isPending
-                                ? "Uploading Cap"
-                                : showUpgradeTooltip()
-                                ? "Upgrade Required"
-                                : "Create Shareable Link"
+                                  ? "Uploading Cap"
+                                  : showUpgradeTooltip()
+                                    ? "Upgrade Required"
+                                    : "Create Shareable Link"
                             }
                             forceOpen={showUpgradeTooltip()}
                             tooltipPlacement="left"

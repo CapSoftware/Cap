@@ -89,9 +89,6 @@ async stopPlayback(videoId: string) : Promise<void> {
 async setPlayheadPosition(videoId: string, frameNumber: number) : Promise<void> {
     await TAURI_INVOKE("set_playhead_position", { videoId, frameNumber });
 },
-async openInFinder(path: string) : Promise<void> {
-    await TAURI_INVOKE("open_in_finder", { path });
-},
 async setProjectConfig(videoId: string, config: ProjectConfiguration) : Promise<void> {
     await TAURI_INVOKE("set_project_config", { videoId, config });
 },

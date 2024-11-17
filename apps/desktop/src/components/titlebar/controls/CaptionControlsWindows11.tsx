@@ -7,7 +7,7 @@ import { cx } from "cva";
 export default function (props: ComponentProps<"div">) {
   const [local, otherProps] = splitProps(props, ["class"]);
   const window = getCurrentWindow();
-  
+
   return (
     <div
       class={`h-full align-baseline select-none *:outline-none *:transition-all *:duration-200 ${local.class}`}
@@ -21,7 +21,7 @@ export default function (props: ComponentProps<"div">) {
             ? "text-black/90 dark:text-white"
             : "text-gray-50 dark:text-white",
           titlebarState.minimizable
-            ? "hover:bg-[#0000000D] active:bg-[#00000008] dark:hover:bg-[#FFFFFF1A] dark:active:bg-[#FFFFFF0D]"
+            ? "hover:bg-[#0000000D] active:bg-[#00000008]"
             : "[&>*]:opacity-30"
         )}
       >
@@ -42,7 +42,7 @@ export default function (props: ComponentProps<"div">) {
               ? "text-black/90 dark:text-white"
               : "text-gray-50 dark:text-white",
             titlebarState.maximizable
-              ? "hover:bg-[#0000000D] active:bg-[#00000008] dark:hover:bg-[#FFFFFF1A] dark:active:bg-[#FFFFFF0D]"
+              ? "hover:bg-[#0000000D] active:bg-[#00000008]"
               : "[&>*]:opacity-30"
           )}
         >
