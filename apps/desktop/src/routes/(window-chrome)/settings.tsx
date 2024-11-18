@@ -23,7 +23,7 @@ export default function Settings(props: RouteSectionProps) {
               {
                 href: "recordings",
                 name: "Previous Recordings",
-                icon: IconLucideVideo,
+                icon: IconLucideSquarePlay,
               },
               {
                 href: "screenshots",

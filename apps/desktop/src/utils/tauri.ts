@@ -160,6 +160,9 @@ async sendFeedbackRequest(feedback: string) : Promise<null> {
 },
 async positionTrafficLights(controlsInset: [number, number] | null) : Promise<void> {
     await TAURI_INVOKE("position_traffic_lights", { controlsInset });
+},
+async reuploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<UploadResult> {
+    return await TAURI_INVOKE("reupload_rendered_video", { videoId, project });
 }
 }
 

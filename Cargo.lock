@@ -1672,7 +1672,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.0-beta.9"
+version = "0.3.0-beta.9.1"
 dependencies = [
  "axum",
  "cap-editor",

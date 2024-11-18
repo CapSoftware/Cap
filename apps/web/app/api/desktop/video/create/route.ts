@@ -95,6 +95,55 @@ export async function GET(req: NextRequest) {
     month: "long",
   })} ${date.getFullYear()}`;
 
+  const videoId = params.get("videoId");
+
+  if (videoId) {
+    const [video] = await db
+      .select()
+      .from(videos)
+      .where(eq(videos.id, videoId));
+
+    if (!video) {
+      return new Response(JSON.stringify({ error: "Video not found" }), {
+        status: 404,
+        headers: {
+          "Access-Control-Allow-Origin":
+            origin && allowedOrigins.includes(origin)
+              ? origin
+              : allowedOrigins.includes(originalOrigin)
+              ? originalOrigin
+              : "null",
+          "Access-Control-Allow-Credentials": "true",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Authorization, sentry-trace, baggage",
+        },
+      });
+    }
+
+    return new Response(
+      JSON.stringify({
+        id: video.id,
+        user_id: user.id,
+        aws_region: video.awsRegion,
+        aws_bucket: video.awsBucket,
+      }),
+      {
+        status: 200,
+        headers: {
+          "Access-Control-Allow-Origin":
+            origin && allowedOrigins.includes(origin)
+              ? origin
+              : allowedOrigins.includes(originalOrigin)
+              ? originalOrigin
+              : "null",
+          "Access-Control-Allow-Credentials": "true",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Authorization, sentry-trace, baggage",
+        },
+      }
+    );
+  }
+
   await db.insert(videos).values({
     id: id,
     name: `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
