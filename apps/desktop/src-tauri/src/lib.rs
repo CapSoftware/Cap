@@ -54,6 +54,7 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
@@ -2501,6 +2502,7 @@ pub async fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             let _ = CapWindow::Main.show(&app);
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -2652,6 +2654,11 @@ pub async fn run() {
                 tauri::async_runtime::spawn(async move {
                     delete_auth_open_signin(app_handle).await.ok();
                 });
+            });
+
+            app_handle.deep_link().on_open_url(|event| {
+
+                //
             });
 
             Ok(())
