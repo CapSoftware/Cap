@@ -832,10 +832,13 @@ dependencies = [
  "cap-media",
  "cap-project",
  "chrono",
+ "flume 0.11.0",
  "serde",
  "serde_json",
  "specta",
+ "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

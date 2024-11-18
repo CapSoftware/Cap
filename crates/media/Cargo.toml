@@ -11,7 +11,7 @@ cap-flags = { path = "../flags" }
 cap-gpu-converters = { path = "../gpu-converters" }
 cpal.workspace = true
 ffmpeg.workspace = true
-flume = "0.11.0"
+flume.workspace = true
 indexmap = "2.5.0"
 nokhwa = { workspace = true, features = ["input-native", "serialize"] }
 num-traits = "0.2.19"
@@ -20,7 +20,7 @@ scap.workspace = true
 serde = { version = "1", features = ["derive"] }
 specta.workspace = true
 tempfile = "3.12.0"
-thiserror = "1.0"
+thiserror.workspace = true
 tracing = "0.1"
 futures = "0.3.31"
 

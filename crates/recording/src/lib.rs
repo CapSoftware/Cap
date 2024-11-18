@@ -1,3 +1,7 @@
+mod actor;
+
+pub use actor::{start_recording_actor, ActorHandle, RecordingError};
+
 use cap_flags::FLAGS;
 use cap_media::{encoders::*, feeds::*, filters::*, pipeline::*, sources::*, MediaError};
 use cap_project::{CursorClickEvent, CursorMoveEvent, RecordingMeta};
@@ -53,18 +57,6 @@ pub struct InProgressRecording {
     pub cursor_clicks: oneshot::Receiver<Vec<CursorClickEvent>>,
     #[serde(skip)]
     pub stop_signal: Arc<AtomicBool>,
-}
-
-pub struct CompletedRecording {
-    pub id: String,
-    pub recording_dir: PathBuf,
-    pub display_output_path: PathBuf,
-    pub camera_output_path: Option<PathBuf>,
-    pub audio_output_path: Option<PathBuf>,
-    pub display_source: ScreenCaptureTarget,
-    pub segments: Vec<f64>,
-    pub meta: RecordingMeta,
-    pub cursor_data: cap_project::CursorData,
 }
 
 impl InProgressRecording {
@@ -165,15 +157,27 @@ impl InProgressRecording {
         }
     }
 
-    pub async fn pause(&mut self) -> Result<(), String> {
-        let _ = self.pipeline.pause().await;
-        Ok(())
-    }
+    // pub async fn pause(&mut self) -> Result<(), String> {
+    //     let _ = self.pipeline.pause().await;
+    //     Ok(())
+    // }
 
     pub async fn play(&mut self) -> Result<(), String> {
         let _ = self.pipeline.play().await;
         Ok(())
     }
+}
+
+pub struct CompletedRecording {
+    pub id: String,
+    pub recording_dir: PathBuf,
+    pub display_output_path: PathBuf,
+    pub camera_output_path: Option<PathBuf>,
+    pub audio_output_path: Option<PathBuf>,
+    pub display_source: ScreenCaptureTarget,
+    pub segments: Vec<f64>,
+    pub meta: RecordingMeta,
+    pub cursor_data: cap_project::CursorData,
 }
 
 pub async fn start(

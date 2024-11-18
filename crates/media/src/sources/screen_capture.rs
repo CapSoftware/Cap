@@ -66,6 +66,21 @@ pub struct ScreenCaptureSource<T> {
     phantom: std::marker::PhantomData<T>,
 }
 
+impl<T> Clone for ScreenCaptureSource<T> {
+    fn clone(&self) -> Self {
+        Self {
+            target: self.target.clone(),
+            fps: self.fps,
+            resolution: self.resolution,
+            video_info: self.video_info.clone(),
+            phantom: Default::default(),
+        }
+    }
+}
+
+unsafe impl<T> Send for ScreenCaptureSource<T> {}
+unsafe impl<T> Sync for ScreenCaptureSource<T> {}
+
 impl<T> ScreenCaptureSource<T> {
     pub const DEFAULT_FPS: u32 = 30;
 
@@ -414,7 +429,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                 Some(Control::Shutdown) | None => {
                     println!("Received shutdown signal");
                     if capturing {
-                        capturer.stop_capture();
+                        // capturer.stop_capture();
                     }
                     break;
                 }

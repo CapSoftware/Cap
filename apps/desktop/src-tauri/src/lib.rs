@@ -27,12 +27,9 @@ use cap_media::{
     platform::Bounds,
     sources::ScreenCaptureTarget,
 };
-use cap_project::{
-    ProjectConfiguration, RecordingMeta, SharingMeta, TimelineConfiguration, TimelineSegment,
-    ZoomSegment,
-};
-use cap_recording::{InProgressRecording, RecordingOptions};
-use cap_rendering::{ProjectUniforms, ZOOM_DURATION};
+use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta};
+use cap_recording::RecordingOptions;
+use cap_rendering::ProjectUniforms;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
@@ -46,17 +43,14 @@ use serde_json::json;
 use specta::Type;
 use std::fs::File;
 use std::io::BufWriter;
-use std::io::{BufReader, Write};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{
-    collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
-    time::Duration,
+    collections::HashMap, io::BufReader, marker::PhantomData, path::PathBuf, process::Command,
+    sync::Arc, time::Duration,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-use tokio::io::AsyncWriteExt;
 use tokio::{
     sync::{Mutex, RwLock},
     time::sleep,
@@ -72,7 +66,7 @@ pub struct App {
     camera_tx: CameraFrameSender,
     camera_ws_port: u16,
     #[serde(skip)]
-    camera_feed: Option<CameraFeed>,
+    camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
     audio_input_feed: Option<AudioInputFeed>,
     #[serde(skip)]
@@ -80,7 +74,7 @@ pub struct App {
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
-    current_recording: Option<InProgressRecording>,
+    current_recording: Option<cap_recording::ActorHandle>,
     #[serde(skip)]
     pre_created_video: Option<PreCreatedVideo>,
 }
@@ -108,24 +102,32 @@ struct PreCreatedVideo {
 }
 
 impl App {
-    pub fn set_current_recording(&mut self, new_value: InProgressRecording) {
-        let option = Some(new_value);
-        let json = JsonValue::new(&option);
+    pub fn set_current_recording(
+        &mut self,
+        actor: cap_recording::ActorHandle, /* new_value: InProgressRecording */
+    ) {
+        // let option = Some(new_value);
+        // let json = JsonValue::new(&option);
 
-        let new_value = option.unwrap();
+        // let new_value = option.unwrap();
 
-        let current_recording = self.current_recording.insert(new_value);
+        let current_recording = self.current_recording.insert(actor);
 
-        CurrentRecordingChanged(json).emit(&self.handle).ok();
+        CurrentRecordingChanged /*(json)*/
+            .emit(&self.handle)
+            .ok();
 
-        if let ScreenCaptureTarget::Window { .. } = &current_recording.display_source {
+        if matches!(
+            current_recording.options.capture_target,
+            ScreenCaptureTarget::Window(_)
+        ) {
             let _ = CapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
             self.close_occluder_window();
         }
     }
 
-    pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
+    pub fn clear_current_recording(&mut self) -> Option<cap_recording::ActorHandle> {
         self.close_occluder_window();
 
         self.current_recording.take()
@@ -156,8 +158,10 @@ impl App {
 
         match new_options.camera_label() {
             Some(camera_label) => {
-                if let Some(camera_feed) = self.camera_feed.as_mut() {
+                if let Some(camera_feed) = self.camera_feed.as_ref() {
                     camera_feed
+                        .lock()
+                        .await
                         .switch_cameras(camera_label)
                         .await
                         .map_err(|error| eprintln!("{error}"))
@@ -165,6 +169,8 @@ impl App {
                 } else {
                     self.camera_feed = CameraFeed::init(camera_label, self.camera_tx.clone())
                         .await
+                        .map(Mutex::new)
+                        .map(Arc::new)
                         .map_err(|error| eprintln!("{error}"))
                         .ok();
                 }
@@ -298,17 +304,27 @@ impl<T: Serialize> JsonValue<T> {
     }
 }
 
+#[derive(Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingInfo {
+    capture_target: ScreenCaptureTarget,
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn get_current_recording(
     state: MutableState<'_, App>,
-) -> Result<JsonValue<Option<InProgressRecording>>, ()> {
+) -> Result<JsonValue<Option<RecordingInfo>>, ()> {
     let state = state.read().await;
-    Ok(JsonValue::new(&state.current_recording))
+    Ok(JsonValue::new(&state.current_recording.as_ref().map(|r| {
+        RecordingInfo {
+            capture_target: r.options.capture_target.clone(),
+        }
+    })))
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
-pub struct CurrentRecordingChanged(JsonValue<Option<InProgressRecording>>);
+pub struct CurrentRecordingChanged; // (JsonValue<Option<InProgressRecording>>);
 
 #[tauri::command]
 #[specta::specta]
@@ -349,21 +365,16 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         }
     }
 
-    match cap_recording::start(
-        id,
+    let actor = cap_recording::start_recording_actor(
         recording_dir,
-        &state.start_recording_options,
-        state.camera_feed.as_ref(),
-        state.audio_input_feed.as_ref(),
+        state.start_recording_options.clone(),
+        state.camera_feed.clone(),
+        state.audio_input_feed.clone(),
     )
     .await
-    {
-        Ok(recording) => state.set_current_recording(recording),
-        Err(error) => {
-            eprintln!("{error}");
-            return Err(format!("Failed to set up recording: {error}"));
-        }
-    };
+    .map_err(|e| e.to_string())?;
+
+    state.set_current_recording(actor);
 
     if let Some(window) = CapWindowId::Main.get(&app) {
         window.minimize().ok();
@@ -391,13 +402,7 @@ async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
     if let Some(recording) = &mut state.current_recording {
-        recording.pause().await?;
-        recording.segments.push(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64(),
-        );
+        recording.pause().await.map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -408,13 +413,7 @@ async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
     if let Some(recording) = &mut state.current_recording {
-        recording.play().await?;
-        recording.segments.push(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64(),
-        );
+        recording.resume().await.map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -423,20 +422,22 @@ async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
 #[specta::specta]
 async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
-    let Some(mut current_recording) = state.clear_current_recording() else {
+    let Some(current_recording) = state.clear_current_recording() else {
         return Err("Recording not in progress".to_string());
     };
 
-    current_recording.segments.push(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64(),
-    );
+    current_recording.stop().await.map_err(|e| e.to_string())?;
 
-    let now = Instant::now();
-    let recording = current_recording.stop().await;
-    println!("stopped recording in {:?}", now.elapsed());
+    // current_recording.segments.push(
+    //     SystemTime::now()
+    //         .duration_since(UNIX_EPOCH)
+    //         .unwrap()
+    //         .as_secs_f64(),
+    // );
+
+    // let now = Instant::now();
+    // let recording = current_recording.stop().await;
+    // println!("stopped recording in {:?}", now.elapsed());
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
         window.hide().unwrap();
@@ -446,179 +447,179 @@ async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<
         window.unminimize().ok();
     }
 
-    let screenshots_dir = recording.recording_dir.join("screenshots");
-    std::fs::create_dir_all(&screenshots_dir).ok();
+    // let screenshots_dir = recording.recording_dir.join("screenshots");
+    // std::fs::create_dir_all(&screenshots_dir).ok();
 
-    let display_screenshot = screenshots_dir.join("display.jpg");
-    let now = Instant::now();
-    create_screenshot(
-        recording.display_output_path.clone(),
-        display_screenshot.clone(),
-        None,
-    )
-    .await?;
-    println!("created screenshot in {:?}", now.elapsed());
-
-    // let thumbnail = screenshots_dir.join("thumbnail.png");
+    // let display_screenshot = screenshots_dir.join("display.jpg");
     // let now = Instant::now();
-    // create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
-    // println!("created thumbnail in {:?}", now.elapsed());
+    // create_screenshot(
+    //     recording.display_output_path.clone(),
+    //     display_screenshot.clone(),
+    //     None,
+    // )
+    // .await?;
+    // println!("created screenshot in {:?}", now.elapsed());
 
-    let recording_dir = recording.recording_dir.clone();
+    // // let thumbnail = screenshots_dir.join("thumbnail.png");
+    // // let now = Instant::now();
+    // // create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
+    // // println!("created thumbnail in {:?}", now.elapsed());
 
-    ShowCapturesPanel.emit(&app).ok();
+    // let recording_dir = recording.recording_dir.clone();
 
-    NewRecordingAdded {
-        path: recording_dir.clone(),
-    }
-    .emit(&app)
-    .ok();
+    // ShowCapturesPanel.emit(&app).ok();
 
-    RecordingStopped {
-        path: recording_dir,
-    }
-    .emit(&app)
-    .ok();
+    // NewRecordingAdded {
+    //     path: recording_dir.clone(),
+    // }
+    // .emit(&app)
+    // .ok();
 
-    let recordings = ProjectRecordings::new(&recording.meta);
-    let max_duration = recordings.duration();
+    // RecordingStopped {
+    //     path: recording_dir,
+    // }
+    // .emit(&app)
+    // .ok();
 
-    let config = {
-        let segments = {
-            let mut segments = vec![];
-            let mut passed_duration = 0.0;
+    // let recordings = ProjectRecordings::new(&recording.meta);
+    // let max_duration = recordings.duration();
 
-            for i in (0..recording.segments.len()).step_by(2) {
-                let start = passed_duration;
-                passed_duration += recording.segments[i + 1] - recording.segments[i];
-                segments.push(TimelineSegment {
-                    start,
-                    end: passed_duration.min(recordings.duration()),
-                    timescale: 1.0,
-                });
-            }
-            segments
-        };
+    // let config = {
+    //     let segments = {
+    //         let mut segments = vec![];
+    //         let mut passed_duration = 0.0;
 
-        let zoom_segments = {
-            let mut segments = vec![];
+    //         for i in (0..recording.segments.len()).step_by(2) {
+    //             let start = passed_duration;
+    //             passed_duration += recording.segments[i + 1] - recording.segments[i];
+    //             segments.push(TimelineSegment {
+    //                 start,
+    //                 end: passed_duration.min(recordings.duration()),
+    //                 timescale: 1.0,
+    //             });
+    //         }
+    //         segments
+    //     };
 
-            const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
+    //     let zoom_segments = {
+    //         let mut segments = vec![];
 
-            for click in &recording.cursor_data.clicks {
-                let time = click.process_time_ms / 1000.0;
+    //         const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
 
-                if segments.last().is_none() {
-                    segments.push(ZoomSegment {
-                        start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
-                        end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-                        amount: 2.0,
-                    });
-                } else {
-                    let last_segment = segments.last_mut().unwrap();
+    //         for click in &recording.cursor_data.clicks {
+    //             let time = click.process_time_ms / 1000.0;
 
-                    if click.down {
-                        if last_segment.end > time {
-                            last_segment.end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING)
-                                .min(recordings.duration());
-                        } else if time < max_duration - ZOOM_DURATION {
-                            segments.push(ZoomSegment {
-                                start: (time - ZOOM_DURATION).max(0.0),
-                                end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-                                amount: 2.0,
-                            });
-                        }
-                    } else {
-                        last_segment.end =
-                            (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-                    }
-                }
-            }
+    //             if segments.last().is_none() {
+    //                 segments.push(ZoomSegment {
+    //                     start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
+    //                     end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
+    //                     amount: 2.0,
+    //                 });
+    //             } else {
+    //                 let last_segment = segments.last_mut().unwrap();
 
-            segments
-        };
+    //                 if click.down {
+    //                     if last_segment.end > time {
+    //                         last_segment.end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING)
+    //                             .min(recordings.duration());
+    //                     } else if time < max_duration - ZOOM_DURATION {
+    //                         segments.push(ZoomSegment {
+    //                             start: (time - ZOOM_DURATION).max(0.0),
+    //                             end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
+    //                             amount: 2.0,
+    //                         });
+    //                     }
+    //                 } else {
+    //                     last_segment.end =
+    //                         (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
+    //                 }
+    //             }
+    //         }
 
-        ProjectConfiguration {
-            timeline: Some(TimelineConfiguration {
-                segments,
-                zoom_segments,
-            }),
-            ..Default::default()
-        }
-    };
+    //         segments
+    //     };
 
-    config.write(&recording.recording_dir).unwrap();
+    //     ProjectConfiguration {
+    //         timeline: Some(TimelineConfiguration {
+    //             segments,
+    //             zoom_segments,
+    //         }),
+    //         ..Default::default()
+    //     }
+    // };
 
-    AppSounds::StopRecording.play();
+    // config.write(&recording.recording_dir).unwrap();
 
-    if let Some((settings, auth)) = GeneralSettingsStore::get(&app)
-        .ok()
-        .flatten()
-        .zip(AuthStore::get(&app).ok().flatten())
-    {
-        if auth.is_upgraded() && settings.auto_create_shareable_link {
-            if let Some(pre_created_video) = state.pre_created_video.take() {
-                // Copy link to clipboard
-                #[cfg(target_os = "macos")]
-                platform::write_string_to_pasteboard(&pre_created_video.link);
+    // AppSounds::StopRecording.play();
 
-                // Send notification for shareable link
-                notifications::send_notification(
-                    &app,
-                    notifications::NotificationType::ShareableLinkCopied,
-                );
+    // if let Some((settings, auth)) = GeneralSettingsStore::get(&app)
+    //     .ok()
+    //     .flatten()
+    //     .zip(AuthStore::get(&app).ok().flatten())
+    // {
+    //     if auth.is_upgraded() && settings.auto_create_shareable_link {
+    //         if let Some(pre_created_video) = state.pre_created_video.take() {
+    //             // Copy link to clipboard
+    //             #[cfg(target_os = "macos")]
+    //             platform::write_string_to_pasteboard(&pre_created_video.link);
 
-                // Open the pre-created shareable link
-                open_external_link(app.clone(), pre_created_video.link.clone()).ok();
+    //             // Send notification for shareable link
+    //             notifications::send_notification(
+    //                 &app,
+    //                 notifications::NotificationType::ShareableLinkCopied,
+    //             );
 
-                // Start the upload process in the background with retry mechanism
-                let app_clone = app.clone();
+    //             // Open the pre-created shareable link
+    //             open_external_link(app.clone(), pre_created_video.link.clone()).ok();
 
-                tauri::async_runtime::spawn(async move {
-                    let max_retries = 3;
-                    let mut retry_count = 0;
+    //             // Start the upload process in the background with retry mechanism
+    //             let app_clone = app.clone();
 
-                    while retry_count < max_retries {
-                        match upload_rendered_video(
-                            app_clone.clone(),
-                            recording.id.clone(),
-                            ProjectConfiguration::default(),
-                            Some(pre_created_video.clone()),
-                        )
-                        .await
-                        {
-                            Ok(_) => {
-                                println!("Video uploaded successfully");
-                                // Don't send notification here since we already did it above
-                                break;
-                            }
-                            Err(e) => {
-                                retry_count += 1;
-                                println!(
-                                    "Error during auto-upload (attempt {}/{}): {}",
-                                    retry_count, max_retries, e
-                                );
+    //             tauri::async_runtime::spawn(async move {
+    //                 let max_retries = 3;
+    //                 let mut retry_count = 0;
 
-                                if retry_count < max_retries {
-                                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                                } else {
-                                    println!("Max retries reached. Upload failed.");
-                                    notifications::send_notification(
-                                        &app_clone,
-                                        notifications::NotificationType::UploadFailed,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        } else if settings.open_editor_after_recording {
-            open_editor(app.clone(), recording.id);
-        }
-    }
+    //                 while retry_count < max_retries {
+    //                     match upload_rendered_video(
+    //                         app_clone.clone(),
+    //                         recording.id.clone(),
+    //                         ProjectConfiguration::default(),
+    //                         Some(pre_created_video.clone()),
+    //                     )
+    //                     .await
+    //                     {
+    //                         Ok(_) => {
+    //                             println!("Video uploaded successfully");
+    //                             // Don't send notification here since we already did it above
+    //                             break;
+    //                         }
+    //                         Err(e) => {
+    //                             retry_count += 1;
+    //                             println!(
+    //                                 "Error during auto-upload (attempt {}/{}): {}",
+    //                                 retry_count, max_retries, e
+    //                             );
 
-    CurrentRecordingChanged(JsonValue::new(&None))
+    //                             if retry_count < max_retries {
+    //                                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    //                             } else {
+    //                                 println!("Max retries reached. Upload failed.");
+    //                                 notifications::send_notification(
+    //                                     &app_clone,
+    //                                     notifications::NotificationType::UploadFailed,
+    //                                 );
+    //                             }
+    //                         }
+    //                     }
+    //                 }
+    //             });
+    //         }
+    //     } else if settings.open_editor_after_recording {
+    //         open_editor(app.clone(), recording.id);
+    //     }
+    // }
+
+    CurrentRecordingChanged /*(JsonValue::new(&None))*/
         .emit(&app)
         .ok();
 
@@ -1705,7 +1706,7 @@ async fn open_upgrade_window(app: AppHandle) {
 #[tauri::command]
 #[specta::specta]
 async fn open_settings_window(app: AppHandle, page: String) {
-    CapWindow::Settings { page: Some(page) }.show(&app);
+    CapWindow::Settings { page: Some(page) }.show(&app).ok();
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
@@ -2599,11 +2600,13 @@ pub async fn run() {
                     {
                         let mut app_state = state.write().await;
                         if let Some(mut recording) = app_state.clear_current_recording() {
-                            CurrentRecordingChanged(JsonValue::new(&None))
+                            CurrentRecordingChanged /*(JsonValue::new(&None))*/
                                 .emit(&app_handle)
                                 .ok();
 
-                            recording.stop_and_discard();
+                            recording.stop().await.ok();
+
+                            // recording.stop_and_discard();
                         }
                     }
 

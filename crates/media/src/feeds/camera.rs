@@ -44,11 +44,12 @@ impl CameraConnection {
     }
 }
 
+// #[derive(Clone)]
 pub struct CameraFeed {
     camera_info: CameraInfo,
     video_info: VideoInfo,
     control: Sender<CameraControl>,
-    join_handle: JoinHandle<()>,
+    // join_handle: JoinHandle<()>,
 }
 
 impl CameraFeed {
@@ -72,7 +73,7 @@ impl CameraFeed {
             camera_info,
             video_info,
             control,
-            join_handle,
+            // join_handle,
         };
 
         Ok(camera_feed)

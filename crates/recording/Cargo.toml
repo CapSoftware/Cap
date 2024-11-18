@@ -9,6 +9,9 @@ serde_json = "1"
 specta.workspace = true
 tokio.workspace = true
 chrono = "0.4.38"
+flume.workspace = true
+thiserror.workspace = true
 cap-project = { path = "../project" }
 cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
+tracing = "0.1.40"
