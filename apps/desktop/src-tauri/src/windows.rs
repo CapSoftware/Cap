@@ -145,6 +145,9 @@ impl CapWindow {
                     .maximized(false)
                     .theme(Some(tauri::Theme::Light));
 
+                #[cfg(target_os = "windows")]
+                let window_builder = window_builder.center();
+
                 window_builder.build()?
             }
             Self::Settings { page } => {
