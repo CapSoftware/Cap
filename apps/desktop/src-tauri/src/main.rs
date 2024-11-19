@@ -16,6 +16,7 @@ fn main() {
                     {
                         let msg = event.message.clone().unwrap_or("No message".into());
                         println!("Sentry captured {}: {}", &event.level, &msg);
+                        println!("Sentry user: {:?}", &event.user);
                         Some(event)
                     }
 
@@ -34,6 +35,14 @@ fn main() {
             None
         }
     };
+
+    #[cfg(debug_assertions)]
+    sentry::configure_scope(|scope| {
+        scope.set_user(Some(sentry::User {
+            username: Some("_DEV_".into()),
+            ..Default::default()
+        }));
+    });
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
