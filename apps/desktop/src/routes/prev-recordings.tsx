@@ -554,31 +554,42 @@ export default function () {
                               <h3 class="text-sm font-medium mb-3 text-gray-50">
                                 <Switch>
                                   <Match
-                                    when={progressState.type === "copying"}
+                                    when={
+                                      progressState.type === "copying" &&
+                                      progressState
+                                    }
                                   >
                                     {(state) => (
                                       <h3 class="text-sm font-medium mb-3 text-gray-50">
-                                        {state.stage === "rendering"
+                                        {state().stage === "rendering"
                                           ? "Rendering video"
                                           : "Copying to clipboard"}
                                       </h3>
                                     )}
                                   </Match>
-                                  <Match when={progressState.type === "saving"}>
+                                  <Match
+                                    when={
+                                      progressState.type === "saving" &&
+                                      progressState
+                                    }
+                                  >
                                     {(state) => (
                                       <h3 class="text-sm font-medium mb-3 text-gray-50">
-                                        {state.stage === "rendering"
+                                        {state().stage === "rendering"
                                           ? "Rendering video"
                                           : "Saving file"}
                                       </h3>
                                     )}
                                   </Match>
                                   <Match
-                                    when={progressState.type === "uploading"}
+                                    when={
+                                      progressState.type === "uploading" &&
+                                      progressState
+                                    }
                                   >
                                     {(state) => (
                                       <h3 class="text-sm font-medium mb-3 text-gray-50">
-                                        {state.stage === "rendering"
+                                        {state().stage === "rendering"
                                           ? "Rendering video"
                                           : "Creating shareable link"}
                                       </h3>
@@ -630,7 +641,9 @@ export default function () {
                               </div>
 
                               <p class="text-xs text-gray-50 mt-2">
-                                {progressState.message}
+                                {"message" in progressState
+                                  ? progressState.message
+                                  : undefined}
                               </p>
                             </div>
                           </div>
