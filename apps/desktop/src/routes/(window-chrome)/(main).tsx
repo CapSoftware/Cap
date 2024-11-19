@@ -597,16 +597,16 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
         as={
           props.options.length <= 1
             ? (p) => (
-              <button
-                onClick={() => {
-                  props.onChange(props.options[0]);
-                }}
-                data-selected={props.selected}
-                class={p.class}
-              >
-                <span class="truncate">{props.placeholder}</span>
-              </button>
-            )
+                <button
+                  onClick={() => {
+                    props.onChange(props.options[0]);
+                  }}
+                  data-selected={props.selected}
+                  class={p.class}
+                >
+                  <span class="truncate">{props.placeholder}</span>
+                </button>
+              )
             : undefined
         }
         class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
@@ -680,8 +680,8 @@ function TargetSelectInfoPill<T>(props: {
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-          ? "On"
-          : "Off"}
+        ? "On"
+        : "Off"}
     </button>
   );
 }
