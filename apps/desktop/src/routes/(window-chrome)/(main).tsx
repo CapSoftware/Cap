@@ -55,7 +55,6 @@ const getAuth = cache(async () => {
     headers: { authorization: `Bearer ${value?.token}` },
   });
   if (res.status !== 200 && !local) return redirect("/signin");
-  commands.setSentryUser(value?.user_id ?? null);
   return value;
 }, "getAuth");
 

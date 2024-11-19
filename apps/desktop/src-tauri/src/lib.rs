@@ -1886,7 +1886,6 @@ pub async fn run() {
             send_feedback_request,
             windows::position_traffic_lights,
             reupload_rendered_video,
-            set_sentry_user,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1960,6 +1959,15 @@ pub async fn run() {
             general_settings::init(app.handle());
 
             let app_handle = app.handle().clone();
+
+            if let Ok(Some(auth)) = AuthStore::load(&app_handle) {
+                sentry::configure_scope(|scope| {
+                    scope.set_user(Some(sentry::User {
+                        id: Some(auth.user_id),
+                        ..Default::default()
+                    }));
+                });
+            }
 
             // Add this line to check notification permissions on startup
             let notification_handle = app_handle.clone();
@@ -2398,17 +2406,4 @@ async fn reupload_rendered_video(
             Err(e)
         }
     }
-}
-
-#[tauri::command]
-#[specta::specta]
-fn set_sentry_user(app: AppHandle, user_id: Option<String>) {
-    let _ = app.run_on_main_thread(|| {
-        sentry::configure_scope(|scope| {
-            scope.set_user(Some(sentry::User {
-                id: user_id,
-                ..Default::default()
-            }));
-        });
-    });
 }

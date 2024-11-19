@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -23,6 +25,18 @@ pub struct Plan {
 }
 
 impl AuthStore {
+    pub fn load<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Self>, String> {
+        let Some(store) = app
+            .store("store")
+            .map(|s| s.get("auth"))
+            .map_err(|e| e.to_string())?
+        else {
+            return Ok(None);
+        };
+
+        serde_json::from_value(store).map_err(|e| e.to_string())
+    }
+
     pub fn get<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Self>, String> {
         let Some(Some(store)) = app.get_store("store").map(|s| s.get("auth")) else {
             return Ok(None);
