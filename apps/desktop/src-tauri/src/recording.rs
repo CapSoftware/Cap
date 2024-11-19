@@ -2,7 +2,7 @@ use crate::audio::AppSounds;
 use crate::auth::AuthStore;
 use crate::general_settings::GeneralSettingsStore;
 use crate::upload::get_s3_config;
-use crate::windows::{CapWindow, CapWindowId};
+use crate::windows::{CapWindowId, ShowCapWindow};
 use crate::{
     create_screenshot, notifications, open_editor, open_external_link, platform,
     upload_rendered_video, web_api, App, CurrentRecordingChanged, MutableState, NewRecordingAdded,
@@ -94,7 +94,7 @@ pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Re
         window.eval("window.location.reload()").unwrap();
         window.show().unwrap();
     } else {
-        CapWindow::InProgressRecording { position: None }
+        ShowCapWindow::InProgressRecording { position: None }
             .show(&app)
             .ok();
     }

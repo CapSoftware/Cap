@@ -46,6 +46,9 @@ uuid = { version = "1.10.0", features = ["v4"] }
 scap.workspace = true
 image = "0.25.2"
 mp4 = "0.14.0"
+tauri-plugin-fs = "2.0.0-rc.0"
+futures-intrusive = "0.5.0"
+anyhow.workspace = true
 futures = "0.3"
 axum = { version = "0.7.5", features = ["ws"] }
 tracing = "0.1.40"
@@ -55,6 +58,13 @@ chrono = "0.4.38"
 rodio = "0.19.0"
 png = "0.17.13"
 device_query = "2.1.0"
+base64 = "0.22.1"
+reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
+dotenvy_macro = "0.15.7"
+global-hotkey = "0.6.3"
+rand = "0.8.5"
+cpal.workspace = true
+keyed_priority_queue = "0.4.2"
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
@@ -64,12 +74,7 @@ cap-editor = { path = "../../../crates/editor" }
 cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
-reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
-dotenvy_macro = "0.15.7"
-global-hotkey = "0.6.3"
-rand = "0.8.5"
-cpal.workspace = true
-keyed_priority_queue = "0.4.2"
+cap-export = { path = "../../../crates/export" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

@@ -758,6 +758,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-export"
+version = "0.1.0"
+dependencies = [
+ "cap-editor",
+ "cap-ffmpeg-cli",
+ "cap-flags",
+ "cap-media",
+ "cap-project",
+ "cap-rendering",
+ "cap-utils",
+ "image 0.25.2",
+ "mp4",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "cap-ffmpeg-cli"
 version = "0.1.0"
 dependencies = [
@@ -1680,8 +1697,11 @@ dependencies = [
 name = "desktop"
 version = "0.3.0-beta.9.1"
 dependencies = [
+ "anyhow",
  "axum",
+ "base64 0.22.1",
  "cap-editor",
+ "cap-export",
  "cap-ffmpeg-cli",
  "cap-flags",
  "cap-media",
@@ -1698,6 +1718,7 @@ dependencies = [
  "dotenvy_macro",
  "ffmpeg-next",
  "futures",
+ "futures-intrusive",
  "global-hotkey",
  "image 0.25.2",
  "keyed_priority_queue",
@@ -1719,6 +1740,7 @@ dependencies = [
  "tauri-build",
  "tauri-nspanel",
  "tauri-plugin-dialog",
+ "tauri-plugin-fs",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-http",
  "tauri-plugin-notification",
@@ -5575,7 +5597,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.7"
-source = "git+https://github.com/CapSoftware/scap?rev=b1e140a3fe905c19b845dfea66b3b1aea02f0472#b1e140a3fe905c19b845dfea66b3b1aea02f0472"
+source = "git+https://github.com/CapSoftware/scap?rev=58d4410bf52f#58d4410bf52fb8033be99dcc62a27369a4cbaf32"
 dependencies = [
  "cocoa 0.25.0",
  "core-graphics-helmer-fork",
