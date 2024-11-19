@@ -19,8 +19,7 @@ fn main() {
                         println!("-- user: {:?}", &event.user);
                         println!("-- event tags: {:?}", &event.tags);
                         println!("-- event contexts: {:?}", &event.contexts);
-                        Some(event)
-                        // None
+                        None
                     }
 
                     #[cfg(not(debug_assertions))]
@@ -32,7 +31,7 @@ fn main() {
             },
         ))),
         Err(_) => {
-            tracing::warn!(
+            eprintln!(
                 "Sentry URL not found in environment variables, skipping Sentry initialization"
             );
             None
