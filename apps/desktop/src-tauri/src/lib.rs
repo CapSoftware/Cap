@@ -1904,7 +1904,10 @@ pub async fn run() {
     tauri::async_runtime::set(tokio::runtime::Handle::current());
 
     #[allow(unused_mut)]
-    let mut builder = tauri::Builder::default();
+    let mut builder =
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = ShowCapWindow::Main.show(app);
+        }));
 
     #[cfg(target_os = "macos")]
     {
@@ -1912,9 +1915,6 @@ pub async fn run() {
     }
 
     builder
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = ShowCapWindow::Main.show(app);
-        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())

@@ -37,6 +37,10 @@ impl EditorInstance {
         video_id: String,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
     ) -> Arc<Self> {
+        sentry::configure_scope(|scope| {
+            scope.set_tag("window", "editor");
+        });
+
         let project_path = projects_path.join(format!(
             "{}{}",
             video_id,

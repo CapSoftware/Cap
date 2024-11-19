@@ -59,13 +59,13 @@ rodio = "0.19.0"
 png = "0.17.13"
 device_query = "2.1.0"
 base64 = "0.22.1"
-sentry = { version = "0.34.0", features = ["anyhow"] }
 reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
 dotenvy_macro = "0.15.7"
 global-hotkey = "0.6.3"
 rand = "0.8.5"
 cpal.workspace = true
 keyed_priority_queue = "0.4.2"
+sentry.workspace = true
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }

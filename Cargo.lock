@@ -755,6 +755,7 @@ dependencies = [
  "cap-rendering",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
+ "sentry",
  "serde",
  "specta",
  "tokio",
