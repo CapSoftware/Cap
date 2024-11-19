@@ -21,7 +21,7 @@ use auth::{AuthStore, AuthenticationInvalid};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_editor::{EditorState, ProjectRecordings};
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
-use cap_media::sources::CaptureScreen;
+use cap_media::sources::{CaptureScreen, CaptureWindow};
 use cap_media::{
     feeds::{AudioFrameBuffer, CameraFeed, CameraFrameSender},
     sources::ScreenCaptureTarget,
@@ -133,8 +133,27 @@ impl App {
     }
 
     async fn set_start_recording_options(&mut self, new_options: RecordingOptions) {
-        sentry::configure_scope(|scope| {
+        let options = new_options.clone();
+        sentry::configure_scope(move |scope| {
             scope.set_tag("cmd", "set_start_recording_options");
+            let mut ctx = std::collections::BTreeMap::new();
+            ctx.insert(
+                "capture_target".into(),
+                match options.capture_target {
+                    ScreenCaptureTarget::Screen(screen) => screen.name,
+                    ScreenCaptureTarget::Window(window) => window.owner_name,
+                }
+                .into(),
+            );
+            ctx.insert(
+                "camera".into(),
+                options.camera_label.unwrap_or("None".into()).into(),
+            );
+            ctx.insert(
+                "microphone".into(),
+                options.audio_input_name.unwrap_or("None".into()).into(),
+            );
+            scope.set_context("recording_options", sentry::protocol::Context::Other(ctx));
         });
 
         match CapWindowId::Camera.get(&self.handle) {
