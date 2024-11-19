@@ -1942,7 +1942,6 @@ pub async fn run() {
             let permissions = permissions::do_permissions_check(false);
             println!("Permissions check result: {:?}", permissions);
 
-            ShowCapWindow::Setup.show(&app_handle).ok();
             if !permissions.screen_recording.permitted()
                 || !permissions.accessibility.permitted()
                 || GeneralSettingsStore::get(app.handle())
