@@ -42,6 +42,7 @@ pub type AudioInputSamplesReceiver = Receiver<AudioInputSamples>;
 
 pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 
+#[derive(Clone)]
 pub struct AudioInputFeed {
     control_tx: Sender<AudioInputControl>,
     audio_info: AudioInfo,

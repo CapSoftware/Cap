@@ -66,6 +66,21 @@ pub struct ScreenCaptureSource<T> {
     phantom: std::marker::PhantomData<T>,
 }
 
+impl<T> Clone for ScreenCaptureSource<T> {
+    fn clone(&self) -> Self {
+        Self {
+            target: self.target.clone(),
+            fps: self.fps,
+            resolution: self.resolution,
+            video_info: self.video_info,
+            phantom: Default::default(),
+        }
+    }
+}
+
+unsafe impl<T> Send for ScreenCaptureSource<T> {}
+unsafe impl<T> Sync for ScreenCaptureSource<T> {}
+
 impl<T> ScreenCaptureSource<T> {
     pub const DEFAULT_FPS: u32 = 30;
 
@@ -94,6 +109,15 @@ impl<T> ScreenCaptureSource<T> {
         this
     }
 
+    pub fn get_bounds(&self) -> Bounds {
+        match &self.target {
+            ScreenCaptureTarget::Window(capture_window) => capture_window.bounds,
+            ScreenCaptureTarget::Screen(capture_screen) => {
+                platform::monitor_bounds(capture_screen.id)
+            }
+        }
+    }
+
     fn create_options(&self) -> Options {
         let targets = dbg!(scap::get_all_targets());
 
@@ -106,23 +130,18 @@ impl<T> ScreenCaptureSource<T> {
             .cloned()
             .collect();
 
-        let (crop_area, bounds) = match &self.target {
-            ScreenCaptureTarget::Window(capture_window) => (
-                Some(Area {
-                    size: Size {
-                        width: capture_window.bounds.width,
-                        height: capture_window.bounds.height,
-                    },
-                    origin: Point {
-                        x: capture_window.bounds.x,
-                        y: capture_window.bounds.y,
-                    },
-                }),
-                capture_window.bounds,
-            ),
-            ScreenCaptureTarget::Screen(capture_screen) => {
-                (None, platform::monitor_bounds(capture_screen.id))
-            }
+        let crop_area = match &self.target {
+            ScreenCaptureTarget::Window(capture_window) => Some(Area {
+                size: Size {
+                    width: capture_window.bounds.width,
+                    height: capture_window.bounds.height,
+                },
+                origin: Point {
+                    x: capture_window.bounds.x,
+                    y: capture_window.bounds.y,
+                },
+            }),
+            ScreenCaptureTarget::Screen(_) => None,
         };
 
         let target = match &self.target {
@@ -414,7 +433,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                 Some(Control::Shutdown) | None => {
                     println!("Received shutdown signal");
                     if capturing {
-                        capturer.stop_capture();
+                        // capturer.stop_capture();
                     }
                     break;
                 }

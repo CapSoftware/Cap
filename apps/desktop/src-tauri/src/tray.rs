@@ -1,4 +1,4 @@
-use crate::windows::CapWindow;
+use crate::windows::ShowCapWindow;
 use crate::{
     RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings,
     RequestStartRecording, RequestStopRecording,
@@ -112,10 +112,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             let app_handle = app_handle.clone();
             move |app: &AppHandle, event| match TrayItem::from(event.id) {
                 TrayItem::OpenCap => {
-                    CapWindow::Main.show(&app_handle);
+                    ShowCapWindow::Main.show(&app_handle);
                 }
                 TrayItem::StartNewRecording => {
-                    CapWindow::Main.show(&app_handle);
+                    ShowCapWindow::Main.show(&app_handle);
 
                     let _ = RequestStartRecording.emit(&app_handle);
                 }
@@ -135,7 +135,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     .emit(&app_handle);
                 }
                 TrayItem::OpenSettings => {
-                    CapWindow::Settings { page: None }.show(&app_handle);
+                    ShowCapWindow::Settings { page: None }.show(&app_handle);
                 }
                 TrayItem::Quit => {
                     app.exit(0);

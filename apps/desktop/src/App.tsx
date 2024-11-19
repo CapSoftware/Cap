@@ -11,7 +11,7 @@ const queryClient = new QueryClient({
   defaultOptions: {
     mutations: {
       onError: (e) =>
-        alert("An error occured, here are the details:\n" + e.message),
+        alert("An error occured, here are the details:\n" + e.toString()),
     },
   },
 });

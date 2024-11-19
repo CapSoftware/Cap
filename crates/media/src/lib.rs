@@ -40,6 +40,9 @@ pub enum MediaError {
     #[error("Camera error: {0}")]
     Nokhwa(#[from] nokhwa::NokhwaError),
 
+    #[error("IO error: {0}")]
+    IO(#[from] std::io::Error),
+
     #[error("Could not find a suitable codec for {0}")]
     MissingCodec(&'static str),
 

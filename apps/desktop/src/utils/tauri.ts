@@ -23,9 +23,6 @@ async pauseRecording() : Promise<null> {
 async resumeRecording() : Promise<null> {
     return await TAURI_INVOKE("resume_recording");
 },
-async takeScreenshot() : Promise<null> {
-    return await TAURI_INVOKE("take_screenshot");
-},
 async listCameras() : Promise<string[]> {
     return await TAURI_INVOKE("list_cameras");
 },
@@ -34,6 +31,9 @@ async listCaptureWindows() : Promise<CaptureWindow[]> {
 },
 async listCaptureScreens() : Promise<CaptureScreen[]> {
     return await TAURI_INVOKE("list_capture_screens");
+},
+async takeScreenshot() : Promise<null> {
+    return await TAURI_INVOKE("take_screenshot");
 },
 async listAudioDevices() : Promise<string[]> {
     return await TAURI_INVOKE("list_audio_devices");
@@ -53,7 +53,7 @@ async removeFakeWindow(name: string) : Promise<null> {
 async focusCapturesPanel() : Promise<void> {
     await TAURI_INVOKE("focus_captures_panel");
 },
-async getCurrentRecording() : Promise<JsonValue<InProgressRecording | null>> {
+async getCurrentRecording() : Promise<JsonValue<RecordingInfo | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
 async renderToFile(outputPath: string, videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<void> {
@@ -235,7 +235,7 @@ export type CameraYPosition = "top" | "bottom"
 export type CaptureScreen = { id: number; name: string }
 export type CaptureWindow = { id: number; owner_name: string; name: string; bounds: Bounds }
 export type Crop = { position: XY<number>; size: XY<number> }
-export type CurrentRecordingChanged = JsonValue<InProgressRecording | null>
+export type CurrentRecordingChanged = null
 export type CursorAnimationStyle = "regular" | "slow" | "fast"
 export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: CursorType; animationStyle: CursorAnimationStyle }
 export type CursorType = "pointer" | "circle"
@@ -247,7 +247,6 @@ export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean;
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
 export type HotkeysConfiguration = { show: boolean }
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
-export type InProgressRecording = { id: string; recordingDir: string; displaySource: ScreenCaptureTarget; segments: number[] }
 export type JsonValue<T> = [T]
 export type NewNotification = { title: string; body: string; is_error: boolean }
 export type NewRecordingAdded = { path: string }
@@ -259,6 +258,7 @@ export type Plan = { upgraded: boolean; last_checked: number }
 export type PreCreatedVideo = { id: string; link: string; config: S3UploadMeta }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null; motionBlur: number | null }
 export type ProjectRecordings = { display: Video; camera: Video | null; audio: Audio | null }
+export type RecordingInfo = { captureTarget: ScreenCaptureTarget }
 export type RecordingMeta = { pretty_name: string; sharing?: SharingMeta | null; display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; segments?: RecordingSegment[]; cursor: string | null }
 export type RecordingMetaChanged = { id: string }
 export type RecordingOptions = { captureTarget: ScreenCaptureTarget; cameraLabel: string | null; audioInputName: string | null }
