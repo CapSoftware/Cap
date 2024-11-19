@@ -10,7 +10,7 @@ mod platform;
 mod recording;
 // mod resource;
 mod audio_meter;
-mod cursor;
+mod fake_window;
 mod tray;
 mod upload;
 mod web_api;
@@ -24,19 +24,18 @@ use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::sources::CaptureScreen;
 use cap_media::{
     feeds::{AudioFrameBuffer, CameraFeed, CameraFrameSender},
-    platform::Bounds,
     sources::ScreenCaptureTarget,
 };
 use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta};
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectUniforms;
+use fake_window::FakeWindowBounds;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
-use recording::{list_cameras, list_capture_screens, list_capture_windows};
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -107,16 +106,9 @@ impl App {
         &mut self,
         actor: cap_recording::ActorHandle, /* new_value: InProgressRecording */
     ) {
-        // let option = Some(new_value);
-        // let json = JsonValue::new(&option);
-
-        // let new_value = option.unwrap();
-
         let current_recording = self.current_recording.insert(actor);
 
-        CurrentRecordingChanged /*(json)*/
-            .emit(&self.handle)
-            .ok();
+        CurrentRecordingChanged.emit(&self.handle).ok();
 
         if matches!(
             current_recording.options.capture_target,
@@ -326,306 +318,6 @@ async fn get_current_recording(
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
 pub struct CurrentRecordingChanged; // (JsonValue<Option<InProgressRecording>>);
-
-#[tauri::command]
-#[specta::specta]
-async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
-    let mut state = state.write().await;
-
-    let id = uuid::Uuid::new_v4().to_string();
-
-    let recording_dir = app
-        .path()
-        .app_data_dir()
-        .unwrap()
-        .join("recordings")
-        .join(format!("{id}.cap"));
-
-    // Check if auto_create_shareable_link is true and user is upgraded
-    let general_settings = GeneralSettingsStore::get(&app)?;
-    let auto_create_shareable_link = general_settings
-        .map(|settings| settings.auto_create_shareable_link)
-        .unwrap_or(false);
-
-    if auto_create_shareable_link {
-        if let Ok(Some(auth)) = AuthStore::get(&app) {
-            if auth.is_upgraded() {
-                // Pre-create the video and get the shareable link
-                if let Ok(s3_config) = get_s3_config(&app, false, None).await {
-                    let link = web_api::make_url(format!("/s/{}", s3_config.id()));
-
-                    state.pre_created_video = Some(PreCreatedVideo {
-                        id: s3_config.id().to_string(),
-                        link: link.clone(),
-                        config: s3_config,
-                    });
-
-                    println!("Pre-created shareable link: {}", link);
-                };
-            }
-        }
-    }
-
-    let actor = cap_recording::start_recording_actor(
-        recording_dir,
-        state.start_recording_options.clone(),
-        state.camera_feed.clone(),
-        state.audio_input_feed.clone(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    state.set_current_recording(actor);
-
-    if let Some(window) = CapWindowId::Main.get(&app) {
-        window.minimize().ok();
-    }
-
-    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
-        window.eval("window.location.reload()").unwrap();
-        window.show().unwrap();
-    } else {
-        CapWindow::InProgressRecording { position: None }
-            .show(&app)
-            .ok();
-    }
-
-    AppSounds::StartRecording.play();
-
-    RecordingStarted.emit(&app).ok();
-
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
-    let mut state = state.write().await;
-
-    if let Some(recording) = &mut state.current_recording {
-        recording.pause().await.map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
-    let mut state = state.write().await;
-
-    if let Some(recording) = &mut state.current_recording {
-        recording.resume().await.map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
-    let mut state = state.write().await;
-    let Some(current_recording) = state.clear_current_recording() else {
-        return Err("Recording not in progress".to_string());
-    };
-
-    current_recording.stop().await.map_err(|e| e.to_string())?;
-
-    // current_recording.segments.push(
-    //     SystemTime::now()
-    //         .duration_since(UNIX_EPOCH)
-    //         .unwrap()
-    //         .as_secs_f64(),
-    // );
-
-    // let now = Instant::now();
-    // let recording = current_recording.stop().await;
-    // println!("stopped recording in {:?}", now.elapsed());
-
-    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
-        window.hide().unwrap();
-    }
-
-    if let Some(window) = CapWindowId::Main.get(&app) {
-        window.unminimize().ok();
-    }
-
-    // let screenshots_dir = recording.recording_dir.join("screenshots");
-    // std::fs::create_dir_all(&screenshots_dir).ok();
-
-    // let display_screenshot = screenshots_dir.join("display.jpg");
-    // let now = Instant::now();
-    // create_screenshot(
-    //     recording.display_output_path.clone(),
-    //     display_screenshot.clone(),
-    //     None,
-    // )
-    // .await?;
-    // println!("created screenshot in {:?}", now.elapsed());
-
-    // // let thumbnail = screenshots_dir.join("thumbnail.png");
-    // // let now = Instant::now();
-    // // create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
-    // // println!("created thumbnail in {:?}", now.elapsed());
-
-    // let recording_dir = recording.recording_dir.clone();
-
-    // ShowCapturesPanel.emit(&app).ok();
-
-    // NewRecordingAdded {
-    //     path: recording_dir.clone(),
-    // }
-    // .emit(&app)
-    // .ok();
-
-    // RecordingStopped {
-    //     path: recording_dir,
-    // }
-    // .emit(&app)
-    // .ok();
-
-    // let recordings = ProjectRecordings::new(&recording.meta);
-    // let max_duration = recordings.duration();
-
-    // let config = {
-    //     let segments = {
-    //         let mut segments = vec![];
-    //         let mut passed_duration = 0.0;
-
-    //         for i in (0..recording.segments.len()).step_by(2) {
-    //             let start = passed_duration;
-    //             passed_duration += recording.segments[i + 1] - recording.segments[i];
-    //             segments.push(TimelineSegment {
-    //                 start,
-    //                 end: passed_duration.min(recordings.duration()),
-    //                 timescale: 1.0,
-    //             });
-    //         }
-    //         segments
-    //     };
-
-    //     let zoom_segments = {
-    //         let mut segments = vec![];
-
-    //         const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
-
-    //         for click in &recording.cursor_data.clicks {
-    //             let time = click.process_time_ms / 1000.0;
-
-    //             if segments.last().is_none() {
-    //                 segments.push(ZoomSegment {
-    //                     start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
-    //                     end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-    //                     amount: 2.0,
-    //                 });
-    //             } else {
-    //                 let last_segment = segments.last_mut().unwrap();
-
-    //                 if click.down {
-    //                     if last_segment.end > time {
-    //                         last_segment.end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING)
-    //                             .min(recordings.duration());
-    //                     } else if time < max_duration - ZOOM_DURATION {
-    //                         segments.push(ZoomSegment {
-    //                             start: (time - ZOOM_DURATION).max(0.0),
-    //                             end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-    //                             amount: 2.0,
-    //                         });
-    //                     }
-    //                 } else {
-    //                     last_segment.end =
-    //                         (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-    //                 }
-    //             }
-    //         }
-
-    //         segments
-    //     };
-
-    //     ProjectConfiguration {
-    //         timeline: Some(TimelineConfiguration {
-    //             segments,
-    //             zoom_segments,
-    //         }),
-    //         ..Default::default()
-    //     }
-    // };
-
-    // config.write(&recording.recording_dir).unwrap();
-
-    // AppSounds::StopRecording.play();
-
-    // if let Some((settings, auth)) = GeneralSettingsStore::get(&app)
-    //     .ok()
-    //     .flatten()
-    //     .zip(AuthStore::get(&app).ok().flatten())
-    // {
-    //     if auth.is_upgraded() && settings.auto_create_shareable_link {
-    //         if let Some(pre_created_video) = state.pre_created_video.take() {
-    //             // Copy link to clipboard
-    //             #[cfg(target_os = "macos")]
-    //             platform::write_string_to_pasteboard(&pre_created_video.link);
-
-    //             // Send notification for shareable link
-    //             notifications::send_notification(
-    //                 &app,
-    //                 notifications::NotificationType::ShareableLinkCopied,
-    //             );
-
-    //             // Open the pre-created shareable link
-    //             open_external_link(app.clone(), pre_created_video.link.clone()).ok();
-
-    //             // Start the upload process in the background with retry mechanism
-    //             let app_clone = app.clone();
-
-    //             tauri::async_runtime::spawn(async move {
-    //                 let max_retries = 3;
-    //                 let mut retry_count = 0;
-
-    //                 while retry_count < max_retries {
-    //                     match upload_rendered_video(
-    //                         app_clone.clone(),
-    //                         recording.id.clone(),
-    //                         ProjectConfiguration::default(),
-    //                         Some(pre_created_video.clone()),
-    //                     )
-    //                     .await
-    //                     {
-    //                         Ok(_) => {
-    //                             println!("Video uploaded successfully");
-    //                             // Don't send notification here since we already did it above
-    //                             break;
-    //                         }
-    //                         Err(e) => {
-    //                             retry_count += 1;
-    //                             println!(
-    //                                 "Error during auto-upload (attempt {}/{}): {}",
-    //                                 retry_count, max_retries, e
-    //                             );
-
-    //                             if retry_count < max_retries {
-    //                                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-    //                             } else {
-    //                                 println!("Max retries reached. Upload failed.");
-    //                                 notifications::send_notification(
-    //                                     &app_clone,
-    //                                     notifications::NotificationType::UploadFailed,
-    //                                 );
-    //                             }
-    //                         }
-    //                     }
-    //                 }
-    //             });
-    //         }
-    //     } else if settings.open_editor_after_recording {
-    //         open_editor(app.clone(), recording.id);
-    //     }
-    // }
-
-    CurrentRecordingChanged /*(JsonValue::new(&None))*/
-        .emit(&app)
-        .ok();
-
-    Ok(())
-}
 
 async fn create_screenshot(
     input: PathBuf,
@@ -1461,45 +1153,6 @@ async fn get_video_metadata(
     Ok((duration, size))
 }
 
-struct FakeWindowBounds(pub Arc<RwLock<HashMap<String, HashMap<String, Bounds>>>>);
-
-#[tauri::command]
-#[specta::specta]
-async fn set_fake_window_bounds(
-    window: tauri::Window,
-    name: String,
-    bounds: Bounds,
-    state: tauri::State<'_, FakeWindowBounds>,
-) -> Result<(), String> {
-    let mut state = state.0.write().await;
-    let map = state.entry(window.label().to_string()).or_default();
-
-    map.insert(name, bounds);
-
-    Ok(())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn remove_fake_window(
-    window: tauri::Window,
-    name: String,
-    state: tauri::State<'_, FakeWindowBounds>,
-) -> Result<(), String> {
-    let mut state = state.0.write().await;
-    let Some(map) = state.get_mut(window.label()) else {
-        return Ok(());
-    };
-
-    map.remove(&name);
-
-    if map.is_empty() {
-        state.remove(window.label());
-    }
-
-    Ok(())
-}
-
 // #[tauri::command(async)]
 // #[specta::specta]
 // fn show_notifications_window(app: AppHandle) {
@@ -1802,7 +1455,7 @@ async fn upload_rendered_video(
         get_s3_config(&app, false, None).await?
     };
 
-    let result = match upload_video(
+    match upload_video(
         &app,
         video_id.clone(),
         output_path,
@@ -1839,9 +1492,7 @@ async fn upload_rendered_video(
             NotificationType::UploadFailed.send(&app);
             Err(e)
         }
-    };
-
-    result
+    }
 }
 
 #[tauri::command]
@@ -2371,19 +2022,19 @@ pub async fn run() {
         .commands(tauri_specta::collect_commands![
             get_recording_options,
             set_recording_options,
-            start_recording,
-            stop_recording,
-            pause_recording,
-            resume_recording,
+            recording::start_recording,
+            recording::stop_recording,
+            recording::pause_recording,
+            recording::resume_recording,
+            recording::list_cameras,
+            recording::list_capture_windows,
+            recording::list_capture_screens,
             take_screenshot,
-            list_cameras,
-            list_capture_windows,
-            list_capture_screens,
             list_audio_devices,
             show_previous_recordings_window,
             close_previous_recordings_window,
-            set_fake_window_bounds,
-            remove_fake_window,
+            fake_window::set_fake_window_bounds,
+            fake_window::remove_fake_window,
             focus_captures_panel,
             get_current_recording,
             render_to_file,
@@ -2476,7 +2127,7 @@ pub async fn run() {
 
     builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = CapWindow::Main.show(&app);
+            let _ = CapWindow::Main.show(app);
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -2557,12 +2208,13 @@ pub async fn run() {
                     };
 
                     if is_recording {
-                        if let Err(e) = stop_recording(app_handle.clone(), app_handle.state()).await
+                        if let Err(e) =
+                            recording::stop_recording(app_handle.clone(), app_handle.state()).await
                         {
                             eprintln!("Failed to stop recording: {}", e);
                         }
                     } else if let Err(e) =
-                        start_recording(app_handle.clone(), app_handle.state()).await
+                        recording::start_recording(app_handle.clone(), app_handle.state()).await
                     {
                         eprintln!("Failed to start recording: {}", e);
                     }
@@ -2573,7 +2225,9 @@ pub async fn run() {
             RequestStopRecording::listen_any(app, move |_| {
                 let app_handle = app_handle_clone.clone();
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = stop_recording(app_handle.clone(), app_handle.state()).await {
+                    if let Err(e) =
+                        recording::stop_recording(app_handle.clone(), app_handle.state()).await
+                    {
                         eprintln!("Failed to stop recording: {}", e);
                     }
                 });
@@ -2588,7 +2242,7 @@ pub async fn run() {
                     // Stop and discard the current recording
                     {
                         let mut app_state = state.write().await;
-                        if let Some(mut recording) = app_state.clear_current_recording() {
+                        if let Some(recording) = app_state.clear_current_recording() {
                             CurrentRecordingChanged /*(JsonValue::new(&None))*/
                                 .emit(&app_handle)
                                 .ok();
@@ -2599,7 +2253,7 @@ pub async fn run() {
                         }
                     }
 
-                    if let Err(e) = start_recording(app_handle.clone(), state).await {
+                    if let Err(e) = recording::start_recording(app_handle.clone(), state).await {
                         eprintln!("Failed to start new recording: {}", e);
                     } else {
                         println!("New recording started successfully");
@@ -2905,9 +2559,7 @@ async fn reupload_rendered_video(
     // Get S3 config with the existing video ID
     let s3_config = get_s3_config(&app, false, Some(sharing.id)).await?;
 
-    let result = match upload_video(&app, video_id.clone(), output_path, false, Some(s3_config))
-        .await
-    {
+    match upload_video(&app, video_id.clone(), output_path, false, Some(s3_config)).await {
         Ok(uploaded_video) => {
             // Emit upload complete
             UploadProgress {
@@ -2932,7 +2584,5 @@ async fn reupload_rendered_video(
             notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
             Err(e)
         }
-    };
-
-    result
+    }
 }

@@ -819,6 +819,7 @@ dependencies = [
 name = "cap-project"
 version = "0.1.0"
 dependencies = [
+ "either",
  "serde",
  "serde_json",
  "specta",
@@ -832,7 +833,12 @@ dependencies = [
  "cap-media",
  "cap-project",
  "chrono",
+ "cocoa 0.26.0",
+ "device_query",
+ "either",
  "flume 0.11.0",
+ "image 0.25.2",
+ "objc",
  "serde",
  "serde_json",
  "specta",

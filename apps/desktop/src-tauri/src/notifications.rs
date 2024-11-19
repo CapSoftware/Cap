@@ -81,7 +81,7 @@ impl NotificationType {
     }
 
     pub fn send(self, app: &tauri::AppHandle) {
-        send_notification(&app, self);
+        send_notification(app, self);
     }
 }
 

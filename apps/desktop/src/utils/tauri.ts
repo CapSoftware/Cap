@@ -23,9 +23,6 @@ async pauseRecording() : Promise<null> {
 async resumeRecording() : Promise<null> {
     return await TAURI_INVOKE("resume_recording");
 },
-async takeScreenshot() : Promise<null> {
-    return await TAURI_INVOKE("take_screenshot");
-},
 async listCameras() : Promise<string[]> {
     return await TAURI_INVOKE("list_cameras");
 },
@@ -34,6 +31,9 @@ async listCaptureWindows() : Promise<CaptureWindow[]> {
 },
 async listCaptureScreens() : Promise<CaptureScreen[]> {
     return await TAURI_INVOKE("list_capture_screens");
+},
+async takeScreenshot() : Promise<null> {
+    return await TAURI_INVOKE("take_screenshot");
 },
 async listAudioDevices() : Promise<string[]> {
     return await TAURI_INVOKE("list_audio_devices");
