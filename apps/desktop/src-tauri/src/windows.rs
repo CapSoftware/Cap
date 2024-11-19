@@ -91,9 +91,11 @@ impl CapWindowId {
 
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
-            Self::Camera | Self::WindowCaptureOccluder | Self::PrevRecordings => None,
+            Self::Camera
+            | Self::WindowCaptureOccluder
+            | Self::PrevRecordings
+            | Self::InProgressRecording => None,
             Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.5))),
-            Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             _ => Some(None),
         }
     }
@@ -190,7 +192,6 @@ impl CapWindow {
                     .resizable(false)
                     .shadow(false)
                     .fullscreen(false)
-                    .decorations(false)
                     .always_on_top(true)
                     .content_protected(true)
                     .visible_on_all_workspaces(true)
@@ -275,7 +276,6 @@ impl CapWindow {
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .decorations(false)
                     .shadow(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
@@ -348,6 +348,8 @@ impl CapWindow {
                 builder = builder
                     .hidden_title(true)
                     .title_bar_style(tauri::TitleBarStyle::Overlay);
+            } else {
+                builder = builder.decorations(false)
             }
         }
 

@@ -3,7 +3,6 @@ use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
 use cap_media::feeds::AudioData;
 use cap_project::{CursorData, ProjectConfiguration, RecordingMeta, XY};
-use cap_rendering::decoder::AsyncVideoDecoder;
 use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
@@ -15,7 +14,7 @@ const FPS: u32 = 30;
 pub struct EditorInstance {
     pub project_path: PathBuf,
     pub id: String,
-    pub audio: Arc<StdMutex<Option<AudioData>>>,
+    pub audio: Arc<Option<AudioData>>,
     pub cursor: Arc<CursorData>,
     pub ws_port: u16,
     pub decoders: RecordingDecoders,
@@ -66,20 +65,13 @@ impl EditorInstance {
                 .map(|c| XY::new(c.width, c.height)),
         };
 
-        let screen_decoder =
-            AsyncVideoDecoder::spawn(project_path.join(&meta.display.path).clone());
-        let camera_decoder = meta
-            .camera
-            .as_ref()
-            .map(|camera| AsyncVideoDecoder::spawn(project_path.join(&camera.path).clone()));
-
         let audio = meta.audio.as_ref().map(|meta| {
             let audio_path = project_path.join(&meta.path);
 
             AudioData::from_file(audio_path).unwrap()
         });
 
-        let (frame_tx, frame_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (frame_tx, frame_rx) = tokio::sync::mpsc::channel(4);
 
         let (ws_port, ws_shutdown) = create_frames_ws(frame_rx).await;
 
@@ -102,12 +94,12 @@ impl EditorInstance {
         let this = Arc::new(Self {
             id: video_id,
             project_path,
-            decoders: RecordingDecoders::new(screen_decoder, camera_decoder),
+            decoders: RecordingDecoders::new(&meta),
             recordings,
             ws_port,
             renderer,
             render_constants,
-            audio: Arc::new(StdMutex::new(audio)),
+            audio: Arc::new(audio),
             cursor,
             state: Arc::new(Mutex::new(EditorState {
                 playhead_position: 0,
@@ -162,11 +154,11 @@ impl EditorInstance {
         println!("Stopping decoders");
         self.decoders.stop().await;
 
-        // Clear audio data
-        if self.audio.lock().unwrap().is_some() {
-            println!("Clearing audio data");
-            *self.audio.lock().unwrap() = None; // Explicitly drop the audio data
-        }
+        // // Clear audio data
+        // if self.audio.lock().unwrap().is_some() {
+        //     println!("Clearing audio data");
+        //     *self.audio.lock().unwrap() = None; // Explicitly drop the audio data
+        // }
 
         // Cancel any remaining tasks
         tokio::task::yield_now().await;
@@ -282,9 +274,7 @@ impl Drop for EditorInstance {
     }
 }
 
-async fn create_frames_ws(
-    frame_rx: mpsc::UnboundedReceiver<SocketMessage>,
-) -> (u16, mpsc::Sender<()>) {
+async fn create_frames_ws(frame_rx: mpsc::Receiver<SocketMessage>) -> (u16, mpsc::Sender<()>) {
     use axum::{
         extract::{
             ws::{Message, WebSocket, WebSocketUpgrade},
@@ -293,9 +283,9 @@ async fn create_frames_ws(
         response::IntoResponse,
         routing::get,
     };
-    use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
+    use tokio::sync::{mpsc::Receiver, Mutex};
 
-    type RouterState = Arc<Mutex<UnboundedReceiver<SocketMessage>>>;
+    type RouterState = Arc<Mutex<Receiver<SocketMessage>>>;
 
     async fn ws_handler(
         ws: WebSocketUpgrade,

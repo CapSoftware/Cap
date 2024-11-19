@@ -767,6 +767,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-export"
+version = "0.1.0"
+dependencies = [
+ "cap-editor",
+ "cap-ffmpeg-cli",
+ "cap-flags",
+ "cap-media",
+ "cap-project",
+ "cap-rendering",
+ "cap-utils",
+ "image 0.25.2",
+ "mp4",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "cap-ffmpeg-cli"
 version = "0.1.0"
 dependencies = [
@@ -1680,6 +1697,7 @@ dependencies = [
  "base64 0.22.1",
  "bytemuck",
  "cap-editor",
+ "cap-export",
  "cap-ffmpeg-cli",
  "cap-flags",
  "cap-media",

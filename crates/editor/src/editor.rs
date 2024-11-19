@@ -113,7 +113,7 @@ pub enum RendererMessage {
 
 pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
-    frame_tx: mpsc::UnboundedSender<SocketMessage>,
+    frame_tx: mpsc::Sender<SocketMessage>,
     render_constants: Arc<RenderVideoConstants>,
 }
 
@@ -124,7 +124,7 @@ pub struct RendererHandle {
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
-        frame_tx: mpsc::UnboundedSender<SocketMessage>,
+        frame_tx: mpsc::Sender<SocketMessage>,
     ) -> RendererHandle {
         let (tx, rx) = mpsc::channel(4);
 
@@ -179,7 +179,7 @@ impl Renderer {
                             // println!("produced frame in {:?}", time_instant.elapsed());
 
                             frame_tx
-                                .send(SocketMessage::Frame {
+                                .try_send(SocketMessage::Frame {
                                     data: frame,
                                     width: uniforms.output_size.0,
                                     height: uniforms.output_size.1,

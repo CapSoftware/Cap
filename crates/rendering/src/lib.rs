@@ -1,7 +1,7 @@
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
 use cap_flags::FLAGS;
-use decoder::AsyncVideoDecoderHandle;
+use decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle};
 use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
 use cap_project::{
     AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorAnimationStyle,
-    CursorData, CursorMoveEvent, ProjectConfiguration, FAST_SMOOTHING_SAMPLES,
+    CursorData, CursorMoveEvent, ProjectConfiguration, RecordingMeta, FAST_SMOOTHING_SAMPLES,
     FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
     SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
 };
@@ -27,7 +27,7 @@ pub use decoder::DecodedFrame;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
 
-#[derive(Debug, Clone, Type)]
+#[derive(Debug, Clone, Copy, Type)]
 pub struct RenderOptions {
     pub camera_size: Option<XY<u32>>,
     pub screen_size: XY<u32>,
@@ -87,9 +87,16 @@ pub struct RecordingDecoders {
 }
 
 impl RecordingDecoders {
-    pub fn new(screen: AsyncVideoDecoderHandle, camera: Option<AsyncVideoDecoderHandle>) -> Self {
-        RecordingDecoders { screen, camera }
+    pub fn new(meta: &RecordingMeta) -> Self {
+        let screen = AsyncVideoDecoder::spawn(meta.project_path.join(&meta.display.path).clone());
+        let camera = meta
+            .camera
+            .as_ref()
+            .map(|camera| AsyncVideoDecoder::spawn(meta.project_path.join(&camera.path).clone()));
+
+        Self { screen, camera }
     }
+
     pub async fn get_frames(
         &self,
         frame_number: u32,
@@ -117,7 +124,7 @@ impl RecordingDecoders {
 pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
-    sender: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    sender: tokio::sync::mpsc::Sender<Vec<u8>>,
     decoders: RecordingDecoders,
     cursor: Arc<CursorData>,
     project_path: PathBuf, // Add project_path parameter
@@ -176,7 +183,7 @@ pub async fn render_video_to_channel(
                 }
             };
 
-            if sender.send(frame).is_err() {
+            if sender.send(frame).await.is_err() {
                 eprintln!("Failed to send processed frame to channel");
                 break;
             }

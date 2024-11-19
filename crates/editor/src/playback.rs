@@ -1,4 +1,4 @@
-use std::{sync::Arc, sync::Mutex as StdMutex, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use cap_media::data::{AudioInfo, FromSampleBytes};
 use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
@@ -13,7 +13,7 @@ use tokio::{sync::watch, time::Instant};
 use crate::{editor, project_recordings::ProjectRecordings};
 
 pub struct Playback {
-    pub audio: Arc<StdMutex<Option<AudioData>>>,
+    pub audio: Arc<Option<AudioData>>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
     pub decoders: RecordingDecoders,
@@ -63,7 +63,7 @@ impl Playback {
                 .unwrap_or(f64::MAX);
 
             // Lock the mutex and check if audio data is available
-            if let Some(audio_data) = self.audio.lock().unwrap().as_ref() {
+            if let Some(audio_data) = self.audio.as_ref() {
                 AudioPlayback {
                     audio: audio_data.clone(),
                     stop_rx: stop_rx.clone(),
