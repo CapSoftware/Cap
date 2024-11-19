@@ -11,6 +11,7 @@ use crate::web_api;
 #[derive(Serialize, Deserialize, Type, Debug)]
 pub struct AuthStore {
     pub token: String,
+    pub user_id: String,
     pub expires: i32,
     pub plan: Option<Plan>,
 }
