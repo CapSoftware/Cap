@@ -774,6 +774,7 @@ dependencies = [
  "cap-utils",
  "image 0.25.2",
  "mp4",
+ "sentry",
  "tempfile",
  "tokio",
 ]

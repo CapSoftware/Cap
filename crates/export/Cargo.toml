@@ -13,6 +13,7 @@ cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
 
 tokio.workspace = true
+sentry.workspace = true
 tempfile = "3.12.0"
 image = "0.25.2"
 mp4 = "0.14.0"
