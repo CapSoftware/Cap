@@ -59,7 +59,7 @@ use tokio::{
     time::sleep,
 };
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
-use windows::{CapWindow, CapWindowId};
+use windows::{CapWindowId, ShowCapWindow};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -134,7 +134,7 @@ impl App {
         CurrentRecordingChanged(json).emit(&self.handle).ok();
 
         if let ScreenCaptureTarget::Window { .. } = &current_recording.display_source {
-            let _ = CapWindow::WindowCaptureOccluder.show(&self.handle);
+            let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
             self.close_occluder_window();
         }
@@ -160,7 +160,7 @@ impl App {
             }
             None if new_options.camera_label.is_some() => {
                 println!("creating camera window");
-                CapWindow::Camera {
+                ShowCapWindow::Camera {
                     ws_port: self.camera_ws_port,
                 }
                 .show(&self.handle)
@@ -388,7 +388,7 @@ async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result
         window.eval("window.location.reload()").unwrap();
         window.show().unwrap();
     } else {
-        CapWindow::InProgressRecording { position: None }
+        ShowCapWindow::InProgressRecording { position: None }
             .show(&app)
             .ok();
     }
@@ -1313,7 +1313,7 @@ fn show_previous_recordings_window(app: AppHandle) {
         return;
     }
 
-    let window = CapWindow::PrevRecordings.show(&app).unwrap();
+    let window = ShowCapWindow::PrevRecordings.show(&app).unwrap();
 
     tokio::spawn(async move {
         let state = app.state::<FakeWindowBounds>();
@@ -1372,7 +1372,7 @@ fn open_editor(app: AppHandle, id: String) {
         window.close().ok();
     }
 
-    CapWindow::Editor { project_id: id }.show(&app).unwrap();
+    ShowCapWindow::Editor { project_id: id }.show(&app).unwrap();
 }
 
 #[tauri::command(async)]
@@ -1495,19 +1495,19 @@ fn open_main_window(app: AppHandle) {
         return;
     }
 
-    CapWindow::Main.show(&app).ok();
+    ShowCapWindow::Main.show(&app).ok();
 }
 
 #[tauri::command]
 #[specta::specta]
 async fn open_upgrade_window(app: AppHandle) {
-    CapWindow::Upgrade.show(&app).ok();
+    ShowCapWindow::Upgrade.show(&app).ok();
 }
 
 #[tauri::command]
 #[specta::specta]
 async fn open_settings_window(app: AppHandle, page: String) {
-    CapWindow::Settings { page: Some(page) }.show(&app);
+    ShowCapWindow::Settings { page: Some(page) }.show(&app);
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
@@ -2276,7 +2276,7 @@ pub async fn run() {
 
     builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = CapWindow::Main.show(app);
+            let _ = ShowCapWindow::Main.show(app);
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -2314,11 +2314,11 @@ pub async fn run() {
                     .map(|s| !s.has_completed_startup)
                     .unwrap_or(false)
             {
-                CapWindow::Setup.show(&app_handle).ok();
+                ShowCapWindow::Setup.show(&app_handle).ok();
             } else {
                 println!("Permissions granted, showing main window");
 
-                CapWindow::Main.show(&app_handle).ok();
+                ShowCapWindow::Main.show(&app_handle).ok();
             }
 
             audio_meter::spawn_event_emitter(app_handle.clone(), audio_input_rx);
@@ -2441,7 +2441,7 @@ pub async fn run() {
                 WindowEvent::Destroyed => {
                     match CapWindowId::from_label(label) {
                         CapWindowId::Main => {
-                            if let Some(w) = (CapWindow::Camera { ws_port: 0 }).get(app) {
+                            if let Some(w) = CapWindowId::Camera.get(app) {
                                 w.close().ok();
                             }
                         }

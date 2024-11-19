@@ -8,7 +8,7 @@ use tauri::{
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
 #[derive(Clone)]
-pub enum CapWindow {
+pub enum ShowCapWindow {
     Setup,
     Main,
     Settings { page: Option<String> },
@@ -101,14 +101,9 @@ impl CapWindowId {
     }
 }
 
-impl CapWindow {
-    pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
-        let label = self.id().label();
-        app.get_webview_window(&label)
-    }
-
+impl ShowCapWindow {
     pub fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
-        if let Some(window) = self.get(app) {
+        if let Some(window) = self.id().get(app) {
             window.show().ok();
             window.set_focus().ok();
 
@@ -363,17 +358,17 @@ impl CapWindow {
 
     pub fn id(&self) -> CapWindowId {
         match self {
-            CapWindow::Setup => CapWindowId::Setup,
-            CapWindow::Main => CapWindowId::Main,
-            CapWindow::Settings { .. } => CapWindowId::Settings,
-            CapWindow::Editor { project_id } => CapWindowId::Editor {
+            ShowCapWindow::Setup => CapWindowId::Setup,
+            ShowCapWindow::Main => CapWindowId::Main,
+            ShowCapWindow::Settings { .. } => CapWindowId::Settings,
+            ShowCapWindow::Editor { project_id } => CapWindowId::Editor {
                 project_id: project_id.clone(),
             },
-            CapWindow::PrevRecordings => CapWindowId::PrevRecordings,
-            CapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
-            CapWindow::Camera { .. } => CapWindowId::Camera,
-            CapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
-            CapWindow::Upgrade => CapWindowId::Upgrade,
+            ShowCapWindow::PrevRecordings => CapWindowId::PrevRecordings,
+            ShowCapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
+            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
+            ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
+            ShowCapWindow::Upgrade => CapWindowId::Upgrade,
         }
     }
 }
