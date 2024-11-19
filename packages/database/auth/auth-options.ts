@@ -3,6 +3,7 @@ import { DrizzleAdapter } from "./drizzle-adapter";
 import { db } from "../";
 import { users } from "../schema";
 import EmailProvider from "next-auth/providers/email";
+import GoogleProvider from "next-auth/providers/google";
 import type { NextAuthOptions } from "next-auth";
 import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
@@ -27,6 +28,19 @@ export const authOptions: NextAuthOptions = {
     signIn: "/login",
   },
   providers: [
+    GoogleProvider({
+      clientId: process.env.GOOGLE_CLIENT_ID!,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      authorization: {
+        params: {
+          scope: [
+            'https://www.googleapis.com/auth/userinfo.email',
+            'https://www.googleapis.com/auth/userinfo.profile',
+          ].join(' '),
+          prompt: "select_account"
+        }
+      }
+    }),
     EmailProvider({
       sendVerificationRequest({ identifier, url }) {
         console.log({ NODE_ENV: process.env.NODE_ENV });
