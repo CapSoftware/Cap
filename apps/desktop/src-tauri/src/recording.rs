@@ -38,6 +38,10 @@ pub fn list_cameras() -> Vec<String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    sentry::configure_scope(|scope| {
+        scope.set_tag("cmd", "start_recording");
+    });
+
     let mut state = state.write().await;
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -56,6 +60,10 @@ pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Re
         .unwrap_or(false);
 
     if auto_create_shareable_link {
+        sentry::configure_scope(|scope| {
+            scope.set_tag("task", "auto_create_shareable_link");
+        });
+
         if let Ok(Some(auth)) = AuthStore::get(&app) {
             if auth.is_upgraded() {
                 // Pre-create the video and get the shareable link
@@ -131,6 +139,10 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 #[tauri::command]
 #[specta::specta]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
+    sentry::configure_scope(|scope| {
+        scope.set_tag("cmd", "stop_recording");
+    });
+
     let mut state = state.write().await;
     let Some(current_recording) = state.clear_current_recording() else {
         return Err("Recording not in progress".to_string())?;

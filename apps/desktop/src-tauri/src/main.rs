@@ -16,8 +16,11 @@ fn main() {
                     {
                         let msg = event.message.clone().unwrap_or("No message".into());
                         println!("Sentry captured {}: {}", &event.level, &msg);
-                        println!("Sentry user: {:?}", &event.user);
+                        println!("-- user: {:?}", &event.user);
+                        println!("-- event tags: {:?}", &event.tags);
+                        println!("-- event contexts: {:?}", &event.contexts);
                         Some(event)
+                        // None
                     }
 
                     #[cfg(not(debug_assertions))]

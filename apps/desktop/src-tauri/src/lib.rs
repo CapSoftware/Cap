@@ -133,6 +133,10 @@ impl App {
     }
 
     async fn set_start_recording_options(&mut self, new_options: RecordingOptions) {
+        sentry::configure_scope(|scope| {
+            scope.set_tag("cmd", "set_start_recording_options");
+        });
+
         match CapWindowId::Camera.get(&self.handle) {
             Some(window) if new_options.camera_label().is_none() => {
                 println!("closing camera window");
@@ -566,6 +570,10 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
 #[tauri::command]
 #[specta::specta]
 async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(), String> {
+    sentry::configure_scope(|scope| {
+        scope.set_tag("cmd", "copy_screenshot_to_clipboard");
+    });
+
     println!("Copying screenshot to clipboard: {:?}", path);
 
     let image_data = match tokio::fs::read(&path).await {
@@ -622,6 +630,7 @@ async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(
         );
     }
 
+    // TODO(Ilya) (Windows) Add support
     #[cfg(not(target_os = "macos"))]
     {
         notifications::send_notification(

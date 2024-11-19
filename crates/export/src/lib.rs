@@ -23,6 +23,10 @@ pub async fn export_video_to_file(
     render_constants: Arc<RenderVideoConstants>,
     cursor: Arc<CursorData>,
 ) -> Result<PathBuf, String> {
+    sentry::configure_scope(|scope| {
+        scope.set_tag("task", "export_video_to_file");
+    });
+
     let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
 
     let output_folder = output_path.parent().unwrap();
