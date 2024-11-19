@@ -1858,6 +1858,7 @@ pub async fn run() {
             send_feedback_request,
             windows::position_traffic_lights,
             reupload_rendered_video,
+            set_sentry_user,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2369,4 +2370,17 @@ async fn reupload_rendered_video(
             Err(e)
         }
     }
+}
+
+#[tauri::command]
+#[specta::specta]
+fn set_sentry_user(app: AppHandle, user_id: Option<String>) {
+    let _ = app.run_on_main_thread(|| {
+        sentry::configure_scope(|scope| {
+            scope.set_user(Some(sentry::User {
+                id: user_id,
+                ..Default::default()
+            }));
+        });
+    });
 }

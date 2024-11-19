@@ -1,10 +1,11 @@
 import { Store } from "@tauri-apps/plugin-store";
 
-import type {
-  AuthStore,
-  ProjectConfiguration,
-  HotkeysStore,
-  GeneralSettingsStore,
+import {
+  type AuthStore,
+  type ProjectConfiguration,
+  type HotkeysStore,
+  type GeneralSettingsStore,
+  commands,
 } from "~/utils/tauri";
 
 let _store: Promise<Store> | undefined;
@@ -41,6 +42,7 @@ export const authStore = {
     const s = await store();
     await s.set("auth", value);
     await s.save();
+    commands.setSentryUser(value?.user_id ?? null);
   },
   listen: (fn: (data?: AuthStore | undefined) => void) =>
     store().then((s) => s.onKeyChange<AuthStore>("presets", fn)),

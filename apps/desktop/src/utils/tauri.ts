@@ -163,6 +163,9 @@ async positionTrafficLights(controlsInset: [number, number] | null) : Promise<vo
 },
 async reuploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<UploadResult> {
     return await TAURI_INVOKE("reupload_rendered_video", { videoId, project });
+},
+async setSentryUser(userId: string | null) : Promise<void> {
+    await TAURI_INVOKE("set_sentry_user", { userId });
 }
 }
 
