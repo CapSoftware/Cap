@@ -44,6 +44,7 @@ use specta::Type;
 use std::fs::File;
 use std::io::BufWriter;
 use std::io::{BufReader, Write};
+use std::str::FromStr;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{
     collections::HashMap, marker::PhantomData, path::PathBuf, process::Command, sync::Arc,
@@ -2439,7 +2440,7 @@ pub async fn run() {
 
             match event {
                 WindowEvent::Destroyed => {
-                    match CapWindowId::from_label(label) {
+                    match CapWindowId::from_str(label).unwrap() {
                         CapWindowId::Main => {
                             if let Some(w) = CapWindowId::Camera.get(app) {
                                 w.close().ok();
@@ -2461,10 +2462,9 @@ pub async fn run() {
 
                     if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None) {
                         if settings.hide_dock_icon
-                            && app
-                                .webview_windows()
-                                .keys()
-                                .all(|label| !CapWindowId::from_label(label).activates_dock())
+                            && app.webview_windows().keys().all(|label| {
+                                !CapWindowId::from_str(label).unwrap().activates_dock()
+                            })
                         {
                             #[cfg(target_os = "macos")]
                             app.set_activation_policy(tauri::ActivationPolicy::Accessory)
@@ -2473,7 +2473,7 @@ pub async fn run() {
                     }
                 }
                 WindowEvent::Focused(focused) if *focused => {
-                    if CapWindowId::from_label(label).activates_dock() {
+                    if CapWindowId::from_str(label).unwrap().activates_dock() {
                         #[cfg(target_os = "macos")]
                         app.set_activation_policy(tauri::ActivationPolicy::Regular)
                             .ok();

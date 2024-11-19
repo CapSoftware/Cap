@@ -1,19 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
-use cap_media::platform::{AVAuthorizationStatus, AVMediaType};
-#[cfg(target_os = "macos")]
-use core_foundation::boolean::CFBoolean;
-#[cfg(target_os = "macos")]
-use core_foundation::dictionary::{CFDictionary, CFDictionaryRef}; // Import CFDictionaryRef
-#[cfg(target_os = "macos")]
-use core_foundation::string::CFString;
-
-#[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
-    fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
+    fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef)
+        -> bool;
 }
 
 #[derive(Serialize, Deserialize, specta::Type)]
@@ -66,6 +58,8 @@ pub fn open_permission_settings(permission: OSPermission) {
 pub async fn request_permission(permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
+        use cap_media::platform::AVMediaType;
+
         match permission {
             OSPermission::ScreenRecording => {
                 scap::request_permission();
@@ -78,7 +72,7 @@ pub async fn request_permission(permission: OSPermission) {
 }
 
 #[cfg(target_os = "macos")]
-fn request_av_permission(media_type: AVMediaType) {
+fn request_av_permission(media_type: cap_media::platform::AVMediaType) {
     use objc::{runtime::*, *};
     use tauri_nspanel::block::ConcreteBlock;
 
@@ -133,6 +127,22 @@ impl OSPermissionsCheck {
 pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
     #[cfg(target_os = "macos")]
     {
+        use cap_media::platform::AVMediaType;
+
+        fn check_av_permission(media_type: AVMediaType) -> OSPermissionStatus {
+            use cap_media::platform::AVAuthorizationStatus;
+            use objc::*;
+
+            let cls = objc::class!(AVCaptureDevice);
+            let status: AVAuthorizationStatus =
+                unsafe { msg_send![cls, authorizationStatusForMediaType:media_type.into_ns_str()] };
+            match status {
+                AVAuthorizationStatus::NotDetermined => OSPermissionStatus::Empty,
+                AVAuthorizationStatus::Authorized => OSPermissionStatus::Granted,
+                _ => OSPermissionStatus::Denied,
+            }
+        }
+
         OSPermissionsCheck {
             screen_recording: {
                 let result = scap::has_permission();
@@ -159,20 +169,6 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
     }
 }
 
-#[cfg(target_os = "macos")]
-pub fn check_av_permission(media_type: AVMediaType) -> OSPermissionStatus {
-    use objc::*;
-
-    let cls = objc::class!(AVCaptureDevice);
-    let status: AVAuthorizationStatus =
-        unsafe { msg_send![cls, authorizationStatusForMediaType:media_type.into_ns_str()] };
-    match status {
-        AVAuthorizationStatus::NotDetermined => OSPermissionStatus::Empty,
-        AVAuthorizationStatus::Authorized => OSPermissionStatus::Granted,
-        _ => OSPermissionStatus::Denied,
-    }
-}
-
 pub fn check_accessibility_permission() -> OSPermissionStatus {
     #[cfg(target_os = "macos")]
     {
@@ -193,9 +189,11 @@ pub fn request_accessibility_permission() {
     #[cfg(target_os = "macos")]
     {
         use core_foundation::base::TCFType;
+        use core_foundation::dictionary::CFDictionary; // Import CFDictionaryRef
+        use core_foundation::string::CFString;
 
         let prompt_key = CFString::new("AXTrustedCheckOptionPrompt");
-        let prompt_value = CFBoolean::true_value();
+        let prompt_value = core_foundation::boolean::CFBoolean::true_value();
 
         let options =
             CFDictionary::from_CFType_pairs(&[(prompt_key.as_CFType(), prompt_value.as_CFType())]);
