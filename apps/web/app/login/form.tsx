@@ -55,7 +55,7 @@ export function LoginForm() {
   return (
     <>
       <div className="flex flex-col space-y-3 fade-in-down animate-delay-2">
-        {process.env.NODE_ENV === "development" && !oauthError && (
+        {process.env.NODE_ENV !== "development" && !oauthError && (
           <>
             <Button
               variant="dark"
