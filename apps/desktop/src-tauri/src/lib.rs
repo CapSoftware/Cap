@@ -1943,8 +1943,6 @@ pub async fn run() {
                 check_notification_permissions(&notification_handle).await;
             });
 
-            ShowCapWindow::Setup.show(&app_handle).ok();
-
             println!("Checking startup completion and permissions...");
             let permissions = permissions::do_permissions_check(false);
             println!("Permissions check result: {:?}", permissions);
