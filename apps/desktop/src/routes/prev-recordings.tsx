@@ -27,7 +27,6 @@ import { Channel } from "@tauri-apps/api/core";
 import {
   commands,
   events,
-  Result,
   UploadResult,
   type RenderProgress,
 } from "~/utils/tauri";
@@ -132,7 +131,7 @@ export default function () {
 
   return (
     <div
-      class="w-screen h-[100vh] bg-transparent relative"
+      class="w-screen h-[100vh] bg-transparent relative overflow-y-hidden"
       style={{
         "scrollbar-color": "auto transparent",
       }}
@@ -147,7 +146,7 @@ export default function () {
             exitActiveClass="absolute"
           >
             <For each={allMedia()}>
-              {(media) => {
+              {(media, i) => {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
                 const normalizedPath = media.path.replace(/\\/g, "/");
                 const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
@@ -186,66 +185,49 @@ export default function () {
 
                     try {
                       if (isRecording) {
-                        const output_path = await commands.getRenderedVideo(
+                        console.log("Setting up render progress channel");
+                        const progress = new Channel<RenderProgress>();
+                        progress.onmessage = (p) => {
+                          console.log("Progress channel message:", p);
+                          if (
+                            p.type === "FrameRendered" &&
+                            progressState.type === "copying"
+                          ) {
+                            console.log(
+                              "Frame rendered in copy:",
+                              p.current_frame,
+                              "Current state:",
+                              progressState
+                            );
+                            setProgressState({
+                              ...progressState,
+                              renderProgress: p.current_frame,
+                            });
+                          }
+                          if (
+                            p.type === "EstimatedTotalFrames" &&
+                            progressState.type === "copying"
+                          ) {
+                            console.log(
+                              "Got total frames in copy:",
+                              p.total_frames
+                            );
+                            setProgressState({
+                              ...progressState,
+                              totalFrames: p.total_frames,
+                            });
+                          }
+                        };
+
+                        console.log("Starting render to file");
+                        const outputPath = await commands.renderToFile(
                           mediaId,
-                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+                          progress
                         );
+                        console.log("Render to file completed");
 
-                        if (output_path) {
-                          await commands.copyRenderedVideoToClipboard(
-                            mediaId,
-                            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                          );
-                        } else {
-                          console.log("Setting up render progress channel");
-                          const progress = new Channel<RenderProgress>();
-                          progress.onmessage = (p) => {
-                            console.log("Progress channel message:", p);
-                            if (
-                              p.type === "FrameRendered" &&
-                              progressState.type === "copying"
-                            ) {
-                              console.log(
-                                "Frame rendered in copy:",
-                                p.current_frame,
-                                "Current state:",
-                                progressState
-                              );
-                              setProgressState({
-                                ...progressState,
-                                renderProgress: p.current_frame,
-                              });
-                            }
-                            if (
-                              p.type === "EstimatedTotalFrames" &&
-                              progressState.type === "copying"
-                            ) {
-                              console.log(
-                                "Got total frames in copy:",
-                                p.total_frames
-                              );
-                              setProgressState({
-                                ...progressState,
-                                totalFrames: p.total_frames,
-                              });
-                            }
-                          };
-
-                          console.log("Starting render to file");
-                          await commands.renderToFile(
-                            output_path,
-                            mediaId,
-                            presets.getDefaultConfig() ??
-                              DEFAULT_PROJECT_CONFIG,
-                            progress
-                          );
-                          console.log("Render to file completed");
-
-                          await commands.copyRenderedVideoToClipboard(
-                            mediaId,
-                            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                          );
-                        }
+                        await commands.copyVideoToClipboard(outputPath);
                       } else {
                         await commands.copyScreenshotToClipboard(media.path);
                       }
@@ -332,13 +314,7 @@ export default function () {
                           }
                         };
 
-                        const output_path = await commands.getRenderedVideo(
-                          mediaId,
-                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                        );
-
-                        await commands.renderToFile(
-                          output_path,
+                        const output_path = await commands.renderToFile(
                           mediaId,
                           presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
                           progress
@@ -433,13 +409,7 @@ export default function () {
                           }
                         };
 
-                        const output_path = await commands.getRenderedVideo(
-                          mediaId,
-                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                        );
-
                         await commands.renderToFile(
-                          output_path,
                           mediaId,
                           presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
                           progress

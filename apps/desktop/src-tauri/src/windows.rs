@@ -287,7 +287,7 @@ impl ShowCapWindow {
                     .accept_first_mouse(true)
                     .content_protected(true)
                     .inner_size(
-                        350.0,
+                        (monitor.size().width as f64) / monitor.scale_factor(),
                         (monitor.size().height as f64) / monitor.scale_factor(),
                     )
                     .skip_taskbar(true)

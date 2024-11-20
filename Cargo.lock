@@ -771,6 +771,7 @@ dependencies = [
  "image 0.25.2",
  "mp4",
  "tempfile",
+ "thiserror",
  "tokio",
 ]
 
@@ -781,6 +782,7 @@ dependencies = [
  "nix 0.29.0",
  "tauri",
  "tauri-plugin-shell",
+ "tokio",
 ]
 
 [[package]]
@@ -881,6 +883,7 @@ dependencies = [
  "nix 0.29.0",
  "serde",
  "specta",
+ "thiserror",
  "tokio",
  "wgpu",
 ]

@@ -56,8 +56,8 @@ async focusCapturesPanel() : Promise<void> {
 async getCurrentRecording() : Promise<JsonValue<RecordingInfo | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
-async renderToFile(outputPath: string, videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<void> {
-    await TAURI_INVOKE("render_to_file", { outputPath, videoId, project, progressChannel });
+async renderToFile(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
+    return await TAURI_INVOKE("render_to_file", { videoId, project, progressChannel });
 },
 async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<string> {
     return await TAURI_INVOKE("get_rendered_video", { videoId, project });
@@ -65,8 +65,8 @@ async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
 },
-async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguration) : Promise<null> {
-    return await TAURI_INVOKE("copy_rendered_video_to_clipboard", { videoId, project });
+async copyVideoToClipboard(path: string) : Promise<null> {
+    return await TAURI_INVOKE("copy_video_to_clipboard", { path });
 },
 async copyScreenshotToClipboard(path: string) : Promise<null> {
     return await TAURI_INVOKE("copy_screenshot_to_clipboard", { path });
@@ -163,6 +163,9 @@ async positionTrafficLights(controlsInset: [number, number] | null) : Promise<vo
 },
 async reuploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<UploadResult> {
     return await TAURI_INVOKE("reupload_rendered_video", { videoId, project });
+},
+async globalMessageDialog(message: string) : Promise<void> {
+    await TAURI_INVOKE("global_message_dialog", { message });
 }
 }
 

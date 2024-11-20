@@ -1,4 +1,4 @@
-use std::{ffi::OsString, path::PathBuf};
+use std::{ffi::OsString, fs::OpenOptions, path::PathBuf};
 
 #[cfg(windows)]
 pub fn get_last_win32_error_formatted() -> String {
@@ -52,14 +52,19 @@ pub fn create_channel_named_pipe(
 
         let path = unix_path.clone();
         tokio::spawn(async move {
-            let mut file = std::fs::File::create(&path).unwrap();
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(false)
+                .truncate(true)
+                .open(&path)?;
             println!("video pipe opened");
 
             while let Some(bytes) = rx.recv().await {
-                file.write_all(&bytes).unwrap();
+                file.write_all(&bytes)?;
             }
 
             println!("done writing to video pipe");
+            Ok::<(), std::io::Error>(())
         });
 
         unix_path.into_os_string()
