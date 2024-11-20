@@ -1085,6 +1085,10 @@ async fn render_to_file(
     project: ProjectConfiguration,
     progress_channel: tauri::ipc::Channel<RenderProgress>,
 ) {
+    sentry::configure_scope(|scope| {
+        scope.set_tag("cmd", "render_to_file");
+    });
+
     let (duration, _size) =
         get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
             .await
@@ -1095,7 +1099,7 @@ async fn render_to_file(
 
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
 
-    cap_export::export_video_to_file(
+    let export_result = cap_export::export_video_to_file(
         project,
         output_path,
         move |current_frame| {
@@ -1114,8 +1118,10 @@ async fn render_to_file(
         editor_instance.render_constants.clone(),
         editor_instance.cursor.clone(),
     )
-    .await
-    .ok();
+    .await;
+    if let Err(err) = export_result {
+        sentry::capture_message(&err, sentry::Level::Error);
+    }
 
     ShowCapturesPanel.emit(&app).ok();
 }

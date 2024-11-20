@@ -38,7 +38,7 @@ impl EditorInstance {
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
     ) -> Arc<Self> {
         sentry::configure_scope(|scope| {
-            scope.set_tag("window", "editor");
+            scope.set_tag("crate", "editor");
         });
 
         let project_path = projects_path.join(format!(
