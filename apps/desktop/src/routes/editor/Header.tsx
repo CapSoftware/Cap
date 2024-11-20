@@ -209,7 +209,7 @@ function ExportButton() {
         renderProgress: 0,
         totalFrames: 0,
         message: "Preparing to render...",
-        mediaPath: p,
+        mediaPath: path,
         stage: "rendering",
       });
 

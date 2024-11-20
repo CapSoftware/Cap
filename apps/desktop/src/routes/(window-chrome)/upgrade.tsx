@@ -9,7 +9,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 export default function Page() {
   const proFeatures = [
     "Unlimited cloud storage & Shareable links",
-    "Connect custom S3 storage bucket (soon!)",
+    "Connect custom S3 storage bucket",
     "Advanced teams features",
     "Unlimited views",
     "Password protected videos",
@@ -105,20 +105,23 @@ export default function Page() {
       {!upgradeComplete() && (
         <>
           <div class="text-center">
-            <h1 class="text-4xl md:text-5xl mb-3 tracking-[-.05em] font-medium">
+            <h1 class="text-4xl md:text-4xl mb-3 tracking-[-.05em] font-medium">
               Upgrade to Cap Pro
             </h1>
             <p class="text-base font-normal leading-6 text-gray-400">
               Cap is currently in public beta, and we're offering special early
-              adopter pricing to our first users. This pricing will be locked in
-              for the lifetime of your subscription.
+              adopter pricing to our first users.{" "}
+              <span class="text-gray-500">
+                This pricing will be locked in for the lifetime of your
+                subscription.
+              </span>
             </p>
           </div>
           <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100">
-            <div class="border text-card-foreground shadow-sm bg-blue-300 p-3 md:p-8 rounded-xl flex-grow border-blue-500/20">
+            <div class="border text-card-foreground shadow-sm bg-blue-300 p-3 md:p-3 rounded-xl flex-grow border-blue-500/20">
               <div class="space-y-3">
                 <div class="flex flex-col space-y-1.5 pt-6 px-6 pb-3">
-                  <h3 class="font-medium tracking-tight text-3xl text-gray-50">
+                  <h3 class="font-medium tracking-tight text-2xl text-gray-50">
                     Cap Pro — Early Adopter Pricing
                   </h3>
                   <p class="text-[0.875rem] leading-[1.25rem] text-gray-50/80">

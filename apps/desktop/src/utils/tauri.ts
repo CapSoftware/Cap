@@ -62,6 +62,12 @@ async renderToFile(videoId: string, project: ProjectConfiguration, progressChann
 async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<string> {
     return await TAURI_INVOKE("get_rendered_video", { videoId, project });
 },
+async getRenderedVideoWithProgress(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
+    return await TAURI_INVOKE("get_rendered_video_with_progress", { videoId, project, progressChannel });
+},
+async renderVideoWithProgress(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
+    return await TAURI_INVOKE("render_video_with_progress", { videoId, project, progressChannel });
+},
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
 },
