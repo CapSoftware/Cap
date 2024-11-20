@@ -191,70 +191,63 @@ import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
 
-  return (
-    <>
-      <Button
-        variant="primary"
-        size="md"
-        onClick={() => {
-          save({
-            filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-            defaultPath: `~/Desktop/${prettyName()}.mp4`,
-          }).then((p) => {
-            if (!p) return;
+  const exportVideo = createMutation(() => ({
+    mutationFn: async () => {
+      const path = await save({
+        filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
+        defaultPath: `~/Desktop/${prettyName()}.mp4`,
+      });
+      if (!path) return;
 
-            setProgressState({
-              type: "saving",
-              progress: 0,
-              renderProgress: 0,
-              totalFrames: 0,
-              message: "Preparing to render...",
-              mediaPath: p,
-              stage: "rendering",
-            });
+      setProgressState({
+        type: "saving",
+        progress: 0,
+        renderProgress: 0,
+        totalFrames: 0,
+        message: "Preparing to render...",
+        mediaPath: path,
+        stage: "rendering",
+      });
 
-            const progress = new Channel<RenderProgress>();
-            progress.onmessage = (p) => {
-              if (
-                p.type === "FrameRendered" &&
-                progressState.type === "saving"
-              ) {
-                setProgressState({
-                  ...progressState,
-                  renderProgress: p.current_frame,
-                });
-              }
-              if (
-                p.type === "EstimatedTotalFrames" &&
-                progressState.type === "saving"
-              ) {
-                setProgressState({
-                  ...progressState,
-                  totalFrames: p.total_frames,
-                });
-              }
-            };
-
-            return commands
-              .renderToFile(p, videoId, project, progress)
-              .then(() => {
-                setProgressState({
-                  type: "saving",
-                  progress: 100,
-                  message: "Saved successfully!",
-                  mediaPath: p,
-                });
-
-                setTimeout(() => {
-                  setProgressState({ type: "idle" });
-                }, 1500);
-              });
+      const progress = new Channel<RenderProgress>();
+      progress.onmessage = (p) => {
+        if (p.type === "FrameRendered" && progressState.type === "saving") {
+          setProgressState({
+            ...progressState,
+            renderProgress: p.current_frame,
           });
-        }}
-      >
-        Export
-      </Button>
-    </>
+        }
+        if (
+          p.type === "EstimatedTotalFrames" &&
+          progressState.type === "saving"
+        ) {
+          setProgressState({
+            ...progressState,
+            totalFrames: p.total_frames,
+          });
+        }
+      };
+
+      const videoPath = await commands.renderToFile(videoId, project, progress);
+      await commands.copyFileToPath(videoPath, path);
+
+      setProgressState({
+        type: "saving",
+        progress: 100,
+        message: "Saved successfully!",
+        mediaPath: path,
+      });
+
+      setTimeout(() => {
+        setProgressState({ type: "idle" });
+      }, 1500);
+    },
+  }));
+
+  return (
+    <Button variant="primary" size="md" onClick={() => exportVideo.mutate()}>
+      Export
+    </Button>
   );
 }
 

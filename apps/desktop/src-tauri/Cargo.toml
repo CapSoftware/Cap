@@ -65,6 +65,7 @@ global-hotkey = "0.6.3"
 rand = "0.8.5"
 cpal.workspace = true
 keyed_priority_queue = "0.4.2"
+sentry.workspace = true
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }

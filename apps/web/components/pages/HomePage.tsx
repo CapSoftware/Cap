@@ -8,6 +8,7 @@ import { ParallaxProvider } from "react-scroll-parallax";
 import { Button } from "@cap/ui";
 import Link from "next/link";
 import { useEffect } from "react";
+import { LogoSection } from "./_components/LogoSection";
 
 export const HomePage = () => {
   useEffect(() => {
@@ -193,6 +194,7 @@ export const HomePage = () => {
           />
         </Parallax>
       </div>
+      <LogoSection />
       <div className="wrapper pb-32 md:pb-40">
         <div className="mb-4">
           <svg

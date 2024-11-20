@@ -7,7 +7,7 @@ export const PrivacyPage = () => {
         <h1 className=" text-3xl md:text-4xl fade-in-down animate-delay-1">
           Privacy Policy
         </h1>
-        <p className="text-lg text-gray-600 max-w-lg mx-auto fade-in-down animate-delay-2">
+        <p className="text-lg text-gray-400 max-w-lg mx-auto fade-in-down animate-delay-2">
           We've tried to make this privacy policy as simple and digestible as
           possible. If you have any questions, please don't hesitate to reach
           out to us.

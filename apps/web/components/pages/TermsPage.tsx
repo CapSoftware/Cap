@@ -7,7 +7,7 @@ export const TermsPage = () => {
         <h1 className=" text-3xl md:text-4xl fade-in-down animate-delay-1">
           Terms of Service
         </h1>
-        <p className="text-lg text-gray-600 max-w-lg mx-auto fade-in-down animate-delay-2">
+        <p className="text-lg text-gray-400 max-w-lg mx-auto fade-in-down animate-delay-2">
           We've tried to make this terms of service policy as simple and
           digestible as possible. If you have any questions, please don't
           hesitate to reach out to us.
@@ -84,6 +84,17 @@ export const TermsPage = () => {
                 d. Attempt to gain unauthorized access to any portion of our
                 Services or any other accounts, computer systems, or networks
                 connected to our Services.
+              </li>
+              <li>
+                <h3>Use of Company Logos</h3>
+                <br />
+                By using our Services, you agree that Cap may use your company’s
+                name and logo for marketing and promotional purposes, including
+                but not limited to displaying your logo on our website,
+                presentations, and promotional materials, to indicate you as a
+                user or customer of our Services. If you do not wish for your
+                company’s name or logo to be used for such purposes, you may opt
+                out by contacting us at hello@cap.so.
               </li>
               <li>
                 <h3>Privacy</h3>

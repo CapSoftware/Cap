@@ -56,17 +56,23 @@ async focusCapturesPanel() : Promise<void> {
 async getCurrentRecording() : Promise<JsonValue<RecordingInfo | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
-async renderToFile(outputPath: string, videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<void> {
-    await TAURI_INVOKE("render_to_file", { outputPath, videoId, project, progressChannel });
+async renderToFile(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
+    return await TAURI_INVOKE("render_to_file", { videoId, project, progressChannel });
 },
 async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<string> {
     return await TAURI_INVOKE("get_rendered_video", { videoId, project });
 },
+async getRenderedVideoWithProgress(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
+    return await TAURI_INVOKE("get_rendered_video_with_progress", { videoId, project, progressChannel });
+},
+async renderVideoWithProgress(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
+    return await TAURI_INVOKE("render_video_with_progress", { videoId, project, progressChannel });
+},
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
 },
-async copyRenderedVideoToClipboard(videoId: string, project: ProjectConfiguration) : Promise<null> {
-    return await TAURI_INVOKE("copy_rendered_video_to_clipboard", { videoId, project });
+async copyVideoToClipboard(path: string) : Promise<null> {
+    return await TAURI_INVOKE("copy_video_to_clipboard", { path });
 },
 async copyScreenshotToClipboard(path: string) : Promise<null> {
     return await TAURI_INVOKE("copy_screenshot_to_clipboard", { path });
@@ -163,6 +169,9 @@ async positionTrafficLights(controlsInset: [number, number] | null) : Promise<vo
 },
 async reuploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<UploadResult> {
     return await TAURI_INVOKE("reupload_rendered_video", { videoId, project });
+},
+async globalMessageDialog(message: string) : Promise<void> {
+    await TAURI_INVOKE("global_message_dialog", { message });
 }
 }
 
@@ -222,7 +231,7 @@ export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string }
-export type AuthStore = { token: string; expires: number; plan: Plan | null }
+export type AuthStore = { token: string; user_id: string; expires: number; plan: Plan | null }
 export type AuthenticationInvalid = null
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
 export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
