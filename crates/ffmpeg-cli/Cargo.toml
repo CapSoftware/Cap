@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 tauri = { workspace = true }
 tauri-plugin-shell = "2.0.0"
+tokio.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["signal"] }

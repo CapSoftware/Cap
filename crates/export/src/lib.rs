@@ -13,6 +13,21 @@ struct AudioRender {
 
 const FPS: u32 = 30;
 
+#[derive(thiserror::Error, Debug)]
+pub enum ExportError {
+    #[error("FFmpeg: {0}")]
+    FFmpeg(String),
+
+    #[error("IO: {0}")]
+    IO(#[from] std::io::Error),
+
+    #[error("FFmpeg Task: {0}")]
+    FFmpegTask(#[from] tokio::task::JoinError),
+
+    #[error("Rendering: {0}")]
+    Rendering(#[from] cap_rendering::RenderingError),
+}
+
 pub async fn export_video_to_file(
     project: ProjectConfiguration,
     output_path: PathBuf,
@@ -22,18 +37,16 @@ pub async fn export_video_to_file(
     meta: RecordingMeta,
     render_constants: Arc<RenderVideoConstants>,
     cursor: Arc<CursorData>,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, ExportError> {
     let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
 
     let output_folder = output_path.parent().unwrap();
-    std::fs::create_dir_all(output_folder)
-        .map_err(|e| format!("Failed to create output directory: {:?}", e))?;
+    std::fs::create_dir_all(output_folder)?;
 
     let output_size = ProjectUniforms::get_output_size(&render_constants.options, &project);
 
     let ffmpeg_handle = tokio::spawn({
         let project = project.clone();
-        let output_path = output_path.clone();
         let project_path = project_path.clone();
         async move {
             println!("Starting FFmpeg output process...");
@@ -95,44 +108,65 @@ pub async fn export_video_to_file(
             let mut first_frame = None;
 
             loop {
-                match rx_image_data.recv().await {
-                    Some(frame) => {
-                        on_progress(frame_count);
-
-                        if frame_count == 0 {
-                            first_frame = Some(frame.clone());
-                        }
-
-                        if let Some(audio) = &mut audio {
-                            if frame_count == 0 {
-                                audio.buffer.set_playhead(0., project.timeline());
+                tokio::select! {
+                    result = ffmpeg_process.wait() => {
+                        match result {
+                            Err(e) => Err(ExportError::FFmpeg(e.to_string())),
+                            Ok(status) => {
+                                if status.success() {
+                                    Ok(())
+                                } else {
+                                    Err(ExportError::FFmpeg(
+                                        ffmpeg_process
+                                            .read_stderr()
+                                            .await
+                                            .unwrap_or_else(|_| "Failed to read FFmpegg error".to_string())
+                                    ))
+                                }
                             }
-
-                            let audio_info = audio.buffer.info();
-                            let estimated_samples_per_frame =
-                                f64::from(audio_info.sample_rate) / f64::from(FPS);
-                            let samples = estimated_samples_per_frame.ceil() as usize;
-
-                            if let Some((_, frame_data)) =
-                                audio.buffer.next_frame_data(samples, project.timeline())
-                            {
-                                let frame_samples = frame_data.to_vec();
-                                audio.pipe_tx.send(frame_samples).await.unwrap();
-                            }
-                        }
-
-                        video_tx.send(frame).await.unwrap();
-
-                        frame_count += 1;
+                        }?;
                     }
-                    None => {
-                        println!("All frames sent to FFmpeg");
-                        break;
+                    frame = rx_image_data.recv()  => {
+                        match frame {
+                            Some(frame) => {
+                                on_progress(frame_count);
+
+                                if frame_count == 0 {
+                                    first_frame = Some(frame.clone());
+                                }
+
+                                if let Some(audio) = &mut audio {
+                                    if frame_count == 0 {
+                                        audio.buffer.set_playhead(0., project.timeline());
+                                    }
+
+                                    let audio_info = audio.buffer.info();
+                                    let estimated_samples_per_frame =
+                                        f64::from(audio_info.sample_rate) / f64::from(FPS);
+                                    let samples = estimated_samples_per_frame.ceil() as usize;
+
+                                    if let Some((_, frame_data)) =
+                                        audio.buffer.next_frame_data(samples, project.timeline())
+                                    {
+                                        let frame_samples = frame_data.to_vec();
+                                        audio.pipe_tx.send(frame_samples).await.unwrap();
+                                    }
+                                }
+
+                                video_tx.send(frame).await.unwrap();
+
+                                frame_count += 1;
+                            }
+                            None => {
+                                println!("All frames sent to FFmpeg");
+                                break;
+                            }
+                        }
                     }
                 }
             }
 
-            ffmpeg_process.stop();
+            ffmpeg_process.stop().await;
 
             // Save the first frame as a screenshot and thumbnail
             if let Some(frame_data) = first_frame {
@@ -174,6 +208,8 @@ pub async fn export_video_to_file(
             } else {
                 eprintln!("No frames were processed, cannot save screenshot or thumbnail");
             }
+
+            Ok::<_, ExportError>(output_path)
         }
     });
 
@@ -191,7 +227,7 @@ pub async fn export_video_to_file(
     )
     .await?;
 
-    ffmpeg_handle.await.ok();
+    let output_path = ffmpeg_handle.await??;
 
     println!("Copying file to {:?}", project_path);
     let result_path = project_path.join("output").join("result.mp4");

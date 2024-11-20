@@ -9,7 +9,7 @@ cap-media = { path = "../media" }
 cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
 
-tokio = { version = "1.39.2", features = ["macros", "process", "fs"] }
+tokio = { workspace = true, features = ["macros", "process", "fs"] }
 cpal.workspace = true
 axum = { version = "0.7.5", features = ["ws"] }
 ffmpeg.workspace = true

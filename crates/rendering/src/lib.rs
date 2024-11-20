@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::ops::{Add, Deref, Mul, Sub};
 use std::{collections::HashMap, sync::Arc};
+use tokio::sync::mpsc;
 use wgpu::util::DeviceExt;
 use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
@@ -121,6 +122,20 @@ impl RecordingDecoders {
     }
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum RenderingError {
+    #[error("No GPU adapter found")]
+    NoAdapter,
+    #[error(transparent)]
+    RequestDeviceFailed(#[from] wgpu::RequestDeviceError),
+    #[error("Failed to wait for buffer mapping")]
+    BufferMapWaitingFailed,
+    #[error(transparent)]
+    BufferMapFailed(#[from] wgpu::BufferAsyncError),
+    #[error("Sending frame to channel failed")]
+    ChannelSendFrameFailed(#[from] mpsc::error::SendError<Vec<u8>>),
+}
+
 pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
@@ -128,7 +143,7 @@ pub async fn render_video_to_channel(
     decoders: RecordingDecoders,
     cursor: Arc<CursorData>,
     project_path: PathBuf, // Add project_path parameter
-) -> Result<(), String> {
+) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, cursor, project_path).await?;
 
     println!("Setting up FFmpeg input for screen recording...");
@@ -139,72 +154,59 @@ pub async fn render_video_to_channel(
 
     let duration = project.timeline().map(|t| t.duration()).unwrap_or(f64::MAX);
 
-    let render_handle: tokio::task::JoinHandle<Result<u32, String>> = tokio::spawn(async move {
-        let mut frame_number = 0;
+    let mut frame_number = 0;
 
-        let background = Background::from(project.background.source.clone());
+    let background = Background::from(project.background.source.clone());
 
-        loop {
-            if frame_number as f64 > 30_f64 * duration {
-                break;
-            };
+    Err(RenderingError::NoAdapter)?;
 
-            let time = if let Some(timeline) = project.timeline() {
-                match timeline.get_recording_time(frame_number as f64 / 30_f64) {
-                    Some(time) => time,
-                    None => break,
-                }
-            } else {
-                frame_number as f64 / 30_f64
-            };
+    loop {
+        if frame_number as f64 > 30_f64 * duration {
+            break;
+        };
 
-            let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
-
-            let Some((screen_frame, camera_frame)) =
-                decoders.get_frames((time * 30.0) as u32).await
-            else {
-                break;
-            };
-
-            let frame = match produce_frame(
-                &constants,
-                &screen_frame,
-                &camera_frame,
-                background,
-                &uniforms,
-                time as f32,
-            )
-            .await
-            {
-                Ok(frame) => frame,
-                Err(e) => {
-                    eprintln!("{e}");
-                    break;
-                }
-            };
-
-            if sender.send(frame).await.is_err() {
-                eprintln!("Failed to send processed frame to channel");
-                break;
+        let time = if let Some(timeline) = project.timeline() {
+            match timeline.get_recording_time(frame_number as f64 / 30_f64) {
+                Some(time) => time,
+                None => break,
             }
+        } else {
+            frame_number as f64 / 30_f64
+        };
 
-            frame_number += 1;
-            if frame_number % 60 == 0 {
-                let elapsed = start_time.elapsed();
-                println!(
-                    "Rendered {} frames in {:?} seconds",
-                    frame_number,
-                    elapsed.as_secs_f32()
-                );
-            }
+        let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
+
+        let Some((screen_frame, camera_frame)) = decoders.get_frames((time * 30.0) as u32).await
+        else {
+            break;
+        };
+
+        let frame = produce_frame(
+            &constants,
+            &screen_frame,
+            &camera_frame,
+            background,
+            &uniforms,
+            time as f32,
+        )
+        .await?;
+
+        sender.send(frame).await?;
+
+        frame_number += 1;
+        if frame_number % 60 == 0 {
+            let elapsed = start_time.elapsed();
+            println!(
+                "Rendered {} frames in {:?} seconds",
+                frame_number,
+                elapsed.as_secs_f32()
+            );
         }
+    }
 
-        println!("Render loop exited");
+    println!("Render loop exited");
 
-        Ok(frame_number)
-    });
-
-    let total_frames = render_handle.await.map_err(|e| e.to_string())??;
+    let total_frames = frame_number;
 
     let total_time = start_time.elapsed();
     println!(
@@ -234,20 +236,19 @@ impl RenderVideoConstants {
         options: RenderOptions,
         cursor: Arc<CursorData>,
         project_path: PathBuf, // Add project_path parameter
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RenderingError> {
         println!("Initializing wgpu...");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default())
             .await
-            .unwrap();
+            .ok_or(RenderingError::NoAdapter)?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default(), None)
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
 
         // Pass project_path to load_cursor_textures
-        let cursor_textures = Self::load_cursor_textures(&device, &queue, &cursor, &project_path)?;
+        let cursor_textures = Self::load_cursor_textures(&device, &queue, &cursor, &project_path);
 
         let cursor_pipeline = CursorPipeline::new(&device);
 
@@ -270,7 +271,7 @@ impl RenderVideoConstants {
         queue: &wgpu::Queue,
         cursor: &CursorData,
         project_path: &PathBuf, // Add project_path parameter
-    ) -> Result<HashMap<String, wgpu::Texture>, String> {
+    ) -> HashMap<String, wgpu::Texture> {
         println!("Starting to load cursor textures");
         println!("Project path: {:?}", project_path);
         println!("Cursor images to load: {:?}", cursor.cursor_images);
@@ -353,7 +354,7 @@ impl RenderVideoConstants {
             "Completed loading cursor textures. Total loaded: {}",
             textures.len()
         );
-        Ok(textures)
+        textures
     }
 }
 
@@ -767,7 +768,7 @@ pub async fn produce_frame(
     background: Background,
     uniforms: &ProjectUniforms,
     time: f32,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
@@ -1026,13 +1027,9 @@ pub async fn produce_frame(
     });
     constants.device.poll(wgpu::Maintain::Wait);
 
-    let Some(frame_result) = rx.receive().await else {
-        return Err("2: Channel closed unexpectedly".to_string());
-    };
-
-    if let Err(e) = frame_result {
-        return Err(format!("Failed to map buffer: {:?}", e));
-    }
+    rx.receive()
+        .await
+        .ok_or(RenderingError::BufferMapWaitingFailed)??;
 
     let data = buffer_slice.get_mapped_range();
     let padded_data: Vec<u8> = data.to_vec(); // Ensure the type is Vec<u8>

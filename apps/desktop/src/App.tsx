@@ -2,16 +2,19 @@ import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
 import { ErrorBoundary, onMount, Suspense } from "solid-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { message } from "@tauri-apps/plugin-dialog";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { commands } from "./utils/tauri";
 
 const queryClient = new QueryClient({
   defaultOptions: {
     mutations: {
-      onError: (e) =>
-        alert("An error occured, here are the details:\n" + e.toString()),
+      onError: (e) => {
+        message(`An error occured, here are the details:\n${e}`);
+      },
     },
   },
 });

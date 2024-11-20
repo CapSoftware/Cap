@@ -23,12 +23,11 @@ use cap_editor::{EditorState, ProjectRecordings};
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::sources::{CaptureScreen, CaptureWindow};
 use cap_media::{
-    feeds::{AudioFrameBuffer, CameraFeed, CameraFrameSender},
+    feeds::{CameraFeed, CameraFrameSender},
     sources::ScreenCaptureTarget,
 };
 use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta};
 use cap_recording::RecordingOptions;
-use cap_rendering::ProjectUniforms;
 use fake_window::FakeWindowBounds;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
@@ -48,6 +47,7 @@ use std::{
     sync::Arc, time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WindowEvent};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
@@ -102,10 +102,7 @@ struct PreCreatedVideo {
 }
 
 impl App {
-    pub fn set_current_recording(
-        &mut self,
-        actor: cap_recording::ActorHandle, /* new_value: InProgressRecording */
-    ) {
+    pub fn set_current_recording(&mut self, actor: cap_recording::ActorHandle) {
         let current_recording = self.current_recording.insert(actor);
 
         CurrentRecordingChanged.emit(&self.handle).ok();
@@ -340,7 +337,7 @@ async fn get_current_recording(
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
-pub struct CurrentRecordingChanged; // (JsonValue<Option<InProgressRecording>>);
+pub struct CurrentRecordingChanged;
 
 async fn create_screenshot(
     input: PathBuf,
@@ -541,7 +538,8 @@ async fn get_rendered_video_impl(
         editor_instance.render_constants.clone(),
         editor_instance.cursor.clone(),
     )
-    .await?;
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(output_path)
 }
@@ -779,30 +777,8 @@ async fn create_editor_instance(
 
 #[tauri::command]
 #[specta::specta]
-async fn copy_rendered_video_to_clipboard(
-    app: AppHandle,
-    video_id: String,
-    project: ProjectConfiguration,
-) -> Result<(), String> {
+async fn copy_video_to_clipboard(app: AppHandle, path: String) -> Result<(), String> {
     println!("copying");
-    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-
-    let output_path = match get_rendered_video_impl(editor_instance, project, false).await {
-        Ok(path) => {
-            println!("Successfully retrieved rendered video path: {:?}", path);
-            path
-        }
-        Err(e) => {
-            println!("Failed to get rendered video: {}", e);
-            notifications::send_notification(
-                &app,
-                notifications::NotificationType::VideoCopyFailed,
-            );
-            return Err(format!("Failed to get rendered video: {}", e));
-        }
-    };
-
-    let output_path_str = output_path.to_str().unwrap();
 
     #[cfg(target_os = "macos")]
     {
@@ -816,7 +792,7 @@ async fn copy_rendered_video_to_clipboard(
                 let pasteboard: id = NSPasteboard::generalPasteboard(nil);
                 NSPasteboard::clearContents(pasteboard);
 
-                let url_str = NSString::alloc(nil).init_str(output_path_str);
+                let url_str = NSString::alloc(nil).init_str(&path);
                 let url = NSURL::fileURLWithPath_(nil, url_str);
 
                 if url == nil {
@@ -1080,7 +1056,6 @@ enum RenderProgress {
 #[specta::specta]
 async fn render_to_file(
     app: AppHandle,
-    output_path: PathBuf,
     video_id: String,
     project: ProjectConfiguration,
     progress_channel: tauri::ipc::Channel<RenderProgress>,
@@ -1089,6 +1064,7 @@ async fn render_to_file(
         scope.set_tag("cmd", "render_to_file");
     });
 
+) -> Result<PathBuf, String> {
     let (duration, _size) =
         get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
             .await
@@ -1100,8 +1076,14 @@ async fn render_to_file(
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
 
     let export_result = cap_export::export_video_to_file(
+    let output_path = editor_instance
+        .project_path
+        .join("output")
+        .join("result.mp4");
+
+    cap_export::export_video_to_file(
         project,
-        output_path,
+        output_path.clone(),
         move |current_frame| {
             if current_frame == 0 {
                 progress_channel
@@ -1122,8 +1104,12 @@ async fn render_to_file(
     if let Err(err) = export_result {
         sentry::capture_message(&err, sentry::Level::Error);
     }
+    .await
+    .map_err(|e| e.to_string())?;
 
     ShowCapturesPanel.emit(&app).ok();
+
+    Ok(output_path)
 }
 
 #[tauri::command]
@@ -1859,7 +1845,7 @@ pub async fn run() {
             render_to_file,
             get_rendered_video,
             copy_file_to_path,
-            copy_rendered_video_to_clipboard,
+            copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
             open_file_path,
             get_video_metadata,
@@ -1892,6 +1878,7 @@ pub async fn run() {
             send_feedback_request,
             windows::position_traffic_lights,
             reupload_rendered_video,
+            global_message_dialog
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2412,4 +2399,10 @@ async fn reupload_rendered_video(
             Err(e)
         }
     }
+}
+
+#[tauri::command]
+#[specta::specta]
+fn global_message_dialog(app: AppHandle, message: String) {
+    app.dialog().message(message).show(|_| {});
 }
