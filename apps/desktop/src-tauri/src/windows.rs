@@ -136,53 +136,41 @@ impl ShowCapWindow {
                 .visible(true)
                 .shadow(true)
                 .build()?,
-            Self::Main => {
-                let mut window_builder = self
-                    .window_builder(app, "/")
-                    .inner_size(300.0, 360.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .maximizable(false)
-                    .maximized(false)
-                    .theme(Some(tauri::Theme::Light));
-
-                window_builder.build()?
-            }
-            Self::Settings { page } => {
-                let mut window_builder = self
-                    .window_builder(
-                        app,
-                        format!("/settings/{}", page.clone().unwrap_or_default()),
-                    )
-                    .min_inner_size(600.0, 450.0)
-                    .resizable(true)
-                    .maximized(false)
-                    .theme(Some(tauri::Theme::Light));
-
-                window_builder.build()?
-            }
-            Self::Editor { project_id } => {
-                let mut window_builder = self
-                    .window_builder(app, format!("/editor?id={project_id}"))
-                    .inner_size(1150.0, 800.0)
-                    .maximizable(true)
-                    .theme(Some(tauri::Theme::Light));
-
-                window_builder.build()?
-            }
-            Self::Upgrade => {
-                let mut window_builder = self
-                    .window_builder(app, "/upgrade")
-                    .inner_size(800.0, 800.0)
-                    .resizable(false)
-                    .focused(true)
-                    .visible(true)
-                    .always_on_top(true)
-                    .maximized(false)
-                    .transparent(true);
-
-                window_builder.build()?
-            }
+            Self::Main => self
+                .window_builder(app, "/")
+                .inner_size(300.0, 360.0)
+                .resizable(false)
+                .maximized(false)
+                .maximizable(false)
+                .maximized(false)
+                .theme(Some(tauri::Theme::Light))
+                .build()?,
+            Self::Settings { page } => self
+                .window_builder(
+                    app,
+                    format!("/settings/{}", page.clone().unwrap_or_default()),
+                )
+                .min_inner_size(600.0, 450.0)
+                .resizable(true)
+                .maximized(false)
+                .theme(Some(tauri::Theme::Light))
+                .build()?,
+            Self::Editor { project_id } => self
+                .window_builder(app, format!("/editor?id={project_id}"))
+                .inner_size(1150.0, 800.0)
+                .maximizable(true)
+                .theme(Some(tauri::Theme::Dark))
+                .build()?,
+            Self::Upgrade => self
+                .window_builder(app, "/upgrade")
+                .inner_size(800.0, 800.0)
+                .resizable(false)
+                .focused(true)
+                .visible(true)
+                .always_on_top(true)
+                .maximized(false)
+                .transparent(true)
+                .build()?,
             Self::Camera { ws_port } => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
@@ -257,7 +245,6 @@ impl ShowCapWindow {
                     .resizable(false)
                     .fullscreen(false)
                     .shadow(true)
-                    .decorations(true)
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)
@@ -273,7 +260,7 @@ impl ShowCapWindow {
                     .build()?
             }
             Self::PrevRecordings => {
-                let mut window_builder = self
+                let window = self
                     .window_builder(app, "/prev-recordings")
                     .maximized(false)
                     .resizable(false)
@@ -289,9 +276,8 @@ impl ShowCapWindow {
                     )
                     .skip_taskbar(true)
                     .position(0.0, 0.0)
-                    .transparent(true);
-
-                let window = window_builder.build()?;
+                    .transparent(true)
+                    .build()?;
 
                 #[cfg(target_os = "macos")]
                 {
