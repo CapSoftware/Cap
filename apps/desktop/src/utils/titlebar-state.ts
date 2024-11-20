@@ -2,6 +2,7 @@ import { createStore } from "solid-js/store";
 import type { JSX } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import { UnlistenFn } from "@tauri-apps/api/event";
 
 export interface TitlebarState {
   height: string;
@@ -31,20 +32,21 @@ const [state, setState] = createStore<TitlebarState>({
   theme: "light",
 });
 
-async function initializeTitlebar() {
+async function initializeTitlebar(): Promise<UnlistenFn | undefined> {
+  if (ostype() === "macos") return;
   const currentWindow = getCurrentWindow();
+  const resizable = await currentWindow.isResizable();
+  if (!resizable) return;
 
-  if (ostype() !== "macos" && (await currentWindow.isResizable())) {
-    const [maximized, maximizable] = await Promise.all([
-      currentWindow.isMaximized(),
-      currentWindow.isMaximizable(),
-    ]);
+  const [maximized, maximizable] = await Promise.all([
+    currentWindow.isMaximized(),
+    currentWindow.isMaximizable(),
+  ]);
 
-    setState({
-      maximized,
-      maximizable,
-    });
-  }
+  setState({
+    maximized,
+    maximizable,
+  });
 
   return await currentWindow.onResized((_) => {
     currentWindow.isMaximized().then((maximized) => {
