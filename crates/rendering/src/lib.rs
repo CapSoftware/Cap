@@ -158,8 +158,6 @@ pub async fn render_video_to_channel(
 
     let background = Background::from(project.background.source.clone());
 
-    Err(RenderingError::NoAdapter)?;
-
     loop {
         if frame_number as f64 > 30_f64 * duration {
             break;
