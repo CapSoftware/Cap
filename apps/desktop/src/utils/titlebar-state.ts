@@ -1,7 +1,6 @@
 import { createStore } from "solid-js/store";
 import type { JSX } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { commands } from "./tauri";
 
 export interface TitlebarState {
   height: string;
@@ -19,7 +18,7 @@ export interface TitlebarState {
 
 const [state, setState] = createStore<TitlebarState>({
   height: "36px",
-  hideMaximize: false,
+  hideMaximize: true,
   order: "platform",
   items: null,
   maximized: false,
@@ -34,15 +33,17 @@ const [state, setState] = createStore<TitlebarState>({
 async function initializeTitlebar() {
   const currentWindow = getCurrentWindow();
 
-  const [maximized, maximizable, closable] = await Promise.all([
+  const [maximized, closable] = await Promise.all([
     currentWindow.isMaximized(),
-    currentWindow.isMaximizable(),
     currentWindow.isClosable(),
   ]);
+  const resizable = await currentWindow.isResizable();
 
-  commands.positionTrafficLights(null);
-
-  setState({ maximized, maximizable, closable });
+  setState({
+    maximized,
+    maximizable: resizable ? await currentWindow.isMaximizable() : false,
+    closable,
+  });
 
   return await currentWindow.onResized(() => {
     currentWindow.isMaximized().then((maximized) => {

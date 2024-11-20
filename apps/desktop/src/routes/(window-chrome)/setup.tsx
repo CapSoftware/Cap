@@ -68,6 +68,8 @@ export default function () {
     setInitialCheck(false);
   };
 
+  setTitlebar("height", "50px");
+
   const [showStartup, showStartupActions] = createResource(() =>
     generalSettingsStore.get().then((s) => {
       if (s === undefined) return true;
@@ -158,7 +160,6 @@ import { generalSettingsStore } from "~/store";
 import { Portal } from "solid-js/web";
 import { cx } from "cva";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import Titlebar from "~/components/titlebar/Titlebar";
 
 function Startup(props: { onClose: () => void }) {
   const [audioState, setAudioState] = makePersisted(

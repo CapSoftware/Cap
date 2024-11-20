@@ -1923,6 +1923,11 @@ pub async fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_denylist(&["setup", "window-capture-occluder", "camera"])
+                .build(),
+        )
         .plugin(flags::plugin::init())
         .invoke_handler(specta_builder.invoke_handler())
         .setup(move |app| {
@@ -1937,6 +1942,8 @@ pub async fn run() {
             tauri::async_runtime::spawn(async move {
                 check_notification_permissions(&notification_handle).await;
             });
+
+            ShowCapWindow::Setup.show(&app_handle).ok();
 
             println!("Checking startup completion and permissions...");
             let permissions = permissions::do_permissions_check(false);

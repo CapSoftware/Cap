@@ -88,11 +88,10 @@ impl CapWindowId {
 
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
-            Self::Camera
-            | Self::WindowCaptureOccluder
-            | Self::PrevRecordings
-            | Self::InProgressRecording => None,
-            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.5))),
+            Self::Camera | Self::WindowCaptureOccluder | Self::PrevRecordings => None,
+            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.0))),
+            Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
+            Self::Setup => Some(Some(LogicalPosition::new(14.0, 24.0))),
             _ => Some(None),
         }
     }
@@ -152,9 +151,6 @@ impl ShowCapWindow {
                     .maximized(false)
                     .theme(Some(tauri::Theme::Light));
 
-                #[cfg(target_os = "windows")]
-                let window_builder = window_builder.center();
-
                 window_builder.build()?
             }
             Self::Settings { page } => {
@@ -165,7 +161,8 @@ impl ShowCapWindow {
                     )
                     .min_inner_size(600.0, 450.0)
                     .resizable(true)
-                    .maximized(false);
+                    .maximized(false)
+                    .theme(Some(tauri::Theme::Light));
 
                 window_builder.build()?
             }

@@ -28,7 +28,6 @@ export function Header() {
 
   onMount(async () => {
     unlistenTitlebar = await initializeTitlebar();
-    commands.positionTrafficLights([20.0, 48.0]);
   });
 
   onCleanup(() => {
@@ -36,7 +35,7 @@ export function Header() {
   });
 
   setTitlebar("border", false);
-  setTitlebar("height", "4.5rem");
+  setTitlebar("height", "4rem");
   setTitlebar(
     "items",
     <div
@@ -59,15 +58,15 @@ export function Header() {
       <Titlebar />
       <Dialog.Root
         open={progressState.type !== "idle"}
-        onOpenChange={() => {}} // Empty handler prevents closing
+        onOpenChange={() => { }} // Empty handler prevents closing
       >
         <DialogContent
           title={
             progressState.type === "copying"
               ? "Link Copied"
               : progressState.type === "uploading"
-              ? "Creating Shareable Link"
-              : "Exporting Recording"
+                ? "Creating Shareable Link"
+                : "Exporting Recording"
           }
           confirm={<></>}
         >
@@ -90,16 +89,15 @@ export function Header() {
                       <div
                         class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                         style={{
-                          width: `${
-                            state.stage === "rendering"
-                              ? Math.min(
-                                  ((state.renderProgress || 0) /
-                                    (state.totalFrames || 1)) *
-                                    100,
-                                  100
-                                )
-                              : Math.min(state.progress || 0, 100)
-                          }%`,
+                          width: `${state.stage === "rendering"
+                            ? Math.min(
+                              ((state.renderProgress || 0) /
+                                (state.totalFrames || 1)) *
+                              100,
+                              100
+                            )
+                            : Math.min(state.progress || 0, 100)
+                            }%`,
                         }}
                       />
                     </div>
@@ -127,16 +125,15 @@ export function Header() {
                       <div
                         class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                         style={{
-                          width: `${
-                            state.stage === "rendering"
-                              ? Math.min(
-                                  ((state.renderProgress || 0) /
-                                    (state.totalFrames || 1)) *
-                                    100,
-                                  100
-                                )
-                              : Math.min(state.progress || 0, 100)
-                          }%`,
+                          width: `${state.stage === "rendering"
+                            ? Math.min(
+                              ((state.renderProgress || 0) /
+                                (state.totalFrames || 1)) *
+                              100,
+                              100
+                            )
+                            : Math.min(state.progress || 0, 100)
+                            }%`,
                         }}
                       />
                     </div>
@@ -164,11 +161,10 @@ export function Header() {
                       <div
                         class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                         style={{
-                          width: `${
-                            state.stage === "rendering"
-                              ? Math.min(state.renderProgress || 0, 100)
-                              : Math.min(state.uploadProgress || 0, 100)
-                          }%`,
+                          width: `${state.stage === "rendering"
+                            ? Math.min(state.renderProgress || 0, 100)
+                            : Math.min(state.uploadProgress || 0, 100)
+                            }%`,
                         }}
                       />
                     </div>
