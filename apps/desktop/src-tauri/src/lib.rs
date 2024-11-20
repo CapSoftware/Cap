@@ -21,7 +21,7 @@ use auth::{AuthStore, AuthenticationInvalid};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_editor::{EditorState, ProjectRecordings};
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
-use cap_media::sources::CaptureScreen;
+use cap_media::sources::{CaptureScreen, CaptureWindow};
 use cap_media::{
     feeds::{CameraFeed, CameraFrameSender},
     sources::ScreenCaptureTarget,
@@ -130,6 +130,29 @@ impl App {
     }
 
     async fn set_start_recording_options(&mut self, new_options: RecordingOptions) {
+        let options = new_options.clone();
+        sentry::configure_scope(move |scope| {
+            scope.set_tag("cmd", "set_start_recording_options");
+            let mut ctx = std::collections::BTreeMap::new();
+            ctx.insert(
+                "capture_target".into(),
+                match options.capture_target {
+                    ScreenCaptureTarget::Screen(screen) => screen.name,
+                    ScreenCaptureTarget::Window(window) => window.owner_name,
+                }
+                .into(),
+            );
+            ctx.insert(
+                "camera".into(),
+                options.camera_label.unwrap_or("None".into()).into(),
+            );
+            ctx.insert(
+                "microphone".into(),
+                options.audio_input_name.unwrap_or("None".into()).into(),
+            );
+            scope.set_context("recording_options", sentry::protocol::Context::Other(ctx));
+        });
+
         match CapWindowId::Camera.get(&self.handle) {
             Some(window) if new_options.camera_label().is_none() => {
                 println!("closing camera window");
@@ -488,35 +511,92 @@ async fn get_rendered_video(
     project: ProjectConfiguration,
 ) -> Result<PathBuf, String> {
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-    get_rendered_video_impl(editor_instance, project, false).await
-}
-
-async fn get_rendered_video_impl(
-    editor_instance: Arc<EditorInstance>,
-    project: ProjectConfiguration,
-    force_render: bool,
-) -> Result<PathBuf, String> {
     let output_path = editor_instance
         .project_path
         .join("output")
         .join("result.mp4");
 
-    if !force_render && output_path.exists() {
+    // If the file doesn't exist, return an error to trigger the progress-enabled path
+    if !output_path.exists() {
+        return Err("Rendered video does not exist".to_string());
+    }
+
+    Ok(output_path)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn get_rendered_video_with_progress(
+    app: AppHandle,
+    video_id: String,
+    project: ProjectConfiguration,
+    progress_channel: tauri::ipc::Channel<RenderProgress>,
+) -> Result<PathBuf, String> {
+    get_rendered_video_impl(app, video_id, project, Some(progress_channel)).await
+}
+
+async fn get_rendered_video_impl(
+    app: AppHandle,
+    video_id: String,
+    project: ProjectConfiguration,
+    progress_channel: Option<tauri::ipc::Channel<RenderProgress>>,
+) -> Result<PathBuf, String> {
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let output_path = editor_instance
+        .project_path
+        .join("output")
+        .join("result.mp4");
+
+    // If the file exists, return it immediately
+    if output_path.exists() {
         return Ok(output_path);
     }
 
-    cap_export::export_video_to_file(
-        project,
-        output_path.clone(),
-        |_| {},
-        &editor_instance.project_path,
-        editor_instance.audio.clone(),
-        editor_instance.meta(),
-        editor_instance.render_constants.clone(),
-        editor_instance.cursor.clone(),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    // If we need to render and have a progress channel, use it
+    if let Some(progress) = progress_channel {
+        let (duration, _size) =
+            get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
+                .await
+                .unwrap();
+
+        // 30 FPS (calculated for output video)
+        let total_frames = (duration * 30.0).round() as u32;
+
+        progress
+            .send(RenderProgress::EstimatedTotalFrames { total_frames })
+            .ok();
+
+        cap_export::export_video_to_file(
+            project,
+            output_path.clone(),
+            move |current_frame| {
+                progress
+                    .send(RenderProgress::FrameRendered { current_frame })
+                    .ok();
+            },
+            &editor_instance.project_path,
+            editor_instance.audio.clone(),
+            editor_instance.meta(),
+            editor_instance.render_constants.clone(),
+            editor_instance.cursor.clone(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    } else {
+        // Render without progress updates
+        cap_export::export_video_to_file(
+            project,
+            output_path.clone(),
+            |_| {},
+            &editor_instance.project_path,
+            editor_instance.audio.clone(),
+            editor_instance.meta(),
+            editor_instance.render_constants.clone(),
+            editor_instance.cursor.clone(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
 
     Ok(output_path)
 }
@@ -564,6 +644,10 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
 #[tauri::command]
 #[specta::specta]
 async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(), String> {
+    sentry::configure_scope(|scope| {
+        scope.set_tag("cmd", "copy_screenshot_to_clipboard");
+    });
+
     println!("Copying screenshot to clipboard: {:?}", path);
 
     let image_data = match tokio::fs::read(&path).await {
@@ -620,6 +704,7 @@ async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(
         );
     }
 
+    // TODO(Ilya) (Windows) Add support
     #[cfg(not(target_os = "macos"))]
     {
         notifications::send_notification(
@@ -1032,6 +1117,10 @@ async fn render_to_file(
     project: ProjectConfiguration,
     progress_channel: tauri::ipc::Channel<RenderProgress>,
 ) -> Result<PathBuf, String> {
+    sentry::configure_scope(|scope| {
+        scope.set_tag("cmd", "render_to_file");
+    });
+
     let (duration, _size) =
         get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
             .await
@@ -1067,7 +1156,10 @@ async fn render_to_file(
         editor_instance.cursor.clone(),
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+        sentry::capture_message(&e.to_string(), sentry::Level::Error);
+        e.to_string()
+    })?;
 
     ShowCapturesPanel.emit(&app).ok();
 
@@ -1189,7 +1281,7 @@ async fn upload_rendered_video(
     .emit(&app)
     .ok();
 
-    let output_path = match get_rendered_video_impl(editor_instance.clone(), project, false).await {
+    let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
         Ok(path) => {
             // Emit rendering complete
             UploadProgress {
@@ -1806,6 +1898,8 @@ pub async fn run() {
             get_current_recording,
             render_to_file,
             get_rendered_video,
+            get_rendered_video_with_progress,
+            render_video_with_progress,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
@@ -1886,7 +1980,10 @@ pub async fn run() {
     tauri::async_runtime::set(tokio::runtime::Handle::current());
 
     #[allow(unused_mut)]
-    let mut builder = tauri::Builder::default();
+    let mut builder =
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = ShowCapWindow::Main.show(app);
+        }));
 
     #[cfg(target_os = "macos")]
     {
@@ -1894,9 +1991,6 @@ pub async fn run() {
     }
 
     builder
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = ShowCapWindow::Main.show(app);
-        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -1914,6 +2008,15 @@ pub async fn run() {
             general_settings::init(app.handle());
 
             let app_handle = app.handle().clone();
+
+            if let Ok(Some(auth)) = AuthStore::load(&app_handle) {
+                sentry::configure_scope(|scope| {
+                    scope.set_user(Some(sentry::User {
+                        id: Some(auth.user_id),
+                        ..Default::default()
+                    }));
+                });
+            }
 
             // Add this line to check notification permissions on startup
             let notification_handle = app_handle.clone();
@@ -2076,8 +2179,8 @@ pub async fn run() {
                                 tokio::task::yield_now().await;
                             });
                         }
-                        CapWindowId::Settings { .. } => {
-                            // Don't quit the app when settings window is closed
+                        CapWindowId::Settings | CapWindowId::Upgrade => {
+                            // Don't quit the app when settings or upgrade window is closed
                             return;
                         }
                         _ => {}
@@ -2286,7 +2389,6 @@ async fn reupload_rendered_video(
         return Err("No sharing metadata found".to_string());
     };
 
-    // Emit initial rendering progress
     UploadProgress {
         stage: "rendering".to_string(),
         progress: 0.0,
@@ -2295,10 +2397,8 @@ async fn reupload_rendered_video(
     .emit(&app)
     .ok();
 
-    // Pass true to force_render to ensure we create a new video
-    let output_path = match get_rendered_video_impl(editor_instance.clone(), project, true).await {
+    let output_path = match get_rendered_video(app.clone(), video_id.clone(), project).await {
         Ok(path) => {
-            // Emit rendering complete
             UploadProgress {
                 stage: "rendering".to_string(),
                 progress: 1.0,
@@ -2358,4 +2458,50 @@ async fn reupload_rendered_video(
 #[specta::specta]
 fn global_message_dialog(app: AppHandle, message: String) {
     app.dialog().message(message).show(|_| {});
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn render_video_with_progress(
+    app: AppHandle,
+    video_id: String,
+    project: ProjectConfiguration,
+    progress_channel: tauri::ipc::Channel<RenderProgress>,
+) -> Result<PathBuf, String> {
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let output_path = editor_instance
+        .project_path
+        .join("output")
+        .join("result.mp4");
+
+    let (duration, _size) =
+        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
+            .await
+            .unwrap();
+
+    // 30 FPS (calculated for output video)
+    let total_frames = (duration * 30.0).round() as u32;
+
+    progress_channel
+        .send(RenderProgress::EstimatedTotalFrames { total_frames })
+        .ok();
+
+    cap_export::export_video_to_file(
+        project,
+        output_path.clone(),
+        move |current_frame| {
+            progress_channel
+                .send(RenderProgress::FrameRendered { current_frame })
+                .ok();
+        },
+        &editor_instance.project_path,
+        editor_instance.audio.clone(),
+        editor_instance.meta(),
+        editor_instance.render_constants.clone(),
+        editor_instance.cursor.clone(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(output_path)
 }

@@ -62,6 +62,12 @@ async renderToFile(videoId: string, project: ProjectConfiguration, progressChann
 async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<string> {
     return await TAURI_INVOKE("get_rendered_video", { videoId, project });
 },
+async getRenderedVideoWithProgress(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
+    return await TAURI_INVOKE("get_rendered_video_with_progress", { videoId, project, progressChannel });
+},
+async renderVideoWithProgress(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
+    return await TAURI_INVOKE("render_video_with_progress", { videoId, project, progressChannel });
+},
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
 },
@@ -225,7 +231,7 @@ export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string }
-export type AuthStore = { token: string; expires: number; plan: Plan | null }
+export type AuthStore = { token: string; user_id: string; expires: number; plan: Plan | null }
 export type AuthenticationInvalid = null
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
 export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }

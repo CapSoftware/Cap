@@ -1,10 +1,10 @@
 import { Store } from "@tauri-apps/plugin-store";
 
-import type {
-  AuthStore,
-  ProjectConfiguration,
-  HotkeysStore,
-  GeneralSettingsStore,
+import {
+  type AuthStore,
+  type ProjectConfiguration,
+  type HotkeysStore,
+  type GeneralSettingsStore,
 } from "~/utils/tauri";
 
 let _store: Promise<Store> | undefined;

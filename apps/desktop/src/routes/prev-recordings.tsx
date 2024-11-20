@@ -178,65 +178,102 @@ export default function () {
                       progress: 0,
                       renderProgress: 0,
                       totalFrames: 0,
-                      message: "Preparing to render...",
+                      message: "Preparing...",
                       mediaPath: media.path,
                       stage: "rendering",
                     });
 
                     try {
                       if (isRecording) {
-                        console.log("Setting up render progress channel");
-                        const progress = new Channel<RenderProgress>();
-                        progress.onmessage = (p) => {
-                          console.log("Progress channel message:", p);
-                          if (
-                            p.type === "FrameRendered" &&
-                            progressState.type === "copying"
-                          ) {
-                            console.log(
-                              "Frame rendered in copy:",
-                              p.current_frame,
-                              "Current state:",
-                              progressState
-                            );
-                            setProgressState({
-                              ...progressState,
-                              renderProgress: p.current_frame,
-                            });
-                          }
-                          if (
-                            p.type === "EstimatedTotalFrames" &&
-                            progressState.type === "copying"
-                          ) {
-                            console.log(
-                              "Got total frames in copy:",
-                              p.total_frames
-                            );
-                            setProgressState({
-                              ...progressState,
-                              totalFrames: p.total_frames,
-                            });
-                          }
-                        };
+                        let outputPath: string;
 
-                        console.log("Starting render to file");
-                        const outputPath = await commands.renderToFile(
-                          mediaId,
-                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
-                          progress
-                        );
-                        console.log("Render to file completed");
+                        try {
+                          // First try to get existing rendered video
+                          outputPath = await commands.getRenderedVideo(
+                            mediaId,
+                            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                          );
+                          console.log("Using existing rendered video");
 
-                        await commands.copyVideoToClipboard(outputPath);
+                          // Show quick progress animation for existing video
+                          setProgressState({
+                            type: "copying",
+                            progress: 0,
+                            renderProgress: 100,
+                            totalFrames: 100,
+                            message: "Copying to clipboard...",
+                            mediaPath: media.path,
+                            stage: "rendering",
+                          });
+
+                          await commands.copyVideoToClipboard(outputPath);
+                        } catch (error) {
+                          console.log(
+                            "Need to render video with progress:",
+                            error
+                          );
+                          const progress = new Channel<RenderProgress>();
+                          progress.onmessage = (p) => {
+                            console.log("Progress channel message:", p);
+                            if (
+                              p.type === "FrameRendered" &&
+                              progressState.type === "copying"
+                            ) {
+                              console.log(
+                                "Frame rendered:",
+                                p.current_frame,
+                                "Total frames:",
+                                progressState.totalFrames
+                              );
+                              setProgressState({
+                                ...progressState,
+                                message: "Rendering video...",
+                                renderProgress: p.current_frame,
+                              });
+                            }
+                            if (
+                              p.type === "EstimatedTotalFrames" &&
+                              progressState.type === "copying"
+                            ) {
+                              console.log("Got total frames:", p.total_frames);
+                              setProgressState({
+                                ...progressState,
+                                totalFrames: p.total_frames,
+                              });
+                            }
+                          };
+
+                          outputPath = await commands.renderVideoWithProgress(
+                            mediaId,
+                            presets.getDefaultConfig() ??
+                              DEFAULT_PROJECT_CONFIG,
+                            progress
+                          );
+                          console.log("Video rendered, copying to clipboard");
+                          await commands.copyVideoToClipboard(outputPath);
+                        }
                       } else {
+                        // For screenshots, show quick progress animation
+                        setProgressState({
+                          type: "copying",
+                          progress: 50,
+                          renderProgress: 100,
+                          totalFrames: 100,
+                          message: "Copying image to clipboard...",
+                          mediaPath: media.path,
+                          stage: "rendering",
+                        });
                         await commands.copyScreenshotToClipboard(media.path);
                       }
 
                       setProgressState({
                         type: "copying",
                         progress: 100,
+                        renderProgress: 100,
+                        totalFrames: 100,
                         message: "Copied successfully!",
                         mediaPath: media.path,
+                        stage: "rendering",
                       });
 
                       setTimeout(() => {
@@ -257,7 +294,9 @@ export default function () {
                       progress: 0,
                       renderProgress: 0,
                       totalFrames: 0,
-                      message: "Preparing to render...",
+                      message: isRecording
+                        ? "Choose where to save video..."
+                        : "Choose where to save image...",
                       mediaPath: media.path,
                       stage: "rendering",
                     });
@@ -291,45 +330,103 @@ export default function () {
                       }
 
                       if (isRecording) {
-                        const progress = new Channel<RenderProgress>();
-                        progress.onmessage = (p) => {
-                          if (
-                            p.type === "FrameRendered" &&
-                            progressState.type === "saving"
-                          ) {
-                            setProgressState({
-                              ...progressState,
-                              renderProgress: p.current_frame,
-                            });
-                          }
-                          if (
-                            p.type === "EstimatedTotalFrames" &&
-                            progressState.type === "saving"
-                          ) {
-                            console.log("Total frames: ", p.total_frames);
-                            setProgressState({
-                              ...progressState,
-                              totalFrames: p.total_frames,
-                            });
-                          }
-                        };
+                        let outputPath: string;
 
-                        const output_path = await commands.renderToFile(
-                          mediaId,
-                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
-                          progress
-                        );
+                        try {
+                          // First try to get existing rendered video
+                          outputPath = await commands.getRenderedVideo(
+                            mediaId,
+                            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                          );
+                          console.log("Using existing rendered video");
 
-                        await commands.copyFileToPath(output_path, savePath);
+                          // Show quick progress animation for existing video
+                          setProgressState({
+                            type: "saving",
+                            progress: 0,
+                            renderProgress: 100,
+                            totalFrames: 100,
+                            message: "Saving video...",
+                            mediaPath: media.path,
+                            stage: "rendering",
+                          });
+                        } catch (error) {
+                          // If it doesn't exist, render with progress
+                          console.log("Need to render video:", error);
+                          const progress = new Channel<RenderProgress>();
+                          progress.onmessage = (p) => {
+                            console.log("Progress channel message:", p);
+                            if (
+                              p.type === "FrameRendered" &&
+                              progressState.type === "saving"
+                            ) {
+                              console.log(
+                                "Frame rendered:",
+                                p.current_frame,
+                                "Total frames:",
+                                progressState.totalFrames
+                              );
+                              setProgressState({
+                                ...progressState,
+                                message: "Rendering video...",
+                                renderProgress: p.current_frame,
+                              });
+                            }
+                            if (
+                              p.type === "EstimatedTotalFrames" &&
+                              progressState.type === "saving"
+                            ) {
+                              console.log("Got total frames:", p.total_frames);
+                              setProgressState({
+                                ...progressState,
+                                totalFrames: p.total_frames,
+                              });
+                            }
+                          };
+
+                          outputPath = await commands.renderVideoWithProgress(
+                            mediaId,
+                            presets.getDefaultConfig() ??
+                              DEFAULT_PROJECT_CONFIG,
+                            progress
+                          );
+                        }
+
+                        // Show copying progress
+                        setProgressState({
+                          type: "saving",
+                          progress: 50,
+                          renderProgress: 100,
+                          totalFrames: 100,
+                          message: "Copying file...",
+                          mediaPath: media.path,
+                          stage: "rendering",
+                        });
+
+                        await commands.copyFileToPath(outputPath, savePath);
                       } else {
+                        // For screenshots, show quick progress animation
+                        setProgressState({
+                          type: "saving",
+                          progress: 50,
+                          renderProgress: 0,
+                          totalFrames: 0,
+                          message: "Saving image...",
+                          mediaPath: media.path,
+                          stage: "rendering",
+                        });
+
                         await commands.copyFileToPath(media.path, savePath);
                       }
 
                       setProgressState({
                         type: "saving",
                         progress: 100,
+                        renderProgress: 100,
+                        totalFrames: 100,
                         message: "Saved successfully!",
                         mediaPath: media.path,
+                        stage: "rendering",
                       });
 
                       setTimeout(() => {
@@ -360,6 +457,12 @@ export default function () {
                       return;
                     }
 
+                    const isUpgraded = await commands.checkUpgradedAndUpdate();
+                    if (!isUpgraded) {
+                      await commands.openUpgradeWindow();
+                      return;
+                    }
+
                     setProgressState({
                       type: "uploading",
                       renderProgress: 0,
@@ -372,47 +475,9 @@ export default function () {
                     try {
                       let res: UploadResult;
                       if (isRecording) {
-                        const progress = new Channel<RenderProgress>();
-                        progress.onmessage = (p) => {
-                          console.log("Upload render progress:", p);
-                          if (
-                            p.type === "FrameRendered" &&
-                            progressState.type === "uploading"
-                          ) {
-                            console.log(
-                              "Frame rendered in upload:",
-                              p.current_frame,
-                              "Current state:",
-                              progressState
-                            );
-                            setProgressState({
-                              ...progressState,
-                              renderProgress: Math.round(
-                                (p.current_frame /
-                                  (progressState.totalFrames || 1)) *
-                                  100
-                              ),
-                            });
-                          }
-                          if (
-                            p.type === "EstimatedTotalFrames" &&
-                            progressState.type === "uploading"
-                          ) {
-                            console.log(
-                              "Got total frames in upload:",
-                              p.total_frames
-                            );
-                            setProgressState({
-                              ...progressState,
-                              totalFrames: p.total_frames,
-                            });
-                          }
-                        };
-
-                        await commands.renderToFile(
+                        const outputPath = await commands.getRenderedVideo(
                           mediaId,
-                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
-                          progress
+                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
                         );
 
                         res = await commands.uploadRenderedVideo(
@@ -430,7 +495,9 @@ export default function () {
                         case "PlanCheckFailed":
                           throw new Error("Plan check failed");
                         case "UpgradeRequired":
-                          throw new Error("Upgrade required");
+                          setProgressState({ type: "idle" });
+                          setShowUpgradeTooltip(true);
+                          return;
                         default:
                           break;
                       }
@@ -531,9 +598,11 @@ export default function () {
                                   >
                                     {(state) => (
                                       <h3 class="text-sm font-medium mb-3 text-gray-50">
-                                        {state().stage === "rendering"
-                                          ? "Rendering video"
-                                          : "Copying to clipboard"}
+                                        {isRecording
+                                          ? state().stage === "rendering"
+                                            ? "Rendering video"
+                                            : "Copying to clipboard"
+                                          : "Copying image to clipboard"}
                                       </h3>
                                     )}
                                   </Match>
@@ -545,9 +614,11 @@ export default function () {
                                   >
                                     {(state) => (
                                       <h3 class="text-sm font-medium mb-3 text-gray-50">
-                                        {state().stage === "rendering"
-                                          ? "Rendering video"
-                                          : "Saving file"}
+                                        {isRecording
+                                          ? state().stage === "rendering"
+                                            ? "Rendering video"
+                                            : "Saving video"
+                                          : "Saving image"}
                                       </h3>
                                     )}
                                   </Match>
@@ -731,17 +802,7 @@ export default function () {
                             }
                             tooltipPlacement="left"
                             onClick={() => {
-                              uploadMedia.mutate(undefined, {
-                                onError: (error) => {
-                                  if (error.message === "Upgrade required") {
-                                    setShowUpgradeTooltip(true);
-                                    setTimeout(
-                                      () => setShowUpgradeTooltip(false),
-                                      10000
-                                    );
-                                  }
-                                },
-                              });
+                              uploadMedia.mutate();
                             }}
                             disabled={
                               copyMedia.isPending ||

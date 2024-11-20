@@ -155,7 +155,7 @@ export const PricingPage = () => {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch">
             <Card
-              className={`bg-white rounded-xl min-h-[600px] flex-grow ${
+              className={`bg-gray-100 rounded-xl min-h-[600px] flex-grow ${
                 initialRender ? "fade-in-down animate-delay-2" : ""
               }`}
             >
@@ -172,7 +172,7 @@ export const PricingPage = () => {
                 <CardContent>
                   <Button
                     href="/download"
-                    className="w-full bg-gray-100 hover:bg-gray-200"
+                    className="w-full hover:bg-gray-200"
                     variant="white"
                     size="lg"
                   >

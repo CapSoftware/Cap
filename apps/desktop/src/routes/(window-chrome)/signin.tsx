@@ -46,20 +46,22 @@ const signInAction = action(async () => {
     stopListening();
 
     const token = url.searchParams.get("token");
+    const user_id = url.searchParams.get("user_id");
     const expires = Number(url.searchParams.get("expires"));
-    if (!token || !expires) {
+    if (!token || !expires || !user_id) {
       throw new Error("Invalid token or expires");
     }
 
     await authStore.set({
       token,
+      user_id,
       expires,
       plan: { upgraded: false, last_checked: 0 },
     });
 
     getCurrentWindow()
       .setFocus()
-      .catch(() => {});
+      .catch(() => { });
 
     return redirect("/");
   } catch (error) {

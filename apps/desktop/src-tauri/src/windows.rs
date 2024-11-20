@@ -181,8 +181,11 @@ impl ShowCapWindow {
             Self::Upgrade => {
                 let mut window_builder = self
                     .window_builder(app, "/upgrade")
-                    .inner_size(800.0, 850.0)
+                    .inner_size(800.0, 800.0)
                     .resizable(false)
+                    .focused(true)
+                    .visible(true)
+                    .always_on_top(true)
                     .maximized(false)
                     .transparent(true);
 
@@ -263,6 +266,7 @@ impl ShowCapWindow {
                     .fullscreen(false)
                     .shadow(true)
                     .always_on_top(true)
+                    .transparent(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(true)
                     .inner_size(width, height)
