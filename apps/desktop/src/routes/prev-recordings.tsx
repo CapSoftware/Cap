@@ -475,10 +475,74 @@ export default function () {
                     try {
                       let res: UploadResult;
                       if (isRecording) {
-                        const outputPath = await commands.getRenderedVideo(
-                          mediaId,
-                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                        );
+                        let outputPath: string;
+                        try {
+                          // First try to get existing rendered video
+                          outputPath = await commands.getRenderedVideo(
+                            mediaId,
+                            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
+                          );
+                          console.log("Using existing rendered video");
+
+                          // Show quick progress animation for existing video
+                          setProgressState({
+                            type: "uploading",
+                            renderProgress: 100,
+                            uploadProgress: 0,
+                            message: "Starting upload...",
+                            mediaPath: media.path,
+                            stage: "uploading",
+                          });
+                        } catch (error) {
+                          // If it doesn't exist, render with progress
+                          console.log(
+                            "Need to render video with progress:",
+                            error
+                          );
+                          const progress = new Channel<RenderProgress>();
+                          progress.onmessage = (p) => {
+                            console.log("Progress channel message:", p);
+                            if (
+                              p.type === "FrameRendered" &&
+                              progressState.type === "uploading"
+                            ) {
+                              console.log(
+                                "Frame rendered:",
+                                p.current_frame,
+                                "Total frames:",
+                                progressState.totalFrames
+                              );
+                              setProgressState({
+                                ...progressState,
+                                message: "Rendering video...",
+                                renderProgress: progressState.totalFrames
+                                  ? Math.round(
+                                      (p.current_frame /
+                                        progressState.totalFrames) *
+                                        100
+                                    )
+                                  : 0,
+                              });
+                            }
+                            if (
+                              p.type === "EstimatedTotalFrames" &&
+                              progressState.type === "uploading"
+                            ) {
+                              console.log("Got total frames:", p.total_frames);
+                              setProgressState({
+                                ...progressState,
+                                totalFrames: p.total_frames,
+                              });
+                            }
+                          };
+
+                          outputPath = await commands.renderVideoWithProgress(
+                            mediaId,
+                            presets.getDefaultConfig() ??
+                              DEFAULT_PROJECT_CONFIG,
+                            progress
+                          );
+                        }
 
                         res = await commands.uploadRenderedVideo(
                           mediaId,
