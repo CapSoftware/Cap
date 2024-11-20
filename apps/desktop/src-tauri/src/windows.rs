@@ -88,10 +88,10 @@ impl CapWindowId {
 
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
-            Self::Camera | Self::WindowCaptureOccluder | Self::PrevRecordings => None,
             Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.0))),
-            Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
             Self::Setup => Some(Some(LogicalPosition::new(14.0, 24.0))),
+            Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
+            Self::Camera | Self::WindowCaptureOccluder | Self::PrevRecordings => None,
             _ => Some(None),
         }
     }
@@ -124,23 +124,18 @@ impl ShowCapWindow {
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
-            Self::Setup => {
-                let mut window_builder = self
-                    .window_builder(app, "/setup")
-                    .inner_size(600.0, 600.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .center()
-                    .focused(true)
-                    .maximizable(false)
-                    .theme(Some(tauri::Theme::Light))
-                    .visible(true)
-                    .shadow(true);
-
-                let window = window_builder.build()?;
-                window.set_focus().ok();
-                window
-            }
+            Self::Setup => self
+                .window_builder(app, "/setup")
+                .inner_size(600.0, 600.0)
+                .resizable(false)
+                .maximized(false)
+                .center()
+                .focused(true)
+                .maximizable(false)
+                .theme(Some(tauri::Theme::Light))
+                .visible(true)
+                .shadow(true)
+                .build()?,
             Self::Main => {
                 let mut window_builder = self
                     .window_builder(app, "/")
@@ -394,17 +389,14 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
             );
 
             let c_win = target_window.clone();
-            target_window.on_window_event(move |event| {
-                if let tauri::WindowEvent::ThemeChanged(..) = event {
-                    delegates::position_window_controls(
-                        delegates::UnsafeWindowHandle(
-                            c_win
-                                .ns_window()
-                                .expect("Failed to get native window handle"),
-                        ),
-                        &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
+            target_window.on_window_event(move |event| match event {
+                tauri::WindowEvent::ThemeChanged(..) | tauri::WindowEvent::Focused(..) => {
+                    position_traffic_lights_impl(
+                        &c_win.as_ref().window(),
+                        controls_inset.map(LogicalPosition::from),
                     );
                 }
+                _ => {}
             });
         })
         .ok();
@@ -414,23 +406,26 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
 #[specta::specta]
 pub fn position_traffic_lights(window: tauri::Window, controls_inset: Option<(f64, f64)>) {
     #[cfg(target_os = "macos")]
-    {
-        use crate::platform::delegates::{position_window_controls, UnsafeWindowHandle};
-        let c_win = window.clone();
+    position_traffic_lights_impl(&window, controls_inset.map(LogicalPosition::from));
+}
 
-        window
-            .run_on_main_thread(move || {
-                position_window_controls(
-                    UnsafeWindowHandle(
-                        c_win
-                            .ns_window()
-                            .expect("Failed to get native window handle"),
-                    ),
-                    &controls_inset
-                        .map(LogicalPosition::from)
-                        .unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-                );
-            })
-            .ok();
-    }
+#[cfg(target_os = "macos")]
+fn position_traffic_lights_impl(
+    window: &tauri::Window,
+    controls_inset: Option<LogicalPosition<f64>>,
+) {
+    use crate::platform::delegates::{position_window_controls, UnsafeWindowHandle};
+    let c_win = window.clone();
+    window
+        .run_on_main_thread(move || {
+            position_window_controls(
+                UnsafeWindowHandle(
+                    c_win
+                        .ns_window()
+                        .expect("Failed to get native window handle"),
+                ),
+                &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
+            );
+        })
+        .ok();
 }

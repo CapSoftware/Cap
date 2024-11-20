@@ -1,6 +1,7 @@
 import { createStore } from "solid-js/store";
 import type { JSX } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { type as ostype } from "@tauri-apps/plugin-os";
 
 export interface TitlebarState {
   height: string;
@@ -33,19 +34,19 @@ const [state, setState] = createStore<TitlebarState>({
 async function initializeTitlebar() {
   const currentWindow = getCurrentWindow();
 
-  const [maximized, closable] = await Promise.all([
-    currentWindow.isMaximized(),
-    currentWindow.isClosable(),
-  ]);
-  const resizable = await currentWindow.isResizable();
+  if (ostype() !== "macos" && (await currentWindow.isResizable())) {
+    const [maximized, maximizable] = await Promise.all([
+      currentWindow.isMaximized(),
+      currentWindow.isMaximizable(),
+    ]);
 
-  setState({
-    maximized,
-    maximizable: resizable ? await currentWindow.isMaximizable() : false,
-    closable,
-  });
+    setState({
+      maximized,
+      maximizable,
+    });
+  }
 
-  return await currentWindow.onResized(() => {
+  return await currentWindow.onResized((_) => {
     currentWindow.isMaximized().then((maximized) => {
       setState("maximized", maximized);
     });

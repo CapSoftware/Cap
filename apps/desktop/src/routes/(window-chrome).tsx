@@ -26,7 +26,6 @@ export default function (props: RouteSectionProps) {
 
   onMount(async () => {
     unlistenResize = await initializeTitlebar();
-    if (ostype() === "macos") commands.positionTrafficLights(null);
     if (location.pathname === "/") getCurrentWindow().show();
   });
 

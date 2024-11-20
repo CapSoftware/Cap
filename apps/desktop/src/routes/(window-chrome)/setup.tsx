@@ -68,7 +68,11 @@ export default function () {
     setInitialCheck(false);
   };
 
-  setTitlebar("height", "50px");
+  onMount(() => {
+    setTitlebar("height", "50px");
+    setTitlebar("transparent", true);
+    setTitlebar("border", false);
+  });
 
   const [showStartup, showStartupActions] = createResource(() =>
     generalSettingsStore.get().then((s) => {
@@ -262,28 +266,30 @@ function Startup(props: { onClose: () => void }) {
     audio.muted = audioState.isMuted;
   };
 
-  setTitlebar("transparent", true);
-  setTitlebar("border", false);
-  setTitlebar("height", "50px");
-  setTitlebar(
-    "items",
-    <div
-      dir={ostype() === "windows" ? "rtl" : "rtl"}
-      class="flex mx-4 items-center gap-[0.25rem]"
-    >
-      <button
-        onClick={toggleMute}
-        class={`text-gray-50 hover:text-gray-200 transition-colors ${isExiting() ? "opacity-0" : ""
-          }`}
+  onMount(() => {
+    setTitlebar("transparent", true);
+    setTitlebar("border", false);
+    setTitlebar("height", "50px");
+    setTitlebar(
+      "items",
+      <div
+        dir={ostype() === "windows" ? "rtl" : "rtl"}
+        class="flex mx-4 items-center gap-[0.25rem]"
       >
-        {audioState.isMuted ? (
-          <IconLucideVolumeX class="w-6 h-6" />
-        ) : (
-          <IconLucideVolume2 class="w-6 h-6" />
-        )}
-      </button>
-    </div>
-  );
+        <button
+          onClick={toggleMute}
+          class={`text-gray-50 hover:text-gray-200 transition-colors ${isExiting() ? "opacity-0" : ""
+            }`}
+        >
+          {audioState.isMuted ? (
+            <IconLucideVolumeX class="w-6 h-6" />
+          ) : (
+            <IconLucideVolume2 class="w-6 h-6" />
+          )}
+        </button>
+      </div>
+    );
+  });
 
   onCleanup(() => setTitlebar("items", null));
 
