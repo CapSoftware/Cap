@@ -257,6 +257,7 @@ impl ShowCapWindow {
                     .resizable(false)
                     .fullscreen(false)
                     .shadow(true)
+                    .decorations(true)
                     .always_on_top(true)
                     .transparent(true)
                     .visible_on_all_workspaces(true)
