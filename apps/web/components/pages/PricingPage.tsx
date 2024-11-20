@@ -17,6 +17,7 @@ import { getProPlanId } from "@cap/utils";
 import toast from "react-hot-toast";
 import { useRouter, useSearchParams } from "next/navigation";
 import { SimplePlans } from "../text/SimplePlans";
+import { LogoSection } from "./_components/LogoSection";
 
 export const PricingPage = () => {
   const [loading, setLoading] = useState(false);
@@ -130,7 +131,7 @@ export const PricingPage = () => {
 
   return (
     <div>
-      <div className="wrapper py-20 space-y-24">
+      <div className="wrapper py-12 space-y-24">
         <div className="space-y-12">
           <div className="text-center">
             <div className={`mb-4 ${initialRender ? "fade-in-down" : ""}`}>
@@ -152,6 +153,72 @@ export const PricingPage = () => {
               adopter pricing to our first users. This pricing will be locked in
               for the lifetime of your subscription.
             </p>
+          </div>
+          <div>
+            <div className="text-center max-w-[800px] mx-auto mb-8 lg:mb-4">
+              <h2 className="text-xl text-gray-400">
+                Used by employees at leading tech companies
+              </h2>
+            </div>
+            <div className="flex flex-col items-center text-center lg:flex-row lg:items-center lg:justify-between lg:text-left pb-8 lg:pb-0">
+              <div className="grid grid-cols-2 gap-10 md:grid-cols-5 lg:max-w-4xl lg:gap-10 mx-auto">
+                <div className="flex items-center justify-center lg:mt-0 ">
+                  <img
+                    alt="Tesla Logo"
+                    loading="lazy"
+                    width={100}
+                    height={30}
+                    decoding="async"
+                    style={{ color: "transparent" }}
+                    src="/logos/tesla.svg"
+                  />
+                </div>
+                <div className="flex items-center justify-center lg:mt-0 ">
+                  <img
+                    alt="Microsoft Logo"
+                    loading="lazy"
+                    width={98}
+                    height={24}
+                    decoding="async"
+                    style={{ color: "transparent" }}
+                    src="/logos/microsoft.svg"
+                  />
+                </div>
+                <div className="flex items-center justify-center lg:mt-0 ">
+                  <img
+                    alt="Coinbase Logo"
+                    loading="lazy"
+                    width={139}
+                    height={32}
+                    decoding="async"
+                    style={{ color: "transparent" }}
+                    src="/logos/coinbase.svg"
+                  />
+                </div>
+                <div className="flex items-center justify-center lg:mt-0 ">
+                  <img
+                    alt="IBM Logo"
+                    loading="lazy"
+                    width={80}
+                    height={20}
+                    decoding="async"
+                    style={{ color: "transparent" }}
+                    src="/logos/ibm.svg"
+                  />
+                </div>
+                <div className="flex items-center justify-center lg:mt-0 ">
+                  <img
+                    alt="Dropbox Logo"
+                    loading="lazy"
+                    width={115}
+                    height={50}
+                    decoding="async"
+                    style={{ color: "transparent" }}
+                    src="/logos/dropbox.svg"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch">
             <Card
