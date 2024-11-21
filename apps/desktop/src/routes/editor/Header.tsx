@@ -24,11 +24,10 @@ import {
 import { events } from "~/utils/tauri";
 
 export function Header() {
-  let unlistenTitlebar: () => void | undefined;
+  let unlistenTitlebar: UnlistenFn | undefined;
 
   onMount(async () => {
     unlistenTitlebar = await initializeTitlebar();
-    commands.positionTrafficLights([20.0, 48.0]);
   });
 
   onCleanup(() => {
@@ -36,7 +35,7 @@ export function Header() {
   });
 
   setTitlebar("border", false);
-  setTitlebar("height", "4.5rem");
+  setTitlebar("height", "4rem");
   setTitlebar(
     "items",
     <div
@@ -59,15 +58,15 @@ export function Header() {
       <Titlebar />
       <Dialog.Root
         open={progressState.type !== "idle"}
-        onOpenChange={() => {}} // Empty handler prevents closing
+        onOpenChange={() => { }} // Empty handler prevents closing
       >
         <DialogContent
           title={
             progressState.type === "copying"
               ? "Link Copied"
               : progressState.type === "uploading"
-              ? "Creating Shareable Link"
-              : "Exporting Recording"
+                ? "Creating Shareable Link"
+                : "Exporting Recording"
           }
           confirm={<></>}
           class="bg-gray-600"
@@ -92,16 +91,15 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${
-                              state.stage === "rendering"
-                                ? Math.min(
-                                    ((state.renderProgress || 0) /
-                                      (state.totalFrames || 1)) *
-                                      100,
-                                    100
-                                  )
-                                : Math.min(state.progress || 0, 100)
-                            }%`,
+                            width: `${state.stage === "rendering"
+                              ? Math.min(
+                                ((state.renderProgress || 0) /
+                                  (state.totalFrames || 1)) *
+                                100,
+                                100
+                              )
+                              : Math.min(state.progress || 0, 100)
+                              }%`,
                           }}
                         />
                       </div>
@@ -129,16 +127,15 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${
-                              state.stage === "rendering"
-                                ? Math.min(
-                                    ((state.renderProgress || 0) /
-                                      (state.totalFrames || 1)) *
-                                      100,
-                                    100
-                                  )
-                                : Math.min(state.progress || 0, 100)
-                            }%`,
+                            width: `${state.stage === "rendering"
+                              ? Math.min(
+                                ((state.renderProgress || 0) /
+                                  (state.totalFrames || 1)) *
+                                100,
+                                100
+                              )
+                              : Math.min(state.progress || 0, 100)
+                              }%`,
                           }}
                         />
                       </div>
@@ -166,14 +163,13 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${
-                              state.stage === "rendering"
-                                ? Math.min(state.renderProgress || 0, 100)
-                                : Math.min(
-                                    (state.uploadProgress || 0) * 100,
-                                    100
-                                  )
-                            }%`,
+                            width: `${state.stage === "rendering"
+                              ? Math.min(state.renderProgress || 0, 100)
+                              : Math.min(
+                                (state.uploadProgress || 0) * 100,
+                                100
+                              )
+                              }%`,
                           }}
                         />
                       </div>
@@ -181,8 +177,8 @@ export function Header() {
                       <p class="text-xs text-white mt-3 relative z-10">
                         {state.stage === "rendering"
                           ? `Rendering - ${Math.round(
-                              state.renderProgress || 0
-                            )}%`
+                            state.renderProgress || 0
+                          )}%`
                           : state.message}
                       </p>
                     </div>
@@ -203,6 +199,7 @@ import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { createMutation } from "@tanstack/solid-query";
 import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
+import { UnlistenFn } from "@tauri-apps/api/event";
 
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
