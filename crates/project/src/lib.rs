@@ -4,6 +4,7 @@ mod cursor;
 pub use configuration::*;
 pub use cursor::*;
 
+use either::Either;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::PathBuf;
@@ -78,10 +79,11 @@ impl RecordingMeta {
         Ok(meta)
     }
 
-    pub fn save_for_project(&self) {
+    pub fn save_for_project(&self) -> Result<(), Either<serde_json::Error, std::io::Error>> {
         let meta_path = &self.project_path.join("recording-meta.json");
-        let meta = serde_json::to_string_pretty(&self).unwrap();
-        std::fs::write(meta_path, meta).unwrap();
+        let meta = serde_json::to_string_pretty(&self).map_err(Either::Left)?;
+        std::fs::write(meta_path, meta).map_err(Either::Right)?;
+        Ok(())
     }
 
     pub fn project_config(&self) -> ProjectConfiguration {
@@ -133,5 +135,9 @@ impl RecordingMeta {
             println!("Found {} cursor images", data.cursor_images.len());
         }
         data
+    }
+
+    pub fn output_path(&self) -> PathBuf {
+        self.project_path.join("output").join("result.mp4")
     }
 }

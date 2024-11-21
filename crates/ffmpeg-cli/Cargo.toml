@@ -4,10 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ffmpeg-sidecar = "1.1.0"
-cap-utils = { path = "../utils" }
 tauri = { workspace = true }
 tauri-plugin-shell = "2.0.0"
+tokio.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["signal"] }

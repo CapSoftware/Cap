@@ -1,4 +1,4 @@
-use crate::windows::CapWindow;
+use crate::windows::ShowCapWindow;
 use crate::{
     RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings,
     RequestStartRecording, RequestStopRecording,
@@ -100,7 +100,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
         ],
     )?;
-    let app_handle = app.clone();
+    let app = app.clone();
     let is_recording = Arc::new(AtomicBool::new(false));
     let _ = TrayIconBuilder::with_id("tray")
         .icon(Image::from_bytes(include_bytes!(
@@ -109,14 +109,12 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .menu_on_left_click(true)
         .on_menu_event({
-            let app_handle = app_handle.clone();
+            let app_handle = app.clone();
             move |app: &AppHandle, event| match TrayItem::from(event.id) {
                 TrayItem::OpenCap => {
-                    CapWindow::Main.show(&app_handle);
+                    ShowCapWindow::Main.show(&app_handle).ok();
                 }
                 TrayItem::StartNewRecording => {
-                    CapWindow::Main.show(&app_handle);
-
                     let _ = RequestStartRecording.emit(&app_handle);
                 }
                 TrayItem::TakeScreenshot => {
@@ -135,7 +133,9 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     .emit(&app_handle);
                 }
                 TrayItem::OpenSettings => {
-                    CapWindow::Settings { page: None }.show(&app_handle);
+                    ShowCapWindow::Settings { page: None }
+                        .show(&app_handle)
+                        .ok();
                 }
                 TrayItem::Quit => {
                     app.exit(0);
@@ -144,7 +144,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         })
         .on_tray_icon_event({
             let is_recording = Arc::clone(&is_recording);
-            let app_handle = app_handle.clone();
+            let app_handle = app.clone();
             move |tray, event| {
                 if let tauri::tray::TrayIconEvent::Click { .. } = event {
                     if is_recording.load(Ordering::Relaxed) {
@@ -155,43 +155,35 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
         })
-        .build(app);
+        .build(&app);
 
-    RecordingStarted::listen_any(app, {
-        let app_handle = app.clone();
-        let is_recording = Arc::clone(&is_recording);
+    RecordingStarted::listen_any(&app, {
+        let app = app.clone();
+        let is_recording = is_recording.clone();
         move |_| {
-            let app_handle = app_handle.clone();
-            let is_recording = Arc::clone(&is_recording);
-            tauri::async_runtime::spawn(async move {
-                is_recording.store(true, Ordering::Relaxed);
-                if let Some(tray) = app_handle.tray_by_id("tray") {
-                    if let Ok(icon) =
-                        Image::from_bytes(include_bytes!("../icons/tray-stop-icon.png"))
-                    {
-                        let _ = tray.set_icon(Some(icon));
-                    }
-                }
-            });
+            is_recording.store(true, Ordering::Relaxed);
+            let Some(tray) = app.tray_by_id("tray") else {
+                return;
+            };
+
+            if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/tray-stop-icon.png")) {
+                let _ = tray.set_icon(Some(icon));
+            }
         }
     });
 
-    RecordingStopped::listen_any(app, {
+    RecordingStopped::listen_any(&app, {
         let app_handle = app.clone();
-        let is_recording = Arc::clone(&is_recording);
+        let is_recording = is_recording.clone();
         move |_| {
-            let app_handle = app_handle.clone();
-            let is_recording = Arc::clone(&is_recording);
-            tauri::async_runtime::spawn(async move {
-                is_recording.store(false, Ordering::Relaxed);
-                if let Some(tray) = app_handle.tray_by_id("tray") {
-                    if let Ok(icon) =
-                        Image::from_bytes(include_bytes!("../icons/tray-default-icon.png"))
-                    {
-                        let _ = tray.set_icon(Some(icon));
-                    }
-                }
-            });
+            is_recording.store(false, Ordering::Relaxed);
+            let Some(tray) = app_handle.tray_by_id("tray") else {
+                return;
+            };
+
+            if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/tray-default-icon.png")) {
+                let _ = tray.set_icon(Some(icon));
+            }
         }
     });
 

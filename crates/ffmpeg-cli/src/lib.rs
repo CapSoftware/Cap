@@ -3,12 +3,17 @@ use std::{
     io::{Read, Write},
     ops::Deref,
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::Stdio,
 };
 use tauri::utils::platform;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::{Child, ChildStderr, ChildStdin, Command},
+};
 
 pub struct FFmpegProcess {
     pub ffmpeg_stdin: ChildStdin,
+    pub ffmpeg_stderr: ChildStderr,
     cmd: Child,
 }
 
@@ -21,32 +26,55 @@ impl FFmpegProcess {
             command.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let mut cmd = command.stdin(Stdio::piped()).spawn().unwrap_or_else(|e| {
-            println!("Failed to start FFmpeg: {}", e);
-            println!("Command: {:?}", command);
-            panic!("Failed to start FFmpeg");
-        });
+        let mut cmd = command
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap_or_else(|e| {
+                println!("Failed to start FFmpeg: {}", e);
+                println!("Command: {:?}", command);
+                panic!("Failed to start FFmpeg");
+            });
 
         let ffmpeg_stdin = cmd.stdin.take().unwrap_or_else(|| {
             println!("Failed to capture FFmpeg stdin");
             panic!("Failed to capture FFmpeg stdin");
         });
 
-        Self { ffmpeg_stdin, cmd }
+        let ffmpeg_stderr = cmd.stderr.take().unwrap_or_else(|| {
+            println!("Failed to capture FFmpeg stderr");
+            panic!("Failed to capture FFmpeg stderr");
+        });
+
+        Self {
+            ffmpeg_stdin,
+            ffmpeg_stderr,
+            cmd,
+        }
     }
 
-    pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
-        self.ffmpeg_stdin.write_all(data)
+    pub async fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
+        self.ffmpeg_stdin.write_all(data).await
     }
 
-    pub fn stop(&mut self) {
-        self.ffmpeg_stdin.write_all(b"q").ok();
-        self.ffmpeg_stdin.flush().ok();
+    pub async fn stop(&mut self) {
+        self.ffmpeg_stdin.write_all(b"q").await.ok();
+        self.ffmpeg_stdin.flush().await.ok();
         println!("Sent stop command to FFmpeg");
     }
 
-    pub fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        self.cmd.wait()
+    pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.cmd.wait().await
+    }
+
+    pub async fn read_stderr(&mut self) -> std::io::Result<String> {
+        let mut err = String::new();
+        self.ffmpeg_stderr.read_to_string(&mut err).await?;
+        Ok(err)
+    }
+
+    pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+        self.cmd.try_wait()
     }
 
     pub fn kill(&mut self) {
@@ -69,12 +97,19 @@ impl FFmpegProcess {
         Ok(None)
     }
 
-    pub fn read_video_frame(
+    pub async fn read_video_frame(
         &mut self,
         frame_size: usize,
     ) -> Result<Option<Vec<u8>>, std::io::Error> {
         let mut buffer = vec![0u8; frame_size];
-        match self.cmd.stdout.as_mut().unwrap().read_exact(&mut buffer) {
+        match self
+            .cmd
+            .stdout
+            .as_mut()
+            .unwrap()
+            .read_exact(&mut buffer)
+            .await
+        {
             Ok(_) => {
                 println!("Read video frame of size: {}", buffer.len());
                 Ok(Some(buffer))
@@ -84,10 +119,10 @@ impl FFmpegProcess {
         }
     }
 
-    pub fn write_video_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
+    pub async fn write_video_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
         let mut remaining = data;
         while !remaining.is_empty() {
-            match self.ffmpeg_stdin.write(remaining) {
+            match self.ffmpeg_stdin.write(remaining).await {
                 Ok(0) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::WriteZero,
@@ -105,7 +140,7 @@ impl FFmpegProcess {
                 }
             }
         }
-        self.ffmpeg_stdin.flush()?;
+        self.ffmpeg_stdin.flush().await?;
         Ok(())
     }
 
@@ -114,7 +149,10 @@ impl FFmpegProcess {
         {
             use nix::sys::signal::{kill, Signal};
             use nix::unistd::Pid;
-            kill(Pid::from_raw(self.cmd.id() as i32), Signal::SIGSTOP)?;
+            kill(
+                Pid::from_raw(self.cmd.id().unwrap() as i32),
+                Signal::SIGSTOP,
+            )?;
             println!("Sent SIGSTOP to FFmpeg");
         }
         Ok(())
@@ -125,7 +163,10 @@ impl FFmpegProcess {
         {
             use nix::sys::signal::{kill, Signal};
             use nix::unistd::Pid;
-            kill(Pid::from_raw(self.cmd.id() as i32), Signal::SIGCONT)?;
+            kill(
+                Pid::from_raw(self.cmd.id().unwrap() as i32),
+                Signal::SIGCONT,
+            )?;
             println!("Sent SIGCONT to FFmpeg");
         }
         Ok(())
@@ -237,8 +278,11 @@ impl Default for FFmpeg {
 
 impl FFmpeg {
     pub fn new() -> Self {
+        let mut command = Command::new(relative_command_path("ffmpeg").unwrap());
+        command.arg("-hide_banner");
+
         Self {
-            command: Command::new(relative_command_path("ffmpeg").unwrap()),
+            command,
             source_index: 0,
         }
     }

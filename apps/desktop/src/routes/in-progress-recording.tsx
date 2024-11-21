@@ -54,7 +54,6 @@ export default function () {
   return (
     <div
       class="text-gray-400 flex flex-row items-stretch bg-gray-500 w-full h-full animate-in fade-in"
-      data-tauri-drag-region
     >
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <button

@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.0-beta.9.1"
+version = "0.3.0-beta.9.2"
 description = "Beautiful, shareable screen recordings."
 authors = ["you"]
 edition = "2021"
@@ -28,45 +28,44 @@ tauri-plugin-shell = "2.0.0"
 tauri-plugin-store = "2.0.0"
 tauri-plugin-os = "2.0.0"
 tauri-plugin-process = "2.0.0"
-tauri-plugin-decorum = "1.0.0"
 tauri-plugin-dialog = "2.0.0"
 tauri-plugin-updater = "2.0.0"
 tauri-plugin-notification = "2.0.0-rc"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
 tauri-plugin-global-shortcut = "2.0.0"
 tauri-plugin-single-instance = "2.0.1"
+tauri-plugin-http = "2.0.0-rc.0"
 tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 specta.workspace = true
 specta-typescript = "0.0.7"
-swift-rs = "1.0.6"
-nix = { version = "0.29.0", features = ["fs"] }
 tokio.workspace = true
 uuid = { version = "1.10.0", features = ["v4"] }
 scap.workspace = true
-ffmpeg-sidecar = { git = "https://github.com/CapSoftware/ffmpeg-sidecar", branch = "main" }
-wgpu.workspace = true
-bytemuck = { version = "1.7", features = ["derive"] }
 image = "0.25.2"
+mp4 = "0.14.0"
 tauri-plugin-fs = "2.0.0-rc.0"
 futures-intrusive = "0.5.0"
 anyhow.workspace = true
-mp4 = "0.14.0"
 futures = "0.3"
 axum = { version = "0.7.5", features = ["ws"] }
 tracing = "0.1.40"
-indexmap = "2.5.0"
-num-traits = "0.2.19"
 tempfile = "3.12.0"
 ffmpeg.workspace = true
 chrono = "0.4.38"
 rodio = "0.19.0"
-fast_image_resize = "4.2.1"
 png = "0.17.13"
 device_query = "2.1.0"
 base64 = "0.22.1"
+reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
+dotenvy_macro = "0.15.7"
+global-hotkey = "0.6.3"
+rand = "0.8.5"
+cpal.workspace = true
+keyed_priority_queue = "0.4.2"
+sentry.workspace = true
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
@@ -75,13 +74,9 @@ cap-ffmpeg-cli = { path = "../../../crates/ffmpeg-cli" }
 cap-editor = { path = "../../../crates/editor" }
 cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
-reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
-dotenvy_macro = "0.15.7"
-global-hotkey = "0.6.3"
-tauri-plugin-http = "2.0.0-rc.0"
-rand = "0.8.5"
-cpal.workspace = true
-keyed_priority_queue = "0.4.2"
+cap-recording = { path = "../../../crates/recording" }
+cap-export = { path = "../../../crates/export" }
+tauri-plugin-window-state = "2.0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

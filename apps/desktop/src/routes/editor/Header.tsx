@@ -24,11 +24,10 @@ import {
 import { events } from "~/utils/tauri";
 
 export function Header() {
-  let unlistenTitlebar: () => void | undefined;
+  let unlistenTitlebar: UnlistenFn | undefined;
 
   onMount(async () => {
     unlistenTitlebar = await initializeTitlebar();
-    commands.positionTrafficLights([20.0, 48.0]);
   });
 
   onCleanup(() => {
@@ -36,7 +35,7 @@ export function Header() {
   });
 
   setTitlebar("border", false);
-  setTitlebar("height", "4.5rem");
+  setTitlebar("height", "4rem");
   setTitlebar(
     "items",
     <div
@@ -70,115 +69,127 @@ export function Header() {
               : "Exporting Recording"
           }
           confirm={<></>}
+          class="bg-gray-600"
         >
-          <Switch>
-            <Match when={progressState.type === "copying"}>
-              {(when) => {
-                const state = progressState as Extract<
-                  ProgressState,
-                  { type: "copying" }
-                >;
-                return (
-                  <div class="w-[80%] text-center mx-auto">
-                    <h3 class="text-sm font-medium mb-3 text-gray-50">
-                      {state.stage === "rendering"
-                        ? "Rendering video"
-                        : "Copying to clipboard"}
-                    </h3>
+          <div class="min-h-[120px] flex items-center justify-center relative">
+            <Switch>
+              <Match when={progressState.type === "copying"}>
+                {(when) => {
+                  const state = progressState as Extract<
+                    ProgressState,
+                    { type: "copying" }
+                  >;
+                  return (
+                    <div class="w-[80%] text-center mx-auto relative z-10">
+                      <h3 class="text-sm font-medium mb-3 text-gray-50">
+                        {state.stage === "rendering"
+                          ? "Rendering video"
+                          : "Copying to clipboard"}
+                      </h3>
 
-                    <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
-                      <div
-                        class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
-                        style={{
-                          width: `${
-                            state.stage === "rendering"
-                              ? Math.min(
-                                  ((state.renderProgress || 0) /
-                                    (state.totalFrames || 1)) *
-                                    100,
-                                  100
-                                )
-                              : Math.min(state.progress || 0, 100)
-                          }%`,
-                        }}
-                      />
+                      <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+                        <div
+                          class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
+                          style={{
+                            width: `${
+                              state.stage === "rendering"
+                                ? Math.min(
+                                    ((state.renderProgress || 0) /
+                                      (state.totalFrames || 1)) *
+                                      100,
+                                    100
+                                  )
+                                : Math.min(state.progress || 0, 100)
+                            }%`,
+                          }}
+                        />
+                      </div>
+
+                      <p class="text-xs mt-3 relative z-10">{state.message}</p>
                     </div>
+                  );
+                }}
+              </Match>
+              <Match when={progressState.type === "saving"}>
+                {(when) => {
+                  const state = progressState as Extract<
+                    ProgressState,
+                    { type: "saving" }
+                  >;
+                  return (
+                    <div class="w-[80%] text-center mx-auto relative z-10">
+                      <h3 class="text-sm font-medium mb-3 text-gray-50">
+                        {state.stage === "rendering"
+                          ? "Rendering video"
+                          : "Saving file"}
+                      </h3>
 
-                    <p class="text-xs text-gray-50 mt-2">{state.message}</p>
-                  </div>
-                );
-              }}
-            </Match>
-            <Match when={progressState.type === "saving"}>
-              {(when) => {
-                const state = progressState as Extract<
-                  ProgressState,
-                  { type: "saving" }
-                >;
-                return (
-                  <div class="w-[80%] text-center mx-auto">
-                    <h3 class="text-sm font-medium mb-3 text-gray-50">
-                      {state.stage === "rendering"
-                        ? "Rendering video"
-                        : "Saving file"}
-                    </h3>
+                      <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+                        <div
+                          class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
+                          style={{
+                            width: `${
+                              state.stage === "rendering"
+                                ? Math.min(
+                                    ((state.renderProgress || 0) /
+                                      (state.totalFrames || 1)) *
+                                      100,
+                                    100
+                                  )
+                                : Math.min(state.progress || 0, 100)
+                            }%`,
+                          }}
+                        />
+                      </div>
 
-                    <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
-                      <div
-                        class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
-                        style={{
-                          width: `${
-                            state.stage === "rendering"
-                              ? Math.min(
-                                  ((state.renderProgress || 0) /
-                                    (state.totalFrames || 1)) *
-                                    100,
-                                  100
-                                )
-                              : Math.min(state.progress || 0, 100)
-                          }%`,
-                        }}
-                      />
+                      <p class="text-xs mt-3 relative z-10">{state.message}</p>
                     </div>
+                  );
+                }}
+              </Match>
+              <Match when={progressState.type === "uploading"}>
+                {(when) => {
+                  const state = progressState as Extract<
+                    ProgressState,
+                    { type: "uploading" }
+                  >;
+                  return (
+                    <div class="w-[80%] text-center mx-auto relative z-10">
+                      <h3 class="text-sm font-medium mb-3 text-gray-50">
+                        {state.stage === "rendering"
+                          ? "Rendering video"
+                          : "Creating shareable link"}
+                      </h3>
 
-                    <p class="text-xs text-gray-50 mt-2">{state.message}</p>
-                  </div>
-                );
-              }}
-            </Match>
-            <Match when={progressState.type === "uploading"}>
-              {(when) => {
-                const state = progressState as Extract<
-                  ProgressState,
-                  { type: "uploading" }
-                >;
-                return (
-                  <div class="w-[80%] text-center mx-auto">
-                    <h3 class="text-sm font-medium mb-3 text-gray-50">
-                      {state.stage === "rendering"
-                        ? "Rendering video"
-                        : "Creating shareable link"}
-                    </h3>
+                      <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+                        <div
+                          class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
+                          style={{
+                            width: `${
+                              state.stage === "rendering"
+                                ? Math.min(state.renderProgress || 0, 100)
+                                : Math.min(
+                                    (state.uploadProgress || 0) * 100,
+                                    100
+                                  )
+                            }%`,
+                          }}
+                        />
+                      </div>
 
-                    <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
-                      <div
-                        class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
-                        style={{
-                          width: `${
-                            state.stage === "rendering"
-                              ? Math.min(state.renderProgress || 0, 100)
-                              : Math.min(state.uploadProgress || 0, 100)
-                          }%`,
-                        }}
-                      />
+                      <p class="text-xs text-white mt-3 relative z-10">
+                        {state.stage === "rendering"
+                          ? `Rendering - ${Math.round(
+                              state.renderProgress || 0
+                            )}%`
+                          : state.message}
+                      </p>
                     </div>
-
-                    <p class="text-xs text-gray-50 mt-2">{state.message}</p>
-                  </div>
-                );
-              }}
-            </Match>
-          </Switch>
+                  );
+                }}
+              </Match>
+            </Switch>
+          </div>
         </DialogContent>
       </Dialog.Root>
     </>
@@ -191,74 +202,73 @@ import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { createMutation } from "@tanstack/solid-query";
 import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
+import { UnlistenFn } from "@tauri-apps/api/event";
 
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
 
-  return (
-    <>
-      <Button
-        variant="primary"
-        size="md"
-        onClick={() => {
-          save({
-            filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-            defaultPath: `~/Desktop/${prettyName()}.mp4`,
-          }).then((p) => {
-            if (!p) return;
+  const exportVideo = createMutation(() => ({
+    mutationFn: async () => {
+      const path = await save({
+        filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
+        defaultPath: `~/Desktop/${prettyName()}.mp4`,
+      });
+      if (!path) return;
 
-            setProgressState({
-              type: "saving",
-              progress: 0,
-              renderProgress: 0,
-              totalFrames: 0,
-              message: "Preparing to render...",
-              mediaPath: p,
-              stage: "rendering",
-            });
+      setProgressState({
+        type: "saving",
+        progress: 0,
+        renderProgress: 0,
+        totalFrames: 0,
+        message: "Preparing to render...",
+        mediaPath: path,
+        stage: "rendering",
+      });
 
-            const progress = new Channel<RenderProgress>();
-            progress.onmessage = (p) => {
-              if (
-                p.type === "FrameRendered" &&
-                progressState.type === "saving"
-              ) {
-                setProgressState({
-                  ...progressState,
-                  renderProgress: p.current_frame,
-                });
-              }
-              if (
-                p.type === "EstimatedTotalFrames" &&
-                progressState.type === "saving"
-              ) {
-                setProgressState({
-                  ...progressState,
-                  totalFrames: p.total_frames,
-                });
-              }
-            };
-
-            return commands
-              .renderToFile(p, videoId, project, progress)
-              .then(() => {
-                setProgressState({
-                  type: "saving",
-                  progress: 100,
-                  message: "Saved successfully!",
-                  mediaPath: p,
-                });
-
-                setTimeout(() => {
-                  setProgressState({ type: "idle" });
-                }, 1500);
-              });
+      const progress = new Channel<RenderProgress>();
+      progress.onmessage = (p) => {
+        if (p.type === "FrameRendered" && progressState.type === "saving") {
+          setProgressState({
+            ...progressState,
+            renderProgress: p.current_frame,
           });
-        }}
-      >
-        Export
-      </Button>
-    </>
+        }
+        if (
+          p.type === "EstimatedTotalFrames" &&
+          progressState.type === "saving"
+        ) {
+          setProgressState({
+            ...progressState,
+            totalFrames: p.total_frames,
+          });
+        }
+      };
+
+      const videoPath = await commands.exportVideo(
+        videoId,
+        project,
+        progress,
+        false
+      );
+      await commands.copyFileToPath(videoPath, path);
+
+      setProgressState({
+        type: "saving",
+        progress: 100,
+        message: "Saved successfully!",
+        mediaPath: path,
+      });
+
+      setTimeout(() => {
+        setProgressState({ type: "idle" });
+      }, 1500);
+    },
+  }));
+
+  return (
+    <Button variant="primary" size="md" onClick={() => exportVideo.mutate()}>
+      Export
+    </Button>
   );
 }
 
@@ -270,97 +280,152 @@ function ShareButton() {
 
   const uploadVideo = createMutation(() => ({
     mutationFn: async () => {
-      if (!recordingMeta()) return;
-
-      if (recordingMeta()?.sharing) {
-        // Use reupload for existing shares
-        return await commands.reuploadRenderedVideo(
-          videoId,
-          project
-            ? project
-            : presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-        );
+      console.log("Starting upload process...");
+      if (!recordingMeta()) {
+        console.error("No recording metadata available");
+        throw new Error("Recording metadata not available");
       }
 
-      setProgressState({
-        type: "uploading",
-        renderProgress: 0,
-        uploadProgress: 0,
-        message: "Preparing to render...",
-        mediaPath: videoId,
-        stage: "rendering",
-        totalFrames: 0,
-      });
+      let unlisten: (() => void) | undefined;
 
-      // Listen for upload progress events
-      const unlisten = await events.uploadProgress.listen(
-        (event: {
-          payload: { stage: string; progress: number; message: string };
-        }) => {
+      try {
+        // Set initial progress state
+        setProgressState({
+          type: "uploading",
+          renderProgress: 0,
+          uploadProgress: 0,
+          message: "Rendering - 0%",
+          mediaPath: videoId,
+          stage: "rendering",
+        });
+
+        // Setup progress listener before starting upload
+        unlisten = await events.uploadProgress.listen((event) => {
+          console.log("Upload progress event:", event.payload);
           if (progressState.type === "uploading") {
+            const progress = Math.round(event.payload.progress * 100);
             if (event.payload.stage === "rendering") {
               setProgressState({
                 type: "uploading",
-                renderProgress: Math.round(event.payload.progress * 100),
+                renderProgress: progress,
                 uploadProgress: 0,
-                message: event.payload.message,
+                message: `Rendering - ${progress}%`,
                 mediaPath: videoId,
                 stage: "rendering",
-                totalFrames: progressState.totalFrames,
               });
             } else {
               setProgressState({
                 type: "uploading",
                 renderProgress: 100,
-                uploadProgress: Math.round(event.payload.progress * 100),
-                message: event.payload.message,
+                uploadProgress: progress / 100,
+                message: `Uploading - ${progress}%`,
                 mediaPath: videoId,
                 stage: "uploading",
-                totalFrames: progressState.totalFrames,
               });
             }
           }
-        }
-      );
+        });
 
-      try {
-        const result = await commands.uploadRenderedVideo(
-          videoId,
-          project
-            ? project
-            : presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
-          null
-        );
+        console.log("Starting actual upload...");
+        const projectConfig =
+          project ?? presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG;
 
-        unlisten();
+        setProgressState({
+          type: "uploading",
+          renderProgress: 0,
+          uploadProgress: 0,
+          message: "Rendering - 0%",
+          mediaPath: videoId,
+          stage: "rendering",
+        });
+
+        const progress = new Channel<RenderProgress>();
+        progress.onmessage = (p) => {
+          console.log("Progress channel message:", p);
+          if (
+            p.type === "FrameRendered" &&
+            progressState.type === "uploading"
+          ) {
+            const renderProgress = Math.round(
+              (p.current_frame / (progressState.totalFrames || 1)) * 100
+            );
+            setProgressState({
+              ...progressState,
+              message: `Rendering - ${renderProgress}%`,
+              renderProgress,
+            });
+          }
+          if (
+            p.type === "EstimatedTotalFrames" &&
+            progressState.type === "uploading"
+          ) {
+            console.log("Got total frames:", p.total_frames);
+            setProgressState({
+              ...progressState,
+              totalFrames: p.total_frames,
+            });
+          }
+        };
+
+        await commands.exportVideo(videoId, projectConfig, progress, false);
+
+        // Now proceed with upload
+        const result = recordingMeta()?.sharing
+          ? await commands.uploadExportedVideo(videoId, "Reupload")
+          : await commands.uploadExportedVideo(videoId, {
+              Initial: { pre_created_video: null },
+            });
+
+        console.log("Upload result:", result);
 
         if (result === "NotAuthenticated") {
-          throw new Error("Not authenticated");
+          throw new Error("You need to sign in to share recordings");
         }
         if (result === "PlanCheckFailed") {
-          throw new Error("Plan check failed");
+          throw new Error("Failed to verify your subscription status");
         }
         if (result === "UpgradeRequired") {
-          throw new Error("Upgrade required");
+          throw new Error("This feature requires an upgraded plan");
         }
+
+        // Show success state briefly before resetting
+        setProgressState({
+          type: "uploading",
+          renderProgress: 100,
+          uploadProgress: 100,
+          message: "Upload complete!",
+          mediaPath: videoId,
+          stage: "uploading",
+        });
+
+        setTimeout(() => {
+          setProgressState({ type: "idle" });
+        }, 1500);
 
         return result;
       } catch (error) {
-        unlisten();
+        console.error("Upload error:", error);
         setProgressState({ type: "idle" });
-        throw error;
+        throw error instanceof Error
+          ? error
+          : new Error("Failed to upload recording");
+      } finally {
+        if (unlisten) {
+          console.log("Cleaning up upload progress listener");
+          unlisten();
+        }
       }
     },
     onSuccess: () => {
+      console.log("Upload successful, refreshing metadata");
       metaActions.refetch();
-      // Don't immediately set to idle - let the progress show for a moment
-      setTimeout(() => {
-        setProgressState({ type: "idle" });
-      }, 1500);
     },
     onError: (error) => {
-      console.error("Upload error:", error);
+      console.error("Upload mutation error:", error);
       setProgressState({ type: "idle" });
+      commands.globalMessageDialog(
+        error instanceof Error ? error.message : "Failed to upload recording"
+      );
     },
   }));
 

@@ -9,8 +9,8 @@ export default function () {
       <Show
         when={
           currentRecording.data &&
-          currentRecording.data.displaySource.variant === "window" &&
-          currentRecording.data.displaySource.bounds
+          currentRecording.data.captureTarget.variant === "window" &&
+          currentRecording.data.captureTarget.bounds
         }
       >
         {(bounds) => (
