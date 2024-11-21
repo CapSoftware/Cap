@@ -178,54 +178,31 @@ async fn stop_recording(mut actor: Actor) -> Result<CompletedRecording, Recordin
             "Cap {}",
             chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
         ),
-        display: Display {
-            path: actor
+        content: Content::SingleSegment(SingleSegment {
+            display: Display {
+                path: actor
+                    .pipeline
+                    .display_output_path
+                    .strip_prefix(&actor.recording_dir)
+                    .unwrap()
+                    .to_owned(),
+            },
+            camera: actor
                 .pipeline
-                .display_output_path
-                .strip_prefix(&actor.recording_dir)
-                .unwrap()
-                .to_owned(),
-        },
-        camera: actor
-            .pipeline
-            .camera_output_path
-            .as_ref()
-            .map(|path| CameraMeta {
-                path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
-            }),
-        audio: actor
-            .pipeline
-            .audio_output_path
-            .as_ref()
-            .map(|path| AudioMeta {
-                path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
-            }),
-        segments: {
-            let segments = [segment];
-
-            let relative_segments = segments
-                .iter()
-                .map(|(l, r)| (l - segments[0].0, r - segments[0].0))
-                .collect::<Vec<_>>();
-
-            let mut segments = vec![];
-
-            let mut diff = 0.0;
-
-            for (i, chunk) in relative_segments.iter().enumerate() {
-                if i < relative_segments.len() / 2 {
-                    segments.push(RecordingSegment {
-                        start: diff,
-                        end: chunk.1 - chunk.0 + diff,
-                    });
-                }
-
-                diff += chunk.1 - chunk.0;
-            }
-
-            segments
-        },
-        cursor: Some(PathBuf::from("cursor.json")),
+                .camera_output_path
+                .as_ref()
+                .map(|path| CameraMeta {
+                    path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                }),
+            audio: actor
+                .pipeline
+                .audio_output_path
+                .as_ref()
+                .map(|path| AudioMeta {
+                    path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                }),
+            cursor: Some(PathBuf::from("cursor.json")),
+        }),
     };
 
     actor.pipeline.inner.shutdown().await?;

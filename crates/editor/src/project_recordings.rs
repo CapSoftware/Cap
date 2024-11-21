@@ -56,32 +56,51 @@ impl Audio {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[derive(Debug, Clone, Serialize, Type)]
 pub struct ProjectRecordings {
+    pub segments: Vec<SegmentRecordings>,
+}
+
+impl ProjectRecordings {
+    pub fn new(meta: &RecordingMeta) -> Self {
+        let segments = match &meta.content {
+            cap_project::Content::SingleSegment(segment) => {
+                let display = Video::new(&meta.project_path.join(&segment.display.path));
+                let camera = segment
+                    .camera
+                    .as_ref()
+                    .map(|camera| Video::new(&meta.project_path.join(&camera.path)));
+                let audio = segment
+                    .audio
+                    .as_ref()
+                    .map(|audio| Audio::new(&meta.project_path.join(&audio.path)));
+
+                let recordings = SegmentRecordings {
+                    display,
+                    camera,
+                    audio,
+                };
+
+                vec![recordings]
+            }
+        };
+
+        Self { segments }
+    }
+
+    pub fn duration(&self) -> f64 {
+        self.segments.iter().map(|s| s.duration()).sum()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct SegmentRecordings {
     pub display: Video,
     pub camera: Option<Video>,
     pub audio: Option<Audio>,
 }
 
-impl ProjectRecordings {
-    pub fn new(meta: &RecordingMeta) -> Self {
-        let display = Video::new(&meta.project_path.join(&meta.display.path));
-        let camera = meta
-            .camera
-            .as_ref()
-            .map(|camera| Video::new(&meta.project_path.join(&camera.path)));
-        let audio = meta
-            .audio
-            .as_ref()
-            .map(|audio| Audio::new(&meta.project_path.join(&audio.path)));
-
-        ProjectRecordings {
-            display,
-            camera,
-            audio,
-        }
-    }
-
+impl SegmentRecordings {
     pub fn duration(&self) -> f64 {
         let mut duration_ns = [
             Some(self.display.duration),

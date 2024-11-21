@@ -11,7 +11,7 @@ use crate::{
     App, CurrentRecordingChanged, MutableState, NewRecordingAdded, PreCreatedVideo,
     RecordingStarted, RecordingStopped, UploadMode,
 };
-use cap_editor::ProjectRecordings;
+use cap_editor::{ProjectRecordings, SegmentRecordings};
 use cap_media::feeds::CameraFeed;
 use cap_media::sources::{AVFrameCapture, CaptureScreen, CaptureWindow, ScreenCaptureSource};
 use cap_project::{ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment};
@@ -209,6 +209,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                 let start = passed_duration;
                 passed_duration += recording.segments[i + 1] - recording.segments[i];
                 segments.push(TimelineSegment {
+                    recording_segment: None,
                     start,
                     end: passed_duration.min(recordings.duration()),
                     timescale: 1.0,

@@ -19,8 +19,8 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid};
-use cap_editor::{EditorInstance, FRAMES_WS_PATH};
-use cap_editor::{EditorState, ProjectRecordings};
+use cap_editor::{EditorInstance, ProjectRecordings, FRAMES_WS_PATH};
+use cap_editor::{EditorState, SegmentRecordings};
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::sources::CaptureScreen;
 use cap_media::{
@@ -735,7 +735,7 @@ async fn create_editor_instance(
             let project_config = editor_instance.project_config.1.borrow();
             project_config.clone()
         },
-        recordings: editor_instance.recordings,
+        recordings: editor_instance.recordings.clone(),
         path: editor_instance.project_path.clone(),
         pretty_name: meta.pretty_name,
     })
@@ -1302,13 +1302,14 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             project_path: recording_dir.clone(),
             sharing: None,
             pretty_name: screenshot_name,
-            display: Display {
-                path: screenshot_path.clone(),
-            },
-            camera: None,
-            audio: None,
-            segments: vec![],
-            cursor: None,
+            content: cap_project::Content::SingleSegment(cap_project::SingleSegment {
+                display: Display {
+                    path: screenshot_path.clone(),
+                },
+                camera: None,
+                audio: None,
+                cursor: None,
+            }),
         }
         .save_for_project();
 

@@ -7,7 +7,7 @@ pub use cursor::*;
 use either::Either;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Display {
@@ -44,38 +44,18 @@ pub struct RecordingMeta {
     pub pretty_name: String,
     #[serde(default)]
     pub sharing: Option<SharingMeta>,
-    pub display: Display,
-    #[serde(default)]
-    pub camera: Option<CameraMeta>,
-    #[serde(default)]
-    pub audio: Option<AudioMeta>,
-    #[serde(default)]
-    pub segments: Vec<RecordingSegment>,
-    pub cursor: Option<PathBuf>,
+    #[serde(flatten)]
+    pub content: Content,
 }
 
 impl RecordingMeta {
     pub fn load_for_project(project_path: &PathBuf) -> Result<Self, String> {
         let meta_path = project_path.join("recording-meta.json");
-        let meta = match std::fs::read_to_string(&meta_path) {
-            Ok(content) => content,
-            Err(_) => {
-                return Ok(Self {
-                    project_path: project_path.clone(),
-                    pretty_name: String::new(),
-                    sharing: None,
-                    display: Display {
-                        path: PathBuf::new(),
-                    },
-                    camera: None,
-                    audio: None,
-                    segments: Vec::new(),
-                    cursor: None,
-                });
-            }
-        };
-        let mut meta: Self = serde_json::from_str(&meta).map_err(|e| e.to_string())?;
+        let mut meta: Self =
+            serde_json::from_str(&std::fs::read_to_string(&meta_path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
         meta.project_path = project_path.clone();
+
         Ok(meta)
     }
 
@@ -90,12 +70,37 @@ impl RecordingMeta {
         ProjectConfiguration::load(&self.project_path).unwrap_or_default()
     }
 
-    pub fn cursor_data(&self) -> CursorData {
+    pub fn output_path(&self) -> PathBuf {
+        self.project_path.join("output").join("result.mp4")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub enum Content {
+    SingleSegment(SingleSegment),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct SingleSegment {
+    pub display: Display,
+    #[serde(default)]
+    pub camera: Option<CameraMeta>,
+    #[serde(default)]
+    pub audio: Option<AudioMeta>,
+    pub cursor: Option<PathBuf>,
+}
+
+impl SingleSegment {
+    pub fn path(&self, meta: &RecordingMeta, path: impl AsRef<Path>) -> PathBuf {
+        meta.project_path.join("content").join(path)
+    }
+
+    pub fn cursor_data(&self, meta: &RecordingMeta) -> CursorData {
         let Some(cursor_path) = &self.cursor else {
             return CursorData::default();
         };
 
-        let full_path = self.project_path.join(cursor_path);
+        let full_path = self.path(meta, cursor_path);
         println!("Loading cursor data from: {:?}", full_path);
 
         // Try to load the cursor data
@@ -108,7 +113,7 @@ impl RecordingMeta {
         };
 
         // If cursor_images is empty but cursor files exist, populate it
-        let cursors_dir = self.project_path.join("content").join("cursors");
+        let cursors_dir = self.path(meta, "cursors");
         if data.cursor_images.is_empty() && cursors_dir.exists() {
             println!("Scanning cursors directory: {:?}", cursors_dir);
             if let Ok(entries) = std::fs::read_dir(&cursors_dir) {
@@ -135,9 +140,5 @@ impl RecordingMeta {
             println!("Found {} cursor images", data.cursor_images.len());
         }
         data
-    }
-
-    pub fn output_path(&self) -> PathBuf {
-        self.project_path.join("output").join("result.mp4")
     }
 }

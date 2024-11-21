@@ -34,7 +34,6 @@ pub struct CursorData {
 }
 
 impl CursorData {
-    // Add a helper method to load from a file
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {}", e))?;
         serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {}", e))
