@@ -1,6 +1,9 @@
 #![allow(unused_mut)]
-use std::{path::PathBuf, str::FromStr};
 
+use crate::fake_window;
+use serde::Deserialize;
+use specta::Type;
+use std::{path::PathBuf, str::FromStr};
 use tauri::{
     AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
@@ -97,7 +100,7 @@ impl CapWindowId {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Type, Deserialize)]
 pub enum ShowCapWindow {
     Setup,
     Main,
@@ -305,6 +308,8 @@ impl ShowCapWindow {
 		                    }
 		                }).ok();
                 }
+
+                fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 
                 window
             }

@@ -1,12 +1,15 @@
-use crate::audio::AppSounds;
-use crate::auth::AuthStore;
-use crate::general_settings::GeneralSettingsStore;
-use crate::upload::get_s3_config;
-use crate::windows::{CapWindowId, ShowCapWindow};
 use crate::{
-    create_screenshot, notifications, open_editor, open_external_link, platform,
-    upload_rendered_video, web_api, App, CurrentRecordingChanged, MutableState, NewRecordingAdded,
-    PreCreatedVideo, RecordingStarted, RecordingStopped, ShowCapturesPanel,
+    audio::AppSounds,
+    auth::AuthStore,
+    create_screenshot,
+    export::export_video,
+    general_settings::GeneralSettingsStore,
+    notifications, open_editor, open_external_link, platform,
+    upload::get_s3_config,
+    upload_exported_video, web_api,
+    windows::{CapWindowId, ShowCapWindow},
+    App, CurrentRecordingChanged, MutableState, NewRecordingAdded, PreCreatedVideo,
+    RecordingStarted, RecordingStopped, UploadMode,
 };
 use cap_editor::ProjectRecordings;
 use cap_media::feeds::CameraFeed;
@@ -180,7 +183,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
     let recording_dir = recording.recording_dir.clone();
 
-    ShowCapturesPanel.emit(&app).ok();
+    ShowCapWindow::PrevRecordings.show(&app).ok();
 
     NewRecordingAdded {
         path: recording_dir.clone(),
@@ -288,18 +291,29 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                 open_external_link(app.clone(), pre_created_video.link.clone()).ok();
 
                 // Start the upload process in the background with retry mechanism
-                let app_clone = app.clone();
+                let app = app.clone();
 
                 tauri::async_runtime::spawn(async move {
                     let max_retries = 3;
                     let mut retry_count = 0;
 
+                    export_video(
+                        app.clone(),
+                        recording.id.clone(),
+                        config,
+                        tauri::ipc::Channel::new(|_| Ok(())),
+                        true,
+                    )
+                    .await
+                    .ok();
+
                     while retry_count < max_retries {
-                        match upload_rendered_video(
-                            app_clone.clone(),
+                        match upload_exported_video(
+                            app.clone(),
                             recording.id.clone(),
-                            ProjectConfiguration::default(),
-                            Some(pre_created_video.clone()),
+                            UploadMode::Initial {
+                                pre_created_video: Some(pre_created_video.clone()),
+                            },
                         )
                         .await
                         {
@@ -320,7 +334,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                                 } else {
                                     println!("Max retries reached. Upload failed.");
                                     notifications::send_notification(
-                                        &app_clone,
+                                        &app,
                                         notifications::NotificationType::UploadFailed,
                                     );
                                 }

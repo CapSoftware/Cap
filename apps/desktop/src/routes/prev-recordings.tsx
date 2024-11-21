@@ -23,6 +23,7 @@ import { createElementBounds } from "@solid-primitives/bounds";
 import { TransitionGroup } from "solid-transition-group";
 import { makePersisted } from "@solid-primitives/storage";
 import { Channel } from "@tauri-apps/api/core";
+import { createStore, produce } from "solid-js/store";
 
 import {
   commands,
@@ -33,7 +34,6 @@ import {
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
 import { progressState, setProgressState } from "~/store/progress";
-import { createStore, produce } from "solid-js/store";
 
 type MediaEntry = {
   path: string;
@@ -43,7 +43,6 @@ type MediaEntry = {
 };
 
 export default function () {
-  const presets = createPresets();
   const [recordings, setRecordings] = makePersisted(
     createStore<MediaEntry[]>([]),
     { name: "recordings-store" }
@@ -146,451 +145,37 @@ export default function () {
             exitActiveClass="absolute"
           >
             <For each={allMedia()}>
-              {(media, i) => {
+              {(media) => {
                 const [ref, setRef] = createSignal<HTMLElement | null>(null);
                 const normalizedPath = media.path.replace(/\\/g, "/");
                 const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
 
                 const type = media.type ?? "recording";
-                const fileId =
-                  type === "recording"
-                    ? mediaId
-                    : normalizedPath
-                        .split("screenshots/")[1]
-                        .split("/")[0]
-                        .replace(".cap", "");
                 const isRecording = type !== "screenshot";
 
-                const recordingMeta = createQuery(() => ({
-                  queryKey: ["recordingMeta", fileId],
-                  queryFn: () =>
-                    commands.getRecordingMeta(
-                      fileId,
-                      isRecording ? "recording" : "screenshot"
-                    ),
-                  enabled: true,
-                }));
-
-                const copyMedia = createMutation(() => ({
-                  mutationFn: async () => {
-                    setProgressState({
-                      type: "copying",
-                      progress: 0,
-                      renderProgress: 0,
-                      totalFrames: 0,
-                      message: "Preparing...",
-                      mediaPath: media.path,
-                      stage: "rendering",
-                    });
-
-                    try {
-                      if (isRecording) {
-                        let outputPath: string;
-
-                        try {
-                          // First try to get existing rendered video
-                          outputPath = await commands.getRenderedVideo(
-                            mediaId,
-                            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                          );
-                          console.log("Using existing rendered video");
-
-                          // Show quick progress animation for existing video
-                          setProgressState({
-                            type: "copying",
-                            progress: 0,
-                            renderProgress: 100,
-                            totalFrames: 100,
-                            message: "Copying to clipboard...",
-                            mediaPath: media.path,
-                            stage: "rendering",
-                          });
-
-                          await commands.copyVideoToClipboard(outputPath);
-                        } catch (error) {
-                          console.log(
-                            "Need to render video with progress:",
-                            error
-                          );
-                          const progress = new Channel<RenderProgress>();
-                          progress.onmessage = (p) => {
-                            console.log("Progress channel message:", p);
-                            if (
-                              p.type === "FrameRendered" &&
-                              progressState.type === "copying"
-                            ) {
-                              console.log(
-                                "Frame rendered:",
-                                p.current_frame,
-                                "Total frames:",
-                                progressState.totalFrames
-                              );
-                              setProgressState({
-                                ...progressState,
-                                message: "Rendering video...",
-                                renderProgress: p.current_frame,
-                              });
-                            }
-                            if (
-                              p.type === "EstimatedTotalFrames" &&
-                              progressState.type === "copying"
-                            ) {
-                              console.log("Got total frames:", p.total_frames);
-                              setProgressState({
-                                ...progressState,
-                                totalFrames: p.total_frames,
-                              });
-                            }
-                          };
-
-                          outputPath = await commands.renderVideoWithProgress(
-                            mediaId,
-                            presets.getDefaultConfig() ??
-                              DEFAULT_PROJECT_CONFIG,
-                            progress
-                          );
-                          console.log("Video rendered, copying to clipboard");
-                          await commands.copyVideoToClipboard(outputPath);
-                        }
-                      } else {
-                        // For screenshots, show quick progress animation
-                        setProgressState({
-                          type: "copying",
-                          progress: 50,
-                          renderProgress: 100,
-                          totalFrames: 100,
-                          message: "Copying image to clipboard...",
-                          mediaPath: media.path,
-                          stage: "rendering",
-                        });
-                        await commands.copyScreenshotToClipboard(media.path);
-                      }
-
-                      setProgressState({
-                        type: "copying",
-                        progress: 100,
-                        renderProgress: 100,
-                        totalFrames: 100,
-                        message: "Copied successfully!",
-                        mediaPath: media.path,
-                        stage: "rendering",
-                      });
-
-                      setTimeout(() => {
-                        setProgressState({ type: "idle" });
-                      }, 1500);
-                    } catch (error) {
-                      console.error("Error in copy media:", error);
-                      setProgressState({ type: "idle" });
-                      throw error;
-                    }
-                  },
-                }));
-
-                const saveMedia = createMutation(() => ({
-                  mutationFn: async () => {
-                    setProgressState({
-                      type: "saving",
-                      progress: 0,
-                      renderProgress: 0,
-                      totalFrames: 0,
-                      message: isRecording
-                        ? "Choose where to save video..."
-                        : "Choose where to save image...",
-                      mediaPath: media.path,
-                      stage: "rendering",
-                    });
-
-                    try {
-                      const meta = recordingMeta.data;
-                      if (!meta) {
-                        throw new Error("Recording metadata not available");
-                      }
-
-                      const defaultName = isRecording
-                        ? "Cap Recording"
-                        : media.path.split(".cap/")[1];
-                      const suggestedName = meta.pretty_name || defaultName;
-
-                      const fileType = isRecording ? "recording" : "screenshot";
-                      const extension = isRecording ? ".mp4" : ".png";
-
-                      const fullFileName = suggestedName.endsWith(extension)
-                        ? suggestedName
-                        : `${suggestedName}${extension}`;
-
-                      const savePath = await commands.saveFileDialog(
-                        fullFileName,
-                        fileType
-                      );
-
-                      if (!savePath) {
-                        setProgressState({ type: "idle" });
-                        return false;
-                      }
-
-                      if (isRecording) {
-                        let outputPath: string;
-
-                        try {
-                          // First try to get existing rendered video
-                          outputPath = await commands.getRenderedVideo(
-                            mediaId,
-                            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                          );
-                          console.log("Using existing rendered video");
-
-                          // Show quick progress animation for existing video
-                          setProgressState({
-                            type: "saving",
-                            progress: 0,
-                            renderProgress: 100,
-                            totalFrames: 100,
-                            message: "Saving video...",
-                            mediaPath: media.path,
-                            stage: "rendering",
-                          });
-                        } catch (error) {
-                          // If it doesn't exist, render with progress
-                          console.log("Need to render video:", error);
-                          const progress = new Channel<RenderProgress>();
-                          progress.onmessage = (p) => {
-                            console.log("Progress channel message:", p);
-                            if (
-                              p.type === "FrameRendered" &&
-                              progressState.type === "saving"
-                            ) {
-                              console.log(
-                                "Frame rendered:",
-                                p.current_frame,
-                                "Total frames:",
-                                progressState.totalFrames
-                              );
-                              setProgressState({
-                                ...progressState,
-                                message: "Rendering video...",
-                                renderProgress: p.current_frame,
-                              });
-                            }
-                            if (
-                              p.type === "EstimatedTotalFrames" &&
-                              progressState.type === "saving"
-                            ) {
-                              console.log("Got total frames:", p.total_frames);
-                              setProgressState({
-                                ...progressState,
-                                totalFrames: p.total_frames,
-                              });
-                            }
-                          };
-
-                          outputPath = await commands.renderVideoWithProgress(
-                            mediaId,
-                            presets.getDefaultConfig() ??
-                              DEFAULT_PROJECT_CONFIG,
-                            progress
-                          );
-                        }
-
-                        // Show copying progress
-                        setProgressState({
-                          type: "saving",
-                          progress: 50,
-                          renderProgress: 100,
-                          totalFrames: 100,
-                          message: "Copying file...",
-                          mediaPath: media.path,
-                          stage: "rendering",
-                        });
-
-                        await commands.copyFileToPath(outputPath, savePath);
-                      } else {
-                        // For screenshots, show quick progress animation
-                        setProgressState({
-                          type: "saving",
-                          progress: 50,
-                          renderProgress: 0,
-                          totalFrames: 0,
-                          message: "Saving image...",
-                          mediaPath: media.path,
-                          stage: "rendering",
-                        });
-
-                        await commands.copyFileToPath(media.path, savePath);
-                      }
-
-                      setProgressState({
-                        type: "saving",
-                        progress: 100,
-                        renderProgress: 100,
-                        totalFrames: 100,
-                        message: "Saved successfully!",
-                        mediaPath: media.path,
-                        stage: "rendering",
-                      });
-
-                      setTimeout(() => {
-                        setProgressState({ type: "idle" });
-                      }, 1500);
-
-                      return true;
-                    } catch (error) {
-                      setProgressState({ type: "idle" });
-                      throw error;
-                    }
-                  },
-                }));
-                const uploadMedia = createMutation(() => ({
-                  mutationFn: async () => {
-                    if (recordingMeta.data?.sharing) {
-                      setProgressState({
-                        type: "copying",
-                        progress: 100,
-                        message: "Link copied to clipboard!",
-                        mediaPath: media.path,
-                      });
-
-                      setTimeout(() => {
-                        setProgressState({ type: "idle" });
-                      }, 1500);
-
-                      return;
-                    }
-
-                    const isUpgraded = await commands.checkUpgradedAndUpdate();
-                    if (!isUpgraded) {
-                      await commands.openUpgradeWindow();
-                      return;
-                    }
-
-                    setProgressState({
-                      type: "uploading",
-                      renderProgress: 0,
-                      uploadProgress: 0,
-                      message: "Preparing to render...",
-                      mediaPath: media.path,
-                      stage: "rendering",
-                    });
-
-                    try {
-                      let res: UploadResult;
-                      if (isRecording) {
-                        let outputPath: string;
-                        try {
-                          // First try to get existing rendered video
-                          outputPath = await commands.getRenderedVideo(
-                            mediaId,
-                            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG
-                          );
-                          console.log("Using existing rendered video");
-
-                          // Show quick progress animation for existing video
-                          setProgressState({
-                            type: "uploading",
-                            renderProgress: 100,
-                            uploadProgress: 0,
-                            message: "Starting upload...",
-                            mediaPath: media.path,
-                            stage: "uploading",
-                          });
-                        } catch (error) {
-                          // If it doesn't exist, render with progress
-                          console.log(
-                            "Need to render video with progress:",
-                            error
-                          );
-                          const progress = new Channel<RenderProgress>();
-                          progress.onmessage = (p) => {
-                            console.log("Progress channel message:", p);
-                            if (
-                              p.type === "FrameRendered" &&
-                              progressState.type === "uploading"
-                            ) {
-                              console.log(
-                                "Frame rendered:",
-                                p.current_frame,
-                                "Total frames:",
-                                progressState.totalFrames
-                              );
-                              setProgressState({
-                                ...progressState,
-                                message: "Rendering video...",
-                                renderProgress: progressState.totalFrames
-                                  ? Math.round(
-                                      (p.current_frame /
-                                        progressState.totalFrames) *
-                                        100
-                                    )
-                                  : 0,
-                              });
-                            }
-                            if (
-                              p.type === "EstimatedTotalFrames" &&
-                              progressState.type === "uploading"
-                            ) {
-                              console.log("Got total frames:", p.total_frames);
-                              setProgressState({
-                                ...progressState,
-                                totalFrames: p.total_frames,
-                              });
-                            }
-                          };
-
-                          outputPath = await commands.renderVideoWithProgress(
-                            mediaId,
-                            presets.getDefaultConfig() ??
-                              DEFAULT_PROJECT_CONFIG,
-                            progress
-                          );
-                        }
-
-                        res = await commands.uploadRenderedVideo(
-                          mediaId,
-                          presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
-                          null
-                        );
-                      } else {
-                        res = await commands.uploadScreenshot(media.path);
-                      }
-
-                      switch (res) {
-                        case "NotAuthenticated":
-                          throw new Error("Not authenticated");
-                        case "PlanCheckFailed":
-                          throw new Error("Plan check failed");
-                        case "UpgradeRequired":
-                          setProgressState({ type: "idle" });
-                          setShowUpgradeTooltip(true);
-                          return;
-                        default:
-                          break;
-                      }
-                    } catch (error) {
-                      setProgressState({ type: "idle" });
-                      throw error;
-                    }
-                  },
-                  onSuccess: () =>
-                    startTransition(() => recordingMeta.refetch()),
-                }));
+                const { copy, save, upload } = createRecordingMutations(
+                  media,
+                  (e) => {
+                    if (e === "upgradeRequired") setShowUpgradeTooltip(true);
+                  }
+                );
 
                 const [metadata] = createResource(async () => {
-                  if (isRecording) {
-                    const result = await commands
-                      .getVideoMetadata(media.path, null)
-                      .catch((e) => {
-                        console.error(`Failed to get metadata: ${e}`);
-                      });
-                    if (!result) return;
+                  if (!isRecording) return null;
 
-                    const [duration, size] = result;
-                    console.log(
-                      `Metadata for ${media.path}: duration=${duration}, size=${size}`
-                    );
+                  const result = await commands
+                    .getVideoMetadata(media.path, null)
+                    .catch((e) => {
+                      console.error(`Failed to get metadata: ${e}`);
+                    });
+                  if (!result) return;
 
-                    return { duration, size };
-                  }
-                  return null;
+                  const [duration, size] = result;
+                  console.log(
+                    `Metadata for ${media.path}: duration=${duration}, size=${size}`
+                  );
+
+                  return { duration, size };
                 });
 
                 const [imageExists, setImageExists] = createSignal(true);
@@ -598,11 +183,22 @@ export default function () {
                   createSignal(false);
 
                 const isLoading = () =>
-                  copyMedia.isPending ||
-                  saveMedia.isPending ||
-                  uploadMedia.isPending;
+                  copy.isPending || save.isPending || upload.isPending;
 
                 createFakeWindowBounds(ref, () => media.path);
+
+                const fileId =
+                  type === "recording"
+                    ? mediaId
+                    : normalizedPath
+                        .split("screenshots/")[1]
+                        .split("/")[0]
+                        .replace(".cap", "");
+
+                const recordingMeta = createQuery(() => ({
+                  queryKey: ["recordingMeta", fileId],
+                  queryFn: () => commands.getRecordingMeta(fileId, type),
+                }));
 
                 return (
                   <Suspense>
@@ -824,26 +420,24 @@ export default function () {
                           <TooltipIconButton
                             class="absolute right-3 top-3 z-20"
                             tooltipText={
-                              copyMedia.isPending
+                              copy.isPending
                                 ? "Copying to Clipboard"
                                 : "Copy to Clipboard"
                             }
                             tooltipPlacement="left"
-                            onClick={() => copyMedia.mutate()}
-                            disabled={
-                              saveMedia.isPending || uploadMedia.isPending
-                            }
+                            onClick={() => copy.mutate()}
+                            disabled={save.isPending || upload.isPending}
                           >
                             <Switch
                               fallback={<IconCapCopy class="size-[1rem]" />}
                             >
-                              <Match when={copyMedia.isPending}>
+                              <Match when={copy.isPending}>
                                 <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
                               </Match>
-                              <Match when={copyMedia.isSuccess}>
+                              <Match when={copy.isSuccess}>
                                 {(_) => {
                                   setTimeout(() => {
-                                    if (!copyMedia.isPending) copyMedia.reset();
+                                    if (!copy.isPending) copy.reset();
                                   }, 2000);
 
                                   return (
@@ -858,7 +452,7 @@ export default function () {
                             tooltipText={
                               recordingMeta.data?.sharing
                                 ? "Copy Shareable Link"
-                                : uploadMedia.isPending
+                                : upload.isPending
                                 ? "Uploading Cap"
                                 : showUpgradeTooltip()
                                 ? "Upgrade Required"
@@ -866,11 +460,11 @@ export default function () {
                             }
                             tooltipPlacement="left"
                             onClick={() => {
-                              uploadMedia.mutate();
+                              upload.mutate();
                             }}
                             disabled={
-                              copyMedia.isPending ||
-                              saveMedia.isPending ||
+                              copy.isPending ||
+                              save.isPending ||
                               recordingMeta.isLoading ||
                               recordingMeta.isError
                             }
@@ -878,14 +472,13 @@ export default function () {
                             <Switch
                               fallback={<IconCapUpload class="size-[1rem]" />}
                             >
-                              <Match when={uploadMedia.isPending}>
+                              <Match when={upload.isPending}>
                                 <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
                               </Match>
-                              <Match when={uploadMedia.isSuccess}>
+                              <Match when={upload.isSuccess}>
                                 {(_) => {
                                   setTimeout(() => {
-                                    if (!uploadMedia.isPending)
-                                      uploadMedia.reset();
+                                    if (!upload.isPending) upload.reset();
                                   }, 2000);
 
                                   return (
@@ -899,25 +492,17 @@ export default function () {
                             <Button
                               variant="secondary"
                               size="sm"
-                              onClick={() => saveMedia.mutate()}
-                              disabled={
-                                copyMedia.isPending || uploadMedia.isPending
-                              }
+                              onClick={() => save.mutate()}
+                              disabled={copy.isPending || upload.isPending}
                             >
                               <Switch fallback="Save">
-                                <Match when={saveMedia.isPending}>
-                                  Saving...
-                                </Match>
+                                <Match when={save.isPending}>Saving...</Match>
                                 <Match
-                                  when={
-                                    saveMedia.isSuccess &&
-                                    saveMedia.data === true
-                                  }
+                                  when={save.isSuccess && save.data === true}
                                 >
                                   {(_) => {
                                     setTimeout(() => {
-                                      if (!saveMedia.isPending)
-                                        saveMedia.reset();
+                                      if (!save.isPending) save.reset();
                                     }, 2000);
 
                                     return "Saved!";
@@ -927,7 +512,7 @@ export default function () {
                             </Button>
                           </div>
                         </div>
-                        <Show when={isRecording && metadata()}>
+                        <Show when={metadata()}>
                           {(metadata) => (
                             <div
                               style={{ color: "white", "font-size": "14px" }}
@@ -1036,4 +621,363 @@ function createFakeWindowBounds(
   onCleanup(() => {
     commands.removeFakeWindow(key());
   });
+}
+
+function createRecordingMutations(
+  media: MediaEntry,
+  onEvent: (e: "upgradeRequired") => void
+) {
+  const presets = createPresets();
+
+  const normalizedPath = media.path.replace(/\\/g, "/");
+  const mediaId = normalizedPath.split("/").pop()?.split(".")[0]!;
+  const type = media.type ?? "recording";
+  const isRecording = type !== "screenshot";
+
+  const fileId =
+    type === "recording"
+      ? mediaId
+      : normalizedPath
+          .split("screenshots/")[1]
+          .split("/")[0]
+          .replace(".cap", "");
+
+  const recordingMeta = createQuery(() => ({
+    queryKey: ["recordingMeta", fileId],
+    queryFn: () => commands.getRecordingMeta(fileId, type),
+  }));
+
+  const copy = createMutation(() => ({
+    mutationFn: async () => {
+      setProgressState({
+        type: "copying",
+        progress: 0,
+        renderProgress: 0,
+        totalFrames: 0,
+        message: "Preparing...",
+        mediaPath: media.path,
+        stage: "rendering",
+      });
+
+      try {
+        if (isRecording) {
+          const progress = new Channel<RenderProgress>();
+          progress.onmessage = (p) => {
+            console.log("Progress channel message:", p);
+            if (
+              p.type === "FrameRendered" &&
+              progressState.type === "copying"
+            ) {
+              console.log(
+                "Frame rendered:",
+                p.current_frame,
+                "Total frames:",
+                progressState.totalFrames
+              );
+              setProgressState({
+                ...progressState,
+                message: "Rendering video...",
+                renderProgress: p.current_frame,
+              });
+            }
+            if (
+              p.type === "EstimatedTotalFrames" &&
+              progressState.type === "copying"
+            ) {
+              console.log("Got total frames:", p.total_frames);
+              setProgressState({
+                ...progressState,
+                totalFrames: p.total_frames,
+              });
+            }
+          };
+
+          // First try to get existing rendered video
+          const outputPath = await commands.exportVideo(
+            mediaId,
+            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+            progress,
+            false
+          );
+
+          // Show quick progress animation for existing video
+          setProgressState({
+            type: "copying",
+            progress: 0,
+            renderProgress: 100,
+            totalFrames: 100,
+            message: "Copying to clipboard...",
+            mediaPath: media.path,
+            stage: "rendering",
+          });
+
+          await commands.copyVideoToClipboard(outputPath);
+        } else {
+          // For screenshots, show quick progress animation
+          setProgressState({
+            type: "copying",
+            progress: 50,
+            renderProgress: 100,
+            totalFrames: 100,
+            message: "Copying image to clipboard...",
+            mediaPath: media.path,
+            stage: "rendering",
+          });
+          await commands.copyScreenshotToClipboard(media.path);
+        }
+
+        setProgressState({
+          type: "copying",
+          progress: 100,
+          renderProgress: 100,
+          totalFrames: 100,
+          message: "Copied successfully!",
+          mediaPath: media.path,
+          stage: "rendering",
+        });
+
+        setTimeout(() => {
+          setProgressState({ type: "idle" });
+        }, 1500);
+      } catch (error) {
+        console.error("Error in copy media:", error);
+        setProgressState({ type: "idle" });
+        throw error;
+      }
+    },
+  }));
+
+  const save = createMutation(() => ({
+    mutationFn: async () => {
+      setProgressState({
+        type: "saving",
+        progress: 0,
+        renderProgress: 0,
+        totalFrames: 0,
+        message: isRecording
+          ? "Choose where to save video..."
+          : "Choose where to save image...",
+        mediaPath: media.path,
+        stage: "rendering",
+      });
+
+      try {
+        const meta = recordingMeta.data;
+        if (!meta) {
+          throw new Error("Recording metadata not available");
+        }
+
+        const defaultName = isRecording
+          ? "Cap Recording"
+          : media.path.split(".cap/")[1];
+        const suggestedName = meta.pretty_name || defaultName;
+
+        const fileType = isRecording ? "recording" : "screenshot";
+        const extension = isRecording ? ".mp4" : ".png";
+
+        const fullFileName = suggestedName.endsWith(extension)
+          ? suggestedName
+          : `${suggestedName}${extension}`;
+
+        const savePath = await commands.saveFileDialog(fullFileName, fileType);
+
+        if (!savePath) {
+          setProgressState({ type: "idle" });
+          return false;
+        }
+
+        if (isRecording) {
+          let outputPath: string;
+
+          const progress = new Channel<RenderProgress>();
+          progress.onmessage = (p) => {
+            console.log("Progress channel message:", p);
+            if (p.type === "FrameRendered" && progressState.type === "saving") {
+              console.log(
+                "Frame rendered:",
+                p.current_frame,
+                "Total frames:",
+                progressState.totalFrames
+              );
+              setProgressState({
+                ...progressState,
+                message: "Rendering video...",
+                renderProgress: p.current_frame,
+              });
+            }
+            if (
+              p.type === "EstimatedTotalFrames" &&
+              progressState.type === "saving"
+            ) {
+              console.log("Got total frames:", p.total_frames);
+              setProgressState({
+                ...progressState,
+                totalFrames: p.total_frames,
+              });
+            }
+          };
+
+          // First try to get existing rendered video
+          outputPath = await commands.exportVideo(
+            mediaId,
+            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+            progress,
+            false
+          );
+
+          await commands.copyFileToPath(outputPath, savePath);
+        } else {
+          // For screenshots, show quick progress animation
+          setProgressState({
+            type: "saving",
+            progress: 50,
+            renderProgress: 0,
+            totalFrames: 0,
+            message: "Saving image...",
+            mediaPath: media.path,
+            stage: "rendering",
+          });
+
+          await commands.copyFileToPath(media.path, savePath);
+        }
+
+        setProgressState({
+          type: "saving",
+          progress: 100,
+          renderProgress: 100,
+          totalFrames: 100,
+          message: "Saved successfully!",
+          mediaPath: media.path,
+          stage: "rendering",
+        });
+
+        setTimeout(() => {
+          setProgressState({ type: "idle" });
+        }, 1500);
+
+        return true;
+      } catch (error) {
+        setProgressState({ type: "idle" });
+        throw error;
+      }
+    },
+  }));
+
+  const upload = createMutation(() => ({
+    mutationFn: async () => {
+      if (recordingMeta.data?.sharing) {
+        setProgressState({
+          type: "copying",
+          progress: 100,
+          message: "Link copied to clipboard!",
+          mediaPath: media.path,
+        });
+
+        setTimeout(() => {
+          setProgressState({ type: "idle" });
+        }, 1500);
+
+        return;
+      }
+
+      const isUpgraded = await commands.checkUpgradedAndUpdate();
+      if (!isUpgraded) {
+        await commands.showWindow("Upgrade");
+        return;
+      }
+
+      setProgressState({
+        type: "uploading",
+        renderProgress: 0,
+        uploadProgress: 0,
+        message: "Preparing to render...",
+        mediaPath: media.path,
+        stage: "rendering",
+      });
+
+      try {
+        let res: UploadResult;
+        if (isRecording) {
+          const progress = new Channel<RenderProgress>();
+          progress.onmessage = (p) => {
+            console.log("Progress channel message:", p);
+            if (
+              p.type === "FrameRendered" &&
+              progressState.type === "uploading"
+            ) {
+              console.log(
+                "Frame rendered:",
+                p.current_frame,
+                "Total frames:",
+                progressState.totalFrames
+              );
+              setProgressState({
+                ...progressState,
+                message: "Rendering video...",
+                renderProgress: progressState.totalFrames
+                  ? Math.round(
+                      (p.current_frame / progressState.totalFrames) * 100
+                    )
+                  : 0,
+              });
+            }
+            if (
+              p.type === "EstimatedTotalFrames" &&
+              progressState.type === "uploading"
+            ) {
+              console.log("Got total frames:", p.total_frames);
+              setProgressState({
+                ...progressState,
+                totalFrames: p.total_frames,
+              });
+            }
+          };
+
+          // First try to get existing rendered video
+          await commands.exportVideo(
+            mediaId,
+            presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
+            progress,
+            false
+          );
+          console.log("Using existing rendered video");
+
+          // Show quick progress animation for existing video
+          setProgressState({
+            type: "uploading",
+            renderProgress: 100,
+            uploadProgress: 0,
+            message: "Starting upload...",
+            mediaPath: media.path,
+            stage: "uploading",
+          });
+
+          res = await commands.uploadExportedVideo(mediaId, {
+            Initial: { pre_created_video: null },
+          });
+        } else {
+          res = await commands.uploadScreenshot(media.path);
+        }
+
+        switch (res) {
+          case "NotAuthenticated":
+            throw new Error("Not authenticated");
+          case "PlanCheckFailed":
+            throw new Error("Plan check failed");
+          case "UpgradeRequired":
+            setProgressState({ type: "idle" });
+            onEvent("upgradeRequired");
+            return;
+          default:
+            break;
+        }
+      } catch (error) {
+        setProgressState({ type: "idle" });
+        throw error;
+      }
+    },
+    onSuccess: () => startTransition(() => recordingMeta.refetch()),
+  }));
+
+  return { copy, save, upload };
 }

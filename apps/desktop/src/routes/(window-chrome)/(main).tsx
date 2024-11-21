@@ -66,15 +66,6 @@ export default function () {
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
 
-  events.showCapturesPanel.listen(() => {
-    commands.showPreviousRecordingsWindow();
-  });
-
-  onMount(async () => {
-    await commands.showPreviousRecordingsWindow();
-    // await commands.showNotificationsWindow();
-  });
-
   const isRecording = () => !!currentRecording.data;
 
   const toggleRecording = createMutation(() => ({
@@ -114,7 +105,7 @@ export default function () {
           variant="secondary"
           size="xs"
           onClick={() => {
-            commands.openSettingsWindow("feedback");
+            commands.showWindow({ Settings: { page: "feedback" } });
           }}
         >
           Feedback
@@ -133,7 +124,9 @@ export default function () {
             <Tooltip.Trigger>
               <button
                 type="button"
-                onClick={() => commands.openSettingsWindow("recordings")}
+                onClick={() =>
+                  commands.showWindow({ Settings: { page: "recordings" } })
+                }
               >
                 <IconLucideSquarePlay class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
               </button>
@@ -150,7 +143,9 @@ export default function () {
             <Tooltip.Trigger>
               <button
                 type="button"
-                onClick={() => commands.openSettingsWindow("general")}
+                onClick={() =>
+                  commands.showWindow({ Settings: { page: "general" } })
+                }
               >
                 <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
               </button>
@@ -712,7 +707,7 @@ function ChangelogButton() {
   );
 
   const handleChangelogClick = () => {
-    commands.openSettingsWindow("changelog");
+    commands.showWindow({ Settings: { page: "changelog" } });
     const version = currentVersion();
     if (version) {
       setChangelogState({

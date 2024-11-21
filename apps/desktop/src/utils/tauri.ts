@@ -38,9 +38,6 @@ async takeScreenshot() : Promise<null> {
 async listAudioDevices() : Promise<string[]> {
     return await TAURI_INVOKE("list_audio_devices");
 },
-async showPreviousRecordingsWindow() : Promise<void> {
-    await TAURI_INVOKE("show_previous_recordings_window");
-},
 async closePreviousRecordingsWindow() : Promise<void> {
     await TAURI_INVOKE("close_previous_recordings_window");
 },
@@ -56,17 +53,8 @@ async focusCapturesPanel() : Promise<void> {
 async getCurrentRecording() : Promise<JsonValue<RecordingInfo | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
-async renderToFile(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
-    return await TAURI_INVOKE("render_to_file", { videoId, project, progressChannel });
-},
-async getRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<string> {
-    return await TAURI_INVOKE("get_rendered_video", { videoId, project });
-},
-async getRenderedVideoWithProgress(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
-    return await TAURI_INVOKE("get_rendered_video_with_progress", { videoId, project, progressChannel });
-},
-async renderVideoWithProgress(videoId: string, project: ProjectConfiguration, progressChannel: TAURI_CHANNEL<RenderProgress>) : Promise<string> {
-    return await TAURI_INVOKE("render_video_with_progress", { videoId, project, progressChannel });
+async exportVideo(videoId: string, project: ProjectConfiguration, progress: TAURI_CHANNEL<RenderProgress>, force: boolean) : Promise<string> {
+    return await TAURI_INVOKE("export_video", { videoId, project, progress, force });
 },
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
@@ -113,20 +101,14 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
 async requestPermission(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("request_permission", { permission });
 },
-async uploadRenderedVideo(videoId: string, project: ProjectConfiguration, preCreatedVideo: PreCreatedVideo | null) : Promise<UploadResult> {
-    return await TAURI_INVOKE("upload_rendered_video", { videoId, project, preCreatedVideo });
+async uploadExportedVideo(videoId: string, mode: UploadMode) : Promise<UploadResult> {
+    return await TAURI_INVOKE("upload_exported_video", { videoId, mode });
 },
 async uploadScreenshot(screenshotPath: string) : Promise<UploadResult> {
     return await TAURI_INVOKE("upload_screenshot", { screenshotPath });
 },
 async getRecordingMeta(id: string, fileType: string) : Promise<RecordingMeta> {
     return await TAURI_INVOKE("get_recording_meta", { id, fileType });
-},
-async openUpgradeWindow() : Promise<void> {
-    await TAURI_INVOKE("open_upgrade_window");
-},
-async openSettingsWindow(page: string) : Promise<void> {
-    await TAURI_INVOKE("open_settings_window", { page });
 },
 async saveFileDialog(fileName: string, fileType: string) : Promise<string | null> {
     return await TAURI_INVOKE("save_file_dialog", { fileName, fileType });
@@ -167,11 +149,11 @@ async sendFeedbackRequest(feedback: string) : Promise<null> {
 async positionTrafficLights(controlsInset: [number, number] | null) : Promise<void> {
     await TAURI_INVOKE("position_traffic_lights", { controlsInset });
 },
-async reuploadRenderedVideo(videoId: string, project: ProjectConfiguration) : Promise<UploadResult> {
-    return await TAURI_INVOKE("reupload_rendered_video", { videoId, project });
-},
 async globalMessageDialog(message: string) : Promise<void> {
     await TAURI_INVOKE("global_message_dialog", { message });
+},
+async showWindow(window: ShowCapWindow) : Promise<void> {
+    await TAURI_INVOKE("show_window", { window });
 }
 }
 
@@ -196,7 +178,6 @@ requestOpenSettings: RequestOpenSettings,
 requestRestartRecording: RequestRestartRecording,
 requestStartRecording: RequestStartRecording,
 requestStopRecording: RequestStopRecording,
-showCapturesPanel: ShowCapturesPanel,
 uploadProgress: UploadProgress
 }>({
 audioInputLevelChange: "audio-input-level-change",
@@ -216,7 +197,6 @@ requestOpenSettings: "request-open-settings",
 requestRestartRecording: "request-restart-recording",
 requestStartRecording: "request-start-recording",
 requestStopRecording: "request-stop-recording",
-showCapturesPanel: "show-captures-panel",
 uploadProgress: "upload-progress"
 })
 
@@ -286,9 +266,10 @@ export type S3UploadMeta = { id: string; user_id: string; aws_region: string; aw
 export type ScreenCaptureTarget = ({ variant: "window" } & CaptureWindow) | ({ variant: "screen" } & CaptureScreen)
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string; prettyName: string }
 export type SharingMeta = { id: string; link: string }
-export type ShowCapturesPanel = null
+export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_id: string } } | "PrevRecordings" | "WindowCaptureOccluder" | { Camera: { ws_port: number } } | { InProgressRecording: { position: [number, number] | null } } | "Upgrade"
 export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments?: ZoomSegment[] }
 export type TimelineSegment = { timescale: number; start: number; end: number }
+export type UploadMode = { Initial: { pre_created_video: PreCreatedVideo | null } } | "Reupload"
 export type UploadProgress = { stage: string; progress: number; message: string }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
 export type Video = { duration: number; width: number; height: number }

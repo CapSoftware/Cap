@@ -58,15 +58,15 @@ export function Header() {
       <Titlebar />
       <Dialog.Root
         open={progressState.type !== "idle"}
-        onOpenChange={() => { }} // Empty handler prevents closing
+        onOpenChange={() => {}} // Empty handler prevents closing
       >
         <DialogContent
           title={
             progressState.type === "copying"
               ? "Link Copied"
               : progressState.type === "uploading"
-                ? "Creating Shareable Link"
-                : "Exporting Recording"
+              ? "Creating Shareable Link"
+              : "Exporting Recording"
           }
           confirm={<></>}
           class="bg-gray-600"
@@ -91,15 +91,16 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${state.stage === "rendering"
-                              ? Math.min(
-                                ((state.renderProgress || 0) /
-                                  (state.totalFrames || 1)) *
-                                100,
-                                100
-                              )
-                              : Math.min(state.progress || 0, 100)
-                              }%`,
+                            width: `${
+                              state.stage === "rendering"
+                                ? Math.min(
+                                    ((state.renderProgress || 0) /
+                                      (state.totalFrames || 1)) *
+                                      100,
+                                    100
+                                  )
+                                : Math.min(state.progress || 0, 100)
+                            }%`,
                           }}
                         />
                       </div>
@@ -127,15 +128,16 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${state.stage === "rendering"
-                              ? Math.min(
-                                ((state.renderProgress || 0) /
-                                  (state.totalFrames || 1)) *
-                                100,
-                                100
-                              )
-                              : Math.min(state.progress || 0, 100)
-                              }%`,
+                            width: `${
+                              state.stage === "rendering"
+                                ? Math.min(
+                                    ((state.renderProgress || 0) /
+                                      (state.totalFrames || 1)) *
+                                      100,
+                                    100
+                                  )
+                                : Math.min(state.progress || 0, 100)
+                            }%`,
                           }}
                         />
                       </div>
@@ -163,13 +165,14 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${state.stage === "rendering"
-                              ? Math.min(state.renderProgress || 0, 100)
-                              : Math.min(
-                                (state.uploadProgress || 0) * 100,
-                                100
-                              )
-                              }%`,
+                            width: `${
+                              state.stage === "rendering"
+                                ? Math.min(state.renderProgress || 0, 100)
+                                : Math.min(
+                                    (state.uploadProgress || 0) * 100,
+                                    100
+                                  )
+                            }%`,
                           }}
                         />
                       </div>
@@ -177,8 +180,8 @@ export function Header() {
                       <p class="text-xs text-white mt-3 relative z-10">
                         {state.stage === "rendering"
                           ? `Rendering - ${Math.round(
-                            state.renderProgress || 0
-                          )}%`
+                              state.renderProgress || 0
+                            )}%`
                           : state.message}
                       </p>
                     </div>
@@ -241,7 +244,12 @@ function ExportButton() {
         }
       };
 
-      const videoPath = await commands.renderToFile(videoId, project, progress);
+      const videoPath = await commands.exportVideo(
+        videoId,
+        project,
+        progress,
+        false
+      );
       await commands.copyFileToPath(videoPath, path);
 
       setProgressState({
@@ -309,7 +317,7 @@ function ShareButton() {
               setProgressState({
                 type: "uploading",
                 renderProgress: 100,
-                uploadProgress: progress,
+                uploadProgress: progress / 100,
                 message: `Uploading - ${progress}%`,
                 mediaPath: videoId,
                 stage: "uploading",
@@ -322,59 +330,51 @@ function ShareButton() {
         const projectConfig =
           project ?? presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG;
 
-        // First try to get or render the video
-        try {
-          setProgressState({
-            type: "uploading",
-            renderProgress: 0,
-            uploadProgress: 0,
-            message: "Rendering - 0%",
-            mediaPath: videoId,
-            stage: "rendering",
-          });
+        setProgressState({
+          type: "uploading",
+          renderProgress: 0,
+          uploadProgress: 0,
+          message: "Rendering - 0%",
+          mediaPath: videoId,
+          stage: "rendering",
+        });
 
-          const progress = new Channel<RenderProgress>();
-          progress.onmessage = (p) => {
-            console.log("Progress channel message:", p);
-            if (
-              p.type === "FrameRendered" &&
-              progressState.type === "uploading"
-            ) {
-              const renderProgress = Math.round(
-                (p.current_frame / (progressState.totalFrames || 1)) * 100
-              );
-              setProgressState({
-                ...progressState,
-                message: `Rendering - ${renderProgress}%`,
-                renderProgress,
-              });
-            }
-            if (
-              p.type === "EstimatedTotalFrames" &&
-              progressState.type === "uploading"
-            ) {
-              console.log("Got total frames:", p.total_frames);
-              setProgressState({
-                ...progressState,
-                totalFrames: p.total_frames,
-              });
-            }
-          };
+        const progress = new Channel<RenderProgress>();
+        progress.onmessage = (p) => {
+          console.log("Progress channel message:", p);
+          if (
+            p.type === "FrameRendered" &&
+            progressState.type === "uploading"
+          ) {
+            const renderProgress = Math.round(
+              (p.current_frame / (progressState.totalFrames || 1)) * 100
+            );
+            setProgressState({
+              ...progressState,
+              message: `Rendering - ${renderProgress}%`,
+              renderProgress,
+            });
+          }
+          if (
+            p.type === "EstimatedTotalFrames" &&
+            progressState.type === "uploading"
+          ) {
+            console.log("Got total frames:", p.total_frames);
+            setProgressState({
+              ...progressState,
+              totalFrames: p.total_frames,
+            });
+          }
+        };
 
-          await commands.renderVideoWithProgress(
-            videoId,
-            projectConfig,
-            progress
-          );
-        } catch (error) {
-          console.error("Error rendering video:", error);
-          throw new Error("Failed to render video");
-        }
+        await commands.exportVideo(videoId, projectConfig, progress, false);
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
-          ? await commands.reuploadRenderedVideo(videoId, projectConfig)
-          : await commands.uploadRenderedVideo(videoId, projectConfig, null);
+          ? await commands.uploadExportedVideo(videoId, "Reupload")
+          : await commands.uploadExportedVideo(videoId, {
+              Initial: { pre_created_video: null },
+            });
 
         console.log("Upload result:", result);
 
