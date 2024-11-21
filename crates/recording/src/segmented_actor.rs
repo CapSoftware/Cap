@@ -234,7 +234,7 @@ fn create_screen_capture(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        ScreenCaptureSource::<AVFrameCapture>::init(
+        ScreenCaptureSource::<cap_media::sources::AVFrameCapture>::init(
             dbg!(&recording_options.capture_target),
             None,
             None,
@@ -329,6 +329,7 @@ trait MakeCapturePipeline: 'static {
         Self: Sized;
 }
 
+#[cfg(target_os = "macos")]
 impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
     fn make_capture_pipeline(
         builder: CapturePipelineBuilder,
