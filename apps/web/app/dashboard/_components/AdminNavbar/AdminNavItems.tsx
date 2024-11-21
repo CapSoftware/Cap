@@ -9,6 +9,7 @@ import {
   Settings,
   MessageSquare,
   Share2,
+  Check,
 } from "lucide-react";
 import Link from "next/link";
 import { classNames } from "@cap/utils";
@@ -22,6 +23,7 @@ import {
 } from "@cap/ui";
 import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
 import { useState } from "react";
+
 import {
   Dialog,
   DialogContent,
@@ -143,8 +145,10 @@ export const AdminNavItems = () => {
               <CommandInput placeholder="Search spaces..." />
               <CommandEmpty>No spaces found.</CommandEmpty>
               <CommandGroup>
-                {spaceData !== null &&
-                  spaceData?.map((space) => (
+                {spaceData?.map((space) => {
+                  const isSelected = activeSpace?.space.id === space.space.id;
+
+                  return (
                     <CommandItem
                       key={space.space.name + "-space"}
                       onSelect={async () => {
@@ -153,8 +157,16 @@ export const AdminNavItems = () => {
                       }}
                     >
                       {space.space.name}
+                      <Check
+                        size={18}
+                        className={classNames(
+                          "ml-auto",
+                          isSelected ? "opacity-100" : "opacity-0"
+                        )}
+                      />
                     </CommandItem>
-                  ))}
+                  );
+                })}
                 <DialogTrigger className="w-full">
                   <CommandItem className=" bg-filler aria-selected:bg-gray-200 rounded-lg">
                     <Plus className="w-4 h-auto mr-1" />
