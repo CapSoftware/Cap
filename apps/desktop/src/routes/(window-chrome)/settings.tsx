@@ -33,7 +33,7 @@ export default function Settings(props: RouteSectionProps) {
               {
                 href: "apps",
                 name: "Cap Apps",
-                icon: IconCapApps,
+                icon: IconLucideCable,
               },
               {
                 href: "feedback",
