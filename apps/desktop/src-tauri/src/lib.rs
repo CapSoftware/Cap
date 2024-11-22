@@ -1536,12 +1536,11 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
     if let Some(window) = CapWindowId::Camera.get(&app) {
         window.close().ok();
     }
-
     if let Some(window) = CapWindowId::Main.get(&app) {
         window.close().ok();
     }
 
-    while CapWindowId::Main.get(&app).is_some() {
+    while CapWindowId::Main.get(&app).is_none() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 

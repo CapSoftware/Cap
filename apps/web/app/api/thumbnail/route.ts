@@ -1,12 +1,13 @@
 import type { NextRequest } from "next/server";
-import { ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getHeaders } from "@/utils/helpers";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-export const revalidate = 3500;
+export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
@@ -46,11 +47,32 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { video, bucket } = query[0];
-  const Bucket = getS3Bucket(bucket);
+  const result = query[0];
+  if (!result?.video) {
+    return new Response(
+      JSON.stringify({ error: true, message: "Video not found" }),
+      {
+        status: 401,
+        headers: getHeaders(origin),
+      }
+    );
+  }
 
-  const s3Client = createS3Client(bucket);
+  const { video } = result;
   const prefix = `${userId}/${videoId}/`;
+
+  let thumbnailUrl: string;
+
+  if (!result.bucket || video.awsBucket === process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) {
+    thumbnailUrl = `https://v.cap.so/${prefix}screenshot/screen-capture.jpg`;
+    return new Response(JSON.stringify({ screen: thumbnailUrl }), {
+      status: 200,
+      headers: getHeaders(origin),
+    });
+  }
+
+  const Bucket = getS3Bucket(result.bucket);
+  const s3Client = createS3Client(result.bucket);
 
   try {
     const listCommand = new ListObjectsV2Command({
@@ -61,24 +83,37 @@ export async function GET(request: NextRequest) {
     const listResponse = await s3Client.send(listCommand);
     const contents = listResponse.Contents || [];
 
-    let thumbnailKey = contents.find((item) => item.Key?.endsWith(".png"))?.Key;
+    const thumbnailKey = contents.find((item) => 
+      item.Key?.endsWith("screen-capture.jpg")
+    )?.Key;
 
     if (!thumbnailKey) {
-      thumbnailKey = `${prefix}screenshot/screen-capture.jpg`;
+      return new Response(
+        JSON.stringify({
+          error: true,
+          message: "No thumbnail found for this video",
+        }),
+        {
+          status: 404,
+          headers: getHeaders(origin),
+        }
+      );
     }
 
-    const thumbnailUrl = `https://v.cap.so/${thumbnailKey}`;
-
-    return new Response(JSON.stringify({ screen: thumbnailUrl }), {
-      status: 200,
-      headers: getHeaders(origin),
-    });
+    thumbnailUrl = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({
+        Bucket,
+        Key: thumbnailKey
+      }),
+      { expiresIn: 3600 }
+    );
   } catch (error) {
-    console.error("Error generating thumbnail URL:", error);
     return new Response(
       JSON.stringify({
         error: true,
         message: "Error generating thumbnail URL",
+        details: error instanceof Error ? error.message : "Unknown error",
       }),
       {
         status: 500,
@@ -86,4 +121,9 @@ export async function GET(request: NextRequest) {
       }
     );
   }
+
+  return new Response(JSON.stringify({ screen: thumbnailUrl }), {
+    status: 200,
+    headers: getHeaders(origin),
+  });
 }

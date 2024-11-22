@@ -83,29 +83,38 @@ export const ShareVideo = ({
 
   useEffect(() => {
     if (videoMetadataLoaded) {
-      console.log("Metadata loaded");
       setIsLoading(false);
     }
   }, [videoMetadataLoaded]);
 
   useEffect(() => {
     const onVideoLoadedMetadata = () => {
-      console.log("Video metadata loaded");
-      setVideoMetadataLoaded(true);
       if (videoRef.current) {
         setLongestDuration(videoRef.current.duration);
+        setVideoMetadataLoaded(true);
+        setIsLoading(false);
       }
     };
 
-    const videoElement = videoRef.current;
+    const onCanPlay = () => {
+      setVideoMetadataLoaded(true);
+      setIsLoading(false);
+    };
 
-    videoElement?.addEventListener("loadedmetadata", onVideoLoadedMetadata);
+    const videoElement = videoRef.current;
+    if (videoElement) {
+      videoElement.addEventListener("loadedmetadata", onVideoLoadedMetadata);
+      videoElement.addEventListener("canplay", onCanPlay);
+    }
 
     return () => {
-      videoElement?.removeEventListener(
-        "loadedmetadata",
-        onVideoLoadedMetadata
-      );
+      if (videoElement) {
+        videoElement.removeEventListener(
+          "loadedmetadata",
+          onVideoLoadedMetadata
+        );
+        videoElement.removeEventListener("canplay", onCanPlay);
+      }
     };
   }, []);
 

@@ -1,6 +1,3 @@
-import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
 import { ImageResponse } from "next/og";
 import { NextRequest } from "next/server";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
@@ -11,25 +8,48 @@ export const runtime = "edge";
 
 export async function GET(req: NextRequest) {
   const videoId = req.nextUrl.searchParams.get("videoId") as string;
-  const query = await db
-    .select({
-      video: videos,
-      bucket: s3Buckets,
-    })
-    .from(videos)
-    .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
-    .where(eq(videos.id, videoId));
 
-  type FileKey = {
-    type: "screen";
-    key: string;
-  };
+  const response = await fetch(
+    `${process.env.NEXT_PUBLIC_URL}/api/video/${videoId}`,
+    {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }
+  );
 
-  type ResponseObject = {
-    screen: string | null;
-  };
+  if (!response.ok) {
+    return new ImageResponse(
+      (
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            background:
+              "radial-gradient(90.01% 80.01% at 53.53% 49.99%,#d3e5ff 30.65%,#4785ff 88.48%,#fff 100%)",
+          }}
+        >
+          <h1 style={{ fontSize: "60px" }}>Cap not found</h1>
+          <p style={{ fontSize: "30px" }}>
+            The video you are looking for does not exist or has moved.
+          </p>
+        </div>
+      ),
+      {
+        width: 1200,
+        height: 630,
+      }
+    );
+  }
 
-  if (query.length === 0 || query?.[0]?.video.public === false) {
+  const { video, bucket } = await response.json();
+
+  if (!video || !bucket || video.public === false) {
     return new ImageResponse(
       (
         <div
@@ -40,10 +60,10 @@ export async function GET(req: NextRequest) {
             alignItems: "center",
             justifyContent: "center",
             background:
-              "radial-gradient(90.01% 80.01% at 53.53% 49.99%,#d3e5ff 30.65%,#82c6f1 88.48%,#fff 100%)",
+              "radial-gradient(90.01% 80.01% at 53.53% 49.99%,#d3e5ff 30.65%,#4785ff 88.48%,#fff 100%)",
           }}
         >
-          <h1 style={{ fontSize: "40px" }}>Video not found</h1>
+          <h1 style={{ fontSize: "40px" }}>Video or bucket not found</h1>
         </div>
       ),
       {
@@ -53,37 +73,21 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const { video, bucket } = query[0];
-
   const s3Client = createS3Client(bucket);
-
   const Bucket = getS3Bucket(bucket);
-  const fileKeys: FileKey[] = [
-    {
-      type: "screen",
-      key: `${video.ownerId}/${video.id}/screenshot/screen-capture.jpg`,
-    },
-  ];
 
-  const responseObject: ResponseObject = {
-    screen: null,
-  };
+  const screenshotKey = `${video.ownerId}/${video.id}/screenshot/screen-capture.jpg`;
+  let screenshotUrl = null;
 
-  await Promise.all(
-    fileKeys.map(async ({ type, key }) => {
-      try {
-        const url = await getSignedUrl(
-          s3Client,
-          new GetObjectCommand({ Bucket, Key: key }),
-          { expiresIn: 3600 }
-        );
-        responseObject[type] = url;
-      } catch (error) {
-        console.error("Error generating URL for:", key, error);
-        responseObject[type] = null;
-      }
-    })
-  );
+  try {
+    screenshotUrl = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({ Bucket, Key: screenshotKey }),
+      { expiresIn: 3600 }
+    );
+  } catch (error) {
+    console.error("Error generating URL for screenshot:", error);
+  }
 
   return new ImageResponse(
     (
@@ -95,7 +99,7 @@ export async function GET(req: NextRequest) {
           alignItems: "center",
           justifyContent: "center",
           background:
-            "radial-gradient(90.01% 80.01% at 53.53% 49.99%,#d3e5ff 30.65%,#82c6f1 88.48%,#fff 100%)",
+            "radial-gradient(90.01% 80.01% at 53.53% 49.99%,#d3e5ff 30.65%,#4785ff 88.48%,#fff 100%)",
         }}
       >
         <div
@@ -134,14 +138,14 @@ export async function GET(req: NextRequest) {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
               <polygon points="6 3 20 12 6 21 6 3"></polygon>
             </svg>
           </div>
-          {responseObject.screen && (
+          {screenshotUrl && (
             <img
               style={{
                 width: "100%",
@@ -151,7 +155,7 @@ export async function GET(req: NextRequest) {
                 opacity: 0.4,
                 zIndex: 1,
               }}
-              src={responseObject.screen}
+              src={screenshotUrl}
             />
           )}
         </div>

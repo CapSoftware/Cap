@@ -78,6 +78,8 @@ export default function () {
     },
   }));
 
+  const [isUpgraded] = createResource(() => commands.checkUpgradedAndUpdate());
+
   createAsync(() => getAuth());
 
   createUpdateCheck();
@@ -118,7 +120,23 @@ export default function () {
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
       <div class="flex items-center justify-between pb-[0.25rem]">
-        <IconCapLogoFull class="w-[90px] h-auto" />
+        <div class="flex items-center space-x-1">
+          <IconCapLogoFull class="w-[90px] h-auto" />
+          <span
+            onClick={async () => {
+              if (!isUpgraded()) {
+                await commands.showWindow("Upgrade");
+              }
+            }}
+            class={`text-[0.625rem] ${
+              isUpgraded()
+                ? "bg-blue-400 text-gray-50"
+                : "bg-gray-200 text-gray-400 cursor-pointer hover:bg-gray-300"
+            } rounded-lg px-1.5 py-0.5`}
+          >
+            {isUpgraded() ? "Pro" : "Free"}
+          </span>
+        </div>
         <div class="flex items-center space-x-2">
           <Tooltip.Root openDelay={0}>
             <Tooltip.Trigger>

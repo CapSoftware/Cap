@@ -78,6 +78,37 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  if (!bucket || video.awsBucket === process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) {
+    if (video.source.type === "desktopMP4") {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          ...getHeaders(origin),
+          Location: `https://v.cap.so/${userId}/${videoId}/result.mp4`,
+        },
+      });
+    }
+
+    if (video.source.type === "MediaConvert") {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          ...getHeaders(origin),
+          Location: `https://v.cap.so/${userId}/${videoId}/output/video_recording_000.m3u8`,
+        },
+      });
+    }
+
+    const playlistUrl = `https://v.cap.so/${userId}/${videoId}/combined-source/stream.m3u8`;
+    return new Response(null, {
+      status: 302,
+      headers: {
+        ...getHeaders(origin),
+        Location: playlistUrl,
+      },
+    });
+  }
+
   const Bucket = getS3Bucket(bucket);
   const videoPrefix = `${userId}/${videoId}/video/`;
   const audioPrefix = `${userId}/${videoId}/audio/`;
@@ -129,7 +160,6 @@ export async function GET(request: NextRequest) {
         { expiresIn: 3600 }
       );
 
-      console.log({ playlistUrl });
       return new Response(null, {
         status: 302,
         headers: {
