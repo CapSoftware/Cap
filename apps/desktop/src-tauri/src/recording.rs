@@ -275,8 +275,11 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
         if auth.is_upgraded() && settings.auto_create_shareable_link {
             if let Some(pre_created_video) = state.pre_created_video.take() {
                 // Copy link to clipboard
-                #[cfg(target_os = "macos")]
-                platform::write_string_to_pasteboard(&pre_created_video.link);
+                let _ = app
+                    .state::<MutableState<'_, arboard::Clipboard>>()
+                    .write()
+                    .await
+                    .set_text(pre_created_video.link.clone());
 
                 // Send notification for shareable link
                 notifications::send_notification(

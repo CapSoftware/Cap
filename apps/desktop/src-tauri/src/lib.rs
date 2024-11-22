@@ -16,6 +16,7 @@ mod upload;
 mod web_api;
 mod windows;
 
+use arboard::Clipboard;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid};
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
@@ -650,7 +651,7 @@ async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(
 
     println!("Copying screenshot to clipboard: {:?}", path);
 
-    let image_data = match tokio::fs::read(&path).await {
+    let image = match image::open(&path) {
         Ok(data) => data,
         Err(e) => {
             println!("Failed to read screenshot file: {}", e);
@@ -661,58 +662,27 @@ async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(
             return Err(format!("Failed to read screenshot file: {}", e));
         }
     };
-
-    #[cfg(target_os = "macos")]
-    {
-        use cocoa::appkit::{NSImage, NSPasteboard};
-        use cocoa::base::{id, nil};
-        use cocoa::foundation::{NSArray, NSData};
-        use objc::rc::autoreleasepool;
-
-        let result = unsafe {
-            autoreleasepool(|| {
-                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
-                NSPasteboard::clearContents(pasteboard);
-
-                let ns_data = NSData::dataWithBytes_length_(
-                    nil,
-                    image_data.as_ptr() as *const std::os::raw::c_void,
-                    image_data.len() as u64,
-                );
-
-                let image = NSImage::initWithData_(NSImage::alloc(nil), ns_data);
-                if image != nil {
-                    NSPasteboard::writeObjects(pasteboard, NSArray::arrayWithObject(nil, image));
-                    Ok(())
-                } else {
-                    Err("Failed to create NSImage from data".to_string())
-                }
-            })
-        };
-
-        if let Err(e) = result {
+    let data = match image.as_rgba8() {
+        Some(data) => data,
+        None => {
+            println!("Failed to load image as 8bit RGBA");
             notifications::send_notification(
                 &app,
                 notifications::NotificationType::ScreenshotCopyFailed,
             );
-            return Err(e);
+            return Err("Failed to load image as 8bit RGBA".into());
         }
+    };
 
-        notifications::send_notification(
-            &app,
-            notifications::NotificationType::ScreenshotCopiedToClipboard,
-        );
-    }
-
-    // TODO(Ilya) (Windows) Add support
-    #[cfg(not(target_os = "macos"))]
-    {
-        notifications::send_notification(
-            &app,
-            notifications::NotificationType::ScreenshotCopyFailed,
-        );
-        return Err("Clipboard operations are only supported on macOS".to_string());
-    }
+    let _ = app
+        .state::<MutableState<'_, Clipboard>>()
+        .write()
+        .await
+        .set_image(arboard::ImageData {
+            width: image.width() as usize,
+            height: image.height() as usize,
+            bytes: std::borrow::Cow::Borrowed(data),
+        });
 
     Ok(())
 }
@@ -836,66 +806,16 @@ async fn create_editor_instance(
 #[specta::specta]
 async fn copy_video_to_clipboard(app: AppHandle, path: String) -> Result<(), String> {
     println!("copying");
-
-    #[cfg(target_os = "macos")]
-    {
-        use cocoa::appkit::NSPasteboard;
-        use cocoa::base::{id, nil};
-        use cocoa::foundation::{NSArray, NSString, NSURL};
-        use objc::rc::autoreleasepool;
-
-        let result: Result<(), String> = unsafe {
-            autoreleasepool(|| {
-                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
-                NSPasteboard::clearContents(pasteboard);
-
-                let url_str = NSString::alloc(nil).init_str(&path);
-                let url = NSURL::fileURLWithPath_(nil, url_str);
-
-                if url == nil {
-                    return Err("Failed to create NSURL".to_string());
-                }
-
-                let objects = NSArray::arrayWithObject(nil, url);
-                if objects == nil {
-                    return Err("Failed to create NSArray".to_string());
-                }
-
-                #[cfg(target_arch = "x86_64")]
-                {
-                    let write_result: i8 = NSPasteboard::writeObjects(pasteboard, objects);
-                    if write_result == 0 {
-                        return Err("Failed to write to pasteboard".to_string());
-                    }
-                }
-
-                #[cfg(target_arch = "aarch64")]
-                {
-                    let write_result: bool = NSPasteboard::writeObjects(pasteboard, objects);
-                    if !write_result {
-                        return Err("Failed to write to pasteboard".to_string());
-                    }
-                }
-
-                Ok(())
-            })
-        };
-
-        if let Err(e) = result {
-            println!("Failed to copy to clipboard: {}", e);
-            notifications::send_notification(
-                &app,
-                notifications::NotificationType::VideoCopyFailed,
-            );
-            return Err(e);
-        }
-    }
+    let _ = app
+        .state::<MutableState<'_, Clipboard>>()
+        .write()
+        .await
+        .set_text(path);
 
     notifications::send_notification(
         &app,
         notifications::NotificationType::VideoCopiedToClipboard,
     );
-
     Ok(())
 }
 
@@ -1340,11 +1260,13 @@ async fn upload_rendered_video(
             meta.save_for_project();
             RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
+            let _ = app
+                .state::<MutableState<'_, Clipboard>>()
+                .write()
+                .await
+                .set_text(uploaded_video.link.clone());
+
             NotificationType::ShareableLinkCopied.send(&app);
-
-            #[cfg(target_os = "macos")]
-            platform::write_string_to_pasteboard(&uploaded_video.link);
-
             Ok(UploadResult::Success(uploaded_video.link))
         }
         Err(e) => {
@@ -1428,8 +1350,11 @@ async fn upload_screenshot(
 
     println!("Copying to clipboard: {:?}", share_link);
 
-    #[cfg(target_os = "macos")]
-    platform::write_string_to_pasteboard(&share_link);
+    let _ = app
+        .state::<MutableState<'_, Clipboard>>()
+        .write()
+        .await
+        .set_text(share_link.clone());
 
     // Send notification after successful upload and clipboard copy
     notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
@@ -2066,6 +1991,10 @@ pub async fn run() {
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
 
+            app.manage(Arc::new(RwLock::new(
+                Clipboard::new().expect("Failed to create clipboard context"),
+            )));
+
             tray::create_tray(&app_handle).unwrap();
 
             let app_handle_clone = app_handle.clone();
@@ -2442,8 +2371,11 @@ async fn reupload_rendered_video(
                 notifications::NotificationType::ShareableLinkCopied,
             );
 
-            #[cfg(target_os = "macos")]
-            platform::write_string_to_pasteboard(&uploaded_video.link);
+            let _ = app
+                .state::<MutableState<'_, Clipboard>>()
+                .write()
+                .await
+                .set_text(uploaded_video.link);
 
             Ok(UploadResult::Success(sharing.link)) // Use existing sharing link
         }

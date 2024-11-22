@@ -66,6 +66,7 @@ rand = "0.8.5"
 cpal.workspace = true
 keyed_priority_queue = "0.4.2"
 sentry.workspace = true
+arboard = "3.4.1"
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
