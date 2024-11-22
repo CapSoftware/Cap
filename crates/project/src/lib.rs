@@ -136,4 +136,8 @@ impl RecordingMeta {
         }
         data
     }
+
+    pub fn output_path(&self) -> PathBuf {
+        self.project_path.join("output").join("result.mp4")
+    }
 }

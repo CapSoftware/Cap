@@ -74,6 +74,10 @@ impl H264AVAssetWriterEncoder {
     }
 
     fn queue_frame(&mut self, frame: screencapturekit::cm_sample_buffer::CMSampleBuffer) {
+        if !self.video_input.is_ready_for_more_media_data() {
+            return;
+        }
+
         let sample_buf = unsafe {
             let ptr = &*frame.sys_ref as *const _ as *const cm::SampleBuf;
             &*ptr

@@ -24,11 +24,10 @@ import {
 import { events } from "~/utils/tauri";
 
 export function Header() {
-  let unlistenTitlebar: () => void | undefined;
+  let unlistenTitlebar: UnlistenFn | undefined;
 
   onMount(async () => {
     unlistenTitlebar = await initializeTitlebar();
-    commands.positionTrafficLights([20.0, 48.0]);
   });
 
   onCleanup(() => {
@@ -36,7 +35,7 @@ export function Header() {
   });
 
   setTitlebar("border", false);
-  setTitlebar("height", "4.5rem");
+  setTitlebar("height", "4rem");
   setTitlebar(
     "items",
     <div
@@ -203,6 +202,7 @@ import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { createMutation } from "@tanstack/solid-query";
 import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
+import { UnlistenFn } from "@tauri-apps/api/event";
 
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
@@ -244,7 +244,12 @@ function ExportButton() {
         }
       };
 
-      const videoPath = await commands.renderToFile(videoId, project, progress);
+      const videoPath = await commands.exportVideo(
+        videoId,
+        project,
+        progress,
+        false
+      );
       await commands.copyFileToPath(videoPath, path);
 
       setProgressState({
@@ -312,7 +317,7 @@ function ShareButton() {
               setProgressState({
                 type: "uploading",
                 renderProgress: 100,
-                uploadProgress: progress,
+                uploadProgress: progress / 100,
                 message: `Uploading - ${progress}%`,
                 mediaPath: videoId,
                 stage: "uploading",
@@ -325,59 +330,51 @@ function ShareButton() {
         const projectConfig =
           project ?? presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG;
 
-        // First try to get or render the video
-        try {
-          setProgressState({
-            type: "uploading",
-            renderProgress: 0,
-            uploadProgress: 0,
-            message: "Rendering - 0%",
-            mediaPath: videoId,
-            stage: "rendering",
-          });
+        setProgressState({
+          type: "uploading",
+          renderProgress: 0,
+          uploadProgress: 0,
+          message: "Rendering - 0%",
+          mediaPath: videoId,
+          stage: "rendering",
+        });
 
-          const progress = new Channel<RenderProgress>();
-          progress.onmessage = (p) => {
-            console.log("Progress channel message:", p);
-            if (
-              p.type === "FrameRendered" &&
-              progressState.type === "uploading"
-            ) {
-              const renderProgress = Math.round(
-                (p.current_frame / (progressState.totalFrames || 1)) * 100
-              );
-              setProgressState({
-                ...progressState,
-                message: `Rendering - ${renderProgress}%`,
-                renderProgress,
-              });
-            }
-            if (
-              p.type === "EstimatedTotalFrames" &&
-              progressState.type === "uploading"
-            ) {
-              console.log("Got total frames:", p.total_frames);
-              setProgressState({
-                ...progressState,
-                totalFrames: p.total_frames,
-              });
-            }
-          };
+        const progress = new Channel<RenderProgress>();
+        progress.onmessage = (p) => {
+          console.log("Progress channel message:", p);
+          if (
+            p.type === "FrameRendered" &&
+            progressState.type === "uploading"
+          ) {
+            const renderProgress = Math.round(
+              (p.current_frame / (progressState.totalFrames || 1)) * 100
+            );
+            setProgressState({
+              ...progressState,
+              message: `Rendering - ${renderProgress}%`,
+              renderProgress,
+            });
+          }
+          if (
+            p.type === "EstimatedTotalFrames" &&
+            progressState.type === "uploading"
+          ) {
+            console.log("Got total frames:", p.total_frames);
+            setProgressState({
+              ...progressState,
+              totalFrames: p.total_frames,
+            });
+          }
+        };
 
-          await commands.renderVideoWithProgress(
-            videoId,
-            projectConfig,
-            progress
-          );
-        } catch (error) {
-          console.error("Error rendering video:", error);
-          throw new Error("Failed to render video");
-        }
+        await commands.exportVideo(videoId, projectConfig, progress, false);
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
-          ? await commands.reuploadRenderedVideo(videoId, projectConfig)
-          : await commands.uploadRenderedVideo(videoId, projectConfig, null);
+          ? await commands.uploadExportedVideo(videoId, "Reupload")
+          : await commands.uploadExportedVideo(videoId, {
+              Initial: { pre_created_video: null },
+            });
 
         console.log("Upload result:", result);
 

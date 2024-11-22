@@ -27,7 +27,7 @@ export default function (props: ComponentProps<"div">) {
       >
         <icons.minimizeWin />
       </ControlButton>
-      <Show when={!titlebarState.hideMaximize}>
+      <Show when={titlebarState.maximizable || !titlebarState.hideMaximize}>
         <ControlButton
           onClick={
             titlebarState.maximizable
