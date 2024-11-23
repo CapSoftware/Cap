@@ -7,11 +7,11 @@ import { commands } from "~/utils/tauri";
 
 interface S3Config {
   provider: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-  endpoint: string;
-  bucketName: string;
-  region: string;
+  accessKeyId: string | null;
+  secretAccessKey: string | null;
+  endpoint: string | null;
+  bucketName: string | null;
+  region: string | null;
 }
 
 export default function S3ConfigPage() {
@@ -54,10 +54,10 @@ export default function S3ConfigPage() {
       if (data.config) {
         const config = data.config as S3Config;
         setProvider(config.provider || "aws");
-        setAccessKeyId(config.accessKeyId);
-        setSecretAccessKey(config.secretAccessKey);
+        setAccessKeyId(config.accessKeyId || "");
+        setSecretAccessKey(config.secretAccessKey || "");
         setEndpoint(config.endpoint || "https://s3.amazonaws.com");
-        setBucketName(config.bucketName);
+        setBucketName(config.bucketName || "");
         setRegion(config.region || "us-east-1");
       }
     } catch (error) {

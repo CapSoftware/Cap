@@ -1,9 +1,6 @@
-import { createCipheriv, createDecipheriv, randomBytes, pbkdf2Sync } from 'crypto';
-
-const ALGORITHM = 'aes-256-gcm';
+const ALGORITHM = { name: 'AES-GCM', length: 256 };
 const IV_LENGTH = 12;
 const SALT_LENGTH = 16;
-const TAG_LENGTH = 16;
 const KEY_LENGTH = 32;
 const ITERATIONS = 100000;
 
@@ -22,32 +19,59 @@ try {
   throw new Error('Invalid encryption key format');
 }
 
-function deriveKey(salt: Buffer): Buffer {
-  return pbkdf2Sync(
-    ENCRYPTION_KEY,
-    salt,
-    ITERATIONS,
-    KEY_LENGTH,
-    'sha256'
+async function deriveKey(salt: Uint8Array): Promise<CryptoKey> {
+  // Convert hex string to ArrayBuffer for Web Crypto API
+  const keyBuffer = Buffer.from(ENCRYPTION_KEY, 'hex');
+  
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    keyBuffer,
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+
+  return crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations: ITERATIONS,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    ALGORITHM,
+    false,
+    ['encrypt', 'decrypt']
   );
 }
 
-export function encrypt(text: string): string {
+export async function encrypt(text: string): Promise<string> {
   if (!text) {
     throw new Error('Cannot encrypt empty or null text');
   }
 
   try {
-    const salt = randomBytes(SALT_LENGTH);
-    const iv = randomBytes(IV_LENGTH);
-    const key = deriveKey(salt);
+    const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
+    const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+    const key = await deriveKey(salt);
     
-    const cipher = createCipheriv(ALGORITHM, key, iv);
-    const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
-    const tag = cipher.getAuthTag();
+    const encoded = new TextEncoder().encode(text);
+    const encrypted = await crypto.subtle.encrypt(
+      {
+        name: ALGORITHM.name,
+        iv,
+      },
+      key,
+      encoded
+    );
 
-    // Combine salt, IV, tag, and encrypted content
-    const result = Buffer.concat([salt, iv, tag, encrypted]);
+    // Combine salt, IV, and encrypted content
+    const result = Buffer.concat([
+      Buffer.from(salt),
+      Buffer.from(iv),
+      Buffer.from(encrypted)
+    ]);
+    
     return result.toString('base64');
   } catch (error: unknown) {
     if (error instanceof Error) {
@@ -57,7 +81,7 @@ export function encrypt(text: string): string {
   }
 }
 
-export function decrypt(encryptedText: string): string {
+export async function decrypt(encryptedText: string): Promise<string> {
   if (!encryptedText) {
     throw new Error('Cannot decrypt empty or null text');
   }
@@ -68,16 +92,21 @@ export function decrypt(encryptedText: string): string {
     // Extract the components
     const salt = encrypted.subarray(0, SALT_LENGTH);
     const iv = encrypted.subarray(SALT_LENGTH, SALT_LENGTH + IV_LENGTH);
-    const tag = encrypted.subarray(SALT_LENGTH + IV_LENGTH, SALT_LENGTH + IV_LENGTH + TAG_LENGTH);
-    const content = encrypted.subarray(SALT_LENGTH + IV_LENGTH + TAG_LENGTH);
+    const content = encrypted.subarray(SALT_LENGTH + IV_LENGTH);
 
     // Derive the same key using the extracted salt
-    const key = deriveKey(salt);
+    const key = await deriveKey(salt);
     
-    const decipher = createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(tag);
-    const decrypted = Buffer.concat([decipher.update(content), decipher.final()]);
-    return decrypted.toString('utf8');
+    const decrypted = await crypto.subtle.decrypt(
+      {
+        name: ALGORITHM.name,
+        iv,
+      },
+      key,
+      content
+    );
+
+    return new TextDecoder().decode(decrypted);
   } catch (error: unknown) {
     if (error instanceof Error) {
       throw new Error(`Decryption failed: ${error.message}`);

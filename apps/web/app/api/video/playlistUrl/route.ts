@@ -47,6 +47,15 @@ export async function GET(request: NextRequest) {
   }
 
   const video = query[0];
+  if (!video) {
+    return new Response(
+      JSON.stringify({ error: true, message: "Video not found" }),
+      {
+        status: 404,
+        headers: getHeaders(origin),
+      }
+    );
+  }
 
   if (video.jobStatus === "COMPLETE") {
     const playlistUrl = `https://v.cap.so/${video.ownerId}/${video.id}/output/video_recording_000_output.m3u8`;

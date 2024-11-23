@@ -14,7 +14,7 @@ import { LogoSpinner } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import toast from "react-hot-toast";
-import { Tooltip } from "react-tooltip"; // Make sure to import this if not already present
+import { Tooltip } from "react-tooltip";
 
 declare global {
   interface Window {
@@ -372,19 +372,42 @@ export const ShareVideo = ({
   };
 
   useEffect(() => {
-    const fetchSubtitles = () => {
-      fetch(`https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`)
-        .then((response) => response.text())
-        .then((text) => {
-          const parsedSubtitles = fromVtt(text);
-          setSubtitles(parsedSubtitles);
-        });
+    const fetchSubtitles = async () => {
+      let transcriptionUrl;
+
+      if (
+        data.bucket &&
+        data.awsBucket !== process.env.NEXT_PUBLIC_CAP_AWS_BUCKET
+      ) {
+        // For custom S3 buckets, fetch through the API
+        transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
+      } else {
+        // For default Cap storage
+        transcriptionUrl = `https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`;
+      }
+
+      try {
+        const response = await fetch(transcriptionUrl);
+        const text = await response.text();
+        const parsedSubtitles = fromVtt(text);
+        setSubtitles(parsedSubtitles);
+      } catch (error) {
+        console.error("Error fetching subtitles:", error);
+      }
     };
 
     if (data.transcriptionStatus === "COMPLETE") {
       fetchSubtitles();
     } else {
+      const startTime = Date.now();
+      const maxDuration = 2 * 60 * 1000;
+
       const intervalId = setInterval(() => {
+        if (Date.now() - startTime > maxDuration) {
+          clearInterval(intervalId);
+          return;
+        }
+
         fetch(`/api/video/transcribe/status?videoId=${data.id}`)
           .then((response) => response.json())
           .then(({ transcriptionStatus }) => {

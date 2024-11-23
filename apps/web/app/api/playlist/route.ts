@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
   const videoId = searchParams.get("videoId") || "";
   const videoType = searchParams.get("videoType") || "";
   const thumbnail = searchParams.get("thumbnail") || "";
+  const fileType = searchParams.get("fileType") || "";
   const origin = request.headers.get("origin") as string;
 
   if (!userId || !videoId) {
@@ -78,6 +79,9 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  const Bucket = await getS3Bucket(bucket);
+  const s3Client = await createS3Client(bucket);
+
   if (!bucket || video.awsBucket === process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) {
     if (video.source.type === "desktopMP4") {
       return new Response(null, {
@@ -109,13 +113,45 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const Bucket = getS3Bucket(bucket);
+  // Handle transcription file request first
+  if (fileType === "transcription") {
+    try {
+      const transcriptionUrl = await getSignedUrl(
+        s3Client,
+        new GetObjectCommand({
+          Bucket,
+          Key: `${userId}/${videoId}/transcription.vtt`,
+        }),
+        { expiresIn: 3600 }
+      );
+
+      const response = await fetch(transcriptionUrl);
+      const transcriptionContent = await response.text();
+
+      return new Response(transcriptionContent, {
+        status: 200,
+        headers: {
+          ...getHeaders(origin),
+          "Content-Type": "text/vtt",
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching transcription file:", error);
+      return new Response(
+        JSON.stringify({ error: true, message: "Transcription file not found" }),
+        {
+          status: 404,
+          headers: getHeaders(origin),
+        }
+      );
+    }
+  }
+
+  // Handle video/audio files
   const videoPrefix = `${userId}/${videoId}/video/`;
   const audioPrefix = `${userId}/${videoId}/audio/`;
 
   try {
-    const s3Client = createS3Client(bucket);
-
     if (video.source.type === "local") {
       const playlistUrl = await getSignedUrl(
         s3Client,
@@ -150,6 +186,7 @@ export async function GET(request: NextRequest) {
         headers: getHeaders(origin),
       });
     }
+
     if (video.source.type === "desktopMP4") {
       const playlistUrl = await getSignedUrl(
         s3Client,
@@ -207,8 +244,6 @@ export async function GET(request: NextRequest) {
       } catch (error) {
         console.warn("No audio segment found for this video", error);
       }
-
-      console.log("audioSegment", audioSegment);
 
       const [videoSegment] = await Promise.all([
         s3Client.send(videoSegmentCommand),

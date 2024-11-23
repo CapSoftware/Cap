@@ -69,16 +69,15 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const Bucket = getS3Bucket(bucket);
+  const Bucket = await getS3Bucket(bucket);
   const screenshotPrefix = `${userId}/${videoId}/`;
 
   try {
-    const s3Client = createS3Client(bucket);
+    const s3Client = await createS3Client(bucket);
 
     const objectsCommand = new ListObjectsV2Command({
       Bucket,
       Prefix: screenshotPrefix,
-      MaxKeys: 1,
     });
 
     const objects = await s3Client.send(objectsCommand);

@@ -1,125 +1,102 @@
 import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { s3Buckets } from "@cap/database/schema";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { eq } from "drizzle-orm";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { encrypt } from "@cap/database/crypto";
-import { nanoId } from "@cap/database/helpers";
-import { getCorsHeaders, getOptionsHeaders } from "@/utils/cors";
 import { cookies } from "next/headers";
-
-export async function OPTIONS(req: NextRequest) {
-  console.log("[S3 Config] OPTIONS request received");
-  const params = req.nextUrl.searchParams;
-  const origin = params.get("origin") || null;
-  const originalOrigin = req.nextUrl.origin;
-
-  console.log("[S3 Config] Responding to OPTIONS request", { origin, originalOrigin });
-  return new Response(null, {
-    status: 200,
-    headers: getOptionsHeaders(origin, originalOrigin, "POST, OPTIONS"),
-  });
-}
+import { nanoId } from "@cap/database/helpers";
 
 export async function POST(request: NextRequest) {
-  console.log("[S3 Config] POST request received");
-  const params = request.nextUrl.searchParams;
-  const origin = params.get("origin") || null;
-  const originalOrigin = request.nextUrl.origin;
-
-  // Handle authentication token
-  const token = request.headers.get("authorization")?.split(" ")[1];
-  if (token) {
-    console.log("[S3 Config] Setting auth token cookie");
-    cookies().set({
-      name: "next-auth.session-token",
-      value: token,
-      path: "/",
-      sameSite: "none",
-      secure: true,
-      httpOnly: true,
-    });
-  } else {
-    console.log("[S3 Config] No auth token provided");
-  }
-
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      console.log("[S3 Config] User not authenticated");
-      return new Response(JSON.stringify({ error: "Not authenticated" }), {
-        status: 401,
-        headers: getCorsHeaders(origin, originalOrigin),
+    const token = request.headers.get("authorization")?.split(" ")[1];
+    if (token) {
+      cookies().set({
+        name: "next-auth.session-token",
+        value: token,
+        path: "/",
+        sameSite: "none",
+        secure: true,
+        httpOnly: true,
       });
     }
 
-    console.log("[S3 Config] User authenticated", { userId: user.id });
+    const user = await getCurrentUser();
+    const origin = request.headers.get("origin") as string;
 
-    const { provider, accessKeyId, secretAccessKey, endpoint, bucketName, region } =
-      await request.json();
+    if (!user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: {
+          "Access-Control-Allow-Origin": origin,
+          "Access-Control-Allow-Credentials": "true",
+        },
+      });
+    }
 
-    console.log("[S3 Config] Received S3 config data", {
-      provider,
-      hasAccessKeyId: !!accessKeyId,
-      hasSecretKey: !!secretAccessKey,
-      endpoint,
-      bucketName,
-      region
-    });
+    const data = await request.json();
 
-    // Get existing bucket for this user
-    const existingBucket = await db
+    // Encrypt the sensitive data
+    const encryptedConfig = {
+      id: nanoId(),
+      provider: data.provider,
+      accessKeyId: await encrypt(data.accessKeyId),
+      secretAccessKey: await encrypt(data.secretAccessKey),
+      endpoint: data.endpoint ? await encrypt(data.endpoint) : null,
+      bucketName: await encrypt(data.bucketName),
+      region: await encrypt(data.region),
+      ownerId: user.id,
+    };
+
+    // Check if user already has a bucket config
+    const [existingBucket] = await db
       .select()
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
 
-    console.log("[S3 Config] Existing bucket found:", { exists: existingBucket.length > 0 });
-
-    // Encrypt sensitive data before storing
-    const encryptedData = {
-      id: existingBucket[0]?.id || nanoId(),
-      provider,
-      accessKeyId: encrypt(accessKeyId),
-      secretAccessKey: encrypt(secretAccessKey),
-      endpoint: endpoint ? encrypt(endpoint) : null,
-      bucketName: encrypt(bucketName),
-      region: encrypt(region),
-      ownerId: user.id,
-    };
-
-    console.log("[S3 Config] Encrypted data prepared", { id: encryptedData.id });
-
-    await db
-      .insert(s3Buckets)
-      .values(encryptedData)
-      .onDuplicateKeyUpdate({
-        set: {
-          provider: encryptedData.provider,
-          accessKeyId: encryptedData.accessKeyId,
-          secretAccessKey: encryptedData.secretAccessKey,
-          endpoint: encryptedData.endpoint,
-          bucketName: encryptedData.bucketName,
-          region: encryptedData.region,
-        },
-      });
-
-    console.log("[S3 Config] Successfully saved S3 configuration");
+    if (existingBucket) {
+      // Update existing config
+      await db
+        .update(s3Buckets)
+        .set(encryptedConfig)
+        .where(eq(s3Buckets.id, existingBucket.id));
+    } else {
+      // Insert new config
+      await db.insert(s3Buckets).values(encryptedConfig);
+    }
 
     return new Response(JSON.stringify({ success: true }), {
-      status: 200,
-      headers: getCorsHeaders(origin, originalOrigin),
+      headers: {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+      },
     });
   } catch (error) {
-    console.error("[S3 Config] Error saving S3 config:", error);
+    console.error("Error in S3 config route:", error);
     return new Response(
       JSON.stringify({ 
         error: "Failed to save S3 configuration",
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: error instanceof Error ? error.message : String(error)
       }),
       {
         status: 500,
-        headers: getCorsHeaders(origin, originalOrigin),
+        headers: {
+          "Access-Control-Allow-Origin": request.headers.get("origin") as string,
+          "Access-Control-Allow-Credentials": "true",
+        },
       }
     );
   }
+}
+
+export async function OPTIONS(request: NextRequest) {
+  return new Response(null, {
+    status: 200,
+    headers: {
+      "Access-Control-Allow-Origin": request.headers.get("origin") as string,
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Credentials": "true",
+    },
+  });
 }

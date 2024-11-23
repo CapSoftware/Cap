@@ -59,7 +59,6 @@ export async function POST(request: NextRequest) {
         .from(s3Buckets)
         .where(eq(s3Buckets.ownerId, user.id));
 
-      // Create a decrypted config for S3 client
       const s3Config = bucket ? {
         endpoint: bucket.endpoint || undefined,
         region: bucket.region,
@@ -74,7 +73,7 @@ export async function POST(request: NextRequest) {
         hasSecretKey: !!s3Config?.secretAccessKey,
       });
 
-      const s3Client = createS3Client(s3Config);
+      const s3Client = await createS3Client(s3Config);
 
       const contentType = fileKey.endsWith(".aac")
         ? "audio/aac"
@@ -98,7 +97,7 @@ export async function POST(request: NextRequest) {
         "x-amz-meta-audiocodec": audioCodec ?? "",
       };
 
-      const bucketName = getS3Bucket(bucket);
+      const bucketName = await getS3Bucket(bucket);
       console.log("Using bucket:", bucketName);
 
       const presignedPostData: PresignedPost = await createPresignedPost(

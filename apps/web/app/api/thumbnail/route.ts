@@ -71,8 +71,8 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const Bucket = getS3Bucket(result.bucket);
-  const s3Client = createS3Client(result.bucket);
+  const Bucket = await getS3Bucket(result.bucket);
+  const s3Client = await createS3Client(result.bucket);
 
   try {
     const listCommand = new ListObjectsV2Command({

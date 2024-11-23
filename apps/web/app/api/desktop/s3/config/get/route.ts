@@ -1,127 +1,111 @@
 import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { s3Buckets } from "@cap/database/schema";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { eq } from "drizzle-orm";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { decrypt } from "@cap/database/crypto";
 import { cookies } from "next/headers";
 
-const allowedOrigins = [
-  process.env.NEXT_PUBLIC_URL,
-  "http://localhost:3001",
-  "http://localhost:3000",
-  "tauri://localhost",
-  "http://tauri.localhost",
-  "https://tauri.localhost",
-];
-
-export async function OPTIONS(req: NextRequest) {
-  const params = req.nextUrl.searchParams;
-  const origin = params.get("origin") || null;
-  const originalOrigin = req.nextUrl.origin;
-
+export async function OPTIONS(request: NextRequest) {
   return new Response(null, {
     status: 200,
     headers: {
-      "Access-Control-Allow-Origin":
-        origin && allowedOrigins.includes(origin)
-          ? origin
-          : allowedOrigins.includes(originalOrigin)
-          ? originalOrigin
-          : "null",
-      "Access-Control-Allow-Credentials": "true",
+      "Access-Control-Allow-Origin": request.headers.get("origin") as string,
       "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers":
-        "Content-Type, Authorization, sentry-trace, baggage",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Credentials": "true",
     },
   });
 }
 
 export async function GET(request: NextRequest) {
-  const token = request.headers.get("authorization")?.split(" ")[1];
-  if (token) {
-    cookies().set({
-      name: "next-auth.session-token",
-      value: token,
-      path: "/",
-      sameSite: "none",
-      secure: true,
-      httpOnly: true,
-    });
-  }
-
-  const params = request.nextUrl.searchParams;
-  const origin = params.get("origin") || null;
-  const originalOrigin = request.nextUrl.origin;
-
   try {
+    const token = request.headers.get("authorization")?.split(" ")[1];
+    if (token) {
+      cookies().set({
+        name: "next-auth.session-token",
+        value: token,
+        path: "/",
+        sameSite: "none",
+        secure: true,
+        httpOnly: true,
+      });
+    }
+
     const user = await getCurrentUser();
+    const origin = request.headers.get("origin") as string;
+
     if (!user) {
-      return new Response(JSON.stringify({ error: "Not authenticated" }), {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
         headers: {
-          "Access-Control-Allow-Origin":
-            origin && allowedOrigins.includes(origin)
-              ? origin
-              : allowedOrigins.includes(originalOrigin)
-              ? originalOrigin
-              : "null",
+          "Access-Control-Allow-Origin": origin,
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
           "Access-Control-Allow-Credentials": "true",
         },
       });
     }
 
-    const encryptedConfig = await db
-      .select({
-        provider: s3Buckets.provider,
-        accessKeyId: s3Buckets.accessKeyId,
-        secretAccessKey: s3Buckets.secretAccessKey,
-        endpoint: s3Buckets.endpoint,
-        bucketName: s3Buckets.bucketName,
-        region: s3Buckets.region,
-      })
+    const [bucket] = await db
+      .select()
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
 
-    const config = encryptedConfig[0] ? {
-      provider: encryptedConfig[0].provider,
-      accessKeyId: decrypt(encryptedConfig[0].accessKeyId),
-      secretAccessKey: decrypt(encryptedConfig[0].secretAccessKey),
-      endpoint: encryptedConfig[0].endpoint ? decrypt(encryptedConfig[0].endpoint) : null,
-      bucketName: decrypt(encryptedConfig[0].bucketName),
-      region: decrypt(encryptedConfig[0].region),
-    } : null;
+    if (!bucket) {
+      return new Response(
+        JSON.stringify({
+          config: {
+            provider: "aws",
+            accessKeyId: "",
+            secretAccessKey: "",
+            endpoint: "https://s3.amazonaws.com",
+            bucketName: "",
+            region: "us-east-1",
+          },
+        }),
+        {
+          headers: {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Credentials": "true",
+          },
+        }
+      );
+    }
 
-    return new Response(
-      JSON.stringify({
-        config: config,
-      }),
-      {
-        status: 200,
-        headers: {
-          "Access-Control-Allow-Origin":
-            origin && allowedOrigins.includes(origin)
-              ? origin
-              : allowedOrigins.includes(originalOrigin)
-              ? originalOrigin
-              : "null",
-          "Access-Control-Allow-Credentials": "true",
-        },
-      }
-    );
+    // Decrypt the values before sending
+    const decryptedConfig = {
+      provider: bucket.provider,
+      accessKeyId: await decrypt(bucket.accessKeyId),
+      secretAccessKey: await decrypt(bucket.secretAccessKey),
+      endpoint: bucket.endpoint ? await decrypt(bucket.endpoint) : "https://s3.amazonaws.com",
+      bucketName: await decrypt(bucket.bucketName),
+      region: await decrypt(bucket.region),
+    };
+
+    return new Response(JSON.stringify({ config: decryptedConfig }), {
+      headers: {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Allow-Credentials": "true",
+      },
+    });
   } catch (error) {
-    console.error("Error fetching S3 config:", error);
+    console.error("Error in S3 config get route:", error);
     return new Response(
-      JSON.stringify({ error: "Failed to fetch S3 configuration" }),
+      JSON.stringify({ 
+        error: "Failed to fetch S3 configuration",
+        details: error instanceof Error ? error.message : String(error)
+      }),
       {
         status: 500,
         headers: {
-          "Access-Control-Allow-Origin":
-            origin && allowedOrigins.includes(origin)
-              ? origin
-              : allowedOrigins.includes(originalOrigin)
-              ? originalOrigin
-              : "null",
+          "Access-Control-Allow-Origin": request.headers.get("origin") as string,
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
           "Access-Control-Allow-Credentials": "true",
         },
       }
