@@ -31,6 +31,11 @@ export default function Settings(props: RouteSectionProps) {
                 icon: IconLucideCamera,
               },
               {
+                href: "apps",
+                name: "Cap Apps",
+                icon: IconLucideLayoutGrid,
+              },
+              {
                 href: "feedback",
                 name: "Feedback",
                 icon: IconLucideMessageSquarePlus,

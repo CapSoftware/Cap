@@ -2,12 +2,13 @@ import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { S3Client, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { S3Client, ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { getHeaders } from "@/utils/helpers";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-export const revalidate = 3599;
+export const revalidate = 0;
 
 export async function OPTIONS(request: NextRequest) {
   const origin = request.headers.get("origin") as string;
@@ -47,7 +48,15 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { video, bucket } = query[0];
+  const result = query[0];
+  if (!result?.video || !result?.bucket) {
+    return new Response(
+      JSON.stringify({ error: true, message: "Video or bucket not found" }),
+      { status: 401, headers: getHeaders(origin) }
+    );
+  }
+
+  const { video, bucket } = result;
 
   if (video.public === false) {
     const user = await getCurrentUser();
@@ -60,16 +69,15 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const Bucket = getS3Bucket(bucket);
+  const Bucket = await getS3Bucket(bucket);
   const screenshotPrefix = `${userId}/${videoId}/`;
 
   try {
-    const s3Client = createS3Client(bucket);
+    const s3Client = await createS3Client(bucket);
 
     const objectsCommand = new ListObjectsV2Command({
       Bucket,
       Prefix: screenshotPrefix,
-      MaxKeys: 1,
     });
 
     const objects = await s3Client.send(objectsCommand);
@@ -85,7 +93,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const screenshotUrl = `https://v.cap.so/${screenshot.Key}`;
+    let screenshotUrl: string;
+
+    if (video.awsBucket !== process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) {
+      screenshotUrl = await getSignedUrl(
+        s3Client,
+        new GetObjectCommand({
+          Bucket, 
+          Key: screenshot.Key 
+        }),
+        { expiresIn: 3600 }
+      );
+    } else {
+      screenshotUrl = `https://v.cap.so/${screenshot.Key}`;
+    }
 
     return new Response(JSON.stringify({ url: screenshotUrl }), {
       status: 200,

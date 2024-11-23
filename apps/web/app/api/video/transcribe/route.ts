@@ -15,7 +15,6 @@ import { createS3Client, getS3Bucket } from "@/utils/s3";
 export const maxDuration = 120;
 
 export async function OPTIONS(request: NextRequest) {
-  console.log("OPTIONS request received");
   const origin = request.headers.get("origin") as string;
 
   return new Response(null, {
@@ -25,22 +24,12 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  console.log("Transcription request received");
   const searchParams = request.nextUrl.searchParams;
   const userId = searchParams.get("userId") || "";
   const videoId = searchParams.get("videoId") || "";
   const origin = request.headers.get("origin") as string;
 
-  console.log(`UserId: ${userId}, VideoId: ${videoId}`);
-
-  if (
-    !process.env.NEXT_PUBLIC_CAP_AWS_BUCKET ||
-    !process.env.NEXT_PUBLIC_CAP_AWS_REGION ||
-    !process.env.CAP_AWS_ACCESS_KEY ||
-    !process.env.CAP_AWS_SECRET_KEY ||
-    !process.env.DEEPGRAM_API_KEY
-  ) {
-    console.error("Missing necessary environment variables");
+  if (!process.env.DEEPGRAM_API_KEY) {
     return new Response(
       JSON.stringify({
         error: true,
@@ -54,7 +43,6 @@ export async function GET(request: NextRequest) {
   }
 
   if (!userId || !videoId) {
-    console.error("userId or videoId not supplied");
     return new Response(
       JSON.stringify({
         error: true,
@@ -67,7 +55,6 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  console.log("Querying database for video");
   const query = await db
     .select({
       video: videos,
@@ -77,10 +64,7 @@ export async function GET(request: NextRequest) {
     .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
     .where(eq(videos.id, videoId));
 
-  console.log("Database query result:", query);
-
   if (query.length === 0) {
-    console.error("Video does not exist");
     return new Response(
       JSON.stringify({ error: true, message: "Video does not exist" }),
       {
@@ -92,7 +76,6 @@ export async function GET(request: NextRequest) {
 
   const result = query[0];
   if (!result || !result.video) {
-    console.error("Video information is missing");
     return new Response(
       JSON.stringify({ error: true, message: "Video information is missing" }),
       {
@@ -105,7 +88,6 @@ export async function GET(request: NextRequest) {
   const { video, bucket } = result;
 
   if (!video) {
-    console.error("Video information is missing");
     return new Response(
       JSON.stringify({ error: true, message: "Video information is missing" }),
       {
@@ -115,12 +97,10 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Use the awsRegion and awsBucket from the video object
   const awsRegion = video.awsRegion;
   const awsBucket = video.awsBucket;
 
   if (!awsRegion || !awsBucket) {
-    console.error("AWS region or bucket information is missing");
     return new Response(
       JSON.stringify({
         error: true,
@@ -133,13 +113,10 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  console.log("Video and bucket information:", { video, bucket });
-
   if (
     video.transcriptionStatus === "COMPLETE" ||
     video.transcriptionStatus === "PROCESSING"
   ) {
-    console.log("Transcription already completed or in progress");
     return new Response(
       JSON.stringify({
         message: "Transcription already completed or in progress",
@@ -148,57 +125,44 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  console.log("Updating transcription status to PROCESSING");
   await db
     .update(videos)
     .set({ transcriptionStatus: "PROCESSING" })
     .where(eq(videos.id, videoId));
 
-  const Bucket = getS3Bucket(awsBucket);
-  console.log("S3 Bucket:", Bucket);
-
-  console.log("Creating S3 client");
-  const s3Client = createS3Client(awsBucket);
+  const s3Client = await createS3Client(bucket);
 
   try {
     const videoKey = `${userId}/${videoId}/result.mp4`;
-    console.log("Video key:", videoKey);
 
-    console.log("Getting signed URL for video");
     const videoUrl = await getSignedUrl(
       s3Client,
       new GetObjectCommand({
-        Bucket,
+        Bucket: awsBucket,
         Key: videoKey,
       })
     );
-    console.log("Signed URL obtained");
 
-    console.log("Transcribing audio");
     const transcription = await transcribeAudio(videoUrl);
 
     if (transcription === "") {
       throw new Error("Failed to transcribe audio");
     }
 
-    console.log("Uploading transcription");
     const uploadCommand = new PutObjectCommand({
-      Bucket,
+      Bucket: awsBucket,
       Key: `${userId}/${videoId}/transcription.vtt`,
       Body: transcription,
       ContentType: "text/vtt",
     });
 
     await s3Client.send(uploadCommand);
-    console.log("Transcription uploaded successfully");
 
-    console.log("Updating transcription status to COMPLETE");
     await db
       .update(videos)
       .set({ transcriptionStatus: "COMPLETE" })
       .where(eq(videos.id, videoId));
 
-    console.log("Transcription process completed successfully");
     return new Response(
       JSON.stringify({
         message: "VTT file generated and uploaded successfully",
@@ -209,7 +173,6 @@ export async function GET(request: NextRequest) {
       }
     );
   } catch (error) {
-    console.error("Error processing video file", error);
     await db
       .update(videos)
       .set({ transcriptionStatus: "ERROR" })
@@ -226,7 +189,6 @@ export async function GET(request: NextRequest) {
 }
 
 function formatToWebVTT(result: any): string {
-  console.log("Formatting transcription to WebVTT");
   let output = "WEBVTT\n\n";
   let captionIndex = 1;
 
@@ -255,12 +217,11 @@ function formatToWebVTT(result: any): string {
 
         group = [];
         start = words[i + 1] ? formatTimestamp(words[i + 1].start) : start;
-        wordCount = 0; // Reset the counter for the next group
+        wordCount = 0;
       }
     }
   });
 
-  console.log("WebVTT formatting completed");
   return output;
 }
 
@@ -275,7 +236,6 @@ function formatTimestamp(seconds: number): string {
 }
 
 async function transcribeAudio(videoUrl: string): Promise<string> {
-  console.log("Starting audio transcription");
   const deepgram = createClient(process.env.DEEPGRAM_API_KEY as string);
 
   const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
@@ -287,16 +247,14 @@ async function transcribeAudio(videoUrl: string): Promise<string> {
       smart_format: true,
       detect_language: true,
       utterances: true,
-      mime_type: "video/mp4", // Specify the MIME type for MP4 video
+      mime_type: "video/mp4",
     }
   );
 
   if (error) {
-    console.error("Transcription error:", error);
     return "";
   }
 
-  console.log("Transcription completed successfully");
   const captions = formatToWebVTT(result);
 
   return captions;

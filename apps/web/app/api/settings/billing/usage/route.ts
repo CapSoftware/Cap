@@ -22,6 +22,20 @@ export async function GET(request: NextRequest) {
     .from(videos)
     .where(eq(videos.ownerId, user.id));
 
+  if (!numberOfVideos[0]) {
+    return new Response(
+      JSON.stringify({
+        error: "Could not fetch video count",
+      }),
+      {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  }
+
   if (
     isUserOnProPlan({
       subscriptionStatus: user.stripeSubscriptionStatus as string,

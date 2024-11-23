@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const video = query[0];
+    const video = query[0]!;
     const videoStartTime = video.videoStartTime
       ? new Date(video.videoStartTime).getTime()
       : 0;

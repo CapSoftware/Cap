@@ -39,8 +39,6 @@ export default function Page() {
         return;
       }
 
-      console.log("auth:", auth);
-
       const response = await fetch(
         `${clientEnv.VITE_SERVER_URL}/api/desktop/subscribe?origin=${window.location.origin}`,
         {

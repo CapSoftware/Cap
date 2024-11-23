@@ -47,7 +47,15 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { video, bucket } = query[0];
+  const result = query[0];
+  if (!result) {
+    return new Response(
+      JSON.stringify({ error: true, message: "Video does not exist" }),
+      { status: 401, headers: getHeaders(origin) }
+    );
+  }
+
+  const { video, bucket } = result;
 
   if (video.public === false) {
     const user = await getCurrentUser();
@@ -60,11 +68,11 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const Bucket = getS3Bucket(bucket);
+  const Bucket = await getS3Bucket(bucket);
   const individualPrefix = `${userId}/${videoId}/individual/`;
 
   try {
-    const s3Client = createS3Client(bucket);
+    const s3Client = await createS3Client(bucket);
 
     const objectsCommand = new ListObjectsV2Command({
       Bucket,

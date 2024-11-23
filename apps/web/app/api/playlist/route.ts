@@ -3,7 +3,6 @@ import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import {
-  S3Client,
   ListObjectsV2Command,
   GetObjectCommand,
   HeadObjectCommand,
@@ -34,6 +33,7 @@ export async function GET(request: NextRequest) {
   const videoId = searchParams.get("videoId") || "";
   const videoType = searchParams.get("videoType") || "";
   const thumbnail = searchParams.get("thumbnail") || "";
+  const fileType = searchParams.get("fileType") || "";
   const origin = request.headers.get("origin") as string;
 
   if (!userId || !videoId) {
@@ -78,13 +78,79 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const Bucket = getS3Bucket(bucket);
+  const Bucket = await getS3Bucket(bucket);
+  const s3Client = await createS3Client(bucket);
+
+  if (!bucket || video.awsBucket === process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) {
+    if (video.source.type === "desktopMP4") {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          ...getHeaders(origin),
+          Location: `https://v.cap.so/${userId}/${videoId}/result.mp4`,
+        },
+      });
+    }
+
+    if (video.source.type === "MediaConvert") {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          ...getHeaders(origin),
+          Location: `https://v.cap.so/${userId}/${videoId}/output/video_recording_000.m3u8`,
+        },
+      });
+    }
+
+    const playlistUrl = `https://v.cap.so/${userId}/${videoId}/combined-source/stream.m3u8`;
+    return new Response(null, {
+      status: 302,
+      headers: {
+        ...getHeaders(origin),
+        Location: playlistUrl,
+      },
+    });
+  }
+
+  // Handle transcription file request first
+  if (fileType === "transcription") {
+    try {
+      const transcriptionUrl = await getSignedUrl(
+        s3Client,
+        new GetObjectCommand({
+          Bucket,
+          Key: `${userId}/${videoId}/transcription.vtt`,
+        }),
+        { expiresIn: 3600 }
+      );
+
+      const response = await fetch(transcriptionUrl);
+      const transcriptionContent = await response.text();
+
+      return new Response(transcriptionContent, {
+        status: 200,
+        headers: {
+          ...getHeaders(origin),
+          "Content-Type": "text/vtt",
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching transcription file:", error);
+      return new Response(
+        JSON.stringify({ error: true, message: "Transcription file not found" }),
+        {
+          status: 404,
+          headers: getHeaders(origin),
+        }
+      );
+    }
+  }
+
+  // Handle video/audio files
   const videoPrefix = `${userId}/${videoId}/video/`;
   const audioPrefix = `${userId}/${videoId}/audio/`;
 
   try {
-    const s3Client = createS3Client(bucket);
-
     if (video.source.type === "local") {
       const playlistUrl = await getSignedUrl(
         s3Client,
@@ -119,6 +185,7 @@ export async function GET(request: NextRequest) {
         headers: getHeaders(origin),
       });
     }
+
     if (video.source.type === "desktopMP4") {
       const playlistUrl = await getSignedUrl(
         s3Client,
@@ -129,7 +196,6 @@ export async function GET(request: NextRequest) {
         { expiresIn: 3600 }
       );
 
-      console.log({ playlistUrl });
       return new Response(null, {
         status: 302,
         headers: {
@@ -177,8 +243,6 @@ export async function GET(request: NextRequest) {
       } catch (error) {
         console.warn("No audio segment found for this video", error);
       }
-
-      console.log("audioSegment", audioSegment);
 
       const [videoSegment] = await Promise.all([
         s3Client.send(videoSegmentCommand),
