@@ -3,7 +3,6 @@ import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import {
-  S3Client,
   ListObjectsV2Command,
   GetObjectCommand,
   HeadObjectCommand,
