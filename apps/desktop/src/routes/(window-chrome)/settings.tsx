@@ -33,7 +33,7 @@ export default function Settings(props: RouteSectionProps) {
               {
                 href: "apps",
                 name: "Cap Apps",
-                icon: IconLucideCable,
+                icon: IconLucideLayoutGrid,
               },
               {
                 href: "feedback",

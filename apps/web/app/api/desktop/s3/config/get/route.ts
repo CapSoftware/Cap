@@ -3,6 +3,7 @@ import { db } from "@cap/database";
 import { s3Buckets } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { eq } from "drizzle-orm";
+import { decrypt } from "@cap/database/crypto";
 import { cookies } from "next/headers";
 
 const allowedOrigins = [
@@ -70,7 +71,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const config = await db
+    const encryptedConfig = await db
       .select({
         accessKeyId: s3Buckets.accessKeyId,
         secretAccessKey: s3Buckets.secretAccessKey,
@@ -81,9 +82,18 @@ export async function GET(request: NextRequest) {
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
 
+    // Decrypt the config before sending
+    const config = encryptedConfig[0] ? {
+      accessKeyId: decrypt(encryptedConfig[0].accessKeyId),
+      secretAccessKey: decrypt(encryptedConfig[0].secretAccessKey),
+      endpoint: encryptedConfig[0].endpoint ? decrypt(encryptedConfig[0].endpoint) : null,
+      bucketName: decrypt(encryptedConfig[0].bucketName),
+      region: decrypt(encryptedConfig[0].region),
+    } : null;
+
     return new Response(
       JSON.stringify({
-        config: config[0] || null,
+        config: config,
       }),
       {
         status: 200,

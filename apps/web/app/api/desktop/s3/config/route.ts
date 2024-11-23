@@ -1,51 +1,36 @@
 import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
-import { s3Buckets, users } from "@cap/database/schema";
+import { s3Buckets } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { eq } from "drizzle-orm";
+import { encrypt } from "@cap/database/crypto";
 import { nanoId } from "@cap/database/helpers";
+import { getCorsHeaders, getOptionsHeaders } from "@/utils/cors";
 import { cookies } from "next/headers";
 
-const allowedOrigins = [
-  process.env.NEXT_PUBLIC_URL,
-  "http://localhost:3001",
-  "http://localhost:3000",
-  "tauri://localhost",
-  "http://tauri.localhost",
-  "https://tauri.localhost",
-];
-
 export async function OPTIONS(req: NextRequest) {
+  console.log("[S3 Config] OPTIONS request received");
   const params = req.nextUrl.searchParams;
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
 
-  console.log("Handling OPTIONS request");
-  console.log("OPTIONS request params:", { origin, originalOrigin });
-
+  console.log("[S3 Config] Responding to OPTIONS request", { origin, originalOrigin });
   return new Response(null, {
     status: 200,
-    headers: {
-      "Access-Control-Allow-Origin":
-        origin && allowedOrigins.includes(origin)
-          ? origin
-          : allowedOrigins.includes(originalOrigin)
-          ? originalOrigin
-          : "null",
-      "Access-Control-Allow-Credentials": "true",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers":
-        "Content-Type, Authorization, sentry-trace, baggage",
-    },
+    headers: getOptionsHeaders(origin, originalOrigin, "POST, OPTIONS"),
   });
 }
 
 export async function POST(request: NextRequest) {
-  console.log("Handling POST request");
-  
+  console.log("[S3 Config] POST request received");
+  const params = request.nextUrl.searchParams;
+  const origin = params.get("origin") || null;
+  const originalOrigin = request.nextUrl.origin;
+
+  // Handle authentication token
   const token = request.headers.get("authorization")?.split(" ")[1];
   if (token) {
-    console.log("Setting session token cookie");
+    console.log("[S3 Config] Setting auth token cookie");
     cookies().set({
       name: "next-auth.session-token",
       value: token,
@@ -54,133 +39,83 @@ export async function POST(request: NextRequest) {
       secure: true,
       httpOnly: true,
     });
+  } else {
+    console.log("[S3 Config] No auth token provided");
   }
 
-  const params = request.nextUrl.searchParams;
-  const origin = params.get("origin") || null;
-  const originalOrigin = request.nextUrl.origin;
-
-  console.log("POST request params:", { origin, originalOrigin });
-
   try {
-    console.log("Attempting to save S3 configuration");
     const user = await getCurrentUser();
     if (!user) {
-      console.log("User not authenticated");
+      console.log("[S3 Config] User not authenticated");
       return new Response(JSON.stringify({ error: "Not authenticated" }), {
         status: 401,
-        headers: {
-          "Access-Control-Allow-Origin":
-            origin && allowedOrigins.includes(origin)
-              ? origin
-              : allowedOrigins.includes(originalOrigin)
-              ? originalOrigin
-              : "null",
-          "Access-Control-Allow-Credentials": "true",
-        },
+        headers: getCorsHeaders(origin, originalOrigin),
       });
     }
 
-    console.log("User authenticated:", user.id);
+    console.log("[S3 Config] User authenticated", { userId: user.id });
 
-    const body = await request.json();
-    const { accessKeyId, secretAccessKey, endpoint, bucketName, region } = body;
+    const { accessKeyId, secretAccessKey, endpoint, bucketName, region } =
+      await request.json();
 
-    console.log("Received S3 config request:", { endpoint, bucketName, region });
+    console.log("[S3 Config] Received S3 config data", {
+      hasAccessKeyId: !!accessKeyId,
+      hasSecretKey: !!secretAccessKey,
+      endpoint,
+      bucketName,
+      region
+    });
 
-    // Validate required fields
-    if (!accessKeyId || !secretAccessKey || !bucketName) {
-      return new Response(
-        JSON.stringify({ error: "Missing required fields" }),
-        {
-          status: 400,
-          headers: {
-            "Access-Control-Allow-Origin":
-              origin && allowedOrigins.includes(origin)
-                ? origin
-                : allowedOrigins.includes(originalOrigin)
-                ? originalOrigin
-                : "null",
-            "Access-Control-Allow-Credentials": "true",
-          },
-        }
-      );
-    }
-
-    console.log("Checking for existing S3 configuration");
-    const existingConfigs = await db
+    // Get existing bucket for this user
+    const existingBucket = await db
       .select()
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
 
-    const existingConfig = existingConfigs[0];
-    console.log("Existing config found:", !!existingConfig);
+    console.log("[S3 Config] Existing bucket found:", { exists: existingBucket.length > 0 });
 
-    let bucketId: string;
-    if (existingConfig) {
-      bucketId = existingConfig.id;
-      console.log("Updating existing S3 configuration");
-      await db
-        .update(s3Buckets)
-        .set({
-          accessKeyId,
-          secretAccessKey,
-          endpoint,
-          bucketName,
-          region,
-        })
-        .where(eq(s3Buckets.id, bucketId));
-    } else {
-      console.log("Creating new S3 configuration for user:", user.id);
-      bucketId = nanoId();
-      await db.insert(s3Buckets).values({
-        id: bucketId,
-        ownerId: user.id,
-        region: region || "us-east-1",
-        endpoint,
-        bucketName,
-        accessKeyId,
-        secretAccessKey,
-      });
-      console.log("Successfully created new S3 configuration");
-    }
+    // Encrypt sensitive data before storing
+    const encryptedData = {
+      id: existingBucket[0]?.id || nanoId(),
+      accessKeyId: encrypt(accessKeyId),
+      secretAccessKey: encrypt(secretAccessKey),
+      endpoint: endpoint ? encrypt(endpoint) : null,
+      bucketName: encrypt(bucketName),
+      region: encrypt(region),
+      ownerId: user.id,
+    };
 
-    console.log("Updating user's customBucket field");
+    console.log("[S3 Config] Encrypted data prepared", { id: encryptedData.id });
+
     await db
-      .update(users)
-      .set({
-        customBucket: bucketId,
-      })
-      .where(eq(users.id, user.id));
+      .insert(s3Buckets)
+      .values(encryptedData)
+      .onDuplicateKeyUpdate({
+        set: {
+          accessKeyId: encryptedData.accessKeyId,
+          secretAccessKey: encryptedData.secretAccessKey,
+          endpoint: encryptedData.endpoint,
+          bucketName: encryptedData.bucketName,
+          region: encryptedData.region,
+        },
+      });
 
-    console.log("S3 configuration saved successfully");
+    console.log("[S3 Config] Successfully saved S3 configuration");
+
     return new Response(JSON.stringify({ success: true }), {
       status: 200,
-      headers: {
-        "Access-Control-Allow-Origin":
-          origin && allowedOrigins.includes(origin)
-            ? origin
-            : allowedOrigins.includes(originalOrigin)
-            ? originalOrigin
-            : "null",
-        "Access-Control-Allow-Credentials": "true",
-      },
+      headers: getCorsHeaders(origin, originalOrigin),
     });
   } catch (error) {
-    console.error("Error saving S3 config:", error);
+    console.error("[S3 Config] Error saving S3 config:", error);
     return new Response(
-      JSON.stringify({ error: "Failed to save S3 configuration" }),
+      JSON.stringify({ 
+        error: "Failed to save S3 configuration",
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }),
       {
         status: 500,
-        headers: {
-          "Access-Control-Allow-Origin":
-            origin && allowedOrigins.includes(origin)
-              ? origin
-              : allowedOrigins.includes(originalOrigin)
-              ? originalOrigin
-              : "null",
-          "Access-Control-Allow-Credentials": "true",
-        },
+        headers: getCorsHeaders(origin, originalOrigin),
       }
     );
   }

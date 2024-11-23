@@ -1500,7 +1500,10 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
 #[specta::specta]
 async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
-        return Err(format!("Failed to update plan information: {}", e));
+        return Err(format!(
+            "Failed to update plan information. Try signing out and signing back in: {}",
+            e
+        ));
     }
 
     let auth = AuthStore::get(&app).map_err(|e| e.to_string())?;

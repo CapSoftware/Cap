@@ -146,7 +146,7 @@ export default function () {
                   commands.showWindow({ Settings: { page: "apps" } })
                 }
               >
-                <IconLucideCable class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
+                <IconLucideLayoutGrid class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
               </button>
             </Tooltip.Trigger>
             <Tooltip.Portal>

@@ -121,9 +121,23 @@ export default function S3ConfigPage() {
           ) : (
             <div class="space-y-4">
               <div>
+                <p class="text-gray-400 text-sm">
+                  It should take under 10 minutes to set up and connect your S3
+                  bucket to Cap. View the{" "}
+                  <a
+                    href="https://cap.so/docs/s3-config"
+                    target="_blank"
+                    class="text-gray-500 font-semibold underline"
+                  >
+                    S3 Config Guide
+                  </a>{" "}
+                  to get started.
+                </p>
+              </div>
+              <div>
                 <label class="text-gray-500 text-sm">Access Key ID</label>
                 <input
-                  type="text"
+                  type="password"
                   value={accessKeyId()}
                   onInput={(
                     e: InputEvent & { currentTarget: HTMLInputElement }
