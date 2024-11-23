@@ -73,6 +73,7 @@ export async function GET(request: NextRequest) {
 
     const encryptedConfig = await db
       .select({
+        provider: s3Buckets.provider,
         accessKeyId: s3Buckets.accessKeyId,
         secretAccessKey: s3Buckets.secretAccessKey,
         endpoint: s3Buckets.endpoint,
@@ -82,8 +83,8 @@ export async function GET(request: NextRequest) {
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
 
-    // Decrypt the config before sending
     const config = encryptedConfig[0] ? {
+      provider: encryptedConfig[0].provider,
       accessKeyId: decrypt(encryptedConfig[0].accessKeyId),
       secretAccessKey: decrypt(encryptedConfig[0].secretAccessKey),
       endpoint: encryptedConfig[0].endpoint ? decrypt(encryptedConfig[0].endpoint) : null,

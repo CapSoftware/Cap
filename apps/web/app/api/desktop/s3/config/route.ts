@@ -55,10 +55,11 @@ export async function POST(request: NextRequest) {
 
     console.log("[S3 Config] User authenticated", { userId: user.id });
 
-    const { accessKeyId, secretAccessKey, endpoint, bucketName, region } =
+    const { provider, accessKeyId, secretAccessKey, endpoint, bucketName, region } =
       await request.json();
 
     console.log("[S3 Config] Received S3 config data", {
+      provider,
       hasAccessKeyId: !!accessKeyId,
       hasSecretKey: !!secretAccessKey,
       endpoint,
@@ -77,6 +78,7 @@ export async function POST(request: NextRequest) {
     // Encrypt sensitive data before storing
     const encryptedData = {
       id: existingBucket[0]?.id || nanoId(),
+      provider,
       accessKeyId: encrypt(accessKeyId),
       secretAccessKey: encrypt(secretAccessKey),
       endpoint: endpoint ? encrypt(endpoint) : null,
@@ -92,6 +94,7 @@ export async function POST(request: NextRequest) {
       .values(encryptedData)
       .onDuplicateKeyUpdate({
         set: {
+          provider: encryptedData.provider,
           accessKeyId: encryptedData.accessKeyId,
           secretAccessKey: encryptedData.secretAccessKey,
           endpoint: encryptedData.endpoint,

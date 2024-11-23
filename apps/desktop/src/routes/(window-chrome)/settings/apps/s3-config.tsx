@@ -6,6 +6,7 @@ import { clientEnv } from "~/utils/env";
 import { commands } from "~/utils/tauri";
 
 interface S3Config {
+  provider: string;
   accessKeyId: string;
   secretAccessKey: string;
   endpoint: string;
@@ -14,6 +15,7 @@ interface S3Config {
 }
 
 export default function S3ConfigPage() {
+  const [provider, setProvider] = createSignal("aws");
   const [accessKeyId, setAccessKeyId] = createSignal("");
   const [secretAccessKey, setSecretAccessKey] = createSignal("");
   const [endpoint, setEndpoint] = createSignal("https://s3.amazonaws.com");
@@ -51,6 +53,7 @@ export default function S3ConfigPage() {
       const data = await response.json();
       if (data.config) {
         const config = data.config as S3Config;
+        setProvider(config.provider || "aws");
         setAccessKeyId(config.accessKeyId);
         setSecretAccessKey(config.secretAccessKey);
         setEndpoint(config.endpoint || "https://s3.amazonaws.com");
@@ -86,6 +89,7 @@ export default function S3ConfigPage() {
             Authorization: `Bearer ${auth.token}`,
           },
           body: JSON.stringify({
+            provider: provider(),
             accessKeyId: accessKeyId(),
             secretAccessKey: secretAccessKey(),
             endpoint: endpoint(),
@@ -122,18 +126,48 @@ export default function S3ConfigPage() {
             <div class="space-y-4">
               <div>
                 <p class="text-gray-400 text-sm">
-                  It should take under 10 minutes to set up and connect your S3
-                  bucket to Cap. View the{" "}
+                  It should take under 10 minutes to set up and connect your
+                  storage bucket to Cap. View the{" "}
                   <a
                     href="https://cap.so/docs/s3-config"
                     target="_blank"
                     class="text-gray-500 font-semibold underline"
                   >
-                    S3 Config Guide
+                    Storage Config Guide
                   </a>{" "}
                   to get started.
                 </p>
               </div>
+
+              <div>
+                <label class="text-gray-500 text-sm">Storage Provider</label>
+                <div class="relative">
+                  <select
+                    value={provider()}
+                    onChange={(e) => setProvider(e.currentTarget.value)}
+                    class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white pr-10"
+                  >
+                    <option value="aws">AWS S3</option>
+                    <option value="cloudflare">Cloudflare R2</option>
+                    <option value="other">Other S3-Compatible</option>
+                  </select>
+                  <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+                    <svg
+                      class="w-4 h-4 text-gray-400"
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fill-rule="evenodd"
+                        d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"
+                        clip-rule="evenodd"
+                      />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label class="text-gray-500 text-sm">Access Key ID</label>
                 <input

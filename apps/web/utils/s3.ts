@@ -38,6 +38,7 @@ export function getS3Config(config?: S3Config) {
   }
 
   return {
+    forcePathStyle: true,
     endpoint: config.endpoint ? tryDecrypt(config.endpoint) : process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
     region: tryDecrypt(config.region) ?? process.env.NEXT_PUBLIC_CAP_AWS_REGION,
     credentials: {

@@ -271,6 +271,7 @@ export const s3Buckets = mysqlTable("s3_buckets", {
   bucketName: encryptedText("bucketName").notNull(),
   accessKeyId: encryptedText("accessKeyId").notNull(),
   secretAccessKey: encryptedText("secretAccessKey").notNull(),
+  provider: text("provider").notNull().default("aws"),
 });
 
 export const commentsRelations = relations(comments, ({ one }) => ({
