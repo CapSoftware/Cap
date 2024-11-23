@@ -93,10 +93,12 @@ impl S3UploadMeta {
 
     pub fn ensure_defaults(&mut self) {
         if self.aws_region.is_empty() {
-            self.aws_region = std::env::var("NEXT_PUBLIC_CAP_AWS_REGION").unwrap_or_default();
+            self.aws_region = std::env::var("NEXT_PUBLIC_CAP_AWS_REGION")
+                .unwrap_or_else(|_| "us-east-1".to_string());
         }
         if self.aws_bucket.is_empty() {
-            self.aws_bucket = std::env::var("NEXT_PUBLIC_CAP_AWS_BUCKET").unwrap_or_default();
+            self.aws_bucket =
+                std::env::var("NEXT_PUBLIC_CAP_AWS_BUCKET").unwrap_or_else(|_| "capso".to_string());
         }
     }
 }

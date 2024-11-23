@@ -49,9 +49,9 @@ export async function GET(request: NextRequest) {
   }
 
   const result = query[0];
-  if (!result?.video || !result?.bucket) {
+  if (!result?.video) {
     return new Response(
-      JSON.stringify({ error: true, message: "Video or bucket not found" }),
+      JSON.stringify({ error: true, message: "Video not found" }),
       { status: 401, headers: getHeaders(origin) }
     );
   }
@@ -113,7 +113,6 @@ export async function GET(request: NextRequest) {
       headers: getHeaders(origin),
     });
   } catch (error) {
-    console.error("Error generating screenshot URL", error);
     return new Response(
       JSON.stringify({
         error: error,
