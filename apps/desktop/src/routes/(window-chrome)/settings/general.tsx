@@ -2,6 +2,7 @@ import { createResource, Show, For } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import { commands, type GeneralSettingsStore } from "~/utils/tauri";
+import { themeStore } from "~/store/theme";
 import {
   isPermissionGranted,
   requestPermission,
@@ -15,6 +16,7 @@ const settingsList: Array<{
   platforms?: OsType[];
   requiresPermission?: boolean;
   pro?: boolean;
+  onChange?: (value: boolean) => Promise<void>;
 }> = [
   {
     key: "uploadIndividualFiles",
@@ -55,6 +57,14 @@ const settingsList: Array<{
     description:
       "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
     requiresPermission: true,
+  },
+  {
+    key: "darkMode",
+    label: "Dark Mode",
+    description: "Switch between light and dark theme for the application interface.",
+    onChange: async () => {
+      await themeStore.toggleTheme();
+    },
   },
 ];
 
@@ -103,6 +113,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       }
     }
 
+    if (settingsList.find((setting) => setting.key === key)?.onChange) {
+      await settingsList.find((setting) => setting.key === key)?.onChange(value);
+    }
+
     setSettings(key as keyof GeneralSettingsStore, value);
     generalSettingsStore.set({ [key]: value });
   };
@@ -126,7 +140,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                   )}
                   <div class="flex items-center justify-between">
                     <div class="flex items-center gap-2">
-                      <p>{setting.label}</p>
+                      <p class="text-[--text-primary]">{setting.label}</p>
                     </div>
                     <button
                       type="button"
@@ -171,7 +185,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                     </button>
                   </div>
                   {setting.description && (
-                    <p class="text-xs text-gray-400">{setting.description}</p>
+                    <p class="text-xs text-[--text-tertiary]">{setting.description}</p>
                   )}
                 </div>
               </Show>

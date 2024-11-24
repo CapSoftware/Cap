@@ -7,7 +7,9 @@ import { message } from "@tauri-apps/plugin-dialog";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
+import "./styles/theme.css";
 import { commands } from "./utils/tauri";
+import { themeStore } from "./store/theme";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,6 +22,20 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
+  onMount(async () => {
+    await themeStore.initialize();
+
+    const matches = useCurrentMatches();
+
+    onMount(() => {
+      for (const match of matches()) {
+        if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+      }
+
+      getCurrentWindow().show();
+    });
+  });
+
   return (
     <ErrorBoundary
       fallback={(e: Error) => {
