@@ -53,12 +53,12 @@ export default function () {
 
   return (
     <div
-      class="text-gray-400 flex flex-row items-stretch bg-gray-500 w-full h-full animate-in fade-in"
+      class="text-[--text-primary] flex flex-row items-stretch bg-gray-50 dark:bg-gray-100 w-full h-full animate-in fade-in"
     >
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <button
           disabled={stopRecording.isPending}
-          class="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.25rem] flex flex-row items-center hover:bg-red-transparent-20 transition-colors rounded-lg"
+          class="py-[0.25rem] px-[0.5rem] text-red-300 dark:text-red-300 gap-[0.25rem] flex flex-row items-center hover:bg-red-transparent-20 transition-colors rounded-lg"
           type="button"
           onClick={() => stopRecording.mutate()}
         >
@@ -67,19 +67,23 @@ export default function () {
             {formatTime((time() - start) / 1000)}
           </span>
         </button>
+
         {window.FLAGS.pauseResume && (
           <ActionButton
             disabled={togglePause.isPending}
             onClick={() => togglePause.mutate()}
+            class="text-[--text-primary] hover:bg-gray-200 dark:hover:bg-gray-300 flex items-center justify-center"
           >
             {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
           </ActionButton>
         )}
+
         <ActionButton
           disabled={restartRecording.isPending}
           onClick={() => restartRecording.mutate()}
+          class="text-[--text-primary] hover:bg-gray-200 dark:hover:bg-gray-300 h-8 w-8 flex items-center justify-center"
         >
-          <IconCapRestart />
+          <IconCapRestart class="dark:fill-white dark:hover:fill-white" />
         </ActionButton>
       </div>
       <div

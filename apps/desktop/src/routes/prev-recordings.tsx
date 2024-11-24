@@ -204,11 +204,11 @@ export default function () {
                   <Suspense>
                     <div
                       ref={setRef}
-                      style={{ "border-color": "rgba(255, 255, 255, 0.2)" }}
+                      style={{ "border-color": "rgba(255, 255, 255, 0.1)" }}
                       class={cx(
-                        "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/50 rounded-[12px] overflow-hidden shadow border-[1px] group relative",
+                        "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/40 dark:bg-gray-500/20 rounded-[12px] overflow-hidden shadow border-[1px] group relative",
                         "transition-all duration-300",
-                        media.isNew && "ring-2 ring-blue-500 ring-opacity-75"
+                        media.isNew && "ring-2 ring-blue-300 dark:ring-blue-400 ring-opacity-75"
                       )}
                     >
                       <div
@@ -218,18 +218,18 @@ export default function () {
                           isLoading() && "backdrop-blur bg-gray-500/80"
                         )}
                         style={{
-                          "border-color": "rgba(255, 255, 255, 0.2)",
+                          "border-color": "rgba(255, 255, 255, 0.1)",
                           "pointer-events": "auto",
                         }}
                       >
                         <Show
                           when={imageExists()}
                           fallback={
-                            <div class="pointer-events-none w-[105%] h-[105%] absolute inset-0 -z-10 bg-gray-400" />
+                            <div class="pointer-events-none w-full h-full absolute inset-0 -z-10 bg-gray-400 dark:bg-gray-300" />
                           }
                         >
                           <img
-                            class="pointer-events-none w-[105%] h-[105%] object-cover absolute inset-0 -z-10"
+                            class="pointer-events-none w-full h-full object-cover absolute inset-0 -z-10 rounded-[6px]"
                             alt="media preview"
                             src={`${convertFileSrc(
                               isRecording
