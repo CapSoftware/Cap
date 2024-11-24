@@ -118,10 +118,10 @@ export default function () {
   });
 
   return (
-    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">
-          <IconCapLogoFull class="w-[90px] h-auto" />
+          <IconCapLogoFull class="w-[90px] h-auto text-[--text-primary]" />
           <span
             onClick={async () => {
               if (!isUpgraded()) {
@@ -130,7 +130,7 @@ export default function () {
             }}
             class={`text-[0.625rem] ${
               isUpgraded()
-                ? "bg-blue-400 text-gray-50"
+                ? "bg-[--blue-400] text-[--text-primary]"
                 : "bg-gray-200 text-gray-400 cursor-pointer hover:bg-gray-300"
             } rounded-lg px-1.5 py-0.5`}
           >
@@ -150,9 +150,9 @@ export default function () {
               </button>
             </Tooltip.Trigger>
             <Tooltip.Portal>
-              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-[--gray-500] rounded shadow-lg animate-in fade-in duration-100">
                 Cap Apps
-                <Tooltip.Arrow class="fill-gray-500" />
+                <Tooltip.Arrow class="fill-[--gray-500]" />
               </Tooltip.Content>
             </Tooltip.Portal>
           </Tooltip.Root>
@@ -205,7 +205,7 @@ export default function () {
           variant={isRecording() ? "destructive" : "primary"}
           size="md"
           onClick={() => toggleRecording.mutate()}
-          class="flex-grow"
+          class="flex-grow text-[--text-primary] hover:text-[--text-primary]"
         >
           {isRecording() ? "Stop Recording" : "Start Recording"}
         </Button>
@@ -222,7 +222,7 @@ export default function () {
         href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
         target="_blank"
         rel="noreferrer"
-        class="text-gray-400 text-[0.875rem] mx-auto hover:text-gray-500 hover:underline"
+        class="text-[--text-tertiary] text-[0.875rem] mx-auto hover:text-[--text-primary] hover:underline"
       >
         Open Cap on Web
       </a>
@@ -394,8 +394,8 @@ function CameraSelect(props: {
     selectOptions()?.find((o) => o.name === props.options?.cameraLabel) ?? null;
 
   return (
-    <div class="flex flex-col gap-[0.25rem] items-stretch">
-      <label class="text-gray-400 text-[0.875rem]">Camera</label>
+    <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+      <label class="text-[--text-tertiary] text-[0.875rem]">Camera</label>
       <KSelect<Option>
         options={selectOptions()}
         optionValue="name"
@@ -506,8 +506,8 @@ function MicrophoneSelect(props: {
     Math.pow(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE, 0.5);
 
   return (
-    <div class="flex flex-col gap-[0.25rem] items-stretch">
-      <label class="text-gray-400">Microphone</label>
+    <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+      <label class="text-[--text-tertiary]">Microphone</label>
       <KSelect<Option>
         options={[{ name: "No Audio", deviceId: "" }, ...(devices.data ?? [])]}
         optionValue="deviceId"

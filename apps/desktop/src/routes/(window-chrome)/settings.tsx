@@ -13,9 +13,9 @@ export default function Settings(props: RouteSectionProps) {
   const [version] = createResource(() => getVersion());
 
   return (
-    <div class="flex-1 flex flex-row divide-x divide-gray-200 text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
+    <div class="flex-1 flex flex-row divide-x divide-[--gray-200] text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
       <div class="h-full flex flex-col">
-        <ul class="min-w-[12rem] h-full p-[0.625rem] space-y-2">
+        <ul class="min-w-[12rem] h-full p-[0.625rem] space-y-2 text-[--text-primary]">
           <For
             each={[
               { href: "general", name: "General", icon: IconCapSettings },
