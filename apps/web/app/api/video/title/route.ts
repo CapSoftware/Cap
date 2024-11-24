@@ -34,9 +34,17 @@ export async function handlePut(request: NextRequest) {
     });
   }
 
-  const ownerId = query[0].ownerId;
+  const video = query[0];
+  if (!video) {
+    return new Response(JSON.stringify({ error: true }), {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  }
 
-  if (ownerId !== userId) {
+  if (video.ownerId !== userId) {
     return new Response(JSON.stringify({ error: true }), {
       status: 401,
       headers: {

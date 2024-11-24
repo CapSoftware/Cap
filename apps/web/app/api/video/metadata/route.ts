@@ -31,9 +31,17 @@ export async function PUT(request: NextRequest) {
     });
   }
 
-  const ownerId = query[0].ownerId;
+  const result = query[0];
+  if (!result) {
+    return new Response(JSON.stringify({ error: true }), {
+      status: 401,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+  }
 
-  if (ownerId !== userId) {
+  if (result.ownerId !== userId) {
     return new Response(JSON.stringify({ error: true }), {
       status: 401,
       headers: {

@@ -82,6 +82,22 @@ export async function GET(request: NextRequest) {
   }
 
   const video = query[0];
+  if (!video) {
+    return new Response(
+      JSON.stringify({ error: true, message: "Video not found" }),
+      {
+        status: 404,
+        headers: {
+          "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+            ? origin
+            : "null",
+          "Access-Control-Allow-Credentials": "true",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+        },
+      }
+    );
+  }
+
   const jobId = video.jobId;
 
   if (!jobId) {

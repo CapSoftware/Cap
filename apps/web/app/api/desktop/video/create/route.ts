@@ -86,8 +86,8 @@ export async function GET(req: NextRequest) {
     .from(s3Buckets)
     .where(eq(s3Buckets.ownerId, user.id));
 
-  const s3Config = getS3Config(bucket);
-  const bucketName = getS3Bucket(bucket);
+  const s3Config = await getS3Config(bucket);
+  const bucketName = await getS3Bucket(bucket);
 
   const id = nanoId();
   const date = new Date();
@@ -144,21 +144,22 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  await db.insert(videos).values({
+  const videoData = {
     id: id,
     name: `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
     ownerId: user.id,
     awsRegion: s3Config.region,
     awsBucket: bucketName,
-    source:
-      recordingMode === "hls"
-        ? { type: "local" }
-        : recordingMode === "desktopMP4"
-        ? { type: "desktopMP4" }
-        : undefined,
-    isScreenshot: isScreenshot,
+    source: recordingMode === "hls" 
+      ? { type: "local" as const }
+      : recordingMode === "desktopMP4"
+      ? { type: "desktopMP4" as const }
+      : undefined,
+    isScreenshot,
     bucket: bucket?.id,
-  });
+  };
+
+  await db.insert(videos).values(videoData);
 
   if (
     process.env.NEXT_PUBLIC_IS_CAP &&
@@ -173,7 +174,7 @@ export async function GET(req: NextRequest) {
 
   return new Response(
     JSON.stringify({
-      id: id,
+      id,
       user_id: user.id,
       aws_region: s3Config.region,
       aws_bucket: bucketName,
