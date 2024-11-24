@@ -14,14 +14,14 @@ use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
 use cap_project::{
     AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop,
-    CursorAnimationStyle, CursorClickEvent, CursorData, CursorMoveEvent, ProjectConfiguration,
-    RecordingMeta, SingleSegment, FAST_SMOOTHING_SAMPLES, FAST_VELOCITY_THRESHOLD,
-    REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD, SLOW_SMOOTHING_SAMPLES,
-    SLOW_VELOCITY_THRESHOLD, XY,
+    CursorAnimationStyle, CursorClickEvent, CursorData, CursorEvents, CursorMoveEvent,
+    ProjectConfiguration, RecordingMeta, SingleSegment, FAST_SMOOTHING_SAMPLES,
+    FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
+    SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
 };
 
 use image::GenericImageView;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod decoder;
@@ -88,13 +88,17 @@ pub struct RecordingSegmentDecoders {
     camera: Option<AsyncVideoDecoderHandle>,
 }
 
+pub struct SegmentVideoPaths<'a> {
+    pub display: &'a Path,
+    pub camera: Option<&'a Path>,
+}
+
 impl RecordingSegmentDecoders {
-    pub fn new(meta: &RecordingMeta, segment: &SingleSegment) -> Self {
-        let screen = AsyncVideoDecoder::spawn(segment.path(meta, &segment.display.path).clone());
+    pub fn new(meta: &RecordingMeta, segment: SegmentVideoPaths) -> Self {
+        let screen = AsyncVideoDecoder::spawn(meta.project_path.join(segment.display));
         let camera = segment
             .camera
-            .as_ref()
-            .map(|camera| AsyncVideoDecoder::spawn(segment.path(meta, &camera.path).clone()));
+            .map(|camera| AsyncVideoDecoder::spawn(meta.project_path.join(camera)));
 
         Self { screen, camera }
     }
@@ -103,10 +107,12 @@ impl RecordingSegmentDecoders {
         &self,
         frame_number: u32,
     ) -> Option<(DecodedFrame, Option<DecodedFrame>)> {
+        let now = Instant::now();
         let (screen_frame, camera_frame) = tokio::join!(
             self.screen.get_frame(frame_number),
             OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
         );
+        println!("get_frames: {:?}", now.elapsed());
 
         screen_frame.map(|f| (f, camera_frame.flatten()))
     }
@@ -127,7 +133,7 @@ pub enum RenderingError {
 }
 
 pub struct RenderSegment {
-    pub cursor: Arc<CursorData>,
+    pub cursor: Arc<CursorEvents>,
     pub decoders: RecordingSegmentDecoders,
 }
 
@@ -270,11 +276,12 @@ impl RenderVideoConstants {
         let cursors_dir = meta.project_path.join("content").join("cursors");
         println!("Cursors directory: {:?}", cursors_dir);
 
-        let cursor = match &meta.content {
-            Content::SingleSegment(segment) => segment.cursor_data(meta),
+        let cursor_images = match &meta.content {
+            Content::SingleSegment { segment } => segment.cursor_data(meta).cursor_images,
+            Content::MultipleSegments { inner } => inner.cursor_images(meta).unwrap_or_default(),
         };
 
-        for (cursor_id, filename) in &cursor.cursor_images {
+        for (cursor_id, filename) in &cursor_images.0 {
             println!("Loading cursor image: {} -> {}", cursor_id, filename);
 
             let cursor_path = cursors_dir.join(filename);

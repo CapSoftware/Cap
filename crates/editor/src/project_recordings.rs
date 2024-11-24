@@ -64,7 +64,7 @@ pub struct ProjectRecordings {
 impl ProjectRecordings {
     pub fn new(meta: &RecordingMeta) -> Self {
         let segments = match &meta.content {
-            cap_project::Content::SingleSegment(segment) => {
+            cap_project::Content::SingleSegment { segment } => {
                 let display = Video::new(&meta.project_path.join(&segment.display.path));
                 let camera = segment
                     .camera
@@ -75,14 +75,33 @@ impl ProjectRecordings {
                     .as_ref()
                     .map(|audio| Audio::new(&meta.project_path.join(&audio.path)));
 
-                let recordings = SegmentRecordings {
+                vec![SegmentRecordings {
                     display,
                     camera,
                     audio,
-                };
-
-                vec![recordings]
+                }]
             }
+            cap_project::Content::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .map(|s| {
+                    let display = Video::new(&meta.project_path.join(&s.display.path));
+                    let camera = s
+                        .camera
+                        .as_ref()
+                        .map(|camera| Video::new(&meta.project_path.join(&camera.path)));
+                    let audio = s
+                        .audio
+                        .as_ref()
+                        .map(|audio| Audio::new(&meta.project_path.join(&audio.path)));
+
+                    SegmentRecordings {
+                        display,
+                        camera,
+                        audio,
+                    }
+                })
+                .collect(),
         };
 
         Self { segments }

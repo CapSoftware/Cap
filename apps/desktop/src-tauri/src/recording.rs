@@ -14,7 +14,9 @@ use crate::{
 use cap_editor::{ProjectRecordings, SegmentRecordings};
 use cap_media::feeds::CameraFeed;
 use cap_media::sources::{AVFrameCapture, CaptureScreen, CaptureWindow, ScreenCaptureSource};
-use cap_project::{ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment};
+use cap_project::{
+    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment,
+};
 use cap_rendering::ZOOM_DURATION;
 use std::time::Instant;
 use tauri::{AppHandle, Manager};
@@ -120,22 +122,24 @@ pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Re
 #[tauri::command]
 #[specta::specta]
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
-    let state = state.write().await;
+    let mut state = state.write().await;
 
-    // if let Some(recording) = &mut state.current_recording {
-    //     recording.pause().await.map_err(|e| e.to_string())?;
-    // }
+    if let Some(recording) = state.current_recording.as_mut() {
+        recording.pause().await.map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
-    let state = state.write().await;
+    let mut state = state.write().await;
 
-    // if let Some(recording) = &mut state.current_recording {
-    //     recording.resume().await.map_err(|e| e.to_string())?;
-    // }
+    if let Some(recording) = state.current_recording.as_mut() {
+        recording.resume().await.map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 
@@ -166,14 +170,16 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     let screenshots_dir = recording.recording_dir.join("screenshots");
     std::fs::create_dir_all(&screenshots_dir).ok();
 
+    let display_output_path = match &recording.meta.content {
+        Content::SingleSegment { segment } => segment.path(&recording.meta, &segment.display.path),
+        Content::MultipleSegments { inner } => {
+            inner.path(&recording.meta, &inner.segments[0].display.path)
+        }
+    };
+
     let display_screenshot = screenshots_dir.join("display.jpg");
     let now = Instant::now();
-    create_screenshot(
-        recording.display_output_path.clone(),
-        display_screenshot.clone(),
-        None,
-    )
-    .await?;
+    create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
     println!("created screenshot in {:?}", now.elapsed());
 
     // let thumbnail = screenshots_dir.join("thumbnail.png");
@@ -218,48 +224,48 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
             segments
         };
 
-        let zoom_segments = {
-            let mut segments = vec![];
+        // let zoom_segments = {
+        //     let mut segments = vec![];
 
-            const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
+        //     const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
 
-            for click in &recording.cursor_data.clicks {
-                let time = click.process_time_ms / 1000.0;
+        //     for click in &recording.cursor_data.clicks {
+        //         let time = click.process_time_ms / 1000.0;
 
-                if segments.last().is_none() {
-                    segments.push(ZoomSegment {
-                        start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
-                        end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-                        amount: 2.0,
-                    });
-                } else {
-                    let last_segment = segments.last_mut().unwrap();
+        //         if segments.last().is_none() {
+        //             segments.push(ZoomSegment {
+        //                 start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
+        //                 end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
+        //                 amount: 2.0,
+        //             });
+        //         } else {
+        //             let last_segment = segments.last_mut().unwrap();
 
-                    if click.down {
-                        if last_segment.end > time {
-                            last_segment.end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING)
-                                .min(recordings.duration());
-                        } else if time < max_duration - ZOOM_DURATION {
-                            segments.push(ZoomSegment {
-                                start: (time - ZOOM_DURATION).max(0.0),
-                                end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-                                amount: 2.0,
-                            });
-                        }
-                    } else {
-                        last_segment.end =
-                            (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-                    }
-                }
-            }
+        //             if click.down {
+        //                 if last_segment.end > time {
+        //                     last_segment.end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING)
+        //                         .min(recordings.duration());
+        //                 } else if time < max_duration - ZOOM_DURATION {
+        //                     segments.push(ZoomSegment {
+        //                         start: (time - ZOOM_DURATION).max(0.0),
+        //                         end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
+        //                         amount: 2.0,
+        //                     });
+        //                 }
+        //             } else {
+        //                 last_segment.end =
+        //                     (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
+        //             }
+        //         }
+        //     }
 
-            segments
-        };
+        //     segments
+        // };
 
         ProjectConfiguration {
             timeline: Some(TimelineConfiguration {
                 segments,
-                zoom_segments,
+                zoom_segments: vec![],
             }),
             ..Default::default()
         }

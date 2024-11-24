@@ -2,9 +2,10 @@ use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::{ProjectRecordings, SegmentRecordings};
 use cap_media::feeds::AudioData;
-use cap_project::{CursorData, ProjectConfiguration, RecordingMeta, XY};
+use cap_project::{CursorData, CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     ProjectUniforms, RecordingSegmentDecoders, RenderOptions, RenderVideoConstants,
+    SegmentVideoPaths,
 };
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
@@ -72,25 +73,58 @@ impl EditorInstance {
                 .map(|c| XY::new(c.width, c.height)),
         };
 
-        let segments = match &meta.content {
-            cap_project::Content::SingleSegment(segment) => {
-                let audio = Arc::new(segment.audio.as_ref().map(|meta| {
-                    let audio_path = project_path.join(&meta.path);
+        let segments =
+            match &meta.content {
+                cap_project::Content::SingleSegment { segment: s } => {
+                    let audio =
+                        Arc::new(s.audio.as_ref().map(|meta| {
+                            AudioData::from_file(project_path.join(&meta.path)).unwrap()
+                        }));
 
-                    AudioData::from_file(audio_path).unwrap()
-                }));
+                    let cursor = Arc::new(s.cursor_data(&meta).into());
 
-                let cursor = Arc::new(segment.cursor_data(&meta));
+                    let decoders = RecordingSegmentDecoders::new(
+                        &meta,
+                        SegmentVideoPaths {
+                            display: s.display.path.as_path(),
+                            camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                        },
+                    );
 
-                let decoders = RecordingSegmentDecoders::new(&meta, &segment);
+                    vec![Segment {
+                        audio,
+                        cursor,
+                        decoders,
+                    }]
+                }
+                cap_project::Content::MultipleSegments { inner } => {
+                    let mut segments = vec![];
 
-                vec![Segment {
-                    audio,
-                    cursor,
-                    decoders,
-                }]
-            }
-        };
+                    for s in &inner.segments {
+                        let audio = Arc::new(s.audio.as_ref().map(|meta| {
+                            AudioData::from_file(project_path.join(&meta.path)).unwrap()
+                        }));
+
+                        let cursor = Arc::new(s.cursor_events(&meta).into());
+
+                        let decoders = RecordingSegmentDecoders::new(
+                            &meta,
+                            SegmentVideoPaths {
+                                display: s.display.path.as_path(),
+                                camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                            },
+                        );
+
+                        segments.push(Segment {
+                            audio,
+                            cursor,
+                            decoders,
+                        });
+                    }
+
+                    segments
+                }
+            };
 
         let (frame_tx, frame_rx) = tokio::sync::mpsc::channel(4);
 
@@ -378,6 +412,6 @@ pub enum SocketMessage {
 
 pub struct Segment {
     pub audio: Arc<Option<AudioData>>,
-    pub cursor: Arc<CursorData>,
+    pub cursor: Arc<CursorEvents>,
     pub decoders: RecordingSegmentDecoders,
 }

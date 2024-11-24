@@ -2,7 +2,7 @@ mod actor;
 mod cursor;
 mod segmented_actor;
 
-pub use actor::{spawn_recording_actor, ActorHandle, RecordingError};
+pub use segmented_actor::{spawn_recording_actor, ActorHandle, RecordingError};
 
 use cap_media::sources::*;
 use serde::{Deserialize, Serialize};

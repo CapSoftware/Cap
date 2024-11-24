@@ -9,9 +9,11 @@ use cap_media::{
     feeds::{AudioInputFeed, CameraFeed},
     filters::VideoFilter,
     pipeline::{builder::PipelineBuilder, Pipeline, RealTimeClock},
-    sources::{AudioInputSource, CameraSource, ScreenCaptureSource},
+    sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
+use cap_project::RecordingMeta;
+use either::Either;
 use thiserror::Error;
 use tokio::sync::{oneshot, Mutex};
 
@@ -19,7 +21,7 @@ use crate::RecordingOptions;
 
 enum ActorState {
     Recording {
-        pipeline: Pipeline<RealTimeClock<()>>,
+        pipeline: RecordingPipeline,
         index: u32,
         segment_start_time: f64,
     },
@@ -32,13 +34,27 @@ enum ActorState {
 pub enum ActorControlMessage {
     Pause(oneshot::Sender<Result<(), RecordingError>>),
     Resume(oneshot::Sender<Result<(), RecordingError>>),
-    Stop(oneshot::Sender<Result<(), RecordingError>>),
+    Stop(oneshot::Sender<Result<CompletedRecording, RecordingError>>),
 }
 
 pub struct Actor {
+    id: String,
     recording_dir: PathBuf,
     options: RecordingOptions,
-    segments: Vec<(f64, f64)>,
+    segments: Vec<RecordingSegment>,
+}
+
+struct RecordingSegment {
+    start: f64,
+    end: f64,
+    pipeline: RecordingPipeline,
+}
+
+struct RecordingPipeline {
+    pub inner: Pipeline<RealTimeClock<()>>,
+    pub display_output_path: PathBuf,
+    pub audio_output_path: Option<PathBuf>,
+    pub camera_output_path: Option<PathBuf>,
 }
 
 pub struct ActorHandle {
@@ -62,6 +78,12 @@ pub enum RecordingError {
 
     #[error("Actor error: {0}")]
     Actor(#[from] ActorError),
+
+    #[error("Serde/{0}")]
+    Serde(#[from] serde_json::Error),
+
+    #[error("IO/{0}")]
+    Io(#[from] std::io::Error),
 }
 
 macro_rules! send_message {
@@ -73,7 +95,7 @@ macro_rules! send_message {
 }
 
 impl ActorHandle {
-    pub async fn stop(&self) -> Result<(), RecordingError> {
+    pub async fn stop(&self) -> Result<CompletedRecording, RecordingError> {
         send_message!(self.ctrl_tx, ActorControlMessage::Stop)
     }
 
@@ -86,7 +108,8 @@ impl ActorHandle {
     }
 }
 
-pub async fn start_recording_actor(
+pub async fn spawn_recording_actor(
+    id: String,
     recording_dir: impl Into<PathBuf>,
     options: RecordingOptions,
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
@@ -119,6 +142,7 @@ pub async fn start_recording_actor(
         let options = options.clone();
         async move {
             let mut actor = Actor {
+                id,
                 recording_dir,
                 options,
                 segments: Vec::new(),
@@ -141,24 +165,38 @@ pub async fn start_recording_actor(
                             return;
                         };
 
-                        if matches!(
-                            &msg,
-                            ActorControlMessage::Pause(_) | ActorControlMessage::Stop(_)
-                        ) {
-                            let segment_stop_time = current_time_f64();
-                            actor.segments.push((segment_start_time, segment_stop_time));
+                        macro_rules! shutdown {
+                            () => {{
+                                let res = pipeline.inner.shutdown().await;
+
+                                let segment_stop_time = current_time_f64();
+                                actor.segments.push(RecordingSegment {
+                                    start: segment_start_time,
+                                    end: segment_stop_time,
+                                    pipeline,
+                                });
+
+                                res
+                            }};
                         }
 
                         break match msg {
                             ActorControlMessage::Pause(tx) => {
-                                let res = pipeline.shutdown().await;
+                                let res = shutdown!();
                                 tx.send(res.map_err(Into::into)).ok();
                                 ActorState::Paused {
                                     next_index: index + 1,
                                 }
                             }
                             ActorControlMessage::Stop(tx) => {
-                                tx.send(stop_recording(Some(pipeline)).await).ok();
+                                let res = shutdown!();
+                                let res = match res {
+                                    Ok(_) => stop_recording(actor).await,
+                                    Err(e) => Err(e.into()),
+                                };
+
+                                tx.send(res).ok();
+
                                 return;
                             }
                             _ => continue,
@@ -171,8 +209,8 @@ pub async fn start_recording_actor(
 
                         break match msg {
                             ActorControlMessage::Stop(tx) => {
-                                tx.send(stop_recording(None).await).ok();
-                                ActorState::Stopped
+                                tx.send(stop_recording(actor).await).ok();
+                                return;
                             }
                             ActorControlMessage::Resume(tx) => {
                                 let (state, res) = match create_segment_pipeline(
@@ -211,14 +249,76 @@ pub async fn start_recording_actor(
     Ok(ActorHandle { ctrl_tx, options })
 }
 
-async fn stop_recording(
-    pipeline: Option<Pipeline<RealTimeClock<()>>>,
-) -> Result<(), RecordingError> {
-    if let Some(mut pipeline) = pipeline {
-        pipeline.shutdown().await?;
-    }
+pub struct CompletedRecording {
+    pub id: String,
+    pub recording_dir: PathBuf,
+    pub display_source: ScreenCaptureTarget,
+    pub meta: RecordingMeta,
+    pub cursor_data: cap_project::CursorImages,
+    pub segments: Vec<f64>,
+}
 
-    Ok(())
+async fn stop_recording(actor: Actor) -> Result<CompletedRecording, RecordingError> {
+    use cap_project::*;
+
+    let meta = RecordingMeta {
+        project_path: actor.recording_dir.clone(),
+        sharing: None,
+        pretty_name: format!(
+            "Cap {}",
+            chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
+        ),
+        content: Content::MultipleSegments {
+            inner: MultipleSegments {
+                segments: {
+                    actor
+                        .segments
+                        .into_iter()
+                        .map(|s| MultipleSegment {
+                            display: Display {
+                                path: s
+                                    .pipeline
+                                    .display_output_path
+                                    .strip_prefix(&actor.recording_dir)
+                                    .unwrap()
+                                    .to_owned(),
+                            },
+                            camera: s
+                                .pipeline
+                                .camera_output_path
+                                .as_ref()
+                                .map(|path| CameraMeta {
+                                    path: path
+                                        .strip_prefix(&actor.recording_dir)
+                                        .unwrap()
+                                        .to_owned(),
+                                }),
+                            audio: s.pipeline.audio_output_path.as_ref().map(|path| AudioMeta {
+                                path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                            }),
+                            cursor: None,
+                        })
+                        .collect()
+                },
+            },
+        },
+    };
+
+    // actor
+    //     .stop_signal
+    //     .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    meta.save_for_project()
+        .map_err(Either::either_into::<RecordingError>)?;
+
+    Ok(CompletedRecording {
+        id: actor.id,
+        meta,
+        cursor_data: Default::default(),
+        recording_dir: actor.recording_dir,
+        display_source: actor.options.capture_target,
+        segments: vec![],
+    })
 }
 
 fn create_screen_capture(
@@ -248,7 +348,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     screen_source: ScreenCaptureSource<TCaptureFormat>,
     camera_feed: Option<&Mutex<CameraFeed>>,
     audio_input_feed: Option<&AudioInputFeed>,
-) -> Result<Pipeline<RealTimeClock<()>>, MediaError> {
+) -> Result<RecordingPipeline, MediaError> {
     let camera_feed = match camera_feed.as_ref() {
         Some(camera_feed) => Some(camera_feed.lock().await),
         None => None,
@@ -267,7 +367,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     pipeline_builder = TCaptureFormat::make_capture_pipeline(
         pipeline_builder,
         screen_source,
-        display_output_path,
+        &display_output_path,
     )?;
 
     if let Some(mic_source) = audio_input_feed.map(AudioInputSource::init) {
@@ -309,7 +409,12 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
     pipeline.play().await?;
 
-    Ok(pipeline)
+    Ok(RecordingPipeline {
+        inner: pipeline,
+        display_output_path,
+        audio_output_path,
+        camera_output_path,
+    })
 }
 
 fn ensure_dir(path: PathBuf) -> Result<PathBuf, MediaError> {
@@ -329,6 +434,7 @@ trait MakeCapturePipeline: 'static {
         Self: Sized;
 }
 
+#[cfg(target_os = "macos")]
 impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
     fn make_capture_pipeline(
         builder: CapturePipelineBuilder,

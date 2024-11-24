@@ -7,6 +7,7 @@ use cap_media::feeds::{AudioData, AudioFrameBuffer};
 use cap_project::{CursorData, ProjectConfiguration, RecordingMeta};
 use cap_rendering::{
     ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants,
+    SegmentVideoPaths,
 };
 
 struct AudioRender {
@@ -49,14 +50,40 @@ pub async fn export_video_to_file(
 
     let (render_segments, audio_segments): (Vec<_>, Vec<_>) = segments
         .iter()
-        .map(|segment| match &meta.content {
-            cap_project::Content::SingleSegment(s) => (
+        .enumerate()
+        .map(|(i, segment)| match &meta.content {
+            cap_project::Content::SingleSegment { segment: s } => (
                 RenderSegment {
                     cursor: segment.cursor.clone(),
-                    decoders: RecordingSegmentDecoders::new(&meta, &s),
+                    decoders: RecordingSegmentDecoders::new(
+                        &meta,
+                        SegmentVideoPaths {
+                            display: s.display.path.as_path(),
+                            camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                        },
+                    ),
                 },
                 segment.audio.clone(),
             ),
+            cap_project::Content::MultipleSegments { inner } => {
+                let s = &inner.segments[i];
+
+                (
+                    RenderSegment {
+                        cursor: segment.cursor.clone(),
+                        decoders: RecordingSegmentDecoders::new(
+                            &meta,
+                            SegmentVideoPaths {
+                                display: s.display.path.as_path(),
+                                camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                            },
+                        ),
+                    },
+                    segment.audio.clone(),
+                );
+
+                todo!()
+            }
         })
         .unzip();
 

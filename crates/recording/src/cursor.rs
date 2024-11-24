@@ -7,7 +7,7 @@ use std::{
 };
 
 use cap_media::platform::Bounds;
-use cap_project::{CursorClickEvent, CursorData, CursorMoveEvent};
+use cap_project::{CursorClickEvent, CursorData, CursorImages, CursorMoveEvent};
 use device_query::{DeviceQuery, DeviceState};
 use tokio::sync::oneshot;
 
@@ -115,7 +115,7 @@ pub fn spawn_cursor_recorder(
         let cursor_data = CursorData {
             clicks: clicks.clone(),
             moves: moves.clone(),
-            cursor_images,
+            cursor_images: CursorImages(cursor_images),
         };
 
         let cursor_json_path = content_dir.join("cursor.json");

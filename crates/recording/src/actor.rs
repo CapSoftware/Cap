@@ -157,9 +157,6 @@ pub async fn spawn_recording_actor(
 pub struct CompletedRecording {
     pub id: String,
     pub recording_dir: PathBuf,
-    pub display_output_path: PathBuf,
-    pub camera_output_path: Option<PathBuf>,
-    pub audio_output_path: Option<PathBuf>,
     pub display_source: ScreenCaptureTarget,
     pub meta: RecordingMeta,
     pub cursor_data: cap_project::CursorData,
@@ -178,31 +175,33 @@ async fn stop_recording(mut actor: Actor) -> Result<CompletedRecording, Recordin
             "Cap {}",
             chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
         ),
-        content: Content::SingleSegment(SingleSegment {
-            display: Display {
-                path: actor
+        content: Content::SingleSegment {
+            segment: SingleSegment {
+                display: Display {
+                    path: actor
+                        .pipeline
+                        .display_output_path
+                        .strip_prefix(&actor.recording_dir)
+                        .unwrap()
+                        .to_owned(),
+                },
+                camera: actor
                     .pipeline
-                    .display_output_path
-                    .strip_prefix(&actor.recording_dir)
-                    .unwrap()
-                    .to_owned(),
+                    .camera_output_path
+                    .as_ref()
+                    .map(|path| CameraMeta {
+                        path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                    }),
+                audio: actor
+                    .pipeline
+                    .audio_output_path
+                    .as_ref()
+                    .map(|path| AudioMeta {
+                        path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                    }),
+                cursor: Some(PathBuf::from("cursor.json")),
             },
-            camera: actor
-                .pipeline
-                .camera_output_path
-                .as_ref()
-                .map(|path| CameraMeta {
-                    path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
-                }),
-            audio: actor
-                .pipeline
-                .audio_output_path
-                .as_ref()
-                .map(|path| AudioMeta {
-                    path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
-                }),
-            cursor: Some(PathBuf::from("cursor.json")),
-        }),
+        },
     };
 
     actor.pipeline.inner.shutdown().await?;
@@ -214,7 +213,7 @@ async fn stop_recording(mut actor: Actor) -> Result<CompletedRecording, Recordin
     let cursor_data = cap_project::CursorData {
         clicks: actor.cursor_clicks.await.unwrap_or_default(),
         moves: actor.cursor_moves.await.unwrap_or_default(),
-        cursor_images: HashMap::new(), // This will be populated during recording
+        cursor_images: CursorImages::default(), // This will be populated during recording
     };
 
     meta.save_for_project()
@@ -225,9 +224,6 @@ async fn stop_recording(mut actor: Actor) -> Result<CompletedRecording, Recordin
         meta,
         cursor_data,
         recording_dir: actor.recording_dir,
-        display_output_path: actor.pipeline.display_output_path,
-        camera_output_path: actor.pipeline.camera_output_path,
-        audio_output_path: actor.pipeline.audio_output_path,
         display_source: actor.options.capture_target,
         segments: vec![segment.0, segment.1],
     })
@@ -350,6 +346,7 @@ trait MakeCapturePipeline: 'static {
         Self: Sized;
 }
 
+#[cfg(target_os = "macos")]
 impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
     fn make_capture_pipeline(
         builder: CapturePipelineBuilder,

@@ -27,15 +27,41 @@ pub struct CursorClickEvent {
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone)]
+#[serde(transparent)]
+pub struct CursorImages(pub HashMap<String, String>);
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone)]
 pub struct CursorData {
     pub clicks: Vec<CursorClickEvent>,
     pub moves: Vec<CursorMoveEvent>,
-    pub cursor_images: HashMap<String, String>,
+    pub cursor_images: CursorImages,
 }
 
 impl CursorData {
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {}", e))?;
         serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {}", e))
+    }
+}
+
+#[derive(Default, Serialize, Deserialize, Debug, Clone)]
+pub struct CursorEvents {
+    pub clicks: Vec<CursorClickEvent>,
+    pub moves: Vec<CursorMoveEvent>,
+}
+
+impl CursorEvents {
+    pub fn load_from_file(path: &Path) -> Result<Self, String> {
+        let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {}", e))?;
+        serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {}", e))
+    }
+}
+
+impl From<CursorData> for CursorEvents {
+    fn from(value: CursorData) -> Self {
+        Self {
+            clicks: value.clicks,
+            moves: value.moves,
+        }
     }
 }

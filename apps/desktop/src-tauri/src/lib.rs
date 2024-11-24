@@ -1302,14 +1302,16 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             project_path: recording_dir.clone(),
             sharing: None,
             pretty_name: screenshot_name,
-            content: cap_project::Content::SingleSegment(cap_project::SingleSegment {
-                display: Display {
-                    path: screenshot_path.clone(),
+            content: cap_project::Content::SingleSegment {
+                segment: cap_project::SingleSegment {
+                    display: Display {
+                        path: screenshot_path.clone(),
+                    },
+                    camera: None,
+                    audio: None,
+                    cursor: None,
                 },
-                camera: None,
-                audio: None,
-                cursor: None,
-            }),
+            },
         }
         .save_for_project();
 
