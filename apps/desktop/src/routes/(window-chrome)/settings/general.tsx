@@ -113,8 +113,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       }
     }
 
-    if (settingsList.find((setting) => setting.key === key)?.onChange) {
-      await settingsList.find((setting) => setting.key === key)?.onChange(value);
+    // Find the setting once and store it
+    const setting = settingsList.find((s) => s.key === key);
+    
+    // If setting exists and has onChange handler, call it
+    if (setting?.onChange) {
+      await setting.onChange(value);
     }
 
     setSettings(key as keyof GeneralSettingsStore, value);
