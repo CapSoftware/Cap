@@ -131,8 +131,8 @@ export default function () {
             }}
             class={`text-[0.625rem] ${
               isUpgraded()
-                ? "bg-[--blue-400] text-[--text-primary]"
-                : "bg-gray-200 text-gray-400 cursor-pointer hover:bg-gray-300"
+                ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
+                : "bg-gray-200 cursor-pointer hover:bg-gray-300"
             } rounded-lg px-1.5 py-0.5`}
           >
             {isUpgraded() ? "Pro" : "Free"}
@@ -206,7 +206,7 @@ export default function () {
           variant={isRecording() ? "destructive" : "primary"}
           size="md"
           onClick={() => toggleRecording.mutate()}
-          class="flex-grow text-[--text-primary] hover:text-[--text-primary]"
+          class="flex-grow"
         >
           {isRecording() ? "Stop Recording" : "Start Recording"}
         </Button>

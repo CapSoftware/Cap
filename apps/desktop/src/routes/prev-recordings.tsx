@@ -206,9 +206,9 @@ export default function () {
                       ref={setRef}
                       style={{ "border-color": "rgba(255, 255, 255, 0.1)" }}
                       class={cx(
-                        "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/40 dark:bg-gray-500/20 rounded-[12px] overflow-hidden shadow border-[1px] group relative",
+                        "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/40 rounded-[12px] overflow-hidden shadow border-[1px] group relative",
                         "transition-all duration-300",
-                        media.isNew && "ring-2 ring-blue-300 dark:ring-blue-400 ring-opacity-75"
+                        media.isNew && "ring-2 ring-blue-300 ring-opacity-75"
                       )}
                     >
                       <div
@@ -225,7 +225,7 @@ export default function () {
                         <Show
                           when={imageExists()}
                           fallback={
-                            <div class="pointer-events-none w-full h-full absolute inset-0 -z-10 bg-gray-400 dark:bg-gray-300" />
+                            <div class="pointer-events-none w-full h-full absolute inset-0 -z-10 bg-gray-400" />
                           }
                         >
                           <img
@@ -246,9 +246,14 @@ export default function () {
                             progressState.mediaPath === media.path
                           }
                         >
-                          <div class="absolute inset-0 bg-gray-500/95 flex items-center justify-center z-[999999] pointer-events-auto">
+                          <div
+                            style={{
+                              "background-color": "rgba(0, 0, 0, 0.85)",
+                            }}
+                            class="absolute inset-0 flex items-center justify-center z-[999999] pointer-events-auto"
+                          >
                             <div class="w-[80%] text-center">
-                              <h3 class="text-sm font-medium mb-3 text-gray-50">
+                              <h3 class="text-sm font-medium mb-3 text-gray-50 dark:text-gray-500">
                                 <Switch>
                                   <Match
                                     when={
@@ -257,7 +262,7 @@ export default function () {
                                     }
                                   >
                                     {(state) => (
-                                      <h3 class="text-sm font-medium mb-3 text-gray-50">
+                                      <h3 class="text-sm font-medium mb-3 text-gray-50 dark:text-gray-500">
                                         {isRecording
                                           ? state().stage === "rendering"
                                             ? "Rendering video"
@@ -273,7 +278,7 @@ export default function () {
                                     }
                                   >
                                     {(state) => (
-                                      <h3 class="text-sm font-medium mb-3 text-gray-50">
+                                      <h3 class="text-sm font-medium mb-3 text-gray-50 dark:text-gray-500">
                                         {isRecording
                                           ? state().stage === "rendering"
                                             ? "Rendering video"
@@ -289,7 +294,7 @@ export default function () {
                                     }
                                   >
                                     {(state) => (
-                                      <h3 class="text-sm font-medium mb-3 text-gray-50">
+                                      <h3 class="text-sm font-medium mb-3 text-gray-50 dark:text-gray-500">
                                         {state().stage === "rendering"
                                           ? "Rendering video"
                                           : "Creating shareable link"}
@@ -301,7 +306,7 @@ export default function () {
 
                               <div class="w-full bg-gray-200/20 rounded-full h-2.5 mb-2">
                                 <div
-                                  class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
+                                  class="bg-blue-300 text-gray-50 dark:text-gray-500 h-2.5 rounded-full transition-all duration-200"
                                   style={{
                                     width: `${(() => {
                                       if (
@@ -341,7 +346,7 @@ export default function () {
                                 />
                               </div>
 
-                              <p class="text-xs text-gray-50 mt-2">
+                              <p class="text-xs text-gray-50 dark:text-gray-500 mt-2">
                                 {"message" in progressState
                                   ? progressState.message
                                   : undefined}
@@ -351,12 +356,15 @@ export default function () {
                         </Show>
 
                         <div
+                          style={{
+                            "background-color": "rgba(0, 0, 0, 0.4)",
+                          }}
                           class={cx(
                             "w-full h-full absolute inset-0 transition-all duration-150 pointer-events-auto",
                             isLoading() || showUpgradeTooltip()
                               ? "opacity-100"
                               : "opacity-0 group-hover:opacity-100",
-                            "backdrop-blur bg-gray-500/80 text-white p-2"
+                            "backdrop-blur text-white p-2"
                           )}
                         >
                           <TooltipIconButton
@@ -490,7 +498,7 @@ export default function () {
                           </TooltipIconButton>
                           <div class="absolute inset-0 flex items-center justify-center">
                             <Button
-                              variant="secondary"
+                              variant="white"
                               size="sm"
                               onClick={() => save.mutate()}
                               disabled={copy.isPending || upload.isPending}
@@ -517,7 +525,7 @@ export default function () {
                             <div
                               style={{ color: "white", "font-size": "14px" }}
                               class={cx(
-                                "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all",
+                                "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 dark:bg-gray-50 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all",
                                 isLoading() || showUpgradeTooltip()
                                   ? "opacity-0"
                                   : "group-hover:opacity-0"
@@ -553,7 +561,7 @@ const IconButton = (props: ComponentProps<"button">) => {
       {...props}
       type="button"
       class={cx(
-        "p-[0.325rem] bg-gray-100 rounded-full text-neutral-300 text-[12px] shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
+        "p-[0.325rem] bg-gray-50 dark:bg-gray-500 rounded-full text-[12px] shadow-[0px 2px 4px rgba(18, 22, 31, 0.12)]",
         props.class
       )}
     />
@@ -587,10 +595,10 @@ const TooltipIconButton = (
       </Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Content
-          class="p-2 font-medium"
+          class="py-1.5 px-2 font-medium"
           style={{
-            "background-color": "rgba(255, 255, 255, 0.1)",
-            color: "white",
+            "background-color": "rgba(255, 255, 255, 0.85)",
+            color: "black",
             "border-radius": "8px",
             "font-size": "12px",
             "z-index": "15",

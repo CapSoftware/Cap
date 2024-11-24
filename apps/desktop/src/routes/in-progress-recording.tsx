@@ -1,4 +1,5 @@
 import { createEffect, createSignal, type ComponentProps } from "solid-js";
+import { cx } from "cva";
 
 import { commands, events } from "~/utils/tauri";
 import { createTimer } from "@solid-primitives/timer";
@@ -52,9 +53,7 @@ export default function () {
   }));
 
   return (
-    <div
-      class="text-[--text-primary] flex flex-row items-stretch bg-gray-50 dark:bg-gray-100 w-full h-full animate-in fade-in"
-    >
+    <div class="flex flex-row items-stretch bg-gray-500 dark:bg-gray-50 w-full h-full animate-in fade-in">
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <button
           disabled={stopRecording.isPending}
@@ -72,7 +71,6 @@ export default function () {
           <ActionButton
             disabled={togglePause.isPending}
             onClick={() => togglePause.mutate()}
-            class="text-[--text-primary] hover:bg-gray-200 dark:hover:bg-gray-300 flex items-center justify-center"
           >
             {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
           </ActionButton>
@@ -81,16 +79,18 @@ export default function () {
         <ActionButton
           disabled={restartRecording.isPending}
           onClick={() => restartRecording.mutate()}
-          class="text-[--text-primary] hover:bg-gray-200 dark:hover:bg-gray-300 h-8 w-8 flex items-center justify-center"
         >
-          <IconCapRestart class="hover:bg-gray-200 dark:hover:bg-gray-300"/>
+          <IconCapRestart />
         </ActionButton>
       </div>
       <div
-        class="bg-white-transparent-5 cursor-move flex items-center justify-center p-[0.25rem] border-l border-white-transparent-5"
+        class="bg-gray-500 dark:bg-gray-50 cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200"
         data-tauri-drag-region
       >
-        <IconCapMoreVertical data-tauri-drag-region />
+        <IconCapMoreVertical
+          class="text-gray-400 dark:text-gray-400"
+          data-tauri-drag-region
+        />
       </div>
     </div>
   );
@@ -100,7 +100,12 @@ function ActionButton(props: ComponentProps<"button">) {
   return (
     <button
       {...props}
-      class="p-[0.25rem] rounded-lg transition-colors"
+      class={cx(
+        "p-[0.25rem] rounded-lg transition-colors",
+        "text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-300",
+        "h-8 w-8 flex items-center justify-center",
+        props.class
+      )}
       type="button"
     />
   );
