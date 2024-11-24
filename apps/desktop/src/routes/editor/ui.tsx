@@ -298,9 +298,7 @@ export const topLeftAnimateClasses =
 export const topRightAnimateClasses =
   "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-right";
 
-export function ComingSoonTooltip(
-  props: ComponentProps<typeof KTooltip> & any
-) {
+export function ComingSoonTooltip(props: ComponentProps<typeof KTooltip> & any) {
   const [trigger, root] = splitProps(props, ["children", "as"]);
   return (
     <KTooltip placement="top" openDelay={0} closeDelay={0} {...root}>
@@ -309,13 +307,7 @@ export function ComingSoonTooltip(
       </KTooltip.Trigger>
       <KTooltip.Portal>
         <KTooltip.Content
-          class="p-2 font-medium bg-gray-500 text-white ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out"
-          style={{
-            color: "white",
-            "border-radius": "8px",
-            "font-size": "12px",
-            "z-index": "1000",
-          }}
+          class="p-2 font-medium bg-gray-500 dark:bg-gray-700 text-gray-50 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-[1000]"
         >
           Coming Soon
         </KTooltip.Content>

@@ -7,7 +7,9 @@ import { message } from "@tauri-apps/plugin-dialog";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
+import "./styles/theme.css";
 import { commands } from "./utils/tauri";
+import { themeStore } from "./store/theme";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,37 +22,55 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
+  const darkMode = themeStore.isDarkMode;
+
+  onMount(async () => {
+    await themeStore.initialize();
+
+    const matches = useCurrentMatches();
+
+    onMount(() => {
+      for (const match of matches()) {
+        if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+      }
+
+      getCurrentWindow().show();
+    });
+  });
+
   return (
-    <ErrorBoundary
-      fallback={(e: Error) => {
-        console.error(e);
-        return (
-          <>
-            <p>{e.toString()}</p>
-            <p>{e.stack?.toString()}</p>
-          </>
-        );
-      }}
-    >
-      <QueryClientProvider client={queryClient}>
-        <Router
-          root={(props) => {
-            const matches = useCurrentMatches();
+    <div class={darkMode() ? "dark" : ""}>
+      <ErrorBoundary
+        fallback={(e: Error) => {
+          console.error(e);
+          return (
+            <>
+              <p>{e.toString()}</p>
+              <p>{e.stack?.toString()}</p>
+            </>
+          );
+        }}
+      >
+        <QueryClientProvider client={queryClient}>
+          <Router
+            root={(props) => {
+              const matches = useCurrentMatches();
 
-            onMount(() => {
-              for (const match of matches()) {
-                if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
-              }
+              onMount(() => {
+                for (const match of matches()) {
+                  if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+                }
 
-              getCurrentWindow().show();
-            });
+                getCurrentWindow().show();
+              });
 
-            return <Suspense>{props.children}</Suspense>;
-          }}
-        >
-          <FileRoutes />
-        </Router>
-      </QueryClientProvider>
-    </ErrorBoundary>
+              return <Suspense>{props.children}</Suspense>;
+            }}
+          >
+            <FileRoutes />
+          </Router>
+        </QueryClientProvider>
+      </ErrorBoundary>
+    </div>
   );
 }

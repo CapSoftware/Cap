@@ -2,6 +2,7 @@ import { createResource, Show, For } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import { commands, type GeneralSettingsStore } from "~/utils/tauri";
+import { themeStore } from "~/store/theme";
 import {
   isPermissionGranted,
   requestPermission,
@@ -15,7 +16,17 @@ const settingsList: Array<{
   platforms?: OsType[];
   requiresPermission?: boolean;
   pro?: boolean;
+  onChange?: (value: boolean) => Promise<void>;
 }> = [
+  {
+    key: "darkMode",
+    label: "Dark Mode",
+    description:
+      "Switch between light and dark theme for the application interface.",
+    onChange: async () => {
+      await themeStore.toggleTheme();
+    },
+  },
   {
     key: "uploadIndividualFiles",
     label: "Upload individual recording files when creating shareable link",
@@ -103,6 +114,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       }
     }
 
+    // Find the setting once and store it
+    const setting = settingsList.find((s) => s.key === key);
+
+    // If setting exists and has onChange handler, call it
+    if (setting?.onChange) {
+      await setting.onChange(value);
+    }
+
     setSettings(key as keyof GeneralSettingsStore, value);
     generalSettingsStore.set({ [key]: value });
   };
@@ -126,7 +145,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                   )}
                   <div class="flex items-center justify-between">
                     <div class="flex items-center gap-2">
-                      <p>{setting.label}</p>
+                      <p class="text-[--text-primary]">{setting.label}</p>
                     </div>
                     <button
                       type="button"
@@ -171,7 +190,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                     </button>
                   </div>
                   {setting.description && (
-                    <p class="text-xs text-gray-400">{setting.description}</p>
+                    <p class="text-xs text-[--text-tertiary]">
+                      {setting.description}
+                    </p>
                   )}
                 </div>
               </Show>
