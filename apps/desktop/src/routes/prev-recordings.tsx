@@ -885,6 +885,8 @@ function createRecordingMutations(
           setProgressState({ type: "idle" });
         }, 1500);
 
+        await commands.writeStringToPasteboard(recordingMeta.data.sharing.link);
+
         return;
       }
 

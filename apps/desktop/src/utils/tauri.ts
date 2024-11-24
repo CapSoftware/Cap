@@ -154,6 +154,9 @@ async globalMessageDialog(message: string) : Promise<void> {
 },
 async showWindow(window: ShowCapWindow) : Promise<void> {
     await TAURI_INVOKE("show_window", { window });
+},
+async writeStringToPasteboard(string: string) : Promise<void> {
+    await TAURI_INVOKE("write_string_to_pasteboard", { string });
 }
 }
 
