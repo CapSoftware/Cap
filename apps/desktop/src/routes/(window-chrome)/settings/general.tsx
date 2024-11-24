@@ -19,6 +19,15 @@ const settingsList: Array<{
   onChange?: (value: boolean) => Promise<void>;
 }> = [
   {
+    key: "darkMode",
+    label: "Dark Mode",
+    description:
+      "Switch between light and dark theme for the application interface.",
+    onChange: async () => {
+      await themeStore.toggleTheme();
+    },
+  },
+  {
     key: "uploadIndividualFiles",
     label: "Upload individual recording files when creating shareable link",
     description:
@@ -57,14 +66,6 @@ const settingsList: Array<{
     description:
       "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
     requiresPermission: true,
-  },
-  {
-    key: "darkMode",
-    label: "Dark Mode",
-    description: "Switch between light and dark theme for the application interface.",
-    onChange: async () => {
-      await themeStore.toggleTheme();
-    },
   },
 ];
 
@@ -115,7 +116,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
     // Find the setting once and store it
     const setting = settingsList.find((s) => s.key === key);
-    
+
     // If setting exists and has onChange handler, call it
     if (setting?.onChange) {
       await setting.onChange(value);
@@ -189,7 +190,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                     </button>
                   </div>
                   {setting.description && (
-                    <p class="text-xs text-[--text-tertiary]">{setting.description}</p>
+                    <p class="text-xs text-[--text-tertiary]">
+                      {setting.description}
+                    </p>
                   )}
                 </div>
               </Show>
