@@ -15,13 +15,13 @@ use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 use cap_project::{
     AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop,
     CursorAnimationStyle, CursorClickEvent, CursorData, CursorEvents, CursorMoveEvent,
-    ProjectConfiguration, RecordingMeta, SingleSegment, FAST_SMOOTHING_SAMPLES,
+    ProjectConfiguration, RecordingMeta, FAST_SMOOTHING_SAMPLES,
     FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
     SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
 };
 
 use image::GenericImageView;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
 pub mod decoder;

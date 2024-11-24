@@ -10,8 +10,8 @@ use ffmpeg::{
     format::{self},
     frame, rescale, Codec, Rational, Rescale,
 };
-use ffmpeg_hw_device::{CodecContextExt, HwDevice};
-use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
+use ffmpeg_hw_device::HwDevice;
+use ffmpeg_sys_next::avcodec_find_decoder;
 
 pub type DecodedFrame = Arc<Vec<u8>>;
 
@@ -180,7 +180,7 @@ impl AsyncVideoDecoder {
 
                         last_active_frame = Some(requested_frame);
 
-                        let mut now = Instant::now();
+                        let now = Instant::now();
                         loop {
                             if peekable_requests.peek().is_some() {
                                 break;

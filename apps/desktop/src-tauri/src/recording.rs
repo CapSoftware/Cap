@@ -11,13 +11,12 @@ use crate::{
     App, CurrentRecordingChanged, MutableState, NewRecordingAdded, PreCreatedVideo,
     RecordingStarted, RecordingStopped, UploadMode,
 };
-use cap_editor::{ProjectRecordings, SegmentRecordings};
+use cap_editor::ProjectRecordings;
 use cap_media::feeds::CameraFeed;
 use cap_media::sources::{AVFrameCapture, CaptureScreen, CaptureWindow, ScreenCaptureSource};
 use cap_project::{
-    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment,
+    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment,
 };
-use cap_rendering::ZOOM_DURATION;
 use std::time::Instant;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;

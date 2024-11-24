@@ -1,8 +1,8 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
-use crate::project_recordings::{ProjectRecordings, SegmentRecordings};
+use crate::project_recordings::ProjectRecordings;
 use cap_media::feeds::AudioData;
-use cap_project::{CursorData, CursorEvents, ProjectConfiguration, RecordingMeta, XY};
+use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     ProjectUniforms, RecordingSegmentDecoders, RenderOptions, RenderVideoConstants,
     SegmentVideoPaths,
@@ -105,7 +105,7 @@ impl EditorInstance {
                             AudioData::from_file(project_path.join(&meta.path)).unwrap()
                         }));
 
-                        let cursor = Arc::new(s.cursor_events(&meta).into());
+                        let cursor = Arc::new(s.cursor_events(&meta));
 
                         let decoders = RecordingSegmentDecoders::new(
                             &meta,

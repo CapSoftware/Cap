@@ -3,8 +3,8 @@ use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use std::{path::PathBuf, sync::Arc};
 
-use cap_media::feeds::{AudioData, AudioFrameBuffer};
-use cap_project::{CursorData, ProjectConfiguration, RecordingMeta};
+use cap_media::feeds::AudioFrameBuffer;
+use cap_project::{ProjectConfiguration, RecordingMeta};
 use cap_rendering::{
     ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants,
     SegmentVideoPaths,
@@ -68,19 +68,13 @@ pub async fn export_video_to_file(
             cap_project::Content::MultipleSegments { inner } => {
                 let s = &inner.segments[i];
 
-                (
-                    RenderSegment {
-                        cursor: segment.cursor.clone(),
-                        decoders: RecordingSegmentDecoders::new(
+                segment.cursor.clone();RecordingSegmentDecoders::new(
                             &meta,
                             SegmentVideoPaths {
                                 display: s.display.path.as_path(),
                                 camera: s.camera.as_ref().map(|c| c.path.as_path()),
                             },
-                        ),
-                    },
-                    segment.audio.clone(),
-                );
+                        );segment.audio.clone();
 
                 todo!()
             }

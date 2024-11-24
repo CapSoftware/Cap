@@ -10,7 +10,6 @@ use cap_media::{
 use cap_project::{CursorClickEvent, CursorMoveEvent, RecordingMeta};
 use either::Either;
 use std::{
-    collections::HashMap,
     path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
     time::{SystemTime, UNIX_EPOCH},
