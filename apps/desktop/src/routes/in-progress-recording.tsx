@@ -83,7 +83,7 @@ export default function () {
           onClick={() => restartRecording.mutate()}
           class="text-[--text-primary] hover:bg-gray-200 dark:hover:bg-gray-300 h-8 w-8 flex items-center justify-center"
         >
-          <IconCapRestart class="dark:fill-white dark:hover:fill-white" />
+          <IconCapRestart class="hover:bg-gray-200 dark:hover:bg-gray-300"/>
         </ActionButton>
       </div>
       <div
@@ -100,7 +100,7 @@ function ActionButton(props: ComponentProps<"button">) {
   return (
     <button
       {...props}
-      class="p-[0.25rem] enabled:hover:bg-white-transparent-5 enabled:hover:text-gray-50 rounded-lg transition-colors"
+      class="p-[0.25rem] rounded-lg transition-colors"
       type="button"
     />
   );
