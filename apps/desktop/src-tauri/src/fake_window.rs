@@ -45,48 +45,71 @@ pub async fn remove_fake_window(
 pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
     tokio::spawn(async move {
         let state = app.state::<FakeWindowBounds>();
+        let mut last_ignore_state = true;
 
         loop {
-            sleep(Duration::from_millis(1000 / 10)).await;
+            sleep(Duration::from_millis(1000 / 20)).await;
 
-            let map = state.0.read().await;
-            let Some(windows) = map.get(window.label()) else {
-                window.set_ignore_cursor_events(true).ok();
-                continue;
+            let window_position = match window.outer_position() {
+                Ok(pos) => pos,
+                Err(_) => continue,
             };
 
-            let window_position = window.outer_position().unwrap();
-            let mouse_position = window.cursor_position().unwrap();
-            let scale_factor = window.scale_factor().unwrap();
+            let mouse_position = match window.cursor_position() {
+                Ok(pos) => pos,
+                Err(_) => continue,
+            };
 
-            let mut ignore = true;
+            let scale_factor = match window.scale_factor() {
+                Ok(scale) => scale,
+                Err(_) => continue,
+            };
+
+            let map = state.0.read().await;
+            let windows = match map.get(window.label()) {
+                Some(windows) => windows,
+                None => {
+                    if !last_ignore_state {
+                        window.set_ignore_cursor_events(true).ok();
+                        last_ignore_state = true;
+                    }
+                    continue;
+                }
+            };
+
+            let mut should_ignore = true;
 
             for bounds in windows.values() {
-                let x_min = (window_position.x as f64) + bounds.x * scale_factor;
-                let x_max = (window_position.x as f64) + (bounds.x + bounds.width) * scale_factor;
-                let y_min = (window_position.y as f64) + bounds.y * scale_factor;
-                let y_max = (window_position.y as f64) + (bounds.y + bounds.height) * scale_factor;
+                let x_min = window_position.x as f64 + bounds.x * scale_factor;
+                let x_max = window_position.x as f64 + (bounds.x + bounds.width) * scale_factor;
+                let y_min = window_position.y as f64 + bounds.y * scale_factor;
+                let y_max = window_position.y as f64 + (bounds.y + bounds.height) * scale_factor;
 
-                if mouse_position.x >= x_min
-                    && mouse_position.x <= x_max
-                    && mouse_position.y >= y_min
-                    && mouse_position.y <= y_max
+                const PADDING: f64 = 2.0;
+                if mouse_position.x >= (x_min - PADDING)
+                    && mouse_position.x <= (x_max + PADDING)
+                    && mouse_position.y >= (y_min - PADDING)
+                    && mouse_position.y <= (y_max + PADDING)
                 {
-                    ignore = false;
-                    // ShowCapturesPanel.emit(&app).ok();
+                    should_ignore = false;
                     break;
                 }
             }
 
-            window.set_ignore_cursor_events(ignore).ok();
+            if should_ignore != last_ignore_state {
+                window.set_ignore_cursor_events(should_ignore).ok();
 
-            let focused = window.is_focused().unwrap_or(false);
-            if !ignore {
-                if !focused {
-                    window.set_focus().ok();
+                if !should_ignore {
+                    if !window.is_focused().unwrap_or(false) {
+                        window.set_focus().ok();
+                    }
                 }
-            } else if focused {
-                window.set_ignore_cursor_events(ignore).ok();
+
+                last_ignore_state = should_ignore;
+            }
+
+            if !should_ignore && !window.is_focused().unwrap_or(false) {
+                window.set_focus().ok();
             }
         }
     });

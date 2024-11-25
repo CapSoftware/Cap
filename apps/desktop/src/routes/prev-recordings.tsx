@@ -304,7 +304,7 @@ export default function () {
                                 </Switch>
                               </h3>
 
-                              <div class="w-full bg-gray-200/20 rounded-full h-2.5 mb-2">
+                              <div class="w-full bg-gray-400 rounded-full h-2.5 mb-2">
                                 <div
                                   class="bg-blue-300 text-gray-50 dark:text-gray-500 h-2.5 rounded-full transition-all duration-200"
                                   style={{
