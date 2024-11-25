@@ -1,5 +1,5 @@
 import { createSignal, onCleanup, onMount } from "solid-js";
-import { getProPlanId } from "~/utils/plans";
+import { checkIsUpgradedAndUpdate, getProPlanId } from "~/utils/plans";
 import { commands } from "~/utils/tauri";
 import { clientEnv } from "~/utils/env";
 import { authStore } from "../../store";
@@ -65,7 +65,7 @@ export default function Page() {
   };
 
   const checkUpgradeStatus = async () => {
-    const result = await commands.checkUpgradedAndUpdate();
+    const result = await checkIsUpgradedAndUpdate();
     if (result) {
       setUpgradeComplete(true);
     }

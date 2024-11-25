@@ -78,7 +78,7 @@ export default function () {
     },
   }));
 
-  const [isUpgraded] = createResource(() => commands.checkUpgradedAndUpdate());
+  const [isUpgraded] = createResource(checkIsUpgradedAndUpdate);
 
   createAsync(() => getAuth());
 
@@ -257,6 +257,7 @@ import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
 import titlebarState, { setTitlebar } from "~/utils/titlebar-state";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import { checkIsUpgradedAndUpdate } from "~/utils/plans";
 
 let hasChecked = false;
 function createUpdateCheck() {

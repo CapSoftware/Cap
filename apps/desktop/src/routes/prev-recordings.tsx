@@ -34,6 +34,7 @@ import {
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
 import { progressState, setProgressState } from "~/store/progress";
+import { checkIsUpgradedAndUpdate } from "~/utils/plans";
 
 type MediaEntry = {
   path: string;
@@ -896,7 +897,7 @@ function createRecordingMutations(
         return;
       }
 
-      const isUpgraded = await commands.checkUpgradedAndUpdate();
+      const isUpgraded = await checkIsUpgradedAndUpdate();
       if (!isUpgraded) {
         await commands.showWindow("Upgrade");
         return;
