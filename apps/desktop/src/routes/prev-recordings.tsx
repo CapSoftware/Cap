@@ -896,14 +896,25 @@ function createRecordingMutations(
         return;
       }
 
-      setProgressState({
-        type: "uploading",
-        renderProgress: 0,
-        uploadProgress: 0,
-        message: "Preparing to render...",
-        mediaPath: media.path,
-        stage: "rendering",
-      });
+      if (!isRecording) {
+        setProgressState({
+          type: "uploading",
+          renderProgress: 0,
+          uploadProgress: 0,
+          message: "Uploading screenshot...",
+          mediaPath: media.path,
+          stage: "uploading",
+        });
+      } else {
+        setProgressState({
+          type: "uploading",
+          renderProgress: 0,
+          uploadProgress: 0,
+          message: "Preparing to render...",
+          mediaPath: media.path,
+          stage: "rendering",
+        });
+      }
 
       try {
         let res: UploadResult;
@@ -981,6 +992,19 @@ function createRecordingMutations(
           default:
             break;
         }
+
+        setProgressState({
+          type: "uploading",
+          renderProgress: 100,
+          uploadProgress: 100,
+          message: "Link copied to clipboard!",
+          mediaPath: media.path,
+          stage: "uploading",
+        });
+
+        setTimeout(() => {
+          setProgressState({ type: "idle" });
+        }, 1500);
       } catch (error) {
         setProgressState({ type: "idle" });
         throw error;
