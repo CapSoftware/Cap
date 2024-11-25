@@ -1628,7 +1628,7 @@ pub async fn run() {
             windows::position_traffic_lights,
             global_message_dialog,
             show_window,
-            platform::macos::write_string_to_pasteboard,
+            write_clipboard_string,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2027,6 +2027,20 @@ async fn send_feedback_request(app: AppHandle, feedback: String) -> Result<(), S
 #[specta::specta]
 fn global_message_dialog(app: AppHandle, message: String) {
     app.dialog().message(message).show(|_| {});
+}
+
+#[tauri::command]
+#[specta::specta]
+fn write_clipboard_string(
+    clipboard: MutableState<'_, Clipboard>,
+    text: String,
+) -> Result<(), String> {
+    let mut writer = clipboard
+        .try_write()
+        .map_err(|e| format!("Failed to acquire lock on clipboard state: {e}"))?;
+    writer
+        .set_text(text)
+        .map_err(|e| format!("Failed to write text to clipboard: {e}"))
 }
 
 trait EventExt: tauri_specta::Event {

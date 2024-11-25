@@ -55,24 +55,6 @@ extern "C" {
         rect: *mut CGRect,
     ) -> boolean_t;
 }
-#[tauri::command]
-#[specta::specta]
-pub fn write_string_to_pasteboard(string: &str) {
-    use cocoa::appkit::NSPasteboard;
-    use cocoa::base::{id, nil};
-    use cocoa::foundation::{NSArray, NSString};
-    use objc::rc::autoreleasepool;
-
-    unsafe {
-        autoreleasepool(|| {
-            let pasteboard: id = NSPasteboard::generalPasteboard(nil);
-            NSPasteboard::clearContents(pasteboard);
-            let ns_string = NSString::alloc(nil).init_str(string);
-            let objects: id = NSArray::arrayWithObject(nil, ns_string);
-            NSPasteboard::writeObjects(pasteboard, objects);
-        });
-    }
-}
 
 /// Makes the background of the WKWebView layer transparent.
 /// This differs from Tauri's implementation as it does not change the window background which causes performance performance issues and artifacts when shadows are enabled on the window.
