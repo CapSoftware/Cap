@@ -1746,6 +1746,8 @@ pub async fn run() {
                 ShowCapWindow::Main.show(&app).ok();
             }
 
+            app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
+
             ShowCapWindow::PrevRecordings.show(&app).ok();
 
             audio_meter::spawn_event_emitter(app.clone(), audio_input_rx);
@@ -1768,8 +1770,6 @@ pub async fn run() {
                 current_recording: None,
                 pre_created_video: None,
             })));
-
-            app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
 
             app.manage(Arc::new(RwLock::new(
                 Clipboard::new().expect("Failed to create clipboard context"),
@@ -2035,7 +2035,7 @@ fn global_message_dialog(app: AppHandle, message: String) {
 
 #[tauri::command]
 #[specta::specta]
-fn write_clipboard_string(
+async fn write_clipboard_string(
     clipboard: MutableState<'_, Clipboard>,
     text: String,
 ) -> Result<(), String> {
