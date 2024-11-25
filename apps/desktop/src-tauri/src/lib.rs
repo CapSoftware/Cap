@@ -1771,6 +1771,10 @@ pub async fn run() {
 
             app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
 
+            app.manage(Arc::new(RwLock::new(
+                Clipboard::new().expect("Failed to create clipboard context"),
+            )));
+
             tray::create_tray(&app).unwrap();
 
             RequestStartRecording::listen_any_spawn(&app, |_, app| async move {
