@@ -98,3 +98,17 @@
 
   --shadow-s: 0px 8px 16px 0px rgba(0, 0, 0, 0.4);
 }
+
+[data-transparent-window] {
+  background: transparent !important;
+}
+
+[data-transparent-window] body {
+  background: transparent !important;
+}
+
+/* Ensure transparent windows stay transparent in dark mode */
+.dark [data-transparent-window],
+.dark [data-transparent-window] body {
+  background: transparent !important;
+}

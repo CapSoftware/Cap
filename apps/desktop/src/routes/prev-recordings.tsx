@@ -43,6 +43,11 @@ type MediaEntry = {
 };
 
 export default function () {
+  onMount(() => {
+    document.documentElement.setAttribute("data-transparent-window", "true");
+    document.body.style.background = "transparent";
+  });
+
   const [recordings, setRecordings] = makePersisted(
     createStore<MediaEntry[]>([]),
     { name: "recordings-store" }

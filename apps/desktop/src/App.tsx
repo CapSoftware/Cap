@@ -10,6 +10,7 @@ import "unfonts.css";
 import "./styles/theme.css";
 import { commands } from "./utils/tauri";
 import { themeStore } from "./store/theme";
+import "./store/early-theme-loader";
 
 const darkModeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const localStorageDarkMode = localStorage.getItem("darkMode");

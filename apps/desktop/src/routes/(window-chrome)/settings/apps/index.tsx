@@ -30,8 +30,8 @@ export default function AppsTab() {
     <div class="p-4">
       <For each={apps}>
         {(app) => (
-          <div class="p-1.5 bg-white rounded-lg border border-[--gray-500]">
-            <div class="flex justify-between items-center border-b border-[--gray-500] pb-2">
+          <div class="p-1.5 bg-white rounded-lg border border-[--gray-200]">
+            <div class="flex justify-between items-center border-b border-[--gray-200] pb-2">
               <div class="flex items-center gap-3">
                 <div class="p-2 rounded-lg bg-[--gray-100]">
                   <app.icon class="w-4 h-4 text-[--text-tertiary]" />
