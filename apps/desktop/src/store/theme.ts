@@ -4,7 +4,9 @@ import type { GeneralSettingsStore } from "~/utils/tauri";
 import { emit, listen } from "@tauri-apps/api/event";
 
 const THEME_CHANGE_EVENT = "theme-change";
-const [isDarkMode, setIsDarkMode] = createSignal(false);
+const [isDarkMode, setIsDarkMode] = createSignal(
+  document.documentElement.classList.contains('dark')
+);
 
 const applyTheme = (darkMode: boolean) => {
   setIsDarkMode(darkMode);

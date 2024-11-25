@@ -11,6 +11,29 @@ import "./styles/theme.css";
 import { commands } from "./utils/tauri";
 import { themeStore } from "./store/theme";
 
+const darkModeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const localStorageDarkMode = localStorage.getItem("darkMode");
+
+// Check stored preference first, then system preference
+if (
+  localStorageDarkMode === "true" ||
+  (localStorageDarkMode === null && darkModeMediaQuery.matches)
+) {
+  document.documentElement.classList.add("dark");
+}
+
+// Add base background color to prevent flash
+const style = document.createElement("style");
+style.textContent = `
+  html.dark {
+    background-color: #1E1E1E;
+  }
+  html.dark body {
+    background-color: #1E1E1E;
+  }
+`;
+document.head.appendChild(style);
+
 const queryClient = new QueryClient({
   defaultOptions: {
     mutations: {

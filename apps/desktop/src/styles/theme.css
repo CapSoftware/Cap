@@ -1,3 +1,13 @@
+@media (prefers-color-scheme: dark) {
+  [data-tauri-drag-region] {
+    background: var(--gray-50);
+  }
+}
+
+.dark [data-tauri-drag-region] {
+  background: var(--gray-50);
+}
+
 :root {
   /* Light theme variables */
   --gray-50: #FFFFFF;
