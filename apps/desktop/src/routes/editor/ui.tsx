@@ -173,7 +173,9 @@ export function DialogContent(
   return (
     <>
       <Dialog.Header>
-        <KDialog.Title>{props.title}</KDialog.Title>
+        <KDialog.Title class="text-gray-500 dark:text-gray-500">
+          {props.title}
+        </KDialog.Title>
       </Dialog.Header>
       <Dialog.Content class={props.class}>{props.children}</Dialog.Content>
       <Dialog.Footer>{props.confirm}</Dialog.Footer>
@@ -298,7 +300,9 @@ export const topLeftAnimateClasses =
 export const topRightAnimateClasses =
   "ui-expanded:animate-in ui-expanded:fade-in ui-expanded:zoom-in-95 ui-closed:animate-out ui-closed:fade-out ui-closed:zoom-out-95 origin-top-right";
 
-export function ComingSoonTooltip(props: ComponentProps<typeof KTooltip> & any) {
+export function ComingSoonTooltip(
+  props: ComponentProps<typeof KTooltip> & any
+) {
   const [trigger, root] = splitProps(props, ["children", "as"]);
   return (
     <KTooltip placement="top" openDelay={0} closeDelay={0} {...root}>
@@ -306,9 +310,7 @@ export function ComingSoonTooltip(props: ComponentProps<typeof KTooltip> & any) 
         {trigger.children}
       </KTooltip.Trigger>
       <KTooltip.Portal>
-        <KTooltip.Content
-          class="p-2 font-medium bg-gray-500 dark:bg-gray-700 text-gray-50 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-[1000]"
-        >
+        <KTooltip.Content class="p-2 font-medium bg-gray-500 dark:bg-gray-700 text-gray-50 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-[1000]">
           Coming Soon
         </KTooltip.Content>
       </KTooltip.Portal>

@@ -57,7 +57,7 @@ export default function () {
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <button
           disabled={stopRecording.isPending}
-          class="py-[0.25rem] px-[0.5rem] text-red-300 dark:text-red-300 gap-[0.25rem] flex flex-row items-center hover:bg-red-transparent-20 transition-colors rounded-lg"
+          class="py-[0.25rem] px-[0.5rem] text-red-300 dark:text-red-300 gap-[0.25rem] flex flex-row items-center rounded-lg"
           type="button"
           onClick={() => stopRecording.mutate()}
         >
@@ -84,7 +84,7 @@ export default function () {
         </ActionButton>
       </div>
       <div
-        class="bg-gray-500 dark:bg-gray-50 cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200"
+        class="bg-gray-500 dark:bg-gray-50 cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200 hover:cursor-move"
         data-tauri-drag-region
       >
         <IconCapMoreVertical
@@ -102,7 +102,7 @@ function ActionButton(props: ComponentProps<"button">) {
       {...props}
       class={cx(
         "p-[0.25rem] rounded-lg transition-colors",
-        "text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-300",
+        "text-gray-400",
         "h-8 w-8 flex items-center justify-center",
         props.class
       )}

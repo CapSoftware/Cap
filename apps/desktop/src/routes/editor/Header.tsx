@@ -56,10 +56,7 @@ export function Header() {
   return (
     <>
       <Titlebar />
-      <Dialog.Root
-        open={progressState.type !== "idle"}
-        onOpenChange={() => {}} // Empty handler prevents closing
-      >
+      <Dialog.Root open={progressState.type !== "idle"} onOpenChange={() => {}}>
         <DialogContent
           title={
             progressState.type === "copying"
@@ -69,7 +66,7 @@ export function Header() {
               : "Exporting Recording"
           }
           confirm={<></>}
-          class="bg-gray-600"
+          class="bg-gray-600 text-gray-500 dark:text-gray-500"
         >
           <div class="min-h-[120px] flex items-center justify-center relative">
             <Switch>
@@ -248,7 +245,7 @@ function ExportButton() {
         videoId,
         project,
         progress,
-        false
+        true
       );
       await commands.copyFileToPath(videoPath, path);
 
@@ -367,7 +364,7 @@ function ShareButton() {
           }
         };
 
-        await commands.exportVideo(videoId, projectConfig, progress, false);
+        await commands.exportVideo(videoId, projectConfig, progress, true);
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
