@@ -107,7 +107,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                 <div class="w-[9rem] h-[2rem] ">
                   <Switch>
                     <Match when={listening()?.action === item()}>
-                      <div class="border border-[--gray-500] rounded-lg text-[--text-tertiary] w-full h-full bg-[--gray-100] flex flex-row items-center justify-between px-[0.375rem]">
+                      <div class="border border-[--gray-300] rounded-lg text-[--text-tertiary] w-full h-full bg-[--gray-100] flex flex-row items-center justify-between px-[0.375rem]">
                         <Show when={hotkeys[item()]} fallback="Listening">
                           {(binding) => <HotkeyText binding={binding()} />}
                         </Show>
@@ -148,7 +148,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                     <Match when={listening()?.action !== item()}>
                       <button
                         type="button"
-                        class="border border-[--gray-500] rounded-lg text-[--text-tertiary] w-full h-full"
+                        class="border border-[--gray-200] rounded-lg text-[--text-tertiary] w-full h-full"
                         onClick={(e) => {
                           e.stopPropagation();
                           setListening({

@@ -1,3 +1,13 @@
+@media (prefers-color-scheme: dark) {
+  [data-tauri-drag-region] {
+    background: var(--gray-50);
+  }
+}
+
+.dark [data-tauri-drag-region] {
+  background: var(--gray-50);
+}
+
 :root {
   /* Light theme variables */
   --gray-50: #FFFFFF;
@@ -87,4 +97,18 @@
   --red-transparent-20: rgba(255,71,102,0.2);
 
   --shadow-s: 0px 8px 16px 0px rgba(0, 0, 0, 0.4);
+}
+
+[data-transparent-window] {
+  background: transparent !important;
+}
+
+[data-transparent-window] body {
+  background: transparent !important;
+}
+
+/* Ensure transparent windows stay transparent in dark mode */
+.dark [data-transparent-window],
+.dark [data-transparent-window] body {
+  background: transparent !important;
 }

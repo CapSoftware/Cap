@@ -43,6 +43,11 @@ type MediaEntry = {
 };
 
 export default function () {
+  onMount(() => {
+    document.documentElement.setAttribute("data-transparent-window", "true");
+    document.body.style.background = "transparent";
+  });
+
   const [recordings, setRecordings] = makePersisted(
     createStore<MediaEntry[]>([]),
     { name: "recordings-store" }
@@ -503,8 +508,10 @@ export default function () {
                               onClick={() => save.mutate()}
                               disabled={copy.isPending || upload.isPending}
                             >
-                              <Switch fallback="Save">
-                                <Match when={save.isPending}>Saving...</Match>
+                              <Switch fallback="Export">
+                                <Match when={save.isPending}>
+                                  Exporting...
+                                </Match>
                                 <Match
                                   when={save.isSuccess && save.data === true}
                                 >
@@ -795,8 +802,7 @@ function createRecordingMutations(
         }
 
         if (isRecording) {
-          let outputPath: string;
-
+          // Create a progress channel to track rendering
           const progress = new Channel<RenderProgress>();
           progress.onmessage = (p) => {
             console.log("Progress channel message:", p);
@@ -825,12 +831,12 @@ function createRecordingMutations(
             }
           };
 
-          // First try to get existing rendered video
-          outputPath = await commands.exportVideo(
+          // Always force re-render when saving
+          const outputPath = await commands.exportVideo(
             mediaId,
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
-            false
+            true // Force re-render
           );
 
           await commands.copyFileToPath(outputPath, savePath);
