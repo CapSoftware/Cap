@@ -47,7 +47,7 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
         let state = app.state::<FakeWindowBounds>();
 
         loop {
-            sleep(Duration::from_millis(1000 / 10)).await;
+            sleep(Duration::from_millis(1000 / 20)).await;
 
             let map = state.0.read().await;
             let Some(windows) = map.get(window.label()) else {

@@ -154,6 +154,9 @@ async globalMessageDialog(message: string) : Promise<void> {
 },
 async showWindow(window: ShowCapWindow) : Promise<void> {
     await TAURI_INVOKE("show_window", { window });
+},
+async writeStringToPasteboard(string: string) : Promise<void> {
+    await TAURI_INVOKE("write_string_to_pasteboard", { string });
 }
 }
 
@@ -231,7 +234,7 @@ export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type EditorStateChanged = { playhead_position: number }
 export type Flags = { recordMouse: boolean; split: boolean; pauseResume: boolean; zoom: boolean }
-export type GeneralSettingsStore = { uploadIndividualFiles?: boolean; openEditorAfterRecording?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean }
+export type GeneralSettingsStore = { uploadIndividualFiles?: boolean; openEditorAfterRecording?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; darkMode?: boolean }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
 export type HotkeysConfiguration = { show: boolean }
@@ -262,7 +265,7 @@ export type RequestOpenSettings = { page: string }
 export type RequestRestartRecording = null
 export type RequestStartRecording = null
 export type RequestStopRecording = null
-export type S3UploadMeta = { id: string; user_id: string; aws_region: string; aws_bucket: string }
+export type S3UploadMeta = { id: string; user_id: string; aws_region?: string; aws_bucket?: string }
 export type ScreenCaptureTarget = ({ variant: "window" } & CaptureWindow) | ({ variant: "screen" } & CaptureScreen)
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string; prettyName: string }
 export type SharingMeta = { id: string; link: string }

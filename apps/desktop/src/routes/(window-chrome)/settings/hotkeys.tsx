@@ -102,16 +102,16 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
             });
 
             return (
-              <li class="w-full flex flex-row justify-between items-center">
+              <li class="w-full flex flex-row justify-between items-center text-[--text-primary]">
                 <span>{ACTION_TEXT[item()]}</span>
-                <div class="w-[9rem] h-[2rem]">
+                <div class="w-[9rem] h-[2rem] ">
                   <Switch>
                     <Match when={listening()?.action === item()}>
-                      <div class="border border-blue-300 rounded-lg text-gray-500 w-full h-full bg-gray-100 flex flex-row items-center justify-between px-[0.375rem]">
+                      <div class="border border-[--gray-500] rounded-lg text-[--text-tertiary] w-full h-full bg-[--gray-100] flex flex-row items-center justify-between px-[0.375rem]">
                         <Show when={hotkeys[item()]} fallback="Listening">
                           {(binding) => <HotkeyText binding={binding()} />}
                         </Show>
-                        <div class="flex flex-row items-center gap-[0.125rem]">
+                        <div class="flex flex-row items-center gap-[0.125rem] text-[--text-tertiary]">
                           <Show when={hotkeys[item()]}>
                             <button
                               type="button"
@@ -125,7 +125,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                                 );
                               }}
                             >
-                              <IconCapCircleCheck class="size-[1.25rem] text-blue-300" />
+                              <IconCapCircleCheck class="size-[1.25rem] text-[--blue-400]" />
                             </button>
                           </Show>
                           <button
@@ -140,7 +140,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                               });
                             }}
                           >
-                            <IconCapCircleX class="size-[1.25rem] text-gray-400" />
+                            <IconCapCircleX class="size-[1.25rem] text-[--gray-400]" />
                           </button>
                         </div>
                       </div>
@@ -148,7 +148,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                     <Match when={listening()?.action !== item()}>
                       <button
                         type="button"
-                        class="border border-gray-200 rounded-lg text-gray-400 w-full h-full"
+                        class="border border-[--gray-500] rounded-lg text-[--text-tertiary] w-full h-full"
                         onClick={(e) => {
                           e.stopPropagation();
                           setListening({
@@ -169,7 +169,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
           }}
         </Index>
       </ul>
-      <div class="flex flex-row-reverse p-[1rem]">
+      <div class="flex flex-row-reverse p-[1rem] text-[--text-primary]">
         <Button disabled variant="secondary">
           Restore Defaults
         </Button>
@@ -180,7 +180,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 
 function HotkeyText(props: { binding: Hotkey }) {
   return (
-    <span class="space-x-0.5">
+    <span class="space-x-0.5 text-[--text-tertiary]">
       {props.binding.meta && <span>⌘</span>}
       {props.binding.ctrl && <span>⌃</span>}
       {props.binding.alt && <span>⌥</span>}

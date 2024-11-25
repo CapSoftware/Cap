@@ -414,12 +414,12 @@ fn position_traffic_lights_impl(
     let c_win = window.clone();
     window
         .run_on_main_thread(move || {
+            let ns_window = match c_win.ns_window() {
+                Ok(handle) => handle,
+                Err(_) => return,
+            };
             position_window_controls(
-                UnsafeWindowHandle(
-                    c_win
-                        .ns_window()
-                        .expect("Failed to get native window handle"),
-                ),
+                UnsafeWindowHandle(ns_window),
                 &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
             );
         })

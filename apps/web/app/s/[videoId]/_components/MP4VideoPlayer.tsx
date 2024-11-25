@@ -21,24 +21,26 @@ export const MP4VideoPlayer = memo(
       const video = videoRef.current;
       if (!video) return;
 
-      const startTime = Date.now();
-      const maxDuration = 2 * 60 * 1000;
-
-      const checkAndReload = () => {
-        if (video.readyState === 0) {
-          // HAVE_NOTHING
-          video.load();
-        }
-
-        if (Date.now() - startTime < maxDuration) {
-          setTimeout(checkAndReload, 3000);
-        }
+      const handleLoadedMetadata = () => {
+        // Trigger a canplay event after metadata is loaded
+        video.dispatchEvent(new Event("canplay"));
       };
 
-      checkAndReload();
+      const handleError = (e: ErrorEvent) => {
+        console.error("Video loading error:", e);
+        // Attempt to reload on error
+        video.load();
+      };
+
+      video.addEventListener("loadedmetadata", handleLoadedMetadata);
+      video.addEventListener("error", handleError as EventListener);
+
+      // Initial load
+      video.load();
 
       return () => {
-        clearTimeout(checkAndReload as unknown as number);
+        video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+        video.removeEventListener("error", handleError as EventListener);
       };
     }, [videoSrc]);
 
@@ -47,7 +49,7 @@ export const MP4VideoPlayer = memo(
         id="video-player"
         ref={videoRef}
         className="w-full h-full object-contain"
-        preload="metadata"
+        preload="auto"
         playsInline
         controls={false}
         muted

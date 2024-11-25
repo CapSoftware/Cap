@@ -83,29 +83,38 @@ export const ShareVideo = ({
 
   useEffect(() => {
     if (videoMetadataLoaded) {
-      console.log("Metadata loaded");
       setIsLoading(false);
     }
   }, [videoMetadataLoaded]);
 
   useEffect(() => {
     const onVideoLoadedMetadata = () => {
-      console.log("Video metadata loaded");
-      setVideoMetadataLoaded(true);
       if (videoRef.current) {
         setLongestDuration(videoRef.current.duration);
+        setVideoMetadataLoaded(true);
+        setIsLoading(false);
       }
     };
 
-    const videoElement = videoRef.current;
+    const onCanPlay = () => {
+      setVideoMetadataLoaded(true);
+      setIsLoading(false);
+    };
 
-    videoElement?.addEventListener("loadedmetadata", onVideoLoadedMetadata);
+    const videoElement = videoRef.current;
+    if (videoElement) {
+      videoElement.addEventListener("loadedmetadata", onVideoLoadedMetadata);
+      videoElement.addEventListener("canplay", onCanPlay);
+    }
 
     return () => {
-      videoElement?.removeEventListener(
-        "loadedmetadata",
-        onVideoLoadedMetadata
-      );
+      if (videoElement) {
+        videoElement.removeEventListener(
+          "loadedmetadata",
+          onVideoLoadedMetadata
+        );
+        videoElement.removeEventListener("canplay", onCanPlay);
+      }
     };
   }, []);
 
@@ -277,13 +286,28 @@ export const ShareVideo = ({
   };
 
   useEffect(() => {
-    const fetchSubtitles = () => {
-      fetch(`https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`)
-        .then((response) => response.text())
-        .then((text) => {
-          const parsedSubtitles = fromVtt(text);
-          setSubtitles(parsedSubtitles);
-        });
+    const fetchSubtitles = async () => {
+      let transcriptionUrl;
+
+      if (
+        data.bucket &&
+        data.awsBucket !== process.env.NEXT_PUBLIC_CAP_AWS_BUCKET
+      ) {
+        // For custom S3 buckets, fetch through the API
+        transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
+      } else {
+        // For default Cap storage
+        transcriptionUrl = `https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`;
+      }
+
+      try {
+        const response = await fetch(transcriptionUrl);
+        const text = await response.text();
+        const parsedSubtitles = fromVtt(text);
+        setSubtitles(parsedSubtitles);
+      } catch (error) {
+        console.error("Error fetching subtitles:", error);
+      }
     };
 
     if (data.transcriptionStatus === "COMPLETE") {

@@ -16,6 +16,7 @@ export async function DELETE(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const videoId = searchParams.get("videoId") || "";
   const userId = user?.id as string;
+  const origin = request.headers.get("origin") as string;
 
   if (!videoId || !userId) {
     console.error("Missing required data in /api/video/delete/route.ts");
@@ -44,15 +45,23 @@ export async function DELETE(request: NextRequest) {
     );
   }
 
-  const { bucket } = query[0];
+  const result = query[0];
+  if (!result) {
+    return new Response(
+      JSON.stringify({ error: true, message: "Video not found" }),
+      {
+        status: 404,
+        headers: getHeaders(origin),
+      }
+    );
+  }
 
   await db
     .delete(videos)
     .where(and(eq(videos.id, videoId), eq(videos.ownerId, userId)));
 
-  const s3Client = createS3Client(bucket);
-
-  const Bucket = getS3Bucket(bucket);
+  const s3Client = await createS3Client(result.bucket);
+  const Bucket = await getS3Bucket(result.bucket);
   const prefix = `${userId}/${videoId}/`;
 
   const listObjectsCommand = new ListObjectsV2Command({

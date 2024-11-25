@@ -1115,6 +1115,7 @@ async fn upload_screenshot(
 
     println!("Copying to clipboard: {:?}", share_link);
 
+    // Copy link to clipboard
     let _ = app
         .state::<MutableState<'_, Clipboard>>()
         .write()
@@ -1425,7 +1426,10 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
 #[specta::specta]
 async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
-        return Err(format!("Failed to update plan information: {}", e));
+        return Err(format!(
+            "Failed to update plan information. Try signing out and signing back in: {}",
+            e
+        ));
     }
 
     let auth = AuthStore::get(&app).map_err(|e| e.to_string())?;
@@ -1461,12 +1465,11 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
     if let Some(window) = CapWindowId::Camera.get(&app) {
         window.close().ok();
     }
-
     if let Some(window) = CapWindowId::Main.get(&app) {
         window.close().ok();
     }
 
-    while CapWindowId::Main.get(&app).is_some() {
+    while CapWindowId::Main.get(&app).is_none() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
@@ -1624,7 +1627,8 @@ pub async fn run() {
             send_feedback_request,
             windows::position_traffic_lights,
             global_message_dialog,
-            show_window
+            show_window,
+            platform::macos::write_string_to_pasteboard,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

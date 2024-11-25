@@ -23,6 +23,8 @@ pub struct GeneralSettingsStore {
     // first launch: store won't exist so show startup
     #[serde(default = "true_b")]
     pub has_completed_startup: bool,
+    #[serde(default)]
+    pub dark_mode: bool,
 }
 
 fn true_b() -> bool {

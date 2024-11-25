@@ -10,7 +10,14 @@ export async function GET(request: Request) {
 
   const allUpdates = getChangelogPosts();
 
-  const changelogs = allUpdates
+  const changelogs: {
+    content: string;
+    title: string;
+    app: string;
+    publishedAt: string;
+    version: string;
+    image?: string;
+  }[] = allUpdates
     .map((post) => ({
       metadata: post.metadata,
       content: post.content,
@@ -19,7 +26,16 @@ export async function GET(request: Request) {
     .sort((a, b) => b.slug - a.slug)
     .map(({ metadata, content }) => ({ ...metadata, content }));
 
-  const latestVersion = changelogs[0].version;
+  if (changelogs.length === 0) {
+    return NextResponse.json({ hasUpdate: false });
+  }
+
+  const firstChangelog = changelogs[0];
+  if (!firstChangelog) {
+    return NextResponse.json({ hasUpdate: false });
+  }
+
+  const latestVersion = firstChangelog.version;
   const hasUpdate = version ? latestVersion === version : false;
 
   const response = NextResponse.json({ hasUpdate });
