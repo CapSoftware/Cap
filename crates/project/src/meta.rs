@@ -234,9 +234,111 @@ impl MultipleSegment {
 
 #[cfg(test)]
 mod test {
-    #[test]
-    fn single_segment() {}
+    use super::RecordingMeta;
+
+    fn test_meta_deserialize(s: &str) {
+        let _: RecordingMeta = serde_json::from_str(s).unwrap();
+    }
 
     #[test]
-    fn multi_segment() {}
+    fn single_segment() {
+        test_meta_deserialize(
+            r#"{
+						  "pretty_name": "Cap 2024-11-15 at 16.35.36",
+						  "sharing": null,
+						  "display": {
+						    "path": "content/display.mp4"
+						  },
+						  "camera": null,
+						  "audio": null,
+						  "segments": [
+						    {
+						      "start": 0.0,
+						      "end": 10.683263063430786
+						    }
+						  ],
+						  "cursor": "cursor.json"
+						}"#,
+        );
+
+        test_meta_deserialize(
+            r#"{
+		          "pretty_name": "Cap 2024-11-26 at 22.16.36",
+		          "sharing": null,
+		          "display": {
+		            "path": "content/display.mp4"
+		          },
+		          "camera": {
+		            "path": "content/camera.mp4"
+		          },
+		          "audio": {
+		            "path": "content/audio-input.mp3"
+		          },
+		          "segments": [],
+		          "cursor": "cursor.json"
+		        }"#,
+        );
+    }
+
+    #[test]
+    fn multi_segment() {
+        // single segment
+        test_meta_deserialize(
+            r#"{
+              "pretty_name": "Cap 2024-11-26 at 22.29.30",
+              "sharing": null,
+              "segments": [
+                {
+                  "display": {
+                    "path": "content/segments/segment-0/display.mp4"
+                  },
+                  "camera": {
+                    "path": "content/segments/segment-0/camera.mp4"
+                  },
+                  "audio": {
+                    "path": "content/segments/segment-0/audio-input.mp3"
+                  }
+                }
+              ],
+              "cursors": {
+                "0": "content/cursors/cursor_0.png",
+                "3": "content/cursors/cursor_3.png",
+                "2": "content/cursors/cursor_2.png",
+                "1": "content/cursors/cursor_1.png"
+              }
+            }"#,
+        );
+
+        // multi segment, no cursor
+        test_meta_deserialize(
+            r#"{
+		          "pretty_name": "Cap 2024-11-26 at 22.32.26",
+		          "sharing": null,
+		          "segments": [
+		            {
+		              "display": {
+		                "path": "content/segments/segment-0/display.mp4"
+		              },
+		              "camera": {
+		                "path": "content/segments/segment-0/camera.mp4"
+		              },
+		              "audio": {
+		                "path": "content/segments/segment-0/audio-input.mp3"
+		              }
+		            },
+		            {
+		              "display": {
+		                "path": "content/segments/segment-1/display.mp4"
+		              },
+		              "camera": {
+		                "path": "content/segments/segment-1/camera.mp4"
+		              },
+		              "audio": {
+		                "path": "content/segments/segment-1/audio-input.mp3"
+		              }
+		            }
+		          ]
+		        }"#,
+        );
+    }
 }

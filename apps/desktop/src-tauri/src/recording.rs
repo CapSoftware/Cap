@@ -216,7 +216,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
             let mut passed_duration = 0.0;
 
             // multi-segment
-            // for segment in recording.segments {
+            // for segment in &completed_recording.segments {
             //     let start = passed_duration;
             //     passed_duration += segment.end - segment.start;
             //     segments.push(TimelineSegment {
@@ -227,6 +227,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
             //     });
             // }
 
+            // single-segment
             for i in (0..completed_recording.segments.len()).step_by(2) {
                 let start = passed_duration;
                 passed_duration +=
