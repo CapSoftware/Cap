@@ -7,7 +7,10 @@ import {
   isPermissionGranted,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
-import { OsType, Platform, type } from "@tauri-apps/plugin-os";
+import { type OsType, Platform, type } from "@tauri-apps/plugin-os";
+import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
+import themePreviewLight from "~/assets/theme-previews/light.jpg";
+import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 
 const settingsList: Array<{
   key: keyof GeneralSettingsStore;
@@ -18,15 +21,15 @@ const settingsList: Array<{
   pro?: boolean;
   onChange?: (value: boolean) => Promise<void>;
 }> = [
-  {
-    key: "darkMode",
-    label: "Dark Mode",
-    description:
-      "Switch between light and dark theme for the application interface.",
-    onChange: async () => {
-      await themeStore.toggleTheme();
-    },
-  },
+  // {
+  //   key: "darkMode",
+  //   label: "Dark Mode",
+  //   description:
+  //     "Switch between light and dark theme for the application interface.",
+  //   onChange: async () => {
+  //     await themeStore.toggleTheme();
+  //   },
+  // },
   {
     key: "uploadIndividualFiles",
     label: "Upload individual recording files when creating shareable link",
@@ -76,6 +79,59 @@ export default function GeneralSettings() {
     <Show when={store.state === "ready" && ([store()] as const)}>
       {(store) => <Inner initialStore={store()[0] ?? null} />}
     </Show>
+  );
+}
+
+function ThemeSection() {
+  const themes = [
+    { id: "auto", name: "System", preview: themePreviewAuto },
+    { id: "light", name: "Light", preview: themePreviewLight },
+    { id: "dark", name: "Dark", preview: themePreviewDark },
+  ];
+  const activeTheme = "auto";
+
+  return (
+    <div class="flex flex-col gap-4">
+      <div class="flex items-center">
+        <p class="text-[--text-primary] font-semibold">Appearance</p>
+      </div>
+      <div
+        class="flex justify-start items-center text-[--text-primary]"
+        on:contextmenu={(e) => e.preventDefault()}
+      >
+        <div class="flex justify-between px-1 w-[22.8rem]">
+          <For each={themes}>
+            {(theme) => (
+              <button type="button" class="flex flex-col items-center">
+                <div
+                  class={`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none transition-all duration-200 ${
+                    activeTheme === theme.id
+                      ? "ring-4 ring-blue-100 ring-opacity-50 ring-offset-2"
+                      : "hover:ring-2 hover:ring-gray-300"
+                  }`}
+                  // onClick={() => setActiveTheme(theme.id)}
+                  aria-label={`Select theme: ${theme.name}`}
+                >
+                  <div class="w-full h-full bg-gray-200 flex items-center justify-center">
+                    <img
+                      src={theme.preview}
+                      alt={`Preview of ${theme.name} theme`}
+                    />
+                  </div>
+                </div>
+                <span
+                  class={`mt-2 text-sm ${
+                    activeTheme !== theme.id ? "!text-opacity-10" : ""
+                  }`}
+                >
+                  {theme.name}
+                </span>
+              </button>
+            )}
+          </For>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -132,6 +188,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
     <div class="flex flex-col w-full h-full">
       <div class="flex-1 overflow-y-auto">
         <div class="p-4 space-y-2 divide-y divide-gray-200">
+          <ThemeSection />
           <For each={settingsList}>
             {(setting) => (
               <Show
