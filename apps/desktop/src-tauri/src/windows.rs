@@ -240,7 +240,7 @@ impl ShowCapWindow {
             Self::InProgressRecording {
                 position: _position,
             } => {
-                let width = 160.0;
+                let width = 200.0;
                 let height = 40.0;
 
                 self.window_builder(app, "/in-progress-recording")

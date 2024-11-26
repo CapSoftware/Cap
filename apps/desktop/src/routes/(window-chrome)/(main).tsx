@@ -467,6 +467,8 @@ function MicrophoneSelect(props: {
   const currentRecording = createCurrentRecordingQuery();
 
   const [open, setOpen] = createSignal(false);
+  const [dbs, setDbs] = createSignal<number | undefined>();
+  const [isInitialized, setIsInitialized] = createSignal(false);
 
   const value = () =>
     devices?.data?.find((d) => d.name === props.options?.audioInputName) ??
@@ -490,21 +492,39 @@ function MicrophoneSelect(props: {
     if (!item.deviceId) setDbs();
   };
 
-  // raw db level
-  const [dbs, setDbs] = createSignal<number | undefined>();
+  // Create a single event listener using onMount
+  onMount(() => {
+    const listener = (event: Event) => {
+      const dbs = (event as CustomEvent<number>).detail;
+      if (!props.options?.audioInputName) setDbs();
+      else setDbs(dbs);
+    };
 
-  createEffect(() => {
-    if (!props.options?.audioInputName) setDbs();
-  });
+    events.audioInputLevelChange.listen((dbs) => {
+      if (!props.options?.audioInputName) setDbs();
+      else setDbs(dbs.payload);
+    });
 
-  events.audioInputLevelChange.listen((dbs) => {
-    if (!props.options?.audioInputName) setDbs();
-    else setDbs(dbs.payload);
+    return () => {
+      window.removeEventListener("audioLevelChange", listener);
+    };
   });
 
   // visual audio level from 0 -> 1
   const audioLevel = () =>
     Math.pow(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE, 0.5);
+
+  // Initialize audio input if needed - only once when component mounts
+  onMount(() => {
+    const audioInput = props.options?.audioInputName;
+    if (!audioInput || !permissionGranted() || isInitialized()) return;
+
+    setIsInitialized(true);
+    handleMicrophoneChange({
+      name: audioInput,
+      deviceId: audioInput,
+    });
+  });
 
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">

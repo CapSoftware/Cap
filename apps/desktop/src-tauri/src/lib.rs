@@ -273,7 +273,23 @@ type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 #[tauri::command]
 #[specta::specta]
 async fn get_recording_options(state: MutableState<'_, App>) -> Result<RecordingOptions, ()> {
-    let state = state.read().await;
+    let mut state = state.write().await;
+
+    // If there's a saved audio input but no feed, initialize it
+    if let Some(audio_input_name) = state.start_recording_options.audio_input_name() {
+        if state.audio_input_feed.is_none() {
+            state.audio_input_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
+                .await
+                .map_err(|error| eprintln!("{error}"))
+            {
+                feed.add_sender(state.audio_input_tx.clone()).await.unwrap();
+                Some(feed)
+            } else {
+                None
+            };
+        }
+    }
+
     Ok(state.start_recording_options.clone())
 }
 

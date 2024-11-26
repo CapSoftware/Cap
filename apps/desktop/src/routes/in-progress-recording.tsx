@@ -4,12 +4,57 @@ import { cx } from "cva";
 import { commands, events } from "~/utils/tauri";
 import { createTimer } from "@solid-primitives/timer";
 import { createMutation } from "@tanstack/solid-query";
+import {
+  createOptionsQuery,
+  createCurrentRecordingQuery,
+} from "~/utils/queries";
+
+// Create a singleton audio level store that persists across reloads
+const audioLevelStore = {
+  level: 0,
+  initialized: false,
+  init() {
+    if (this.initialized) return;
+
+    events.audioInputLevelChange.listen((dbs) => {
+      // Convert dB to a percentage (0-100)
+      // Typical microphone levels are between -60dB and 0dB
+      // We'll use -60dB as our floor and 0dB as our ceiling
+      const DB_MIN = -60;
+      const DB_MAX = 0;
+
+      const dbValue = dbs.payload ?? DB_MIN;
+      const normalizedLevel = Math.max(
+        0,
+        Math.min(1, (dbValue - DB_MIN) / (DB_MAX - DB_MIN))
+      );
+      this.level = normalizedLevel;
+
+      window.dispatchEvent(
+        new CustomEvent("audioLevelChange", { detail: normalizedLevel })
+      );
+    });
+
+    this.initialized = true;
+  },
+  cleanup() {
+    this.initialized = false;
+    this.level = 0;
+  },
+};
 
 export default function () {
   const start = Date.now();
   const [time, setTime] = createSignal(Date.now());
   const [isPaused, setIsPaused] = createSignal(false);
   const [stopped, setStopped] = createSignal(false);
+  const [audioLevel, setAudioLevel] = createSignal<number>(0);
+  const currentRecording = createCurrentRecordingQuery();
+  const { options } = createOptionsQuery();
+
+  const isAudioEnabled = () => {
+    return options.data?.audioInputName != null;
+  };
 
   createTimer(
     () => {
@@ -22,6 +67,27 @@ export default function () {
 
   createEffect(() => {
     setTime(Date.now());
+  });
+
+  // Single effect to handle audio initialization and cleanup
+  createEffect(() => {
+    if (!isAudioEnabled()) {
+      audioLevelStore.cleanup();
+      setAudioLevel(0);
+      return;
+    }
+
+    audioLevelStore.init();
+    setAudioLevel(audioLevelStore.level);
+
+    const handler = (e: CustomEvent) => {
+      setAudioLevel(e.detail);
+    };
+
+    window.addEventListener("audioLevelChange", handler as EventListener);
+    return () => {
+      window.removeEventListener("audioLevelChange", handler as EventListener);
+    };
   });
 
   const stopRecording = createMutation(() => ({
@@ -67,30 +133,50 @@ export default function () {
           </span>
         </button>
 
-        {window.FLAGS.pauseResume && (
-          <ActionButton
-            disabled={togglePause.isPending}
-            onClick={() => togglePause.mutate()}
-          >
-            {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
-          </ActionButton>
-        )}
+        <div class="flex items-center gap-1">
+          <div class="relative h-8 w-8 flex items-center justify-center">
+            {isAudioEnabled() ? (
+              <>
+                <IconCapMicrophone class="size-5 text-gray-400" />
+                <div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-400 overflow-hidden rounded-full">
+                  <div
+                    class="absolute inset-0 bg-blue-400 transition-transform duration-100"
+                    style={{
+                      transform: `translateX(-${(1 - audioLevel()) * 100}%)`,
+                    }}
+                  />
+                </div>
+              </>
+            ) : (
+              <IconLucideMicOff
+                class="size-5 text-gray-300 opacity-20 dark:text-gray-300 dark:opacity-100"
+                data-tauri-drag-region
+              />
+            )}
+          </div>
 
-        <ActionButton
-          disabled={restartRecording.isPending}
-          onClick={() => restartRecording.mutate()}
-        >
-          <IconCapRestart />
-        </ActionButton>
+          {window.FLAGS.pauseResume && (
+            <ActionButton
+              disabled={togglePause.isPending}
+              onClick={() => togglePause.mutate()}
+            >
+              {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
+            </ActionButton>
+          )}
+
+          <ActionButton
+            disabled={restartRecording.isPending}
+            onClick={() => restartRecording.mutate()}
+          >
+            <IconCapRestart />
+          </ActionButton>
+        </div>
       </div>
       <div
-        class="bg-gray-500 dark:bg-gray-50 cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200 hover:cursor-move"
+        class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200 hover:cursor-move"
         data-tauri-drag-region
       >
-        <IconCapMoreVertical
-          class="text-gray-400 dark:text-gray-400"
-          data-tauri-drag-region
-        />
+        <IconCapMoreVertical class="text-gray-400 dark:text-gray-400" />
       </div>
     </div>
   );

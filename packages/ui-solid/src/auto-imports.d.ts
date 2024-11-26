@@ -6,6 +6,7 @@
 // biome-ignore lint: disable
 export {}
 declare global {
+  const IconCapArrows: typeof import('~icons/cap/arrows.jsx')['default']
   const IconCapAudioOn: typeof import('~icons/cap/audio-on.jsx')['default']
   const IconCapBlur: typeof import('~icons/cap/blur.jsx')['default']
   const IconCapCamera: typeof import('~icons/cap/camera.jsx')['default']
@@ -40,6 +41,7 @@ declare global {
   const IconCapScissors: typeof import('~icons/cap/scissors.jsx')['default']
   const IconCapSettings: typeof import('~icons/cap/settings.jsx')['default']
   const IconCapShadow: typeof import('~icons/cap/shadow.jsx')['default']
+  const IconCapSquare: typeof import('~icons/cap/square.jsx')['default']
   const IconCapStopCircle: typeof import('~icons/cap/stop-circle.jsx')['default']
   const IconCapTrash: typeof import('~icons/cap/trash.jsx')['default']
   const IconCapUndo: typeof import('~icons/cap/undo.jsx')['default']
@@ -54,6 +56,7 @@ declare global {
   const IconLucideLayoutGrid: typeof import('~icons/lucide/layout-grid.jsx')['default']
   const IconLucideLoaderCircle: typeof import('~icons/lucide/loader-circle.jsx')['default']
   const IconLucideMessageSquarePlus: typeof import('~icons/lucide/message-square-plus.jsx')['default']
+  const IconLucideMicOff: typeof import('~icons/lucide/mic-off.jsx')['default']
   const IconLucideRabbit: typeof import('~icons/lucide/rabbit.jsx')['default']
   const IconLucideRotateCcw: typeof import('~icons/lucide/rotate-ccw.jsx')['default']
   const IconLucideSearch: typeof import('~icons/lucide/search.jsx')['default']
