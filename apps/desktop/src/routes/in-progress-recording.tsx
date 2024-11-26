@@ -9,7 +9,6 @@ import {
   createCurrentRecordingQuery,
 } from "~/utils/queries";
 
-// Create a singleton audio level store that persists across reloads
 const audioLevelStore = {
   level: 0,
   initialized: false,
@@ -17,9 +16,6 @@ const audioLevelStore = {
     if (this.initialized) return;
 
     events.audioInputLevelChange.listen((dbs) => {
-      // Convert dB to a percentage (0-100)
-      // Typical microphone levels are between -60dB and 0dB
-      // We'll use -60dB as our floor and 0dB as our ceiling
       const DB_MIN = -60;
       const DB_MAX = 0;
 
