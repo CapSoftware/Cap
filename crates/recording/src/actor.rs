@@ -77,6 +77,14 @@ impl ActorHandle {
     pub async fn stop(&self) -> Result<CompletedRecording, RecordingError> {
         send_message!(self.ctrl_tx, ActorControlMessage::Stop)
     }
+
+    pub async fn pause(&self) -> Result<(), RecordingError> {
+        Ok(())
+    }
+
+    pub async fn resume(&self) -> Result<(), RecordingError> {
+        Ok(())
+    }
 }
 
 pub async fn spawn_recording_actor(
