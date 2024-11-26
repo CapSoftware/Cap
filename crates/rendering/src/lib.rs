@@ -13,14 +13,15 @@ use wgpu::util::DeviceExt;
 use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
 use cap_project::{
-    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Crop, CursorAnimationStyle,
-    CursorData, CursorMoveEvent, ProjectConfiguration, RecordingMeta, FAST_SMOOTHING_SAMPLES,
-    FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
-    SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
+    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop,
+    CursorAnimationStyle, CursorClickEvent, CursorData, CursorEvents, CursorMoveEvent,
+    ProjectConfiguration, RecordingMeta, FAST_SMOOTHING_SAMPLES, FAST_VELOCITY_THRESHOLD,
+    REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD, SLOW_SMOOTHING_SAMPLES,
+    SLOW_VELOCITY_THRESHOLD, XY,
 };
 
 use image::GenericImageView;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Instant;
 
 pub mod decoder;
@@ -82,18 +83,22 @@ impl From<BackgroundSource> for Background {
 }
 
 #[derive(Clone)]
-pub struct RecordingDecoders {
+pub struct RecordingSegmentDecoders {
     screen: AsyncVideoDecoderHandle,
     camera: Option<AsyncVideoDecoderHandle>,
 }
 
-impl RecordingDecoders {
-    pub fn new(meta: &RecordingMeta) -> Self {
-        let screen = AsyncVideoDecoder::spawn(meta.project_path.join(&meta.display.path).clone());
-        let camera = meta
+pub struct SegmentVideoPaths<'a> {
+    pub display: &'a Path,
+    pub camera: Option<&'a Path>,
+}
+
+impl RecordingSegmentDecoders {
+    pub fn new(meta: &RecordingMeta, segment: SegmentVideoPaths) -> Self {
+        let screen = AsyncVideoDecoder::spawn(meta.project_path.join(segment.display));
+        let camera = segment
             .camera
-            .as_ref()
-            .map(|camera| AsyncVideoDecoder::spawn(meta.project_path.join(&camera.path).clone()));
+            .map(|camera| AsyncVideoDecoder::spawn(meta.project_path.join(camera)));
 
         Self { screen, camera }
     }
@@ -108,17 +113,6 @@ impl RecordingDecoders {
         );
 
         screen_frame.map(|f| (f, camera_frame.flatten()))
-    }
-
-    pub async fn stop(&self) {
-        // Implement the stop logic for the decoders
-        // This might involve stopping any running decoding tasks
-        // and cleaning up resources
-        if let Some(camera) = &self.camera {
-            camera.stop().await;
-        }
-        self.screen.stop().await;
-        println!("Decoders stopped");
     }
 }
 
@@ -136,15 +130,19 @@ pub enum RenderingError {
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<Vec<u8>>),
 }
 
+pub struct RenderSegment {
+    pub cursor: Arc<CursorEvents>,
+    pub decoders: RecordingSegmentDecoders,
+}
+
 pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
     sender: tokio::sync::mpsc::Sender<Vec<u8>>,
-    decoders: RecordingDecoders,
-    cursor: Arc<CursorData>,
-    project_path: PathBuf, // Add project_path parameter
+    meta: &RecordingMeta,
+    segments: Vec<RenderSegment>,
 ) -> Result<(), RenderingError> {
-    let constants = RenderVideoConstants::new(options, cursor, project_path).await?;
+    let constants = RenderVideoConstants::new(options, meta).await?;
 
     println!("Setting up FFmpeg input for screen recording...");
 
@@ -163,18 +161,21 @@ pub async fn render_video_to_channel(
             break;
         };
 
-        let time = if let Some(timeline) = project.timeline() {
+        let (time, segment) = if let Some(timeline) = project.timeline() {
             match timeline.get_recording_time(frame_number as f64 / 30_f64) {
-                Some(time) => time,
+                Some(value) => value,
                 None => break,
             }
         } else {
-            frame_number as f64 / 30_f64
+            (frame_number as f64 / 30_f64, None)
         };
+
+        let segment = &segments[segment.unwrap_or(0) as usize];
 
         let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
 
-        let Some((screen_frame, camera_frame)) = decoders.get_frames((time * 30.0) as u32).await
+        let Some((screen_frame, camera_frame)) =
+            segment.decoders.get_frames((time * 30.0) as u32).await
         else {
             break;
         };
@@ -224,17 +225,12 @@ pub struct RenderVideoConstants {
     pub options: RenderOptions,
     composite_video_frame_pipeline: CompositeVideoFramePipeline,
     gradient_or_color_pipeline: GradientOrColorPipeline,
-    pub cursor: Arc<CursorData>,
     pub cursor_textures: HashMap<String, wgpu::Texture>,
     cursor_pipeline: CursorPipeline,
 }
 
 impl RenderVideoConstants {
-    pub async fn new(
-        options: RenderOptions,
-        cursor: Arc<CursorData>,
-        project_path: PathBuf, // Add project_path parameter
-    ) -> Result<Self, RenderingError> {
+    pub async fn new(options: RenderOptions, meta: &RecordingMeta) -> Result<Self, RenderingError> {
         println!("Initializing wgpu...");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
         let adapter = instance
@@ -246,7 +242,7 @@ impl RenderVideoConstants {
             .await?;
 
         // Pass project_path to load_cursor_textures
-        let cursor_textures = Self::load_cursor_textures(&device, &queue, &cursor, &project_path);
+        let cursor_textures = Self::load_cursor_textures(&device, &queue, meta);
 
         let cursor_pipeline = CursorPipeline::new(&device);
 
@@ -258,7 +254,6 @@ impl RenderVideoConstants {
             queue,
             device,
             options,
-            cursor,
             cursor_textures,
             cursor_pipeline,
         })
@@ -267,20 +262,24 @@ impl RenderVideoConstants {
     fn load_cursor_textures(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        cursor: &CursorData,
-        project_path: &PathBuf, // Add project_path parameter
+        meta: &RecordingMeta,
     ) -> HashMap<String, wgpu::Texture> {
         println!("Starting to load cursor textures");
-        println!("Project path: {:?}", project_path);
-        println!("Cursor images to load: {:?}", cursor.cursor_images);
+        println!("Project path: {:?}", meta.project_path);
+        // println!("Cursor images to load: {:?}", cursor.cursor_images);
 
         let mut textures = HashMap::new();
 
         // Create the full path to the cursors directory
-        let cursors_dir = project_path.join("content").join("cursors");
+        let cursors_dir = meta.project_path.join("content").join("cursors");
         println!("Cursors directory: {:?}", cursors_dir);
 
-        for (cursor_id, filename) in &cursor.cursor_images {
+        let cursor_images = match &meta.content {
+            Content::SingleSegment { segment } => segment.cursor_data(meta).cursor_images,
+            Content::MultipleSegments { inner } => inner.cursor_images(meta).unwrap_or_default(),
+        };
+
+        for (cursor_id, filename) in &cursor_images.0 {
             println!("Loading cursor image: {} -> {}", cursor_id, filename);
 
             let cursor_path = cursors_dir.join(filename);
@@ -484,8 +483,11 @@ impl ProjectUniforms {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project);
 
-        let cursor_position =
-            interpolate_cursor_position(&constants.cursor, time, &project.cursor.animation_style);
+        let cursor_position = interpolate_cursor_position(
+            &Default::default(), /*constants.cursor*/
+            time,
+            &project.cursor.animation_style,
+        );
 
         let zoom_keyframes = ZoomKeyframes::new(project);
         let current_zoom = zoom_keyframes.get_amount(time as f64);
@@ -889,16 +891,16 @@ pub async fn produce_frame(
         output_is_left = !output_is_left;
     }
 
-    if FLAGS.zoom {
-        // Then render the cursor
-        draw_cursor(
-            constants,
-            uniforms,
-            time,
-            &mut encoder,
-            get_either(texture_views, !output_is_left),
-        );
-    }
+    // if FLAGS.zoom {
+    // Then render the cursor
+    draw_cursor(
+        constants,
+        uniforms,
+        time,
+        &mut encoder,
+        get_either(texture_views, !output_is_left),
+    );
+    // }
 
     // camera
     if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (
@@ -1052,7 +1054,7 @@ fn draw_cursor(
     view: &wgpu::TextureView,
 ) {
     let Some(cursor_position) = interpolate_cursor_position(
-        &constants.cursor,
+        &Default::default(), // constants.cursor,
         time,
         &uniforms.project.cursor.animation_style,
     ) else {
@@ -1061,7 +1063,7 @@ fn draw_cursor(
 
     // Calculate previous position for velocity
     let prev_position = interpolate_cursor_position(
-        &constants.cursor,
+        &Default::default(), // constants.cursor,
         time - 1.0 / 30.0,
         &uniforms.project.cursor.animation_style,
     );
@@ -1082,11 +1084,12 @@ fn draw_cursor(
     let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
     let motion_blur_amount = (speed * 0.3).min(1.0) * uniforms.project.motion_blur.unwrap_or(0.8);
 
-    let cursor_event = find_cursor_event(&constants.cursor, time);
+    let cursor = Default::default();
+    let cursor_event = find_cursor_event(&cursor /* constants.cursor */, time);
 
-    let last_click_time = constants
+    let last_click_time =  /* constants
         .cursor
-        .clicks
+        .clicks */ Vec::<CursorClickEvent>::new()
         .iter()
         .filter(|click| click.down && click.process_time_ms <= (time as f64) * 1000.0)
         .max_by_key(|click| click.process_time_ms as i64)
@@ -1530,17 +1533,6 @@ fn get_either<T>((a, b): (T, T), left: bool) -> T {
         a
     } else {
         b
-    }
-}
-
-impl AsyncVideoDecoderHandle {
-    // ... (existing methods)
-
-    pub async fn stop(&self) {
-        // Implement the stop logic for the video decoder
-        // This might involve sending a stop signal to a running task
-        // or cleaning up resources
-        println!("Video decoder stopped");
     }
 }
 

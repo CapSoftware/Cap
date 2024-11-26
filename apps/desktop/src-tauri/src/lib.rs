@@ -20,8 +20,8 @@ mod windows;
 use arboard::Clipboard;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid};
-use cap_editor::{EditorInstance, FRAMES_WS_PATH};
-use cap_editor::{EditorState, ProjectRecordings};
+use cap_editor::EditorState;
+use cap_editor::{EditorInstance, ProjectRecordings, FRAMES_WS_PATH};
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::sources::CaptureScreen;
 use cap_media::{
@@ -274,7 +274,23 @@ type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 #[tauri::command]
 #[specta::specta]
 async fn get_recording_options(state: MutableState<'_, App>) -> Result<RecordingOptions, ()> {
-    let state = state.read().await;
+    let mut state = state.write().await;
+
+    // If there's a saved audio input but no feed, initialize it
+    if let Some(audio_input_name) = state.start_recording_options.audio_input_name() {
+        if state.audio_input_feed.is_none() {
+            state.audio_input_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
+                .await
+                .map_err(|error| eprintln!("{error}"))
+            {
+                feed.add_sender(state.audio_input_tx.clone()).await.unwrap();
+                Some(feed)
+            } else {
+                None
+            };
+        }
+    }
+
     Ok(state.start_recording_options.clone())
 }
 
@@ -705,7 +721,7 @@ async fn create_editor_instance(
             let project_config = editor_instance.project_config.1.borrow();
             project_config.clone()
         },
-        recordings: editor_instance.recordings,
+        recordings: editor_instance.recordings.clone(),
         path: editor_instance.project_path.clone(),
         pretty_name: meta.pretty_name,
     })
@@ -1228,13 +1244,16 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             project_path: recording_dir.clone(),
             sharing: None,
             pretty_name: screenshot_name,
-            display: Display {
-                path: screenshot_path.clone(),
+            content: cap_project::Content::SingleSegment {
+                segment: cap_project::SingleSegment {
+                    display: Display {
+                        path: screenshot_path.clone(),
+                    },
+                    camera: None,
+                    audio: None,
+                    cursor: None,
+                },
             },
-            camera: None,
-            audio: None,
-            segments: vec![],
-            cursor: None,
         }
         .save_for_project();
 

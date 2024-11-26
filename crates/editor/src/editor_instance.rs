@@ -2,8 +2,11 @@ use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use crate::project_recordings::ProjectRecordings;
 use cap_media::feeds::AudioData;
-use cap_project::{CursorData, ProjectConfiguration, RecordingMeta, XY};
-use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderOptions, RenderVideoConstants};
+use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
+use cap_rendering::{
+    ProjectUniforms, RecordingSegmentDecoders, RenderOptions, RenderVideoConstants,
+    SegmentVideoPaths,
+};
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
 use std::{path::PathBuf, sync::Arc};
@@ -14,10 +17,7 @@ const FPS: u32 = 30;
 pub struct EditorInstance {
     pub project_path: PathBuf,
     pub id: String,
-    pub audio: Arc<Option<AudioData>>,
-    pub cursor: Arc<CursorData>,
     pub ws_port: u16,
-    pub decoders: RecordingDecoders,
     pub recordings: ProjectRecordings,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
@@ -29,6 +29,7 @@ pub struct EditorInstance {
         watch::Receiver<ProjectConfiguration>,
     ),
     ws_shutdown: Arc<StdMutex<Option<mpsc::Sender<()>>>>,
+    pub segments: Arc<Vec<Segment>>,
 }
 
 impl EditorInstance {
@@ -62,33 +63,77 @@ impl EditorInstance {
         let recordings = ProjectRecordings::new(&meta);
 
         let render_options = RenderOptions {
-            screen_size: XY::new(recordings.display.width, recordings.display.height),
-            camera_size: recordings
+            screen_size: XY::new(
+                recordings.segments[0].display.width,
+                recordings.segments[0].display.height,
+            ),
+            camera_size: recordings.segments[0]
                 .camera
                 .as_ref()
                 .map(|c| XY::new(c.width, c.height)),
         };
 
-        let audio = meta.audio.as_ref().map(|meta| {
-            let audio_path = project_path.join(&meta.path);
+        let segments =
+            match &meta.content {
+                cap_project::Content::SingleSegment { segment: s } => {
+                    let audio =
+                        Arc::new(s.audio.as_ref().map(|meta| {
+                            AudioData::from_file(project_path.join(&meta.path)).unwrap()
+                        }));
 
-            AudioData::from_file(audio_path).unwrap()
-        });
+                    let cursor = Arc::new(s.cursor_data(&meta).into());
+
+                    let decoders = RecordingSegmentDecoders::new(
+                        &meta,
+                        SegmentVideoPaths {
+                            display: s.display.path.as_path(),
+                            camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                        },
+                    );
+
+                    vec![Segment {
+                        audio,
+                        cursor,
+                        decoders,
+                    }]
+                }
+                cap_project::Content::MultipleSegments { inner } => {
+                    let mut segments = vec![];
+
+                    for s in &inner.segments {
+                        let audio = Arc::new(s.audio.as_ref().map(|meta| {
+                            AudioData::from_file(project_path.join(&meta.path)).unwrap()
+                        }));
+
+                        let cursor = Arc::new(s.cursor_events(&meta));
+
+                        let decoders = RecordingSegmentDecoders::new(
+                            &meta,
+                            SegmentVideoPaths {
+                                display: s.display.path.as_path(),
+                                camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                            },
+                        );
+
+                        segments.push(Segment {
+                            audio,
+                            cursor,
+                            decoders,
+                        });
+                    }
+
+                    segments
+                }
+            };
 
         let (frame_tx, frame_rx) = tokio::sync::mpsc::channel(4);
 
         let (ws_port, ws_shutdown) = create_frames_ws(frame_rx).await;
 
-        let cursor = Arc::new(meta.cursor_data());
-
         let render_constants = Arc::new(
-            RenderVideoConstants::new(
-                render_options,
-                cursor.clone(),
-                project_path.clone(), // Add project path argument
-            )
-            .await
-            .unwrap(),
+            RenderVideoConstants::new(render_options, &meta)
+                .await
+                .unwrap(),
         );
 
         let renderer = Arc::new(editor::Renderer::spawn(render_constants.clone(), frame_tx));
@@ -98,13 +143,10 @@ impl EditorInstance {
         let this = Arc::new(Self {
             id: video_id,
             project_path,
-            decoders: RecordingDecoders::new(&meta),
             recordings,
             ws_port,
             renderer,
             render_constants,
-            audio: Arc::new(audio),
-            cursor,
             state: Arc::new(Mutex::new(EditorState {
                 playhead_position: 0,
                 playback_task: None,
@@ -114,6 +156,7 @@ impl EditorInstance {
             preview_tx,
             project_config: watch::channel(meta.project_config()),
             ws_shutdown: Arc::new(StdMutex::new(Some(ws_shutdown))),
+            segments: Arc::new(segments),
         });
 
         this.state.lock().await.preview_task =
@@ -154,10 +197,6 @@ impl EditorInstance {
         println!("Stopping renderer");
         self.renderer.stop().await;
 
-        // Stop decoders
-        println!("Stopping decoders");
-        self.decoders.stop().await;
-
         // // Clear audio data
         // if self.audio.lock().unwrap().is_some() {
         //     println!("Clearing audio data");
@@ -187,11 +226,9 @@ impl EditorInstance {
             let start_frame_number = state.playhead_position;
 
             let playback_handle = playback::Playback {
-                audio: Arc::clone(&self.audio),
+                segments: self.segments.clone(),
                 renderer: self.renderer.clone(),
                 render_constants: self.render_constants.clone(),
-                decoders: self.decoders.clone(),
-                recordings: self.recordings,
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
             }
@@ -241,17 +278,21 @@ impl EditorInstance {
 
                 let project = self.project_config.1.borrow().clone();
 
-                let Some(time) = project
+                let Some((time, segment)) = project
                     .timeline
                     .as_ref()
                     .map(|timeline| timeline.get_recording_time(frame_number as f64 / FPS as f64))
-                    .unwrap_or(Some(frame_number as f64 / FPS as f64))
+                    .unwrap_or(Some((frame_number as f64 / FPS as f64, None)))
                 else {
                     continue;
                 };
 
-                let Some((screen_frame, camera_frame)) =
-                    self.decoders.get_frames((time * FPS as f64) as u32).await
+                let segment = &self.segments[segment.unwrap_or(0) as usize];
+
+                let Some((screen_frame, camera_frame)) = segment
+                    .decoders
+                    .get_frames((time * FPS as f64) as u32)
+                    .await
                 else {
                     continue;
                 };
@@ -367,4 +408,10 @@ pub enum SocketMessage {
         width: u32,
         height: u32,
     },
+}
+
+pub struct Segment {
+    pub audio: Arc<Option<AudioData>>,
+    pub cursor: Arc<CursorEvents>,
+    pub decoders: RecordingSegmentDecoders,
 }

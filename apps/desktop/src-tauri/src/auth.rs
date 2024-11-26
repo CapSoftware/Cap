@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;

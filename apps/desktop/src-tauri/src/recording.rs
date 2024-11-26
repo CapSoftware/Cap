@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::{
     audio::AppSounds,
     auth::AuthStore,
@@ -12,11 +14,14 @@ use crate::{
     RecordingStarted, RecordingStopped, UploadMode,
 };
 use cap_editor::ProjectRecordings;
+use cap_flags::FLAGS;
 use cap_media::feeds::CameraFeed;
 use cap_media::sources::{AVFrameCapture, CaptureScreen, CaptureWindow, ScreenCaptureSource};
-use cap_project::{ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment};
+use cap_project::{
+    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment,
+};
+use cap_recording::CompletedRecording;
 use cap_rendering::ZOOM_DURATION;
-use std::time::Instant;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 
@@ -120,22 +125,24 @@ pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Re
 #[tauri::command]
 #[specta::specta]
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
-    let state = state.write().await;
+    let mut state = state.write().await;
 
-    // if let Some(recording) = &mut state.current_recording {
-    //     recording.pause().await.map_err(|e| e.to_string())?;
-    // }
+    if let Some(recording) = state.current_recording.as_mut() {
+        recording.pause().await.map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
-    let state = state.write().await;
+    let mut state = state.write().await;
 
-    // if let Some(recording) = &mut state.current_recording {
-    //     recording.resume().await.map_err(|e| e.to_string())?;
-    // }
+    if let Some(recording) = state.current_recording.as_mut() {
+        recording.resume().await.map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 
@@ -152,7 +159,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     };
 
     let now = Instant::now();
-    let recording = current_recording.stop().await.map_err(|e| e.to_string())?;
+    let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
     println!("stopped recording in {:?}", now.elapsed());
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
@@ -163,17 +170,21 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
         window.unminimize().ok();
     }
 
-    let screenshots_dir = recording.recording_dir.join("screenshots");
+    let screenshots_dir = completed_recording.recording_dir.join("screenshots");
     std::fs::create_dir_all(&screenshots_dir).ok();
+
+    let display_output_path = match &completed_recording.meta.content {
+        Content::SingleSegment { segment } => {
+            segment.path(&completed_recording.meta, &segment.display.path)
+        }
+        Content::MultipleSegments { inner } => {
+            inner.path(&completed_recording.meta, &inner.segments[0].display.path)
+        }
+    };
 
     let display_screenshot = screenshots_dir.join("display.jpg");
     let now = Instant::now();
-    create_screenshot(
-        recording.display_output_path.clone(),
-        display_screenshot.clone(),
-        None,
-    )
-    .await?;
+    create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
     println!("created screenshot in {:?}", now.elapsed());
 
     // let thumbnail = screenshots_dir.join("thumbnail.png");
@@ -181,7 +192,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     // create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
     // println!("created thumbnail in {:?}", now.elapsed());
 
-    let recording_dir = recording.recording_dir.clone();
+    let recording_dir = completed_recording.recording_dir.clone();
 
     ShowCapWindow::PrevRecordings.show(&app).ok();
 
@@ -197,59 +208,36 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     .emit(&app)
     .ok();
 
-    let recordings = ProjectRecordings::new(&recording.meta);
-    let max_duration = recordings.duration();
+    let recordings = ProjectRecordings::new(&completed_recording.meta);
 
     let config = {
         let segments = {
             let mut segments = vec![];
             let mut passed_duration = 0.0;
 
-            for i in (0..recording.segments.len()).step_by(2) {
+            // multi-segment
+            // for segment in &completed_recording.segments {
+            //     let start = passed_duration;
+            //     passed_duration += segment.end - segment.start;
+            //     segments.push(TimelineSegment {
+            //         recording_segment: None,
+            //         start,
+            //         end: passed_duration.min(recordings.duration()),
+            //         timescale: 1.0,
+            //     });
+            // }
+
+            // single-segment
+            for i in (0..completed_recording.segments.len()).step_by(2) {
                 let start = passed_duration;
-                passed_duration += recording.segments[i + 1] - recording.segments[i];
+                passed_duration +=
+                    completed_recording.segments[i + 1] - completed_recording.segments[i];
                 segments.push(TimelineSegment {
+                    recording_segment: None,
                     start,
                     end: passed_duration.min(recordings.duration()),
                     timescale: 1.0,
                 });
-            }
-            segments
-        };
-
-        let zoom_segments = {
-            let mut segments = vec![];
-
-            const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
-
-            for click in &recording.cursor_data.clicks {
-                let time = click.process_time_ms / 1000.0;
-
-                if segments.last().is_none() {
-                    segments.push(ZoomSegment {
-                        start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
-                        end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-                        amount: 2.0,
-                    });
-                } else {
-                    let last_segment = segments.last_mut().unwrap();
-
-                    if click.down {
-                        if last_segment.end > time {
-                            last_segment.end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING)
-                                .min(recordings.duration());
-                        } else if time < max_duration - ZOOM_DURATION {
-                            segments.push(ZoomSegment {
-                                start: (time - ZOOM_DURATION).max(0.0),
-                                end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-                                amount: 2.0,
-                            });
-                        }
-                    } else {
-                        last_segment.end =
-                            (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-                    }
-                }
             }
 
             segments
@@ -258,14 +246,17 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
         ProjectConfiguration {
             timeline: Some(TimelineConfiguration {
                 segments,
-                zoom_segments,
+                zoom_segments: generate_zoom_segments_from_clicks(
+                    &completed_recording,
+                    &recordings,
+                ),
             }),
             ..Default::default()
         }
     };
 
     config
-        .write(&recording.recording_dir)
+        .write(&completed_recording.recording_dir)
         .map_err(|e| e.to_string())?;
 
     AppSounds::StopRecording.play();
@@ -302,7 +293,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
                     export_video(
                         app.clone(),
-                        recording.id.clone(),
+                        completed_recording.id.clone(),
                         config,
                         tauri::ipc::Channel::new(|_| Ok(())),
                         true,
@@ -313,7 +304,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                     while retry_count < max_retries {
                         match upload_exported_video(
                             app.clone(),
-                            recording.id.clone(),
+                            completed_recording.id.clone(),
                             UploadMode::Initial {
                                 pre_created_video: Some(pre_created_video.clone()),
                             },
@@ -347,11 +338,59 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                 });
             }
         } else if settings.open_editor_after_recording {
-            open_editor(app.clone(), recording.id);
+            open_editor(app.clone(), completed_recording.id);
         }
     }
 
     CurrentRecordingChanged.emit(&app).ok();
 
     Ok(())
+}
+
+fn generate_zoom_segments_from_clicks(
+    recording: &CompletedRecording,
+    recordings: &ProjectRecordings,
+) -> Vec<ZoomSegment> {
+    let mut segments = vec![];
+
+    if !FLAGS.zoom {
+        return vec![];
+    };
+
+    let max_duration = recordings.duration();
+
+    const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
+
+    // single-segment only
+    for click in &recording.cursor_data.clicks {
+        let time = click.process_time_ms / 1000.0;
+
+        if segments.last().is_none() {
+            segments.push(ZoomSegment {
+                start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
+                end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
+                amount: 2.0,
+            });
+        } else {
+            let last_segment = segments.last_mut().unwrap();
+
+            if click.down {
+                if last_segment.end > time {
+                    last_segment.end =
+                        (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
+                } else if time < max_duration - ZOOM_DURATION {
+                    segments.push(ZoomSegment {
+                        start: (time - ZOOM_DURATION).max(0.0),
+                        end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
+                        amount: 2.0,
+                    });
+                }
+            } else {
+                last_segment.end =
+                    (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
+            }
+        }
+    }
+
+    segments
 }

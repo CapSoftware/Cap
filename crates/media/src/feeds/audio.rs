@@ -82,7 +82,7 @@ impl AudioFrameBuffer {
 
         self.cursor = match maybe_timeline {
             Some(timeline) => match timeline.get_recording_time(playhead) {
-                Some(time) => self.playhead_to_samples(time) * self.sample_size,
+                Some((time, _)) => self.playhead_to_samples(time) * self.sample_size,
                 None => self.data.buffer.len(),
             },
             None => self.elapsed_samples * self.sample_size,
@@ -97,7 +97,7 @@ impl AudioFrameBuffer {
         // (corresponding to a trim or split point). Currently this change is at least 0.2 seconds
         // - not sure we offer that much precision in the editor even!
         let new_cursor = match timeline.get_recording_time(playhead) {
-            Some(time) => self.playhead_to_samples(time) * self.sample_size,
+            Some((time, _)) => self.playhead_to_samples(time) * self.sample_size,
             None => self.data.buffer.len(),
         };
 

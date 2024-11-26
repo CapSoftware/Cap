@@ -56,6 +56,8 @@ export const listAudioDevices = queryOptions({
   },
   reconcile: "name",
   refetchInterval: 1000,
+  gcTime: 0,
+  staleTime: 0
 });
 
 export const getPermissions = queryOptions({

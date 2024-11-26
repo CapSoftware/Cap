@@ -48,10 +48,9 @@ pub async fn export_video(
                 .ok();
         },
         &editor_instance.project_path,
-        editor_instance.audio.clone(),
         editor_instance.meta(),
         editor_instance.render_constants.clone(),
-        editor_instance.cursor.clone(),
+        &editor_instance.segments,
     )
     .await
     .map_err(|e| {

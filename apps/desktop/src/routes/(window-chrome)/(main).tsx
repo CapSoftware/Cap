@@ -468,10 +468,16 @@ function MicrophoneSelect(props: {
   const currentRecording = createCurrentRecordingQuery();
 
   const [open, setOpen] = createSignal(false);
+  const [dbs, setDbs] = createSignal<number | undefined>();
+  const [isInitialized, setIsInitialized] = createSignal(false);
 
-  const value = () =>
-    devices?.data?.find((d) => d.name === props.options?.audioInputName) ??
-    null;
+  const value = createMemo(() => {
+    if (!props.options?.audioInputName) return null;
+    return (
+      devices.data?.find((d) => d.name === props.options!.audioInputName) ??
+      null
+    );
+  });
 
   const requestPermission = useRequestPermission();
 
@@ -491,21 +497,39 @@ function MicrophoneSelect(props: {
     if (!item.deviceId) setDbs();
   };
 
-  // raw db level
-  const [dbs, setDbs] = createSignal<number | undefined>();
+  // Create a single event listener using onMount
+  onMount(() => {
+    const listener = (event: Event) => {
+      const dbs = (event as CustomEvent<number>).detail;
+      if (!props.options?.audioInputName) setDbs();
+      else setDbs(dbs);
+    };
 
-  createEffect(() => {
-    if (!props.options?.audioInputName) setDbs();
-  });
+    events.audioInputLevelChange.listen((dbs) => {
+      if (!props.options?.audioInputName) setDbs();
+      else setDbs(dbs.payload);
+    });
 
-  events.audioInputLevelChange.listen((dbs) => {
-    if (!props.options?.audioInputName) setDbs();
-    else setDbs(dbs.payload);
+    return () => {
+      window.removeEventListener("audioLevelChange", listener);
+    };
   });
 
   // visual audio level from 0 -> 1
   const audioLevel = () =>
     Math.pow(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE, 0.5);
+
+  // Initialize audio input if needed - only once when component mounts
+  onMount(() => {
+    const audioInput = props.options?.audioInputName;
+    if (!audioInput || !permissionGranted() || isInitialized()) return;
+
+    setIsInitialized(true);
+    handleMicrophoneChange({
+      name: audioInput,
+      deviceId: audioInput,
+    });
+  });
 
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
@@ -547,12 +571,17 @@ function MicrophoneSelect(props: {
             )}
           </Show>
           <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
-          <KSelect.Value<{
-            name: string;
-          }> class="flex-1 text-left truncate">
-            {(state) => (
-              <span>{state.selectedOption()?.name ?? "No Audio"}</span>
-            )}
+          <KSelect.Value<Option> class="flex-1 text-left truncate">
+            {(state) => {
+              const selected = state.selectedOption();
+              return (
+                <span>
+                  {selected?.name ??
+                    props.options?.audioInputName ??
+                    "No Audio"}
+                </span>
+              );
+            }}
           </KSelect.Value>
           <TargetSelectInfoPill
             value={props.options?.audioInputName ?? null}

@@ -18,7 +18,7 @@ import { mergeRefs } from "@solid-primitives/refs";
 import { createContextProvider } from "@solid-primitives/context";
 import { createMemo } from "solid-js";
 
-import { commands } from "~/utils/tauri";
+import { commands, TimelineSegment } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { formatTime } from "./utils";
 
@@ -54,7 +54,9 @@ export function Timeline() {
     if (!project.timeline) {
       const resume = history.pause();
       setProject("timeline", {
-        segments: [{ timescale: 1, start: 0, end: duration() }],
+        segments: [
+          { timescale: 1, start: 0, end: duration(), recordingSegment: null },
+        ],
       });
       resume();
     }
@@ -62,8 +64,10 @@ export function Timeline() {
 
   const xPadding = 12;
 
-  const segments = () =>
-    project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
+  const segments = (): Array<TimelineSegment> =>
+    project.timeline?.segments ?? [
+      { start: 0, end: duration(), timescale: 1, recordingSegment: null },
+    ];
 
   if (window.FLAGS.zoom)
     if (
@@ -73,7 +77,14 @@ export function Timeline() {
       setProject(
         produce((project) => {
           project.timeline ??= {
-            segments: [{ start: 0, end: duration(), timescale: 1 }],
+            segments: [
+              {
+                start: 0,
+                end: duration(),
+                timescale: 1,
+                recordingSegment: null,
+              },
+            ],
           };
         })
       );
@@ -176,6 +187,7 @@ export function Timeline() {
                         start: splitTime,
                         end: segment.end,
                         timescale: 1,
+                        recordingSegment: segment.recordingSegment,
                       });
                       segments[i()].end = splitTime;
                     })

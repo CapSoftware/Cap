@@ -263,6 +263,7 @@ pub struct HotkeysConfiguration {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineSegment {
+    pub recording_segment: Option<u32>,
     pub timescale: f64,
     pub start: f64,
     pub end: f64,
@@ -300,12 +301,14 @@ pub struct TimelineConfiguration {
 }
 
 impl TimelineConfiguration {
-    pub fn get_recording_time(&self, tick_time: f64) -> Option<f64> {
+    pub fn get_recording_time(&self, tick_time: f64) -> Option<(f64, Option<u32>)> {
         let mut accum_duration = 0.0;
 
         for segment in &self.segments {
             if tick_time < accum_duration + segment.duration() {
-                return segment.interpolate_time(tick_time - accum_duration);
+                return segment
+                    .interpolate_time(tick_time - accum_duration)
+                    .map(|t| (t, segment.recording_segment));
             }
 
             accum_duration += segment.duration();

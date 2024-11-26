@@ -12,9 +12,6 @@ use objc::{class, msg_send, sel, sel_impl};
 
 pub mod delegates;
 
-use specta::Type;
-use tauri_specta::Event;
-
 #[derive(Debug)]
 pub struct Window {
     pub window_number: u32,

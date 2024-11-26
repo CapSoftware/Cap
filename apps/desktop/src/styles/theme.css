@@ -1,10 +1,10 @@
 @media (prefers-color-scheme: dark) {
-  [data-tauri-drag-region] {
+  [data-tauri-drag-region]:not(.non-styled-move) {
     background: var(--gray-50);
   }
 }
 
-.dark [data-tauri-drag-region] {
+.dark [data-tauri-drag-region]:not(.non-styled-move) {
   background: var(--gray-50);
 }
 
