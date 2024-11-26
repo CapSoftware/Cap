@@ -157,7 +157,7 @@ impl<T> ScreenCaptureSource<T> {
 
         Options {
             fps: self.fps,
-            show_cursor: !FLAGS.zoom,
+            show_cursor: !FLAGS.record_mouse,
             show_highlight: true,
             excluded_targets: Some(excluded_targets),
             output_type: if cfg!(windows) {

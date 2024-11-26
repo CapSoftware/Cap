@@ -1,138 +1,151 @@
 use std::{
     collections::HashMap,
-    fs::File,
+    hash::{DefaultHasher, Hash, Hasher},
     path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
     time::{Duration, Instant},
 };
 
 use cap_media::platform::Bounds;
-use cap_project::{CursorClickEvent, CursorData, CursorImages, CursorMoveEvent};
+use cap_project::{CursorClickEvent, CursorMoveEvent};
 use device_query::{DeviceQuery, DeviceState};
 use tokio::sync::oneshot;
 
-pub fn spawn_cursor_recorder(
+pub type Cursors = HashMap<u64, (String, i32)>;
+
+pub struct CursorActorResponse {
+    // pub cursor_images: HashMap<String, Vec<u8>>,
+    pub cursors: Cursors,
+    pub next_cursor_id: i32,
+    pub moves: Vec<CursorMoveEvent>,
+    pub clicks: Vec<CursorClickEvent>,
+}
+
+pub struct CursorActor {
     stop_signal: Arc<AtomicBool>,
+    rx: oneshot::Receiver<CursorActorResponse>,
+}
+
+impl CursorActor {
+    pub async fn stop(self) -> CursorActorResponse {
+        self.stop_signal
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.rx.await.unwrap()
+    }
+}
+
+pub fn spawn_cursor_recorder(
     screen_bounds: Bounds,
-    content_dir: PathBuf,
     cursors_dir: PathBuf,
-) -> (
-    oneshot::Receiver<Vec<CursorMoveEvent>>,
-    oneshot::Receiver<Vec<CursorClickEvent>>,
-) {
-    let (move_tx, move_rx) = oneshot::channel();
-    let (click_tx, click_rx) = oneshot::channel();
+    prev_cursors: Cursors,
+    next_cursor_id: i32,
+) -> CursorActor {
+    let stop_signal = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = oneshot::channel();
 
-    tokio::spawn(async move {
-        let device_state = DeviceState::new();
-        let mut last_mouse_state = device_state.get_mouse();
-        let start_time = Instant::now();
+    tokio::spawn({
+        let stop_signal = stop_signal.clone();
+        async move {
+            let device_state = DeviceState::new();
+            let mut last_mouse_state = device_state.get_mouse();
+            let start_time = Instant::now();
 
-        let mut moves = vec![];
-        let mut clicks = vec![];
-        let mut cursor_images = HashMap::new();
-        let mut seen_cursor_data: HashMap<Vec<u8>, String> = HashMap::new();
-        let mut next_cursor_id = 0;
-
-        // Create cursors directory if it doesn't exist
-        std::fs::create_dir_all(&cursors_dir).unwrap();
-
-        while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
-            let mouse_state = device_state.get_mouse();
-            let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
-            let unix_time = chrono::Utc::now().timestamp_millis() as f64;
-
-            let cursor_data = get_cursor_image_data();
-            let cursor_id = if let Some(data) = cursor_data {
-                // Check if we've seen this cursor data before
-                if let Some(existing_id) = seen_cursor_data.get(&data) {
-                    existing_id.clone()
-                } else {
-                    // New cursor data - save it
-                    let cursor_id = next_cursor_id.to_string();
-                    let filename = format!("cursor_{}.png", cursor_id);
-                    let cursor_path = cursors_dir.join(&filename);
-
-                    println!("Saving new cursor image to: {:?}", cursor_path);
-
-                    if let Ok(image) = image::load_from_memory(&data) {
-                        // Convert to RGBA
-                        let rgba_image = image.into_rgba8();
-                        if let Err(e) = rgba_image.save(&cursor_path) {
-                            eprintln!("Failed to save cursor image: {}", e);
-                        } else {
-                            println!("Successfully saved cursor image {}", cursor_id);
-                            cursor_images.insert(cursor_id.clone(), filename.clone());
-                            seen_cursor_data.insert(data, cursor_id.clone());
-                            next_cursor_id += 1;
-                        }
-                    }
-                    cursor_id
-                }
-            } else {
-                "default".to_string()
+            let mut response = CursorActorResponse {
+                cursors: prev_cursors,
+                next_cursor_id,
+                moves: vec![],
+                clicks: vec![],
             };
 
-            if mouse_state.coords != last_mouse_state.coords {
-                let mouse_event = CursorMoveEvent {
-                    active_modifiers: vec![],
-                    cursor_id: cursor_id.clone(),
-                    process_time_ms: elapsed,
-                    unix_time_ms: unix_time,
-                    x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,
-                    y: (mouse_state.coords.1 as f64 - screen_bounds.y) / screen_bounds.height,
-                };
-                moves.push(mouse_event);
-            }
+            // Create cursors directory if it doesn't exist
+            std::fs::create_dir_all(&cursors_dir).unwrap();
 
-            for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {
-                let Some(prev) = last_mouse_state.button_pressed.get(num) else {
-                    continue;
+            while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
+                let mouse_state = device_state.get_mouse();
+                let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+                let unix_time = chrono::Utc::now().timestamp_millis() as f64;
+
+                let cursor_data = get_cursor_image_data();
+                let cursor_id = if let Some(data) = cursor_data {
+                    let mut hasher = DefaultHasher::default();
+                    data.hash(&mut hasher);
+                    let id = hasher.finish();
+
+                    // Check if we've seen this cursor data before
+                    if let Some(existing_id) = response.cursors.get(&id) {
+                        existing_id.1.to_string()
+                    } else {
+                        // New cursor data - save it
+                        let cursor_id = response.next_cursor_id.to_string();
+                        let filename = format!("cursor_{}.png", cursor_id);
+                        let cursor_path = cursors_dir.join(&filename);
+
+                        println!("Saving new cursor image to: {:?}", cursor_path);
+
+                        if let Ok(image) = image::load_from_memory(&data) {
+                            // Convert to RGBA
+                            let rgba_image = image.into_rgba8();
+
+                            if let Err(e) = rgba_image.save(&cursor_path) {
+                                eprintln!("Failed to save cursor image: {}", e);
+                            } else {
+                                println!("Successfully saved cursor image {}", cursor_id);
+                                response
+                                    .cursors
+                                    .insert(id, (filename.clone(), response.next_cursor_id));
+                                response.next_cursor_id += 1;
+                            }
+                        }
+
+                        cursor_id
+                    }
+                } else {
+                    "default".to_string()
                 };
 
-                if pressed == *prev {
-                    continue;
+                if mouse_state.coords != last_mouse_state.coords {
+                    let mouse_event = CursorMoveEvent {
+                        active_modifiers: vec![],
+                        cursor_id: cursor_id.clone(),
+                        process_time_ms: elapsed,
+                        unix_time_ms: unix_time,
+                        x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,
+                        y: (mouse_state.coords.1 as f64 - screen_bounds.y) / screen_bounds.height,
+                    };
+                    response.moves.push(mouse_event);
                 }
 
-                let mouse_event = CursorClickEvent {
-                    down: pressed,
-                    active_modifiers: vec![],
-                    cursor_num: num as u8,
-                    cursor_id: cursor_id.clone(),
-                    process_time_ms: elapsed,
-                    unix_time_ms: unix_time,
-                    x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,
-                    y: (mouse_state.coords.1 as f64 - screen_bounds.y) / screen_bounds.height,
-                };
-                clicks.push(mouse_event);
+                for (num, &pressed) in mouse_state.button_pressed.iter().enumerate() {
+                    let Some(prev) = last_mouse_state.button_pressed.get(num) else {
+                        continue;
+                    };
+
+                    if pressed == *prev {
+                        continue;
+                    }
+
+                    let mouse_event = CursorClickEvent {
+                        down: pressed,
+                        active_modifiers: vec![],
+                        cursor_num: num as u8,
+                        cursor_id: cursor_id.clone(),
+                        process_time_ms: elapsed,
+                        unix_time_ms: unix_time,
+                        x: (mouse_state.coords.0 as f64 - screen_bounds.x) / screen_bounds.width,
+                        y: (mouse_state.coords.1 as f64 - screen_bounds.y) / screen_bounds.height,
+                    };
+                    response.clicks.push(mouse_event);
+                }
+
+                last_mouse_state = mouse_state;
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
 
-            last_mouse_state = mouse_state;
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tx.send(response).ok();
         }
-
-        // Save cursor data to cursor.json
-        let cursor_data = CursorData {
-            clicks: clicks.clone(),
-            moves: moves.clone(),
-            cursor_images: CursorImages(cursor_images),
-        };
-
-        let cursor_json_path = content_dir.join("cursor.json");
-        println!("Saving cursor data to: {:?}", cursor_json_path);
-        if let Ok(mut file) = File::create(&cursor_json_path) {
-            if let Err(e) = serde_json::to_writer_pretty(&mut file, &cursor_data) {
-                eprintln!("Failed to save cursor data: {}", e);
-            } else {
-                println!("Successfully saved cursor data");
-            }
-        }
-
-        move_tx.send(moves).unwrap();
-        click_tx.send(clicks).unwrap();
     });
 
-    (move_rx, click_rx)
+    CursorActor { rx, stop_signal }
 }
 
 #[cfg(target_os = "macos")]

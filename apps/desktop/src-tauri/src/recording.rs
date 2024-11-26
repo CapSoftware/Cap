@@ -12,11 +12,10 @@ use crate::{
     RecordingStarted, RecordingStopped, UploadMode,
 };
 use cap_editor::ProjectRecordings;
+use cap_flags::FLAGS;
 use cap_media::feeds::CameraFeed;
 use cap_media::sources::{AVFrameCapture, CaptureScreen, CaptureWindow, ScreenCaptureSource};
-use cap_project::{
-    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment,
-};
+use cap_project::{Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment};
 use std::time::Instant;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
@@ -123,9 +122,9 @@ pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Re
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
-    if let Some(recording) = state.current_recording.as_mut() {
-        recording.pause().await.map_err(|e| e.to_string())?;
-    }
+    // if let Some(recording) = state.current_recording.as_mut() {
+    //     recording.pause().await.map_err(|e| e.to_string())?;
+    // }
 
     Ok(())
 }
@@ -135,9 +134,9 @@ pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String>
 pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
-    if let Some(recording) = state.current_recording.as_mut() {
-        recording.resume().await.map_err(|e| e.to_string())?;
-    }
+    // if let Some(recording) = state.current_recording.as_mut() {
+    //     recording.resume().await.map_err(|e| e.to_string())?;
+    // }
 
     Ok(())
 }
@@ -210,6 +209,18 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
             let mut segments = vec![];
             let mut passed_duration = 0.0;
 
+            // multi-segment
+            // for segment in recording.segments {
+            //     let start = passed_duration;
+            //     passed_duration += segment.end - segment.start;
+            //     segments.push(TimelineSegment {
+            //         recording_segment: None,
+            //         start,
+            //         end: passed_duration.min(recordings.duration()),
+            //         timescale: 1.0,
+            //     });
+            // }
+
             for i in (0..recording.segments.len()).step_by(2) {
                 let start = passed_duration;
                 passed_duration += recording.segments[i + 1] - recording.segments[i];
@@ -220,6 +231,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                     timescale: 1.0,
                 });
             }
+
             segments
         };
 

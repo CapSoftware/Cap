@@ -48,20 +48,6 @@ const queryClient = new QueryClient({
 export default function App() {
   const darkMode = themeStore.isDarkMode;
 
-  onMount(async () => {
-    await themeStore.initialize();
-
-    const matches = useCurrentMatches();
-
-    onMount(() => {
-      for (const match of matches()) {
-        if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
-      }
-
-      getCurrentWindow().show();
-    });
-  });
-
   return (
     <div class={darkMode() ? "dark" : ""}>
       <ErrorBoundary
@@ -85,7 +71,9 @@ export default function App() {
                   if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
                 }
 
-                getCurrentWindow().show();
+                themeStore.initialize().then(() => {
+                  getCurrentWindow().show();
+                });
               });
 
               return <Suspense>{props.children}</Suspense>;

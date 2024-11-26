@@ -19,8 +19,8 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid};
-use cap_editor::{EditorInstance, ProjectRecordings, FRAMES_WS_PATH};
 use cap_editor::EditorState;
+use cap_editor::{EditorInstance, ProjectRecordings, FRAMES_WS_PATH};
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::sources::CaptureScreen;
 use cap_media::{

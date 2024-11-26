@@ -2,6 +2,7 @@ use either::Either;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
+    collections::HashMap,
     fs::File,
     path::{Path, PathBuf},
 };
@@ -84,10 +85,11 @@ pub enum Content {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct SingleSegment {
     pub display: Display,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraMeta>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<PathBuf>,
 }
 
@@ -148,6 +150,8 @@ impl SingleSegment {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct MultipleSegments {
     pub segments: Vec<MultipleSegment>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub cursors: HashMap<String, PathBuf>,
 }
 
 impl MultipleSegments {
@@ -196,10 +200,11 @@ impl MultipleSegments {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct MultipleSegment {
     pub display: Display,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera: Option<CameraMeta>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<PathBuf>,
 }
 

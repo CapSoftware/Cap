@@ -15,9 +15,9 @@ use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 use cap_project::{
     AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop,
     CursorAnimationStyle, CursorClickEvent, CursorData, CursorEvents, CursorMoveEvent,
-    ProjectConfiguration, RecordingMeta, FAST_SMOOTHING_SAMPLES,
-    FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
-    SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
+    ProjectConfiguration, RecordingMeta, FAST_SMOOTHING_SAMPLES, FAST_VELOCITY_THRESHOLD,
+    REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD, SLOW_SMOOTHING_SAMPLES,
+    SLOW_VELOCITY_THRESHOLD, XY,
 };
 
 use image::GenericImageView;
@@ -107,12 +107,10 @@ impl RecordingSegmentDecoders {
         &self,
         frame_number: u32,
     ) -> Option<(DecodedFrame, Option<DecodedFrame>)> {
-        let now = Instant::now();
         let (screen_frame, camera_frame) = tokio::join!(
             self.screen.get_frame(frame_number),
             OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
         );
-        println!("get_frames: {:?}", now.elapsed());
 
         screen_frame.map(|f| (f, camera_frame.flatten()))
     }
@@ -893,16 +891,16 @@ pub async fn produce_frame(
         output_is_left = !output_is_left;
     }
 
-    if FLAGS.zoom {
-        // Then render the cursor
-        draw_cursor(
-            constants,
-            uniforms,
-            time,
-            &mut encoder,
-            get_either(texture_views, !output_is_left),
-        );
-    }
+    // if FLAGS.zoom {
+    // Then render the cursor
+    draw_cursor(
+        constants,
+        uniforms,
+        time,
+        &mut encoder,
+        get_either(texture_views, !output_is_left),
+    );
+    // }
 
     // camera
     if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (
