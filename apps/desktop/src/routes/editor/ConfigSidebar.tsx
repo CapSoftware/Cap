@@ -91,7 +91,9 @@ export function ConfigSidebar() {
             {
               id: "camera" as const,
               icon: IconCapCamera,
-              disabled: editorInstance.recordings.camera === null,
+              disabled: editorInstance.recordings.segments.every(
+                (s) => s.camera === null
+              ),
             },
             // {
             //   id: "transcript" as const,

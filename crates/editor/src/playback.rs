@@ -10,8 +10,8 @@ use cpal::{
 };
 use tokio::{sync::watch, time::Instant};
 
-use crate::editor_instance::Segment;
 use crate::editor;
+use crate::editor_instance::Segment;
 
 pub struct Playback {
     pub renderer: Arc<editor::RendererHandle>,

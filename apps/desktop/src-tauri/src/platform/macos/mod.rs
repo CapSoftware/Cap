@@ -12,7 +12,6 @@ use objc::{class, msg_send, sel, sel_impl};
 
 pub mod delegates;
 
-
 #[derive(Debug)]
 pub struct Window {
     pub window_number: u32,

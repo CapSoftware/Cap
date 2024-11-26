@@ -68,13 +68,15 @@ pub async fn export_video_to_file(
             cap_project::Content::MultipleSegments { inner } => {
                 let s = &inner.segments[i];
 
-                segment.cursor.clone();RecordingSegmentDecoders::new(
-                            &meta,
-                            SegmentVideoPaths {
-                                display: s.display.path.as_path(),
-                                camera: s.camera.as_ref().map(|c| c.path.as_path()),
-                            },
-                        );segment.audio.clone();
+                segment.cursor.clone();
+                RecordingSegmentDecoders::new(
+                    &meta,
+                    SegmentVideoPaths {
+                        display: s.display.path.as_path(),
+                        camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                    },
+                );
+                segment.audio.clone();
 
                 todo!()
             }
