@@ -68,6 +68,9 @@ async copyScreenshotToClipboard(path: string) : Promise<null> {
 async openFilePath(path: string) : Promise<null> {
     return await TAURI_INVOKE("open_file_path", { path });
 },
+async deleteFile(path: string) : Promise<null> {
+    return await TAURI_INVOKE("delete_file", { path });
+},
 async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<[number, number]> {
     return await TAURI_INVOKE("get_video_metadata", { videoId, videoType });
 },
@@ -171,6 +174,7 @@ editorStateChanged: EditorStateChanged,
 newNotification: NewNotification,
 newRecordingAdded: NewRecordingAdded,
 newScreenshotAdded: NewScreenshotAdded,
+recordingDeleted: RecordingDeleted,
 recordingMetaChanged: RecordingMetaChanged,
 recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
@@ -190,6 +194,7 @@ editorStateChanged: "editor-state-changed",
 newNotification: "new-notification",
 newRecordingAdded: "new-recording-added",
 newScreenshotAdded: "new-screenshot-added",
+recordingDeleted: "recording-deleted",
 recordingMetaChanged: "recording-meta-changed",
 recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
@@ -252,6 +257,7 @@ export type Plan = { upgraded: boolean; last_checked: number }
 export type PreCreatedVideo = { id: string; link: string; config: S3UploadMeta }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null; motionBlur: number | null }
 export type ProjectRecordings = { segments: SegmentRecordings[] }
+export type RecordingDeleted = { path: string }
 export type RecordingInfo = { captureTarget: ScreenCaptureTarget }
 export type RecordingMeta = ({ segment: SingleSegment } | { inner: MultipleSegments }) & { pretty_name: string; sharing?: SharingMeta | null }
 export type RecordingMetaChanged = { id: string }

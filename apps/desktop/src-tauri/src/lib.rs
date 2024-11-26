@@ -245,6 +245,11 @@ pub struct RecordingStopped {
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RecordingDeleted {
+    path: PathBuf,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestStartRecording;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
@@ -675,6 +680,24 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
             )
             .spawn()
             .map_err(|e| format!("Failed to open folder: {}", e))?;
+    }
+
+    Ok(())
+}
+
+
+#[tauri::command]
+#[specta::specta]
+async fn delete_file(_app: AppHandle, path: PathBuf) -> Result<(), String> {
+    let path_str = path.to_str().ok_or("Invalid path")?;
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("rm")
+            .arg("-r")
+            .arg(path_str)
+            .spawn()
+            .map_err(|e| format!("Failed to delete folder: {}", e))?;
     }
 
     Ok(())
@@ -1694,6 +1717,7 @@ pub async fn run() {
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
             open_file_path,
+            delete_file,
             get_video_metadata,
             create_editor_instance,
             start_playback,
@@ -1735,6 +1759,7 @@ pub async fn run() {
             RecordingMetaChanged,
             RecordingStarted,
             RecordingStopped,
+            RecordingDeleted,
             RequestStartRecording,
             RequestRestartRecording,
             RequestStopRecording,
