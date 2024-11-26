@@ -16,7 +16,7 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.18.0",
     "tsconfig": "workspace:*",
-    "typescript": "^5.3.2"
+    "typescript": "^5.7.2"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.485.0",

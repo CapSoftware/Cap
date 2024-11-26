@@ -32,7 +32,7 @@
     "tauri-plugin-context-menu": "^0.5.0",
     "tauri-plugin-positioner-api": "^0.2.7",
     "tsconfig": "workspace:*",
-    "typescript": "^5.3.2",
+    "typescript": "^5.7.2",
     "vite": "^4.4.4",
     "vite-tsconfig-paths": "^4.2.1"
   },
