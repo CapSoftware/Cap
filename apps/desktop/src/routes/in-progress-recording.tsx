@@ -1,4 +1,5 @@
 import { createEffect, createSignal, type ComponentProps } from "solid-js";
+import { cx } from "cva";
 
 import { commands, events } from "~/utils/tauri";
 import { createTimer } from "@solid-primitives/timer";
@@ -52,13 +53,11 @@ export default function () {
   }));
 
   return (
-    <div
-      class="text-gray-400 flex flex-row items-stretch bg-gray-500 w-full h-full animate-in fade-in"
-    >
+    <div class="flex flex-row items-stretch bg-gray-500 dark:bg-gray-50 w-full h-full animate-in fade-in">
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <button
           disabled={stopRecording.isPending}
-          class="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.25rem] flex flex-row items-center hover:bg-red-transparent-20 transition-colors rounded-lg"
+          class="py-[0.25rem] px-[0.5rem] text-red-300 dark:text-red-300 gap-[0.25rem] flex flex-row items-center rounded-lg"
           type="button"
           onClick={() => stopRecording.mutate()}
         >
@@ -67,6 +66,7 @@ export default function () {
             {formatTime((time() - start) / 1000)}
           </span>
         </button>
+
         {window.FLAGS.pauseResume && (
           <ActionButton
             disabled={togglePause.isPending}
@@ -75,6 +75,7 @@ export default function () {
             {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
           </ActionButton>
         )}
+
         <ActionButton
           disabled={restartRecording.isPending}
           onClick={() => restartRecording.mutate()}
@@ -83,10 +84,13 @@ export default function () {
         </ActionButton>
       </div>
       <div
-        class="bg-white-transparent-5 cursor-move flex items-center justify-center p-[0.25rem] border-l border-white-transparent-5"
+        class="bg-gray-500 dark:bg-gray-50 cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200 hover:cursor-move"
         data-tauri-drag-region
       >
-        <IconCapMoreVertical data-tauri-drag-region />
+        <IconCapMoreVertical
+          class="text-gray-400 dark:text-gray-400"
+          data-tauri-drag-region
+        />
       </div>
     </div>
   );
@@ -96,7 +100,12 @@ function ActionButton(props: ComponentProps<"button">) {
   return (
     <button
       {...props}
-      class="p-[0.25rem] enabled:hover:bg-white-transparent-5 enabled:hover:text-gray-50 rounded-lg transition-colors"
+      class={cx(
+        "p-[0.25rem] rounded-lg transition-colors",
+        "text-gray-400",
+        "h-8 w-8 flex items-center justify-center",
+        props.class
+      )}
       type="button"
     />
   );

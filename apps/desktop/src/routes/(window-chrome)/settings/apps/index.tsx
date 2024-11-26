@@ -30,14 +30,14 @@ export default function AppsTab() {
     <div class="p-4">
       <For each={apps}>
         {(app) => (
-          <div class="p-1.5 bg-white rounded-lg border border-gray-200">
-            <div class="flex justify-between items-center border-b border-gray-200 pb-2">
+          <div class="p-1.5 bg-white rounded-lg border border-[--gray-200]">
+            <div class="flex justify-between items-center border-b border-[--gray-200] pb-2">
               <div class="flex items-center gap-3">
-                <div class="p-2 rounded-lg bg-gray-100">
-                  <app.icon class="w-4 h-4 text-gray-500" />
+                <div class="p-2 rounded-lg bg-[--gray-100]">
+                  <app.icon class="w-4 h-4 text-[--text-tertiary]" />
                 </div>
                 <div class="flex flex-col gap-1">
-                  <span class="text-sm font-medium text-gray-900">
+                  <span class="text-sm font-medium text-[--text-primary]">
                     {app.name}
                   </span>
                 </div>
@@ -50,7 +50,7 @@ export default function AppsTab() {
               </Button>
             </div>
             <div class="p-2">
-              <p class="text-xs text-gray-400">{app.description}</p>
+              <p class="text-xs text-[--text-tertiary]">{app.description}</p>
             </div>
           </div>
         )}

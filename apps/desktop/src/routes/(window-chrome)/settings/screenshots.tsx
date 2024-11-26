@@ -54,7 +54,7 @@ export default function Screenshots() {
           <Show
             when={fetchScreenshots.data && fetchScreenshots.data.length > 0}
             fallback={
-              <p class="text-center text-gray-500">No screenshots found</p>
+              <p class="text-center text-[--text-tertiary]">No screenshots found</p>
             }
           >
             <For each={fetchScreenshots.data}>
@@ -81,7 +81,7 @@ function ScreenshotItem(props: {
   const [imageExists, setImageExists] = createSignal(true);
 
   return (
-    <li class="w-full flex flex-row justify-between items-center p-2 hover:bg-gray-100 rounded">
+    <li class="w-full flex flex-row justify-between items-center p-2 hover:bg-gray-100 dark:hover:bg-gray-200 rounded">
       <div class="flex items-center">
         <Show
           when={imageExists()}
@@ -96,7 +96,7 @@ function ScreenshotItem(props: {
             onError={() => setImageExists(false)}
           />
         </Show>
-        <span>{props.screenshot.prettyName.replace(".png", "")}</span>
+        <span class="text-[--text-primary]">{props.screenshot.prettyName.replace(".png", "")}</span>
       </div>
       <div class="flex items-center">
         <button
@@ -105,7 +105,7 @@ function ScreenshotItem(props: {
             e.stopPropagation();
             props.onOpenFolder();
           }}
-          class="p-2 hover:bg-gray-200 rounded-full mr-2"
+          class="p-2 hover:bg-gray-200 dark:hover:bg-gray-300 text-[--text-tertiary] hover:text-[--text-primary] rounded-full mr-2"
         >
           <IconLucideFolder class="size-5" />
         </button>
@@ -115,7 +115,7 @@ function ScreenshotItem(props: {
             e.stopPropagation();
             props.onClick();
           }}
-          class="p-2 hover:bg-gray-200 rounded-full"
+          class="p-2 hover:bg-gray-200 dark:hover:bg-gray-300 text-[--text-tertiary] hover:text-[--text-primary] rounded-full"
         >
           <IconLucideEye class="size-5" />
         </button>

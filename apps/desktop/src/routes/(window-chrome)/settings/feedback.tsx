@@ -32,8 +32,8 @@ export default function FeedbackTab() {
 
   return (
     <div class="p-6 max-w-2xl">
-      <h2 class="text-lg font-medium mb-2">Send Feedback</h2>
-      <p class="text-gray-400 mb-[1rem]">
+      <h2 class="text-[--text-primary] text-lg font-medium mb-2">Send Feedback</h2>
+      <p class="text-[--text-tertiary] mb-[1rem]">
         Help us improve Cap by submitting feedback or reporting bugs. We'll get
         right on it.
       </p>
@@ -45,7 +45,7 @@ export default function FeedbackTab() {
             placeholder="Tell us what you think about Cap..."
             required
             minLength={10}
-            class="w-full h-32 p-2 border border-gray-300 rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+            class="w-full h-32 p-2 border border-[--gray-500] bg-[--gray-100] text-[--text-primary] rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-[--blue-400]"
             disabled={isSubmitting()}
           />
         </div>
@@ -53,7 +53,7 @@ export default function FeedbackTab() {
         {error() && <p class="text-red-500 text-sm">{error()}</p>}
 
         {success() && (
-          <p class="text-green-500 text-sm">Thank you for your feedback!</p>
+          <p class="text-[--text-primary] text-sm">Thank you for your feedback!</p>
         )}
 
         <Button
@@ -62,7 +62,7 @@ export default function FeedbackTab() {
           disabled={
             isSubmitting() || !feedback().trim() || feedback().trim().length < 0
           }
-          class="w-full"
+          class="w-full bg-[--blue-400] text-[--text-primary]"
         >
           {isSubmitting() ? "Submitting..." : "Submit Feedback"}
         </Button>

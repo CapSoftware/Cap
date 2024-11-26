@@ -173,7 +173,9 @@ export function DialogContent(
   return (
     <>
       <Dialog.Header>
-        <KDialog.Title>{props.title}</KDialog.Title>
+        <KDialog.Title class="text-gray-500 dark:text-gray-500">
+          {props.title}
+        </KDialog.Title>
       </Dialog.Header>
       <Dialog.Content class={props.class}>{props.children}</Dialog.Content>
       <Dialog.Footer>{props.confirm}</Dialog.Footer>
@@ -308,15 +310,7 @@ export function ComingSoonTooltip(
         {trigger.children}
       </KTooltip.Trigger>
       <KTooltip.Portal>
-        <KTooltip.Content
-          class="p-2 font-medium bg-gray-500 text-white ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out"
-          style={{
-            color: "white",
-            "border-radius": "8px",
-            "font-size": "12px",
-            "z-index": "1000",
-          }}
-        >
+        <KTooltip.Content class="p-2 font-medium bg-gray-500 dark:bg-gray-700 text-gray-50 ui-expanded:animate-in ui-expanded:slide-in-from-bottom-1 ui-expanded:fade-in ui-closed:animate-out ui-closed:slide-out-to-bottom-1 ui-closed:fade-out rounded-lg text-xs z-[1000]">
           Coming Soon
         </KTooltip.Content>
       </KTooltip.Portal>

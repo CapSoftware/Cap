@@ -323,7 +323,7 @@ export default function S3ConfigPage() {
                 : ""
             }
           >
-            {saving() ? "Saving..." : "Save"}
+            {saving() ? "Exporting..." : "Export"}
           </Button>
         </div>
       </div>

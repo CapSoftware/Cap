@@ -1105,10 +1105,11 @@ async fn upload_exported_video(
             meta.save_for_project().ok();
             RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
-            NotificationType::ShareableLinkCopied.send(&app);
-
+            // Copy link to clipboard
             #[cfg(target_os = "macos")]
-            platform::write_string_to_pasteboard(&uploaded_video.link);
+            platform::macos::write_string_to_pasteboard(&uploaded_video.link);
+
+            NotificationType::ShareableLinkCopied.send(&app);
 
             Ok(UploadResult::Success(uploaded_video.link))
         }
@@ -1193,6 +1194,7 @@ async fn upload_screenshot(
 
     println!("Copying to clipboard: {:?}", share_link);
 
+    // Copy link to clipboard
     #[cfg(target_os = "macos")]
     platform::write_string_to_pasteboard(&share_link);
 
@@ -1704,7 +1706,8 @@ pub async fn run() {
             send_feedback_request,
             windows::position_traffic_lights,
             global_message_dialog,
-            show_window
+            show_window,
+            platform::macos::write_string_to_pasteboard,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
