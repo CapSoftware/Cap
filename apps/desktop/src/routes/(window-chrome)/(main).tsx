@@ -470,9 +470,13 @@ function MicrophoneSelect(props: {
   const [dbs, setDbs] = createSignal<number | undefined>();
   const [isInitialized, setIsInitialized] = createSignal(false);
 
-  const value = () =>
-    devices?.data?.find((d) => d.name === props.options?.audioInputName) ??
-    null;
+  const value = createMemo(() => {
+    if (!props.options?.audioInputName) return null;
+    return (
+      devices.data?.find((d) => d.name === props.options!.audioInputName) ??
+      null
+    );
+  });
 
   const requestPermission = useRequestPermission();
 
@@ -566,12 +570,17 @@ function MicrophoneSelect(props: {
             )}
           </Show>
           <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
-          <KSelect.Value<{
-            name: string;
-          }> class="flex-1 text-left truncate">
-            {(state) => (
-              <span>{state.selectedOption()?.name ?? "No Audio"}</span>
-            )}
+          <KSelect.Value<Option> class="flex-1 text-left truncate">
+            {(state) => {
+              const selected = state.selectedOption();
+              return (
+                <span>
+                  {selected?.name ??
+                    props.options?.audioInputName ??
+                    "No Audio"}
+                </span>
+              );
+            }}
           </KSelect.Value>
           <TargetSelectInfoPill
             value={props.options?.audioInputName ?? null}
