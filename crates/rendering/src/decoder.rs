@@ -2,15 +2,16 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     sync::{mpsc, Arc},
+    time::Instant,
 };
 
 use ffmpeg::{
-    codec,
+    codec::{self, Capabilities},
     format::{self},
     frame, rescale, Codec, Rational, Rescale,
 };
-use ffmpeg_hw_device::{CodecContextExt, HwDevice};
-use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
+use ffmpeg_hw_device::HwDevice;
+use ffmpeg_sys_next::avcodec_find_decoder;
 
 pub type DecodedFrame = Arc<Vec<u8>>;
 
@@ -57,18 +58,32 @@ impl AsyncVideoDecoder {
             // Create a decoder for the video stream
             let mut decoder = context.decoder().video().unwrap();
 
-            let hw_device: Option<HwDevice> = {
-                #[cfg(target_os = "macos")]
-                {
-                    decoder
-                        .try_use_hw_device(
-                            AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
-                            Pixel::NV12,
-                        )
-                        .ok()
-                }
+            {
+                use codec::threading::{Config, Type};
 
-                #[cfg(not(target_os = "macos"))]
+                let capabilities = decoder_codec.capabilities();
+
+                if capabilities.intersects(Capabilities::FRAME_THREADS) {
+                    decoder.set_threading(Config::kind(Type::Frame));
+                } else if capabilities.intersects(Capabilities::SLICE_THREADS) {
+                    decoder.set_threading(Config::kind(Type::Slice));
+                } else {
+                    decoder.set_threading(Config::count(1));
+                }
+            }
+
+            let hw_device: Option<HwDevice> = {
+                // #[cfg(target_os = "macos")]
+                // {
+                //     decoder
+                //         .try_use_hw_device(
+                //             AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                //             Pixel::NV12,
+                //         )
+                //         .ok()
+                // }
+
+                // #[cfg(not(target_os = "macos"))]
                 None
             };
 
@@ -108,6 +123,8 @@ impl AsyncVideoDecoder {
             while let Ok(r) = peekable_requests.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_frame, sender) => {
+                        let time_in = Instant::now();
+
                         let mut sender = if let Some(cached) = cache.get(&requested_frame) {
                             sender.send(Some(cached.clone())).ok();
                             last_sent_frame = Some((requested_frame, cached.clone()));
@@ -163,6 +180,7 @@ impl AsyncVideoDecoder {
 
                         last_active_frame = Some(requested_frame);
 
+                        let now = Instant::now();
                         loop {
                             if peekable_requests.peek().is_some() {
                                 break;
@@ -289,7 +307,7 @@ impl AsyncVideoDecoder {
                         }
 
                         if let Some(s) = sender.take() {
-                            s.send(None);
+                            s.send(None).ok();
                         }
                     }
                 }

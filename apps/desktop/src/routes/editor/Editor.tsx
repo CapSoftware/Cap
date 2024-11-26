@@ -318,7 +318,7 @@ function Dialogs() {
                   size: dialog().size,
                 });
 
-                const display = editorInstance.recordings.display;
+                const display = editorInstance.recordings.segments[0].display;
 
                 const styles = createMemo(() => {
                   return {
@@ -377,8 +377,8 @@ function Dialogs() {
                           setCrop({
                             position: { x: 0, y: 0 },
                             size: {
-                              x: editorInstance.recordings.display.width,
-                              y: editorInstance.recordings.display.height,
+                              x: display.width,
+                              y: display.height,
                             },
                           })
                         }
@@ -531,8 +531,7 @@ function Dialogs() {
                                                     clamp(
                                                       original.size.x + diff.x,
                                                       MIN_SIZE,
-                                                      editorInstance.recordings
-                                                        .display.width -
+                                                      display.width -
                                                         crop.position.x
                                                     )
                                                   )
@@ -546,9 +545,7 @@ function Dialogs() {
                                                       original.position.x +
                                                         diff.x,
                                                       0,
-                                                      editorInstance.recordings
-                                                        .display.width -
-                                                        MIN_SIZE
+                                                      display.width - MIN_SIZE
                                                     )
                                                   )
                                                 );
@@ -559,8 +556,7 @@ function Dialogs() {
                                                     clamp(
                                                       original.size.x - diff.x,
                                                       MIN_SIZE,
-                                                      editorInstance.recordings
-                                                        .display.width
+                                                      display.width
                                                     )
                                                   )
                                                 );
@@ -574,8 +570,7 @@ function Dialogs() {
                                                     clamp(
                                                       original.size.y + diff.y,
                                                       MIN_SIZE,
-                                                      editorInstance.recordings
-                                                        .display.height -
+                                                      display.height -
                                                         crop.position.y
                                                     )
                                                   )
@@ -589,9 +584,7 @@ function Dialogs() {
                                                       original.position.y +
                                                         diff.y,
                                                       0,
-                                                      editorInstance.recordings
-                                                        .display.height -
-                                                        MIN_SIZE
+                                                      display.height - MIN_SIZE
                                                     )
                                                   )
                                                 );
@@ -602,8 +595,7 @@ function Dialogs() {
                                                     clamp(
                                                       original.size.y - diff.y,
                                                       MIN_SIZE,
-                                                      editorInstance.recordings
-                                                        .display.height
+                                                      display.height
                                                     )
                                                   )
                                                 );

@@ -78,7 +78,7 @@
     "eslint-config-next": "14.1.0",
     "postcss": "^8.4.23",
     "tailwindcss": "^3",
-    "typescript": "^5.3.2"
+    "typescript": "^5.7.2"
   },
   "engines": {
     "node": "20"

@@ -7,10 +7,9 @@ use cap_media::{
     sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
-use cap_project::{CursorClickEvent, CursorMoveEvent, RecordingMeta};
+use cap_project::RecordingMeta;
 use either::Either;
 use std::{
-    collections::HashMap,
     path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
     time::{SystemTime, UNIX_EPOCH},
@@ -18,7 +17,10 @@ use std::{
 use thiserror::Error;
 use tokio::sync::{oneshot, Mutex};
 
-use crate::{cursor::spawn_cursor_recorder, RecordingOptions};
+use crate::{
+    cursor::{spawn_cursor_recorder, CursorActor},
+    RecordingOptions,
+};
 
 pub enum ActorControlMessage {
     Stop(oneshot::Sender<Result<CompletedRecording, RecordingError>>),
@@ -31,8 +33,7 @@ pub struct Actor {
     pipeline: RecordingPipeline,
     start_time: f64,
     stop_signal: Arc<AtomicBool>,
-    cursor_moves: oneshot::Receiver<Vec<CursorMoveEvent>>,
-    cursor_clicks: oneshot::Receiver<Vec<CursorClickEvent>>,
+    cursor: Option<CursorActor>,
 }
 
 pub struct ActorHandle {
@@ -76,6 +77,14 @@ impl ActorHandle {
     pub async fn stop(&self) -> Result<CompletedRecording, RecordingError> {
         send_message!(self.ctrl_tx, ActorControlMessage::Stop)
     }
+
+    pub async fn pause(&self) -> Result<(), RecordingError> {
+        Ok(())
+    }
+
+    pub async fn resume(&self) -> Result<(), RecordingError> {
+        Ok(())
+    }
 }
 
 pub async fn spawn_recording_actor(
@@ -107,22 +116,14 @@ pub async fn spawn_recording_actor(
     let stop_signal = Arc::new(AtomicBool::new(false));
 
     // Initialize default values for cursor channels
-    let (cursor_moves, cursor_clicks) = if FLAGS.record_mouse {
+    let cursor = FLAGS.record_mouse.then(|| {
         spawn_cursor_recorder(
-            stop_signal.clone(),
             screen_source.get_bounds(),
-            content_dir,
             cursors_dir,
+            Default::default(),
+            0,
         )
-    } else {
-        // Create dummy channels that will never receive data
-        let (move_tx, move_rx) = oneshot::channel();
-        let (click_tx, click_rx) = oneshot::channel();
-        // Send empty vectors immediately
-        move_tx.send(vec![]).unwrap();
-        click_tx.send(vec![]).unwrap();
-        (move_rx, click_rx)
-    };
+    });
 
     tokio::spawn({
         let options = options.clone();
@@ -132,8 +133,7 @@ pub async fn spawn_recording_actor(
                 options,
                 pipeline,
                 start_time,
-                cursor_moves,
-                cursor_clicks,
+                cursor,
                 stop_signal,
                 id,
             };
@@ -157,9 +157,6 @@ pub async fn spawn_recording_actor(
 pub struct CompletedRecording {
     pub id: String,
     pub recording_dir: PathBuf,
-    pub display_output_path: PathBuf,
-    pub camera_output_path: Option<PathBuf>,
-    pub audio_output_path: Option<PathBuf>,
     pub display_source: ScreenCaptureTarget,
     pub meta: RecordingMeta,
     pub cursor_data: cap_project::CursorData,
@@ -178,54 +175,33 @@ async fn stop_recording(mut actor: Actor) -> Result<CompletedRecording, Recordin
             "Cap {}",
             chrono::Local::now().format("%Y-%m-%d at %H.%M.%S")
         ),
-        display: Display {
-            path: actor
-                .pipeline
-                .display_output_path
-                .strip_prefix(&actor.recording_dir)
-                .unwrap()
-                .to_owned(),
+        content: Content::SingleSegment {
+            segment: SingleSegment {
+                display: Display {
+                    path: actor
+                        .pipeline
+                        .display_output_path
+                        .strip_prefix(&actor.recording_dir)
+                        .unwrap()
+                        .to_owned(),
+                },
+                camera: actor
+                    .pipeline
+                    .camera_output_path
+                    .as_ref()
+                    .map(|path| CameraMeta {
+                        path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                    }),
+                audio: actor
+                    .pipeline
+                    .audio_output_path
+                    .as_ref()
+                    .map(|path| AudioMeta {
+                        path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                    }),
+                cursor: Some(PathBuf::from("content/cursor.json")),
+            },
         },
-        camera: actor
-            .pipeline
-            .camera_output_path
-            .as_ref()
-            .map(|path| CameraMeta {
-                path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
-            }),
-        audio: actor
-            .pipeline
-            .audio_output_path
-            .as_ref()
-            .map(|path| AudioMeta {
-                path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
-            }),
-        segments: {
-            let segments = [segment];
-
-            let relative_segments = segments
-                .iter()
-                .map(|(l, r)| (l - segments[0].0, r - segments[0].0))
-                .collect::<Vec<_>>();
-
-            let mut segments = vec![];
-
-            let mut diff = 0.0;
-
-            for (i, chunk) in relative_segments.iter().enumerate() {
-                if i < relative_segments.len() / 2 {
-                    segments.push(RecordingSegment {
-                        start: diff,
-                        end: chunk.1 - chunk.0 + diff,
-                    });
-                }
-
-                diff += chunk.1 - chunk.0;
-            }
-
-            segments
-        },
-        cursor: Some(PathBuf::from("cursor.json")),
     };
 
     actor.pipeline.inner.shutdown().await?;
@@ -234,11 +210,26 @@ async fn stop_recording(mut actor: Actor) -> Result<CompletedRecording, Recordin
         .stop_signal
         .store(true, std::sync::atomic::Ordering::Relaxed);
 
-    let cursor_data = cap_project::CursorData {
-        clicks: actor.cursor_clicks.await.unwrap_or_default(),
-        moves: actor.cursor_moves.await.unwrap_or_default(),
-        cursor_images: HashMap::new(), // This will be populated during recording
+    let cursor_data = if let Some(cursor) = actor.cursor {
+        let resp = cursor.stop().await;
+        cap_project::CursorData {
+            clicks: resp.clicks,
+            moves: resp.moves,
+            cursor_images: CursorImages(
+                resp.cursors
+                    .into_values()
+                    .map(|(filename, id)| (id.to_string(), filename))
+                    .collect(),
+            ),
+        }
+    } else {
+        Default::default()
     };
+
+    std::fs::write(
+        actor.recording_dir.join("content/cursor.json"),
+        serde_json::to_string_pretty(&cursor_data)?,
+    )?;
 
     meta.save_for_project()
         .map_err(Either::either_into::<RecordingError>)?;
@@ -248,9 +239,6 @@ async fn stop_recording(mut actor: Actor) -> Result<CompletedRecording, Recordin
         meta,
         cursor_data,
         recording_dir: actor.recording_dir,
-        display_output_path: actor.pipeline.display_output_path,
-        camera_output_path: actor.pipeline.camera_output_path,
-        audio_output_path: actor.pipeline.audio_output_path,
         display_source: actor.options.capture_target,
         segments: vec![segment.0, segment.1],
     })
@@ -373,6 +361,7 @@ trait MakeCapturePipeline: 'static {
         Self: Sized;
 }
 
+#[cfg(target_os = "macos")]
 impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
     fn make_capture_pipeline(
         builder: CapturePipelineBuilder,

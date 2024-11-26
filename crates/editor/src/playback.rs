@@ -3,23 +3,22 @@ use std::{sync::Arc, time::Duration};
 use cap_media::data::{AudioInfo, FromSampleBytes};
 use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
 use cap_project::ProjectConfiguration;
-use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderVideoConstants};
+use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     BufferSize, SampleFormat,
 };
 use tokio::{sync::watch, time::Instant};
 
-use crate::{editor, project_recordings::ProjectRecordings};
+use crate::editor;
+use crate::editor_instance::Segment;
 
 pub struct Playback {
-    pub audio: Arc<Option<AudioData>>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
-    pub decoders: RecordingDecoders,
     pub start_frame_number: u32,
     pub project: watch::Receiver<ProjectConfiguration>,
-    pub recordings: ProjectRecordings,
+    pub segments: Arc<Vec<Segment>>,
 }
 
 const FPS: u32 = 30;
@@ -63,16 +62,16 @@ impl Playback {
                 .unwrap_or(f64::MAX);
 
             // Lock the mutex and check if audio data is available
-            if let Some(audio_data) = self.audio.as_ref() {
-                AudioPlayback {
-                    audio: audio_data.clone(),
-                    stop_rx: stop_rx.clone(),
-                    start_frame_number: self.start_frame_number,
-                    duration,
-                    project: self.project.clone(),
-                }
-                .spawn();
-            };
+            // if let Some(audio_data) = self.audio.as_ref() {
+            //     AudioPlayback {
+            //         audio: audio_data.clone(),
+            //         stop_rx: stop_rx.clone(),
+            //         start_frame_number: self.start_frame_number,
+            //         duration,
+            //         project: self.project.clone(),
+            //     }
+            //     .spawn();
+            // };
 
             loop {
                 if frame_number as f64 > FPS as f64 * duration {
@@ -81,20 +80,22 @@ impl Playback {
 
                 let project = self.project.borrow().clone();
 
-                let time = if let Some(timeline) = project.timeline() {
+                let (time, segment) = if let Some(timeline) = project.timeline() {
                     match timeline.get_recording_time(frame_number as f64 / FPS as f64) {
                         Some(time) => time,
                         None => break,
                     }
                 } else {
-                    frame_number as f64 / FPS as f64
+                    (frame_number as f64 / FPS as f64, None)
                 };
+
+                let segment = &self.segments[segment.unwrap_or(0) as usize];
 
                 tokio::select! {
                     _ = stop_rx.changed() => {
                        break;
                     },
-                    Some((screen_frame, camera_frame)) = self.decoders.get_frames((time * FPS as f64) as u32) => {
+                    Some((screen_frame, camera_frame)) =                    segment.decoders.get_frames((time * FPS as f64) as u32) => {
                         // println!("decoded frame in {:?}", debug.elapsed());
                         let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32);
 
