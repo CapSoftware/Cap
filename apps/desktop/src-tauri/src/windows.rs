@@ -116,7 +116,7 @@ pub enum ShowCapWindow {
 impl ShowCapWindow {
     pub fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Some(window) = self.id().get(app) {
-            window.show().ok();
+            // window.show().ok();
             window.set_focus().ok();
 
             return Ok(window);
@@ -136,7 +136,6 @@ impl ShowCapWindow {
                 .focused(true)
                 .maximizable(false)
                 .theme(Some(tauri::Theme::Light))
-                .visible(true)
                 .shadow(true)
                 .build()?,
             Self::Main => self
@@ -169,7 +168,6 @@ impl ShowCapWindow {
                 .inner_size(800.0, 800.0)
                 .resizable(false)
                 .focused(true)
-                .visible(true)
                 .always_on_top(true)
                 .maximized(false)
                 .transparent(true)
@@ -257,7 +255,6 @@ impl ShowCapWindow {
                         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
-                    .visible(false)
                     .theme(Some(tauri::Theme::Dark))
                     .skip_taskbar(true)
                     .build()?
@@ -309,11 +306,15 @@ impl ShowCapWindow {
 		                }).ok();
                 }
 
+                println!("about to spawn fake window listener");
+
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 
                 window
             }
         };
+
+        window.hide().ok();
 
         #[cfg(target_os = "macos")]
         if let Some(position) = id.traffic_lights_position() {

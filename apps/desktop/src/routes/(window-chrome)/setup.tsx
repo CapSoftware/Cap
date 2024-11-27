@@ -83,7 +83,7 @@ export default function () {
 
   return (
     <>
-      <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-100 justify-evenly items-center">
+      <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-50 justify-evenly items-center">
         {showStartup() && (
           <Startup
             onClose={() => {
@@ -93,7 +93,9 @@ export default function () {
         )}
         <div class="flex flex-col items-center">
           <IconCapLogo class="size-18 mb-3" />
-          <h1 class="text-[1.2rem] font-[700] mb-1">Permissions Required</h1>
+          <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
+            Permissions Required
+          </h1>
           <p class="text-gray-400">Cap needs permissions to run properly.</p>
         </div>
 
@@ -106,10 +108,10 @@ export default function () {
                 <Show when={permissionCheck() !== "notNeeded"}>
                   <li class="flex flex-row items-center gap-4">
                     <div class="flex flex-col flex-[2]">
-                      <span class="font-[500] text-[0.875rem]">
+                      <span class="font-[500] text-[0.875rem] text-[--text-primary]">
                         {permission.name} Permission
                       </span>
-                      <span class="text-gray-400">
+                      <span class="text-[--text-secondary]">
                         {permission.description}
                       </span>
                     </div>
@@ -125,8 +127,8 @@ export default function () {
                       {permissionCheck() === "granted"
                         ? "Granted"
                         : permissionCheck() !== "denied"
-                          ? "Grant Permission"
-                          : "Request Permission"}
+                        ? "Grant Permission"
+                        : "Request Permission"}
                     </Button>
                   </li>
                 </Show>
@@ -278,8 +280,9 @@ function Startup(props: { onClose: () => void }) {
       >
         <button
           onClick={toggleMute}
-          class={`text-gray-50 hover:text-gray-200 transition-colors ${isExiting() ? "opacity-0" : ""
-            }`}
+          class={`text-gray-50 hover:text-gray-200 transition-colors ${
+            isExiting() ? "opacity-0" : ""
+          }`}
         >
           {audioState.isMuted ? (
             <IconLucideVolumeX class="w-6 h-6" />
@@ -401,8 +404,9 @@ function Startup(props: { onClose: () => void }) {
           {/* Floating clouds */}
           <div
             id="cloud-1"
-            class={`absolute top-0 right-0 opacity-70 pointer-events-none cloud-transition cloud-1 ${isExiting() ? "exiting" : ""
-              }`}
+            class={`absolute top-0 right-0 opacity-70 pointer-events-none cloud-transition cloud-1 ${
+              isExiting() ? "exiting" : ""
+            }`}
           >
             <img
               class="cloud-image w-[100vw] md:w-[80vw] -mr-40"
@@ -412,8 +416,9 @@ function Startup(props: { onClose: () => void }) {
           </div>
           <div
             id="cloud-2"
-            class={`absolute top-0 left-0 opacity-70 pointer-events-none cloud-transition cloud-2 ${isExiting() ? "exiting" : ""
-              }`}
+            class={`absolute top-0 left-0 opacity-70 pointer-events-none cloud-transition cloud-2 ${
+              isExiting() ? "exiting" : ""
+            }`}
           >
             <img
               class="cloud-image w-[100vw] md:w-[80vw] -ml-40"
@@ -423,8 +428,9 @@ function Startup(props: { onClose: () => void }) {
           </div>
           <div
             id="cloud-3"
-            class={`absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none cloud-transition cloud-3 ${isExiting() ? "exiting" : ""
-              }`}
+            class={`absolute -bottom-[15%] left-1/2 -translate-x-1/2 opacity-70 pointer-events-none cloud-transition cloud-3 ${
+              isExiting() ? "exiting" : ""
+            }`}
           >
             <img
               class="cloud-image w-[180vw] md:w-[180vw]"
@@ -435,8 +441,9 @@ function Startup(props: { onClose: () => void }) {
 
           {/* Main content */}
           <div
-            class={`content-container flex flex-col items-center justify-center flex-1 relative z-10 px-4 ${isExiting() ? "exiting" : ""
-              }`}
+            class={`content-container flex flex-col items-center justify-center flex-1 relative z-10 px-4 ${
+              isExiting() ? "exiting" : ""
+            }`}
           >
             <div class="text-center mb-8">
               <div
@@ -451,7 +458,7 @@ function Startup(props: { onClose: () => void }) {
               <h1 class="text-5xl md:text-5xl font-bold text-gray-50 mb-4 drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
                 Welcome to Cap
               </h1>
-              <p class="text-2xl text-gray-50/70 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
+              <p class="text-2xl text-gray-50 opacity-80 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
                 Beautiful, shareable screen recordings.
               </p>
             </div>
@@ -481,7 +488,6 @@ function Startup(props: { onClose: () => void }) {
                 </Button>
               </Match>
             </Switch>
-
           </div>
         </div>
         props.onClose()

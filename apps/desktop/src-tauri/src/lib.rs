@@ -1790,6 +1790,12 @@ pub async fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
+                .with_state_flags({
+                    use tauri_plugin_window_state::StateFlags;
+                    let mut flags = StateFlags::all();
+                    flags.remove(StateFlags::VISIBLE);
+                    flags
+                })
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
                     CapWindowId::WindowCaptureOccluder.label().as_str(),
@@ -1809,6 +1815,7 @@ pub async fn run() {
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
+            fake_window::init(&app);
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
                 sentry::configure_scope(|scope| {
@@ -1826,6 +1833,7 @@ pub async fn run() {
             let permissions = permissions::do_permissions_check(false);
             println!("Permissions check result: {:?}", permissions);
 
+            ShowCapWindow::Setup.show(&app).ok();
             if !permissions.screen_recording.permitted()
                 || !permissions.accessibility.permitted()
                 || GeneralSettingsStore::get(&app)
@@ -1863,8 +1871,6 @@ pub async fn run() {
                 current_recording: None,
                 pre_created_video: None,
             })));
-
-            app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
 
             tray::create_tray(&app).unwrap();
 

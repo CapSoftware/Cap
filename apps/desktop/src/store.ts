@@ -68,4 +68,8 @@ export const generalSettingsStore = {
     });
     await s.save();
   },
+  listen: (fn: (data?: GeneralSettingsStore | undefined) => void) =>
+    store().then((s) =>
+      s.onKeyChange<GeneralSettingsStore>("general_settings", fn)
+    ),
 };
