@@ -1,4 +1,4 @@
-import { createResource, Show, For } from "solid-js";
+import { createResource, Show, For, createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import { commands, type GeneralSettingsStore } from "~/utils/tauri";
@@ -82,19 +82,17 @@ export default function GeneralSettings() {
   );
 }
 
-function ThemeSection() {
+function AppearanceSection() {
   const themes = [
     { id: "auto", name: "System", preview: themePreviewAuto },
     { id: "light", name: "Light", preview: themePreviewLight },
     { id: "dark", name: "Dark", preview: themePreviewDark },
   ];
-  const activeTheme = "auto";
+  const [currentTheme, setCurrentTheme] = createSignal(themes[0]);
 
   return (
     <div class="flex flex-col gap-4">
-      <div class="flex items-center">
-        <p class="text-[--text-primary] font-semibold">Appearance</p>
-      </div>
+      <p class="text-[--text-primary] font-semibold">Appearance</p>
       <div
         class="flex justify-start items-center text-[--text-primary]"
         on:contextmenu={(e) => e.preventDefault()}
@@ -102,14 +100,17 @@ function ThemeSection() {
         <div class="flex justify-between px-1 w-[22.8rem]">
           <For each={themes}>
             {(theme) => (
-              <button type="button" class="flex flex-col items-center">
+              <button
+                type="button"
+                class="flex flex-col items-center"
+                onClick={() => setCurrentTheme(theme)}
+              >
                 <div
                   class={`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none transition-all duration-200 ${
-                    activeTheme === theme.id
+                    currentTheme().id === theme.id
                       ? "ring-4 ring-blue-100 ring-opacity-50 ring-offset-2"
                       : "hover:ring-2 hover:ring-gray-300"
                   }`}
-                  // onClick={() => setActiveTheme(theme.id)}
                   aria-label={`Select theme: ${theme.name}`}
                 >
                   <div class="w-full h-full bg-gray-200 flex items-center justify-center">
@@ -121,7 +122,9 @@ function ThemeSection() {
                 </div>
                 <span
                   class={`mt-2 text-sm ${
-                    activeTheme !== theme.id ? "!text-opacity-10" : ""
+                    currentTheme().id === theme.id
+                      ? "font-medium"
+                      : "font-light"
                   }`}
                 >
                   {theme.name}
@@ -188,7 +191,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
     <div class="flex flex-col w-full h-full">
       <div class="flex-1 overflow-y-auto">
         <div class="p-4 space-y-2 divide-y divide-gray-200">
-          <ThemeSection />
+          <AppearanceSection />
           <For each={settingsList}>
             {(setting) => (
               <Show
