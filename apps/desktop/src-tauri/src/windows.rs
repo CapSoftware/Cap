@@ -1,6 +1,7 @@
 #![allow(unused_mut)]
 
 use crate::fake_window;
+use cap_flags::FLAGS;
 use serde::Deserialize;
 use specta::Type;
 use std::{path::PathBuf, str::FromStr};
@@ -238,7 +239,10 @@ impl ShowCapWindow {
             Self::InProgressRecording {
                 position: _position,
             } => {
-                let width = 200.0;
+                let mut width = 180.0;
+                if FLAGS.pause_resume {
+                    width += 32.0;
+                }
                 let height = 40.0;
 
                 self.window_builder(app, "/in-progress-recording")

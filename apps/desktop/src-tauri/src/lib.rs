@@ -1801,6 +1801,7 @@ pub async fn run() {
                     CapWindowId::WindowCaptureOccluder.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::PrevRecordings.label().as_str(),
+                    CapWindowId::InProgressRecording.label().as_str(),
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",
@@ -1833,7 +1834,6 @@ pub async fn run() {
             let permissions = permissions::do_permissions_check(false);
             println!("Permissions check result: {:?}", permissions);
 
-            ShowCapWindow::Setup.show(&app).ok();
             if !permissions.screen_recording.permitted()
                 || !permissions.accessibility.permitted()
                 || GeneralSettingsStore::get(&app)
