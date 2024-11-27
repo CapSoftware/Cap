@@ -3,13 +3,13 @@ import {
   createPresignedPost,
   type PresignedPost,
 } from "@aws-sdk/s3-presigned-post";
+import { CloudFrontClient, CreateInvalidationCommand } from "@aws-sdk/client-cloudfront";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import type { NextRequest } from "next/server";
-import { decrypt } from "@cap/database/crypto";
 
 export async function POST(request: NextRequest) {
   try {
@@ -66,6 +66,41 @@ export async function POST(request: NextRequest) {
         secretAccessKey: bucket.secretAccessKey,
       } : null;
 
+      if (!bucket || !s3Config || bucket.bucketName !== process.env.CAP_S3_BUCKET) {
+        const distributionId = process.env.CAP_CLOUDFRONT_DISTRIBUTION_ID;
+        if (distributionId) {
+          console.log("Creating CloudFront invalidation for", fileKey);
+          
+          const cloudfront = new CloudFrontClient({
+            region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "us-east-1",
+            credentials: {
+              accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
+              secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
+            }
+          });
+
+          const pathToInvalidate = "/" + fileKey;
+
+          try {
+            const invalidation = await cloudfront.send(
+              new CreateInvalidationCommand({
+                DistributionId: distributionId,
+                InvalidationBatch: {
+                  CallerReference: `${Date.now()}`,
+                  Paths: {
+                    Quantity: 1,
+                    Items: [pathToInvalidate],
+                  },
+                },
+              })
+            );
+            console.log("CloudFront invalidation created:", invalidation);
+          } catch (error) {
+            console.error("Failed to create CloudFront invalidation:", error);
+          }
+        }
+      }
+
       console.log("Creating S3 client with config:", {
         hasEndpoint: !!s3Config?.endpoint,
         hasRegion: !!s3Config?.region,
@@ -98,7 +133,6 @@ export async function POST(request: NextRequest) {
       };
 
       const bucketName = await getS3Bucket(bucket);
-      console.log("Using bucket:", bucketName);
 
       const presignedPostData: PresignedPost = await createPresignedPost(
         s3Client,

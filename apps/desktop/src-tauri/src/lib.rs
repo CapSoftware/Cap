@@ -2005,7 +2005,28 @@ pub async fn run() {
         .expect("error while running tauri application")
         .run(|handle, event| match event {
             #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => open_main_window(handle.clone()),
+            tauri::RunEvent::Reopen { .. } => {
+                // Check if any editor window is open
+                let has_editor = handle
+                    .webview_windows()
+                    .iter()
+                    .any(|(label, _)| label.starts_with("editor-"));
+
+                if has_editor {
+                    // Find and focus the editor window
+                    if let Some(editor_window) = handle
+                        .webview_windows()
+                        .iter()
+                        .find(|(label, _)| label.starts_with("editor-"))
+                        .map(|(_, window)| window.clone())
+                    {
+                        editor_window.set_focus().ok();
+                    }
+                } else {
+                    // No editor window open, show main window
+                    open_main_window(handle.clone());
+                }
+            }
             _ => {}
         });
 }
