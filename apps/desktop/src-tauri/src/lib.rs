@@ -1787,8 +1787,6 @@ pub async fn run() {
                 ShowCapWindow::Main.show(&app).ok();
             }
 
-            app.manage(FakeWindowBounds(Arc::new(RwLock::new(HashMap::new()))));
-
             ShowCapWindow::PrevRecordings.show(&app).ok();
 
             audio_meter::spawn_event_emitter(app.clone(), audio_input_rx);
