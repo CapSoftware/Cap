@@ -1833,8 +1833,8 @@ pub async fn run() {
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
                 sentry::configure_scope(|scope| {
-                    scope.set_user(Some(sentry::User {
-                        id: Some(auth.user_id),
+                    scope.set_user(auth.user_id.map(|id| sentry::User {
+                        id: Some(id),
                         ..Default::default()
                     }));
                 });
