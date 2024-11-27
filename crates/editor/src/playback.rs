@@ -61,17 +61,17 @@ impl Playback {
                 .map(|t| t.duration())
                 .unwrap_or(f64::MAX);
 
-            // Lock the mutex and check if audio data is available
-            // if let Some(audio_data) = self.audio.as_ref() {
-            //     AudioPlayback {
-            //         audio: audio_data.clone(),
-            //         stop_rx: stop_rx.clone(),
-            //         start_frame_number: self.start_frame_number,
-            //         duration,
-            //         project: self.project.clone(),
-            //     }
-            //     .spawn();
-            // };
+            // TODO: make this work with >1 segment
+            if let Some(audio_data) = self.segments[0].audio.as_ref() {
+                AudioPlayback {
+                    audio: audio_data.clone(),
+                    stop_rx: stop_rx.clone(),
+                    start_frame_number: self.start_frame_number,
+                    duration,
+                    project: self.project.clone(),
+                }
+                .spawn();
+            };
 
             loop {
                 if frame_number as f64 > FPS as f64 * duration {

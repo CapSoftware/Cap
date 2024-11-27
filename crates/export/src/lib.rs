@@ -92,28 +92,29 @@ pub async fn export_video_to_file(
 
             let audio_dir = tempfile::tempdir().unwrap();
             let video_dir = tempfile::tempdir().unwrap();
-            let mut audio = None::<AudioRender>;
-            // if let Some(audio_data) = audio.as_ref() {
-            //     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
+            let mut audio = if let Some(audio_data) =
+                audio_segments.get(0).and_then(|d| d.as_ref().as_ref())
+            {
+                let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
 
-            //     let pipe_path =
-            //         cap_utils::create_channel_named_pipe(rx, audio_dir.path().join("audio.pipe"));
+                let pipe_path =
+                    cap_utils::create_channel_named_pipe(rx, audio_dir.path().join("audio.pipe"));
 
-            //     ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
-            //         input: pipe_path,
-            //         sample_format: "f64le".to_string(),
-            //         sample_rate: audio_data.info.sample_rate,
-            //         channels: audio_data.info.channels as u16,
-            //     });
+                ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
+                    input: pipe_path,
+                    sample_format: "f64le".to_string(),
+                    sample_rate: audio_data.info.sample_rate,
+                    channels: audio_data.info.channels as u16,
+                });
 
-            //     let buffer = AudioFrameBuffer::new(audio_data.clone());
-            //     Some(AudioRender {
-            //         buffer,
-            //         pipe_tx: tx,
-            //     })
-            // } else {
-            //     None
-            // };
+                let buffer = AudioFrameBuffer::new(audio_data.clone());
+                Some(AudioRender {
+                    buffer,
+                    pipe_tx: tx,
+                })
+            } else {
+                None
+            };
 
             let video_tx = {
                 let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
