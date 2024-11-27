@@ -43,6 +43,8 @@ pub async fn remove_fake_window(
 }
 
 pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
+    window.set_ignore_cursor_events(true).ok();
+
     tokio::spawn(async move {
         let state = app.state::<FakeWindowBounds>();
 
@@ -95,4 +97,8 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
             }
         }
     });
+}
+
+pub fn init(app: &AppHandle) {
+    app.manage(FakeWindowBounds(Default::default()));
 }

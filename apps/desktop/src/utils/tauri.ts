@@ -155,8 +155,8 @@ async globalMessageDialog(message: string) : Promise<void> {
 async showWindow(window: ShowCapWindow) : Promise<void> {
     await TAURI_INVOKE("show_window", { window });
 },
-async writeClipboardString(text: string) : Promise<null> {
-    return await TAURI_INVOKE("write_clipboard_string", { text });
+async setWindowTheme(dark: boolean) : Promise<void> {
+    await TAURI_INVOKE("set_window_theme", { dark });
 }
 }
 
@@ -233,7 +233,7 @@ export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: C
 export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type EditorStateChanged = { playhead_position: number }
-export type Flags = { recordMouse: boolean; split: boolean; pauseResume: boolean; zoom: boolean }
+export type Flags = { recordMouse: boolean; split: boolean; pauseResume: boolean; zoom: boolean; customS3: boolean }
 export type GeneralSettingsStore = { uploadIndividualFiles?: boolean; openEditorAfterRecording?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; darkMode?: boolean }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"

@@ -1,6 +1,7 @@
 #![allow(unused_mut)]
 
 use crate::fake_window;
+use cap_flags::FLAGS;
 use serde::Deserialize;
 use specta::Type;
 use std::{path::PathBuf, str::FromStr};
@@ -116,7 +117,7 @@ pub enum ShowCapWindow {
 impl ShowCapWindow {
     pub fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Some(window) = self.id().get(app) {
-            window.show().ok();
+            // window.show().ok();
             window.set_focus().ok();
 
             return Ok(window);
@@ -135,8 +136,7 @@ impl ShowCapWindow {
                 .center()
                 .focused(true)
                 .maximizable(false)
-                .theme(Some(tauri::Theme::Light))
-                .visible(true)
+                // .theme(Some(tauri::Theme::Light))
                 .shadow(true)
                 .build()?,
             Self::Main => self
@@ -146,7 +146,7 @@ impl ShowCapWindow {
                 .maximized(false)
                 .maximizable(false)
                 .maximized(false)
-                .theme(Some(tauri::Theme::Light))
+                // .theme(Some(tauri::Theme::Light))
                 .build()?,
             Self::Settings { page } => self
                 .window_builder(
@@ -156,20 +156,19 @@ impl ShowCapWindow {
                 .min_inner_size(600.0, 450.0)
                 .resizable(true)
                 .maximized(false)
-                .theme(Some(tauri::Theme::Light))
+                // .theme(Some(tauri::Theme::Light))
                 .build()?,
             Self::Editor { project_id } => self
                 .window_builder(app, format!("/editor?id={project_id}"))
                 .inner_size(1150.0, 800.0)
                 .maximizable(true)
-                .theme(Some(tauri::Theme::Dark))
+                // .theme(Some(tauri::Theme::Dark))
                 .build()?,
             Self::Upgrade => self
                 .window_builder(app, "/upgrade")
                 .inner_size(800.0, 800.0)
                 .resizable(false)
                 .focused(true)
-                .visible(true)
                 .always_on_top(true)
                 .maximized(false)
                 .transparent(true)
@@ -240,7 +239,10 @@ impl ShowCapWindow {
             Self::InProgressRecording {
                 position: _position,
             } => {
-                let width = 200.0;
+                let mut width = 180.0;
+                if FLAGS.pause_resume {
+                    width += 32.0;
+                }
                 let height = 40.0;
 
                 self.window_builder(app, "/in-progress-recording")
@@ -257,8 +259,7 @@ impl ShowCapWindow {
                         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
-                    .visible(false)
-                    .theme(Some(tauri::Theme::Dark))
+                    // .theme(Some(tauri::Theme::Dark))
                     .skip_taskbar(true)
                     .build()?
             }
@@ -309,11 +310,15 @@ impl ShowCapWindow {
 		                }).ok();
                 }
 
+                println!("about to spawn fake window listener");
+
                 fake_window::spawn_fake_window_listener(app.clone(), window.clone());
 
                 window
             }
         };
+
+        window.hide().ok();
 
         #[cfg(target_os = "macos")]
         if let Some(position) = id.traffic_lights_position() {
@@ -334,7 +339,8 @@ impl ShowCapWindow {
             .title(id.title())
             .visible(false)
             .accept_first_mouse(true)
-            .shadow(true);
+            .shadow(true)
+            .theme(Some(tauri::Theme::Light));
 
         #[cfg(target_os = "macos")]
         {

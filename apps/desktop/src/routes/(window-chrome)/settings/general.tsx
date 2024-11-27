@@ -2,7 +2,7 @@ import { createResource, Show, For } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import { commands, type GeneralSettingsStore } from "~/utils/tauri";
-import { themeStore } from "~/store/theme";
+// import { themeStore } from "~/store/theme";
 import {
   isPermissionGranted,
   requestPermission,
@@ -21,15 +21,15 @@ const settingsList: Array<{
   pro?: boolean;
   onChange?: (value: boolean) => Promise<void>;
 }> = [
-  // {
-  //   key: "darkMode",
-  //   label: "Dark Mode",
-  //   description:
-  //     "Switch between light and dark theme for the application interface.",
-  //   onChange: async () => {
-  //     await themeStore.toggleTheme();
-  //   },
-  // },
+  {
+    key: "darkMode",
+    label: "Dark Mode",
+    description:
+      "Switch between light and dark theme for the application interface.",
+    onChange: async () => {
+      // await themeStore.toggleTheme();
+    },
+  },
   {
     key: "uploadIndividualFiles",
     label: "Upload individual recording files when creating shareable link",

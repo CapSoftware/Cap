@@ -139,25 +139,26 @@ export default function () {
           </span>
         </div>
         <div class="flex items-center space-x-2">
-          <Tooltip.Root openDelay={0}>
-            <Tooltip.Trigger>
-              <button
-                type="button"
-                onClick={() =>
-                  commands.showWindow({ Settings: { page: "apps" } })
-                }
-              >
-                <IconLucideLayoutGrid class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-              </button>
-            </Tooltip.Trigger>
-            <Tooltip.Portal>
-              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-[--gray-500] rounded shadow-lg animate-in fade-in duration-100">
-                Cap Apps
-                <Tooltip.Arrow class="fill-[--gray-500]" />
-              </Tooltip.Content>
-            </Tooltip.Portal>
-          </Tooltip.Root>
-
+          {window.FLAGS.customS3 && (
+            <Tooltip.Root openDelay={0}>
+              <Tooltip.Trigger>
+                <button
+                  type="button"
+                  onClick={() =>
+                    commands.showWindow({ Settings: { page: "apps" } })
+                  }
+                >
+                  <IconLucideLayoutGrid class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-[--gray-500] rounded shadow-lg animate-in fade-in duration-100">
+                  Cap Apps
+                  <Tooltip.Arrow class="fill-[--gray-500]" />
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+          )}
           <Tooltip.Root openDelay={0}>
             <Tooltip.Trigger>
               <button
@@ -398,7 +399,7 @@ function CameraSelect(props: {
   return (
     <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
       <label class="text-[--text-tertiary] text-[0.875rem]">Camera</label>
-      <KSelect<Option>
+      <KSelect<Option | null>
         options={selectOptions()}
         optionValue="name"
         optionTextValue="name"
@@ -409,7 +410,7 @@ function CameraSelect(props: {
         itemComponent={(props) => (
           <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
             <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue.name}
+              {props.item.rawValue?.name}
             </KSelect.ItemLabel>
           </MenuItem>
         )}
@@ -425,8 +426,8 @@ function CameraSelect(props: {
       >
         <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
           <IconCapCamera class="text-gray-400 size-[1.25rem]" />
-          <KSelect.Value<Option> class="flex-1 text-left truncate">
-            {(state) => <span>{state.selectedOption().name}</span>}
+          <KSelect.Value<Option | null> class="flex-1 text-left truncate">
+            {(state) => <span>{state.selectedOption()?.name}</span>}
           </KSelect.Value>
           <TargetSelectInfoPill
             value={props.options?.cameraLabel ?? null}

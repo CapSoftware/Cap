@@ -2,6 +2,7 @@ import { A, type RouteSectionProps } from "@solidjs/router";
 import { createResource, For, Show, Suspense } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { getVersion } from "@tauri-apps/api/app";
+import "@total-typescript/ts-reset/filter-boolean";
 
 import { commands } from "~/utils/tauri";
 
@@ -30,7 +31,7 @@ export default function Settings(props: RouteSectionProps) {
                 name: "Previous Screenshots",
                 icon: IconLucideCamera,
               },
-              {
+              window.FLAGS.customS3 && {
                 href: "apps",
                 name: "Cap Apps",
                 icon: IconLucideLayoutGrid,
@@ -45,7 +46,7 @@ export default function Settings(props: RouteSectionProps) {
                 name: "Changelog",
                 icon: IconLucideBell,
               },
-            ]}
+            ].filter(Boolean)}
           >
             {(item) => (
               <li>

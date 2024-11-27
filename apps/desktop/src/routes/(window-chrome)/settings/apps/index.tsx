@@ -2,6 +2,8 @@ import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import { For, createResource } from "solid-js";
 import { checkIsUpgradedAndUpdate } from "~/utils/plans";
+
+import "@total-typescript/ts-reset/filter-boolean";
 import { commands } from "~/utils/tauri";
 
 export default function AppsTab() {
@@ -9,7 +11,7 @@ export default function AppsTab() {
   const [isUpgraded] = createResource(checkIsUpgradedAndUpdate);
 
   const apps = [
-    {
+    window.FLAGS.customS3 && {
       name: "S3 Config",
       description:
         "Connect your own S3 bucket. All new shareable link uploads will be uploaded here. Maintain complete ownership over your data.",
@@ -17,7 +19,7 @@ export default function AppsTab() {
       url: "/settings/apps/s3-config",
       pro: true,
     },
-  ];
+  ].filter(Boolean);
 
   const handleAppClick = async (app: (typeof apps)[number]) => {
     if (app.pro && !isUpgraded()) {

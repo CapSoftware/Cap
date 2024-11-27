@@ -1,10 +1,5 @@
 import type { RouteSectionProps } from "@solidjs/router";
-import {
-  onCleanup,
-  onMount,
-  ParentProps,
-  Suspense,
-} from "solid-js";
+import { onCleanup, onMount, ParentProps, Suspense } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { UnlistenFn } from "@tauri-apps/api/event";
 import { AbsoluteInsetLoader } from "~/components/Loader";

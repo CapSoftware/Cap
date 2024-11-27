@@ -1593,6 +1593,18 @@ async fn check_notification_permissions(app: AppHandle) {
     }
 }
 
+#[tauri::command]
+#[specta::specta]
+fn set_window_theme(window: tauri::Window, dark: bool) {
+    window
+        .set_theme(Some(if dark {
+            tauri::Theme::Dark
+        } else {
+            tauri::Theme::Light
+        }))
+        .ok();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -1647,6 +1659,7 @@ pub async fn run() {
             windows::position_traffic_lights,
             global_message_dialog,
             show_window,
+            set_window_theme,
             write_clipboard_string,
         ])
         .events(tauri_specta::collect_events![
@@ -1712,13 +1725,21 @@ pub async fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
+                .with_state_flags({
+                    use tauri_plugin_window_state::StateFlags;
+                    let mut flags = StateFlags::all();
+                    flags.remove(StateFlags::VISIBLE);
+                    flags
+                })
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
                     CapWindowId::WindowCaptureOccluder.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::PrevRecordings.label().as_str(),
+                    CapWindowId::InProgressRecording.label().as_str(),
                 ])
                 .map_label(|label| match label {
                     label if label.starts_with("editor-") => "editor",
@@ -1733,11 +1754,12 @@ pub async fn run() {
             specta_builder.mount_events(&app);
             hotkeys::init(&app);
             general_settings::init(&app);
+            fake_window::init(&app);
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
                 sentry::configure_scope(|scope| {
-                    scope.set_user(Some(sentry::User {
-                        id: Some(auth.user_id),
+                    scope.set_user(auth.user_id.map(|id| sentry::User {
+                        id: Some(id),
                         ..Default::default()
                     }));
                 });
