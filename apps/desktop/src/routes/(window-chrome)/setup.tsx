@@ -459,7 +459,7 @@ function Startup(props: { onClose: () => void }) {
                 Welcome to Cap
               </h1>
               <p class="text-2xl text-gray-50 opacity-80 max-w-md mx-auto drop-shadow-[0_0_20px_rgba(0,0,0,0.2)]">
-                Beautiful, shareable screen recordings.
+                Beautiful screen recordings, owned by you.
               </p>
             </div>
 

@@ -9,11 +9,11 @@ import { CSPostHogProvider } from "./providers";
 import Intercom from "@intercom/messenger-js-sdk";
 
 export const metadata: Metadata = {
-  title: "Cap — Beautiful, shareable screen recordings.",
+  title: "Cap — Beautiful screen recordings, owned by you.",
   description:
     "Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
   openGraph: {
-    title: "Cap — Beautiful, shareable screen recordings.",
+    title: "Cap — Beautiful screen recordings, owned by you.",
     description:
       "Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
     type: "website",

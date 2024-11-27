@@ -22,7 +22,7 @@ export default async function LoginPage() {
             Sign in to Cap.
           </h1>
           <p className="text-2xl text-gray-500 fade-in-down animate-delay-1">
-            Beautiful, shareable screen recordings.
+            Beautiful screen recordings, owned by you.
           </p>
         </div>
         <div className="flex flex-col space-y-3">
