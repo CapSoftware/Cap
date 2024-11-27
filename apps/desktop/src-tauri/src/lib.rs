@@ -1669,6 +1669,18 @@ async fn check_notification_permissions(app: AppHandle) {
     }
 }
 
+#[tauri::command]
+#[specta::specta]
+fn set_window_theme(window: tauri::Window, dark: bool) {
+    window
+        .set_theme(Some(if dark {
+            tauri::Theme::Dark
+        } else {
+            tauri::Theme::Light
+        }))
+        .ok();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -1723,7 +1735,7 @@ pub async fn run() {
             windows::position_traffic_lights,
             global_message_dialog,
             show_window,
-            platform::macos::write_string_to_pasteboard,
+            set_window_theme,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1788,6 +1800,7 @@ pub async fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({

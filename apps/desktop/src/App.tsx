@@ -16,6 +16,7 @@ import "unfonts.css";
 import "./styles/theme.css";
 import { generalSettingsStore } from "./store";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { commands } from "./utils/tauri";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -91,7 +92,7 @@ function createThemeListener() {
       t = false;
     if (t === undefined) return;
 
-    getCurrentWindow().setTheme(t ? "dark" : "light");
+    commands.setWindowTheme(!!t);
 
     if (t) {
       document.documentElement.classList.add("dark");

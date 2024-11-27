@@ -136,7 +136,7 @@ impl ShowCapWindow {
                 .center()
                 .focused(true)
                 .maximizable(false)
-                .theme(Some(tauri::Theme::Light))
+                // .theme(Some(tauri::Theme::Light))
                 .shadow(true)
                 .build()?,
             Self::Main => self
@@ -146,7 +146,7 @@ impl ShowCapWindow {
                 .maximized(false)
                 .maximizable(false)
                 .maximized(false)
-                .theme(Some(tauri::Theme::Light))
+                // .theme(Some(tauri::Theme::Light))
                 .build()?,
             Self::Settings { page } => self
                 .window_builder(
@@ -156,13 +156,13 @@ impl ShowCapWindow {
                 .min_inner_size(600.0, 450.0)
                 .resizable(true)
                 .maximized(false)
-                .theme(Some(tauri::Theme::Light))
+                // .theme(Some(tauri::Theme::Light))
                 .build()?,
             Self::Editor { project_id } => self
                 .window_builder(app, format!("/editor?id={project_id}"))
                 .inner_size(1150.0, 800.0)
                 .maximizable(true)
-                .theme(Some(tauri::Theme::Dark))
+                // .theme(Some(tauri::Theme::Dark))
                 .build()?,
             Self::Upgrade => self
                 .window_builder(app, "/upgrade")
@@ -259,7 +259,7 @@ impl ShowCapWindow {
                         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
-                    .theme(Some(tauri::Theme::Dark))
+                    // .theme(Some(tauri::Theme::Dark))
                     .skip_taskbar(true)
                     .build()?
             }
@@ -339,7 +339,8 @@ impl ShowCapWindow {
             .title(id.title())
             .visible(false)
             .accept_first_mouse(true)
-            .shadow(true);
+            .shadow(true)
+            .theme(Some(tauri::Theme::Light));
 
         #[cfg(target_os = "macos")]
         {

@@ -5,6 +5,7 @@ pub struct Flags {
     pub split: bool,
     pub pause_resume: bool,
     pub zoom: bool,
+    pub custom_s3: bool,
 }
 
 pub const FLAGS: Flags = Flags {
@@ -12,4 +13,5 @@ pub const FLAGS: Flags = Flags {
     split: false,        // cfg!(debug_assertions),
     pause_resume: false, // cfg!(debug_assertions),
     zoom: false,         // cfg!(debug_assertions),
+    custom_s3: false,
 };

@@ -43,7 +43,8 @@ export default function () {
       size: "sm",
       shape: "round",
       mirrored: false,
-    })
+    }),
+    { name: "cameraWindowState" }
   );
 
   const [latestFrame, setLatestFrame] = createLazySignal<ImageData | null>();

@@ -52,8 +52,6 @@ extern "C" {
         rect: *mut CGRect,
     ) -> boolean_t;
 }
-#[tauri::command]
-#[specta::specta]
 pub fn write_string_to_pasteboard(string: &str) {
     use cocoa::appkit::NSPasteboard;
     use cocoa::base::{id, nil};
