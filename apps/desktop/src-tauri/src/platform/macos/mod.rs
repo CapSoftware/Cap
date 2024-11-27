@@ -12,9 +12,6 @@ use objc::{class, msg_send, sel, sel_impl};
 
 pub mod delegates;
 
-use specta::Type;
-use tauri_specta::Event;
-
 #[derive(Debug)]
 pub struct Window {
     pub window_number: u32,
@@ -55,8 +52,6 @@ extern "C" {
         rect: *mut CGRect,
     ) -> boolean_t;
 }
-#[tauri::command]
-#[specta::specta]
 pub fn write_string_to_pasteboard(string: &str) {
     use cocoa::appkit::NSPasteboard;
     use cocoa::base::{id, nil};

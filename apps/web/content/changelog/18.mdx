@@ -1,15 +1,11 @@
 ---
-title: Dark mode, new audio level indicator & fixes
+title: Dark mode + stability improvements
 app: Cap Desktop
-publishedAt: "2024-11-26"
-version: 0.3.0-beta.9.3
+publishedAt: "2024-11-20"
+version: 0.3.0-beta.10
 image:
 ---
 
-- New dark mode toggle in settings
-- New audio level indicator during recording
-- Exporting video now always re-renders the video
-- Improved automatic device selection on startup
-- Fixed thumbnail progress bar for screenshots
-- Fixed issue with copy to clipboard for shareable links in thumbnail
-
+- New dark mode option
+- Fixes a recording crash cause by the encoder not respecting `readyForMoreMediaData`
+- Multiple recording segments are now supported in recording metadata, paving the way for pause/resume support

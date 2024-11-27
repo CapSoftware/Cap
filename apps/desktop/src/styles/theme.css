@@ -1,50 +1,40 @@
-@media (prefers-color-scheme: dark) {
-  [data-tauri-drag-region]:not(.non-styled-move) {
-    background: var(--gray-50);
-  }
-}
-
-.dark [data-tauri-drag-region]:not(.non-styled-move) {
-  background: var(--gray-50);
-}
-
 :root {
   /* Light theme variables */
-  --gray-50: #FFFFFF;
-  --gray-100: #F7F8FA;
-  --gray-200: #E7EAF0;
-  --gray-300: #C9CEDB;
-  --gray-400: #8991A3;
-  --gray-500: #12161F;
+  --gray-50: #ffffff;
+  --gray-100: #f7f8fa;
+  --gray-200: #e7eaf0;
+  --gray-300: #c9cedb;
+  --gray-400: #8991a3;
+  --gray-500: #12161f;
 
-  --black-transparent-5: rgba(18,22,31,0.05);
-  --black-transparent-10: rgba(18,22,31,0.1);
-  --black-transparent-20: rgba(18,22,31,0.2);
-  --black-transparent-40: rgba(18,22,31,0.4);
-  --black-transparent-60: rgba(18,22,31,0.6);
-  --black-transparent-80: rgba(18,22,31,0.8);
+  --black-transparent-5: rgba(18, 22, 31, 0.05);
+  --black-transparent-10: rgba(18, 22, 31, 0.1);
+  --black-transparent-20: rgba(18, 22, 31, 0.2);
+  --black-transparent-40: rgba(18, 22, 31, 0.4);
+  --black-transparent-60: rgba(18, 22, 31, 0.6);
+  --black-transparent-80: rgba(18, 22, 31, 0.8);
 
-  --white-transparent-5: rgba(255,255,255,0.05);
-  --white-transparent-10: rgba(255,255,255,0.1);
-  --white-transparent-20: rgba(255,255,255,0.2);
-  --white-transparent-40: rgba(255,255,255,0.4);
+  --white-transparent-5: rgba(255, 255, 255, 0.05);
+  --white-transparent-10: rgba(255, 255, 255, 0.1);
+  --white-transparent-20: rgba(255, 255, 255, 0.2);
+  --white-transparent-40: rgba(255, 255, 255, 0.4);
 
-  --blue-50: #EBF1FF;
-  --blue-100: #ADC9FF;
-  --blue-200: #85ADFF;
-  --blue-300: #4785FF;
-  --blue-400: #3F75E0;
+  --blue-50: #ebf1ff;
+  --blue-100: #adc9ff;
+  --blue-200: #85adff;
+  --blue-300: #4785ff;
+  --blue-400: #3f75e0;
 
-  --blue-transparent-10: rgba(34,64,122,0.1);
-  --blue-transparent-20: rgba(34,64,122,0.2);
+  --blue-transparent-10: rgba(34, 64, 122, 0.1);
+  --blue-transparent-20: rgba(34, 64, 122, 0.2);
 
-  --red-50: #FFEBEE;
-  --red-100: #FFADBB;
-  --red-200: #FF8599;
-  --red-300: #FF4766;
-  --red-400: #E03F5A;
+  --red-50: #ffebee;
+  --red-100: #ffadbb;
+  --red-200: #ff8599;
+  --red-300: #ff4766;
+  --red-400: #e03f5a;
 
-  --red-transparent-20: rgba(255,71,102,0.2);
+  --red-transparent-20: rgba(255, 71, 102, 0.2);
 
   --shadow-s: 0px 8px 16px 0px rgba(18, 22, 31, 0.04);
 }
@@ -52,49 +42,49 @@
 /* Dark theme variables */
 :root.dark {
   /* Main background colors */
-  --gray-50: #1E1E1E;    /* Main background */
-  --gray-100: #242424;   /* Secondary background */
-  --gray-200: #2A2A2A;   /* Borders and dividers */
-  --gray-300: #3A3A3A;   /* Subtle highlights */
-  --gray-400: #EBEBF0;   /* Secondary text - descriptions */
-  --gray-500: #FFFFFF;   /* Primary text - titles/headings (back to white) */
+  --gray-50: #1e1e1e; /* Main background */
+  --gray-100: #242424; /* Secondary background */
+  --gray-200: #2a2a2a; /* Borders and dividers */
+  --gray-300: #3a3a3a; /* Subtle highlights */
+  --gray-400: #ebebf0; /* Secondary text - descriptions */
+  --gray-500: #ffffff; /* Primary text - titles/headings (back to white) */
 
   /* Add new variables for text hierarchy */
-  --text-primary: rgba(255, 255, 255, 0.95);    /* Section titles, headings */
-  --text-secondary: rgba(255, 255, 255, 0.85);  /* Important labels */
-  --text-tertiary: rgba(255, 255, 255, 0.65);   /* Descriptions */
+  --text-primary: rgba(255, 255, 255, 0.95); /* Section titles, headings */
+  --text-secondary: rgba(255, 255, 255, 0.85); /* Important labels */
+  --text-tertiary: rgba(255, 255, 255, 0.65); /* Descriptions */
 
   /* Transparent overlays - adjusted for better contrast */
-  --black-transparent-5: rgba(255,255,255,0.05);
-  --black-transparent-10: rgba(255,255,255,0.1);
-  --black-transparent-20: rgba(255,255,255,0.2);
-  --black-transparent-40: rgba(255,255,255,0.4);
-  --black-transparent-60: rgba(255,255,255,0.6);
-  --black-transparent-80: rgba(255,255,255,0.8);
+  --black-transparent-5: rgba(255, 255, 255, 0.05);
+  --black-transparent-10: rgba(255, 255, 255, 0.1);
+  --black-transparent-20: rgba(255, 255, 255, 0.2);
+  --black-transparent-40: rgba(255, 255, 255, 0.4);
+  --black-transparent-60: rgba(255, 255, 255, 0.6);
+  --black-transparent-80: rgba(255, 255, 255, 0.8);
 
   /* White transparencies */
-  --white-transparent-5: rgba(18,22,31,0.05);
-  --white-transparent-10: rgba(18,22,31,0.1);
-  --white-transparent-20: rgba(18,22,31,0.2);
-  --white-transparent-40: rgba(18,22,31,0.4);
+  --white-transparent-5: rgba(18, 22, 31, 0.05);
+  --white-transparent-10: rgba(18, 22, 31, 0.1);
+  --white-transparent-20: rgba(18, 22, 31, 0.2);
+  --white-transparent-40: rgba(18, 22, 31, 0.4);
 
   /* Accent colors remain mostly the same but adjusted for dark theme */
-  --blue-50: #1A2438;
+  --blue-50: #1a2438;
   --blue-100: #243352;
-  --blue-200: #2E426B;
-  --blue-300: #4785FF;
-  --blue-400: #5C8FFF;
+  --blue-200: #2e426b;
+  --blue-300: #4785ff;
+  --blue-400: #5c8fff;
 
-  --blue-transparent-10: rgba(71,133,255,0.1);
-  --blue-transparent-20: rgba(71,133,255,0.2);
+  --blue-transparent-10: rgba(71, 133, 255, 0.1);
+  --blue-transparent-20: rgba(71, 133, 255, 0.2);
 
-  --red-50: #2C1A1E;
-  --red-100: #52232C;
-  --red-200: #6B2C39;
-  --red-300: #FF4766;
-  --red-400: #FF5C7A;
+  --red-50: #2c1a1e;
+  --red-100: #52232c;
+  --red-200: #6b2c39;
+  --red-300: #ff4766;
+  --red-400: #ff5c7a;
 
-  --red-transparent-20: rgba(255,71,102,0.2);
+  --red-transparent-20: rgba(255, 71, 102, 0.2);
 
   --shadow-s: 0px 8px 16px 0px rgba(0, 0, 0, 0.4);
 }

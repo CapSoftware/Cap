@@ -1,6 +1,12 @@
 import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
-import { ErrorBoundary, onMount, Suspense } from "solid-js";
+import {
+  createEffect,
+  createResource,
+  ErrorBoundary,
+  onMount,
+  Suspense,
+} from "solid-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
@@ -8,32 +14,9 @@ import { message } from "@tauri-apps/plugin-dialog";
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
+import { generalSettingsStore } from "./store";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { commands } from "./utils/tauri";
-import { themeStore } from "./store/theme";
-import "./store/early-theme-loader";
-
-const darkModeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-const localStorageDarkMode = localStorage.getItem("darkMode");
-
-// Check stored preference first, then system preference
-if (
-  localStorageDarkMode === "true" ||
-  (localStorageDarkMode === null && darkModeMediaQuery.matches)
-) {
-  document.documentElement.classList.add("dark");
-}
-
-// Add base background color to prevent flash
-const style = document.createElement("style");
-style.textContent = `
-  html.dark {
-    background-color: #1E1E1E;
-  }
-  html.dark body {
-    background-color: #1E1E1E;
-  }
-`;
-document.head.appendChild(style);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,55 +29,75 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
-  const darkMode = themeStore.isDarkMode;
+  return (
+    <Suspense>
+      <Inner />
+    </Suspense>
+  );
+}
 
-  onMount(async () => {
-    await themeStore.initialize();
-
-    const matches = useCurrentMatches();
-
-    onMount(() => {
-      for (const match of matches()) {
-        if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
-      }
-
-      getCurrentWindow().show();
-    });
-  });
+function Inner() {
+  createThemeListener();
 
   return (
-    <div class={darkMode() ? "dark" : ""}>
-      <ErrorBoundary
-        fallback={(e: Error) => {
-          console.error(e);
-          return (
-            <>
-              <p>{e.toString()}</p>
-              <p>{e.stack?.toString()}</p>
-            </>
-          );
-        }}
-      >
-        <QueryClientProvider client={queryClient}>
-          <Router
-            root={(props) => {
-              const matches = useCurrentMatches();
+    <ErrorBoundary
+      fallback={(e: Error) => {
+        console.error(e);
+        return (
+          <>
+            <p>{e.toString()}</p>
+            <p>{e.stack?.toString()}</p>
+          </>
+        );
+      }}
+    >
+      <QueryClientProvider client={queryClient}>
+        <Router
+          root={(props) => {
+            const matches = useCurrentMatches();
 
-              onMount(() => {
-                for (const match of matches()) {
-                  if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
-                }
+            onMount(() => {
+              for (const match of matches()) {
+                if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
+              }
 
-                getCurrentWindow().show();
-              });
+              getCurrentWindow().show();
+            });
 
-              return <Suspense>{props.children}</Suspense>;
-            }}
-          >
-            <FileRoutes />
-          </Router>
-        </QueryClientProvider>
-      </ErrorBoundary>
-    </div>
+            return <Suspense>{props.children}</Suspense>;
+          }}
+        >
+          <FileRoutes />
+        </Router>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
+}
+
+function createThemeListener() {
+  const [theme, themeActions] = createResource(() =>
+    generalSettingsStore.get().then((s) => s?.darkMode ?? null)
+  );
+
+  generalSettingsStore.listen((s) => {
+    themeActions.mutate(s?.darkMode);
+  });
+
+  createEffect(() => {
+    let t = theme();
+    if (
+      location.pathname === "/camera" ||
+      location.pathname === "/prev-recordings"
+    )
+      t = false;
+    if (t === undefined) return;
+
+    commands.setWindowTheme(!!t);
+
+    if (t) {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  });
 }

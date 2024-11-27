@@ -1,10 +1,14 @@
+use cap_editor::Segment;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use std::{path::PathBuf, sync::Arc};
 
-use cap_media::feeds::{AudioData, AudioFrameBuffer};
-use cap_project::{CursorData, ProjectConfiguration, RecordingMeta};
-use cap_rendering::{ProjectUniforms, RecordingDecoders, RenderVideoConstants};
+use cap_media::feeds::AudioFrameBuffer;
+use cap_project::{ProjectConfiguration, RecordingMeta};
+use cap_rendering::{
+    ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants,
+    SegmentVideoPaths,
+};
 
 struct AudioRender {
     buffer: AudioFrameBuffer,
@@ -33,10 +37,9 @@ pub async fn export_video_to_file(
     output_path: PathBuf,
     on_progress: impl Fn(u32) + Send + 'static,
     project_path: &PathBuf,
-    audio: Arc<Option<AudioData>>,
     meta: RecordingMeta,
     render_constants: Arc<RenderVideoConstants>,
-    cursor: Arc<CursorData>,
+    segments: &[Segment],
 ) -> Result<PathBuf, ExportError> {
     let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
 
@@ -44,6 +47,41 @@ pub async fn export_video_to_file(
     std::fs::create_dir_all(output_folder)?;
 
     let output_size = ProjectUniforms::get_output_size(&render_constants.options, &project);
+
+    let (render_segments, audio_segments): (Vec<_>, Vec<_>) = segments
+        .iter()
+        .enumerate()
+        .map(|(i, segment)| match &meta.content {
+            cap_project::Content::SingleSegment { segment: s } => (
+                RenderSegment {
+                    cursor: segment.cursor.clone(),
+                    decoders: RecordingSegmentDecoders::new(
+                        &meta,
+                        SegmentVideoPaths {
+                            display: s.display.path.as_path(),
+                            camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                        },
+                    ),
+                },
+                segment.audio.clone(),
+            ),
+            cap_project::Content::MultipleSegments { inner } => {
+                let s = &inner.segments[i];
+
+                segment.cursor.clone();
+                RecordingSegmentDecoders::new(
+                    &meta,
+                    SegmentVideoPaths {
+                        display: s.display.path.as_path(),
+                        camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                    },
+                );
+                segment.audio.clone();
+
+                todo!()
+            }
+        })
+        .unzip();
 
     let ffmpeg_handle = tokio::spawn({
         let project = project.clone();
@@ -54,27 +92,28 @@ pub async fn export_video_to_file(
 
             let audio_dir = tempfile::tempdir().unwrap();
             let video_dir = tempfile::tempdir().unwrap();
-            let mut audio = if let Some(audio_data) = audio.as_ref() {
-                let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
+            let mut audio = None::<AudioRender>;
+            // if let Some(audio_data) = audio.as_ref() {
+            //     let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
 
-                let pipe_path =
-                    cap_utils::create_channel_named_pipe(rx, audio_dir.path().join("audio.pipe"));
+            //     let pipe_path =
+            //         cap_utils::create_channel_named_pipe(rx, audio_dir.path().join("audio.pipe"));
 
-                ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
-                    input: pipe_path,
-                    sample_format: "f64le".to_string(),
-                    sample_rate: audio_data.info.sample_rate,
-                    channels: audio_data.info.channels as u16,
-                });
+            //     ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
+            //         input: pipe_path,
+            //         sample_format: "f64le".to_string(),
+            //         sample_rate: audio_data.info.sample_rate,
+            //         channels: audio_data.info.channels as u16,
+            //     });
 
-                let buffer = AudioFrameBuffer::new(audio_data.clone());
-                Some(AudioRender {
-                    buffer,
-                    pipe_tx: tx,
-                })
-            } else {
-                None
-            };
+            //     let buffer = AudioFrameBuffer::new(audio_data.clone());
+            //     Some(AudioRender {
+            //         buffer,
+            //         pipe_tx: tx,
+            //     })
+            // } else {
+            //     None
+            // };
 
             let video_tx = {
                 let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
@@ -215,15 +254,12 @@ pub async fn export_video_to_file(
 
     println!("Rendering video to channel");
 
-    let decoders = RecordingDecoders::new(&meta);
-
     cap_rendering::render_video_to_channel(
         render_constants.options,
         project,
         tx_image_data,
-        decoders,
-        cursor.clone(),
-        project_path.clone(),
+        &meta,
+        render_segments,
     )
     .await?;
 

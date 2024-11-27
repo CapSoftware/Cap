@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -12,7 +11,7 @@ use crate::web_api;
 #[derive(Serialize, Deserialize, Type, Debug)]
 pub struct AuthStore {
     pub token: String,
-    pub user_id: String,
+    pub user_id: Option<String>,
     pub expires: i32,
     pub plan: Option<Plan>,
 }

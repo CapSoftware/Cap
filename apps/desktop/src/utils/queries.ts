@@ -57,7 +57,7 @@ export const listAudioDevices = queryOptions({
   reconcile: "name",
   refetchInterval: 1000,
   gcTime: 0,
-  staleTime: 0
+  staleTime: 0,
 });
 
 export const getPermissions = queryOptions({
@@ -68,17 +68,12 @@ export const getPermissions = queryOptions({
 
 type PartialRecordingOptions = Omit<RecordingOptions, "captureTarget">;
 export function createOptionsQuery() {
-  const KEY = "recordingOptionsQuery";
-  const localState = localStorage.getItem(KEY);
-  const [state, setState, _init] = makePersisted(
-    createStore<PartialRecordingOptions>(
-      localState
-        ? JSON.parse(localState)
-        : {
-            cameraLabel: null,
-            audioInputName: null,
-          }
-    )
+  const [state, setState] = makePersisted(
+    createStore<PartialRecordingOptions>({
+      cameraLabel: null,
+      audioInputName: null,
+    }),
+    { name: "recordingOptionsQuery" }
   );
 
   const setOptions = (newOptions: RecordingOptions) => {
@@ -86,10 +81,6 @@ export function createOptionsQuery() {
     const { captureTarget: _, ...partialOptions } = newOptions;
     setState(partialOptions);
   };
-
-  createEffect(() => {
-    localStorage.setItem(KEY, JSON.stringify(state));
-  });
 
   const options = createQuery(() => ({
     ...getOptions,

@@ -118,7 +118,7 @@ export function Player() {
           <EditorButton
             leftIcon={<IconCapCrop />}
             onClick={() => {
-              const display = editorInstance.recordings.display;
+              const display = editorInstance.recordings.segments[0].display;
               setDialog({
                 open: true,
                 type: "crop",
