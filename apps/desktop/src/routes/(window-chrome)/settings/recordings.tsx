@@ -3,6 +3,7 @@ import { For, Show, Suspense, createSignal } from "solid-js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { commands, events } from "~/utils/tauri";
+import { createQueryInvalidate } from "~/utils/events";
 
 type MediaEntry = {
   id: string;
@@ -13,36 +14,50 @@ type MediaEntry = {
 };
 
 export default function Recordings() {
-  const fetchRecordings = createQuery(() => ({
-    queryKey: ["recordings"],
-    queryFn: async () => {
-      const result = await commands
-        .listRecordings()
-        .catch(
-          () =>
-            Promise.resolve([]) as ReturnType<typeof commands.listRecordings>
+  function fetchRecordingsQuery() {
+    const fetchRecordings = createQuery(() => ({
+      queryKey: ["recordings"],
+      queryFn: async () => {
+        const result = await commands
+          .listRecordings()
+          .catch(
+            () =>
+              Promise.resolve([]) as ReturnType<typeof commands.listRecordings>
+          );
+
+        const recordings = await Promise.all(
+          result.map(async (file) => {
+            const [id, path, meta] = file;
+            const thumbnailPath = `${path}/screenshots/display.jpg`;
+
+            return {
+              id,
+              path,
+              prettyName: meta.pretty_name,
+              isNew: false,
+              thumbnailPath,
+            };
+          })
         );
+        return recordings;
+      },
+      staleTime: 0,
+    }));
 
-      const recordings = await Promise.all(
-        result.map(async (file) => {
-          const [id, path, meta] = file;
-          const thumbnailPath = `${path}/screenshots/display.jpg`;
+    createQueryInvalidate(fetchRecordings, "recordingDeleted");
 
-          return {
-            id,
-            path,
-            prettyName: meta.pretty_name,
-            isNew: false,
-            thumbnailPath,
-          };
-        })
-      );
-      return recordings;
-    },
-  }));
+    return fetchRecordings;
+  }
 
-  const handleRecordingClick = (recording: MediaEntry) => {
+  const recordings = fetchRecordingsQuery();
+
+  const handleOpenRecording = (recording: MediaEntry) => {
     events.newRecordingAdded.emit({ path: recording.path });
+  };
+
+  const handleDeleteRecording = (path: string) => {
+    commands.deleteFile(path);
+    events.recordingDeleted.emit({ path });
   };
 
   const handleOpenFolder = (path: string) => {
@@ -60,18 +75,21 @@ export default function Recordings() {
       <div class="flex-1 overflow-y-auto">
         <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
           <Show
-            when={fetchRecordings.data && fetchRecordings.data.length > 0}
+            when={recordings.data && recordings.data.length > 0}
             fallback={
               <p class="text-center text-[--text-tertiary]">No recordings found</p>
             }
           >
-            <For each={fetchRecordings.data}>
+            <For each={recordings.data}>
               {(recording) => (
                 <RecordingItem
                   recording={recording}
-                  onClick={() => handleRecordingClick(recording)}
                   onOpenFolder={() => handleOpenFolder(recording.path)}
                   onOpenEditor={() => handleOpenEditor(recording.path)}
+                  onOpenRecording={() => handleOpenRecording(recording)}
+                  onDeleteRecording={() =>
+                    handleDeleteRecording(recording.path)
+                  }
                 />
               )}
             </For>
@@ -84,9 +102,10 @@ export default function Recordings() {
 
 function RecordingItem(props: {
   recording: MediaEntry;
-  onClick: () => void;
   onOpenFolder: () => void;
   onOpenEditor: () => void;
+  onOpenRecording: () => void;
+  onDeleteRecording: () => void;
 }) {
   const [imageExists, setImageExists] = createSignal(true);
 
@@ -133,11 +152,21 @@ function RecordingItem(props: {
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            props.onClick();
+            props.onOpenRecording();
           }}
           class="p-2 hover:bg-gray-200 rounded-full"
         >
           <IconLucideEye class="size-5" />
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            props.onDeleteRecording();
+          }}
+          class="p-2 hover:bg-gray-200 rounded-full"
+        >
+          <IconCapTrash class="size-5" />
         </button>
       </div>
     </li>
