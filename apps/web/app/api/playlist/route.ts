@@ -13,7 +13,7 @@ import {
   generateM3U8Playlist,
   generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
-import { getHeaders } from "@/utils/helpers";
+import { getHeaders, CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 
 export const revalidate = 3599;
@@ -88,6 +88,7 @@ export async function GET(request: NextRequest) {
         headers: {
           ...getHeaders(origin),
           Location: `https://v.cap.so/${userId}/${videoId}/result.mp4`,
+          ...CACHE_CONTROL_HEADERS,
         },
       });
     }
@@ -98,6 +99,7 @@ export async function GET(request: NextRequest) {
         headers: {
           ...getHeaders(origin),
           Location: `https://v.cap.so/${userId}/${videoId}/output/video_recording_000.m3u8`,
+          ...CACHE_CONTROL_HEADERS,
         },
       });
     }
@@ -108,6 +110,7 @@ export async function GET(request: NextRequest) {
       headers: {
         ...getHeaders(origin),
         Location: playlistUrl,
+        ...CACHE_CONTROL_HEADERS,
       },
     });
   }
@@ -131,6 +134,7 @@ export async function GET(request: NextRequest) {
         status: 200,
         headers: {
           ...getHeaders(origin),
+          ...CACHE_CONTROL_HEADERS,
           "Content-Type": "text/vtt",
         },
       });
@@ -182,7 +186,10 @@ export async function GET(request: NextRequest) {
 
       return new Response(playlist, {
         status: 200,
-        headers: getHeaders(origin),
+        headers: {
+          ...getHeaders(origin),
+          ...CACHE_CONTROL_HEADERS,
+        },
       });
     }
 
@@ -201,6 +208,7 @@ export async function GET(request: NextRequest) {
         headers: {
           ...getHeaders(origin),
           Location: playlistUrl,
+          ...CACHE_CONTROL_HEADERS,
         },
       });
     }
@@ -279,7 +287,10 @@ export async function GET(request: NextRequest) {
 
       return new Response(generatedPlaylist, {
         status: 200,
-        headers: getHeaders(origin),
+        headers: {
+          ...getHeaders(origin),
+          ...CACHE_CONTROL_HEADERS,
+        },
       });
     }
 
@@ -317,7 +328,10 @@ export async function GET(request: NextRequest) {
 
     return new Response(generatedPlaylist, {
       status: 200,
-      headers: getHeaders(origin),
+      headers: {
+        ...getHeaders(origin),
+        ...CACHE_CONTROL_HEADERS,
+      },
     });
   } catch (error) {
     console.error("Error generating video segment URLs", error);

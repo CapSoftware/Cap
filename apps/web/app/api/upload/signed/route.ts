@@ -146,6 +146,22 @@ export async function POST(request: NextRequest) {
 
       console.log("Presigned URL created successfully");
 
+      // After successful presigned URL creation, trigger revalidation
+      const videoId = fileKey.split('/')[1]; // Assuming fileKey format is userId/videoId/...
+      if (videoId) {
+        try {
+          await fetch(`${process.env.NEXT_PUBLIC_URL}/api/revalidate`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ videoId }),
+          });
+        } catch (revalidateError) {
+          console.error('Failed to revalidate page:', revalidateError);
+        }
+      }
+
       return new Response(JSON.stringify({ presignedPostData }), {
         headers: {
           "Content-Type": "application/json",
