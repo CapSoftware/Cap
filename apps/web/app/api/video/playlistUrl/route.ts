@@ -3,6 +3,7 @@ import { db } from "@cap/database";
 import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { getHeaders } from "@/utils/helpers";
+import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 
 export const revalidate = 0;
 
@@ -63,7 +64,10 @@ export async function GET(request: NextRequest) {
       JSON.stringify({ playlistOne: playlistUrl, playlistTwo: null }),
       {
         status: 200,
-        headers: getHeaders(origin),
+        headers: {
+          ...getHeaders(origin),
+          ...CACHE_CONTROL_HEADERS,
+        },
       }
     );
   }
@@ -75,7 +79,10 @@ export async function GET(request: NextRequest) {
     }),
     {
       status: 200,
-      headers: getHeaders(origin),
+      headers: {
+        ...getHeaders(origin),
+        ...CACHE_CONTROL_HEADERS,
+      },
     }
   );
 }

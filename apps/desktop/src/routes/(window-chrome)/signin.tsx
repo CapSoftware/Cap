@@ -61,7 +61,7 @@ const signInAction = action(async () => {
 
     getCurrentWindow()
       .setFocus()
-      .catch(() => { });
+      .catch(() => {});
 
     return redirect("/");
   } catch (error) {
@@ -102,7 +102,7 @@ export default function Page() {
       <div class="space-y-[0.375rem] flex-1">
         <IconCapLogo class="size-[3rem]" />
         <h1 class="text-[1rem] font-[700]">Sign in to Cap</h1>
-        <p class="text-gray-400">Beautiful, shareable screen recordings.</p>
+        <p class="text-gray-400">Beautiful screen recordings, owned by you.</p>
       </div>
       {submission.pending ? (
         <Button variant="secondary" onClick={() => submission.clear()}>

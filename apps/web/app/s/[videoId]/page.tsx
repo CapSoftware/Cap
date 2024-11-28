@@ -1,4 +1,3 @@
-"use server";
 import { Share } from "./Share";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
@@ -7,6 +6,10 @@ import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
 import { ImageViewer } from "./_components/ImageViewer";
+
+export const dynamic = "auto";
+export const dynamicParams = true;
+export const revalidate = 30;
 
 type Props = {
   params: { [key: string]: string | string[] | undefined };
