@@ -10,6 +10,13 @@ export type PostMetadata = {
   image?: string;
 };
 
+export type DocMetadata = {
+  title: string;
+  summary: string;
+  tags?: string;
+  image?: string;
+};
+
 function parseFrontmatter(fileContent: string) {
   let frontmatterRegex = /---\s*([\s\S]*?)\s*---/;
   let match = frontmatterRegex.exec(fileContent);
@@ -52,4 +59,8 @@ function getMDXData(dir: string) {
 
 export function getBlogPosts() {
   return getMDXData(path.join(process.cwd(), "content/updates"));
+}
+
+export function getDocs() {
+  return getMDXData(path.join(process.cwd(), "content/docs"));
 }

@@ -522,7 +522,7 @@ export default function () {
                                       if (!save.isPending) save.reset();
                                     }, 2000);
 
-                                    return "Saved!";
+                                    return "Exported!";
                                   }}
                                 </Match>
                               </Switch>
@@ -777,7 +777,7 @@ function createRecordingMutations(
         renderProgress: 0,
         totalFrames: 0,
         message: isRecording
-          ? "Choose where to save video..."
+          ? "Choose where to export video..."
           : "Choose where to save image...",
         mediaPath: media.path,
         stage: "rendering",
@@ -867,7 +867,7 @@ function createRecordingMutations(
           progress: 100,
           renderProgress: 100,
           totalFrames: 100,
-          message: "Saved successfully!",
+          message: "Exported successfully!",
           mediaPath: media.path,
           stage: "rendering",
         });

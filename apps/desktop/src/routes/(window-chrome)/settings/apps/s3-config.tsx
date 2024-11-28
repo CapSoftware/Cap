@@ -38,6 +38,7 @@ export default function S3ConfigPage() {
   const [loading, setLoading] = createSignal(true);
   const [deleting, setDeleting] = createSignal(false);
   const [hasConfig, setHasConfig] = createSignal(false);
+  const [testing, setTesting] = createSignal(false);
 
   const resetForm = () => {
     setProvider(DEFAULT_CONFIG.provider);
@@ -182,6 +183,66 @@ export default function S3ConfigPage() {
     }
   };
 
+  const handleTest = async () => {
+    setTesting(true);
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5500); // 5.5s timeout (slightly longer than backend)
+
+      const response = await makeAuthenticatedRequest(
+        "/api/desktop/s3/config/test",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            provider: provider(),
+            accessKeyId: accessKeyId(),
+            secretAccessKey: secretAccessKey(),
+            endpoint: endpoint(),
+            bucketName: bucketName(),
+            region: region(),
+          }),
+          signal: controller.signal,
+        }
+      );
+
+      clearTimeout(timeoutId);
+
+      if (response) {
+        await commands.globalMessageDialog(
+          "S3 configuration test successful! Connection is working."
+        );
+      }
+    } catch (error) {
+      console.error("Failed to test S3 config:", error);
+      let errorMessage =
+        "Failed to connect to S3. Please check your settings and try again.";
+
+      if (error instanceof Error) {
+        if (error.name === "AbortError") {
+          errorMessage =
+            "Connection test timed out after 5 seconds. Please check your endpoint URL and network connection.";
+        } else if ("response" in error) {
+          try {
+            const errorResponse = (error as { response: Response }).response;
+            const errorData = await errorResponse.json();
+            if (errorData?.error) {
+              errorMessage = errorData.error;
+            }
+          } catch (e) {
+            // If we can't parse the error response, use the default message
+          }
+        }
+      }
+
+      await commands.globalMessageDialog(errorMessage);
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const renderInput = (
     label: string,
     value: () => string,
@@ -294,36 +355,60 @@ export default function S3ConfigPage() {
       </div>
 
       <div class="flex-shrink-0 p-4 border-t">
-        <div
-          class={`flex ${
-            hasConfig() ? "justify-between" : "justify-end"
-          } items-center`}
-        >
-          {hasConfig() && (
+        <div class="flex justify-between items-center">
+          <div class="flex gap-2">
+            {hasConfig() && (
+              <Button
+                variant="destructive"
+                onClick={handleDelete}
+                disabled={deleting() || loading() || saving() || testing()}
+                class={
+                  deleting() || loading() || saving() || testing()
+                    ? "opacity-50 cursor-not-allowed"
+                    : ""
+                }
+              >
+                {deleting() ? "Removing..." : "Remove Config"}
+              </Button>
+            )}
             <Button
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={deleting() || loading() || saving()}
+              variant="secondary"
+              onClick={handleTest}
+              disabled={
+                saving() ||
+                loading() ||
+                deleting() ||
+                testing() ||
+                !accessKeyId() ||
+                !secretAccessKey() ||
+                !bucketName()
+              }
               class={
-                deleting() || loading() || saving()
+                saving() ||
+                loading() ||
+                deleting() ||
+                testing() ||
+                !accessKeyId() ||
+                !secretAccessKey() ||
+                !bucketName()
                   ? "opacity-50 cursor-not-allowed"
                   : ""
               }
             >
-              {deleting() ? "Removing..." : "Remove Config"}
+              {testing() ? "Testing..." : "Test Connection"}
             </Button>
-          )}
+          </div>
           <Button
             variant="primary"
             onClick={handleSave}
-            disabled={saving() || loading() || deleting()}
+            disabled={saving() || loading() || deleting() || testing()}
             class={
-              saving() || loading() || deleting()
+              saving() || loading() || deleting() || testing()
                 ? "opacity-50 cursor-not-allowed"
                 : ""
             }
           >
-            {saving() ? "Exporting..." : "Export"}
+            {saving() ? "Saving..." : "Save"}
           </Button>
         </div>
       </div>

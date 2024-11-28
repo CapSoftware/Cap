@@ -79,6 +79,11 @@ html {
   @apply max-w-5xl;
 }
 
+.prose :where(blockquote p:first-of-type):not(:where([class~="not-prose"],[class~="not-prose"] *))::before {
+  content: "“" !important;
+  display: none;
+}
+
 *,
 *:before,
 *:after {
