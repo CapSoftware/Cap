@@ -87,10 +87,10 @@ export const HomePage = () => {
 
   return (
     <ParallaxProvider>
-      <div className="-mt-[80px] custom-bg min-h-screen md:min-h-[calc(100vh+20px)] relative flex items-center">
+      <div className="-mt-[73px] custom-bg min-h-screen md:min-h-[calc(100vh+20px)] relative flex items-center">
         <div className="w-full relative z-10 flex">
           <div className="wrapper wrapper-sm mx-auto">
-            <div className="mb-auto text-center px-4 pt-40 pb-52 md:pb-64 -mt-40">
+            <div className="mb-auto text-center px-4 pt-60 pb-72 sm:pb-80 -mt-40">
               <Link
                 href="/updates/cap-v03-launch"
                 className="mx-auto mb-4 inline-flex justify-center font-medium transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 bg-blue-400 hover:bg-blue-500 h-9 px-4 py-2 rounded-full space-x-2 items-center animate-pulse"
@@ -181,7 +181,7 @@ export const HomePage = () => {
       </div>
       <div
         id="scrolling-section"
-        className="pb-32 md:pb-48 fade-in-up animate-delay-2 -mt-40"
+        className="pb-32 md:pb-48 fade-in-up animate-delay-2 -mt-24"
       >
         <Parallax
           className="cursor-pointer"
