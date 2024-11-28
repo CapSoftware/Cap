@@ -1630,18 +1630,6 @@ async fn check_notification_permissions(app: AppHandle) {
     }
 }
 
-#[tauri::command]
-#[specta::specta]
-fn set_window_theme(window: tauri::Window, dark: bool) {
-    window
-        .set_theme(Some(if dark {
-            tauri::Theme::Dark
-        } else {
-            tauri::Theme::Light
-        }))
-        .ok();
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -1696,7 +1684,6 @@ pub async fn run() {
             windows::position_traffic_lights,
             global_message_dialog,
             show_window,
-            set_window_theme,
             write_clipboard_string,
         ])
         .events(tauri_specta::collect_events![

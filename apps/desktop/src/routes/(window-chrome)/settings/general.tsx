@@ -1,7 +1,13 @@
-import { createResource, Show, For, createSignal } from "solid-js";
+import {
+  createResource,
+  Show,
+  For,
+  createSignal,
+  createEffect,
+} from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
-import { commands, type GeneralSettingsStore } from "~/utils/tauri";
+import { AppTheme, commands, type GeneralSettingsStore } from "~/utils/tauri";
 // import { themeStore } from "~/store/theme";
 import {
   isPermissionGranted,
@@ -21,15 +27,6 @@ const settingsList: Array<{
   pro?: boolean;
   onChange?: (value: boolean) => Promise<void>;
 }> = [
-  {
-    key: "darkMode",
-    label: "Dark Mode",
-    description:
-      "Switch between light and dark theme for the application interface.",
-    onChange: async () => {
-      // await themeStore.toggleTheme();
-    },
-  },
   {
     key: "uploadIndividualFiles",
     label: "Upload individual recording files when creating shareable link",
@@ -82,13 +79,15 @@ export default function GeneralSettings() {
   );
 }
 
-function AppearanceSection() {
-  const themes = [
-    { id: "auto", name: "System", preview: themePreviewAuto },
+function AppearanceSection(props: {
+  currentTheme: AppTheme;
+  onThemeChange: (theme: AppTheme) => void;
+}) {
+  const options = [
+    { id: "system", name: "System", preview: themePreviewAuto },
     { id: "light", name: "Light", preview: themePreviewLight },
     { id: "dark", name: "Dark", preview: themePreviewDark },
-  ];
-  const [currentTheme, setCurrentTheme] = createSignal(themes[0]);
+  ] satisfies { id: AppTheme; name: string; preview: string }[];
 
   return (
     <div class="flex flex-col gap-4">
@@ -97,19 +96,19 @@ function AppearanceSection() {
         class="flex justify-start items-center text-[--text-primary]"
         on:contextmenu={(e) => e.preventDefault()}
       >
-        <div class="flex justify-between px-1 w-[22.8rem]">
-          <For each={themes}>
+        <div class="flex justify-between m-1 min-w-[20rem] w-[22.2rem] flex-nowrap">
+          <For each={options}>
             {(theme) => (
               <button
                 type="button"
-                class="flex flex-col items-center"
-                onClick={() => setCurrentTheme(theme)}
+                class="flex flex-col items-center group"
+                onClick={() => props.onThemeChange(theme.id)}
               >
                 <div
                   class={`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none transition-all duration-200 ${
-                    currentTheme().id === theme.id
+                    props.currentTheme === theme.id
                       ? "ring-4 ring-blue-100 ring-opacity-50 ring-offset-2"
-                      : "hover:ring-2 hover:ring-gray-300"
+                      : "group-hover:ring-2 group-hover:ring-gray-300"
                   }`}
                   aria-label={`Select theme: ${theme.name}`}
                 >
@@ -122,7 +121,7 @@ function AppearanceSection() {
                 </div>
                 <span
                   class={`mt-2 text-sm ${
-                    currentTheme().id === theme.id
+                    props.currentTheme === theme.id
                       ? "font-medium"
                       : "font-light"
                   }`}
@@ -191,7 +190,13 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
     <div class="flex flex-col w-full h-full">
       <div class="flex-1 overflow-y-auto">
         <div class="p-4 space-y-2 divide-y divide-gray-200">
-          <AppearanceSection />
+          <AppearanceSection
+            currentTheme={settings.theme ?? "system"}
+            onThemeChange={(newTheme) => {
+              setSettings("theme", newTheme);
+              generalSettingsStore.set({ theme: newTheme });
+            }}
+          />
           <For each={settingsList}>
             {(setting) => (
               <Show

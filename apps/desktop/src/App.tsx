@@ -3,20 +3,27 @@ import { FileRoutes } from "@solidjs/start/router";
 import {
   createEffect,
   createResource,
+  createSignal,
   ErrorBoundary,
+  onCleanup,
   onMount,
   Suspense,
 } from "solid-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  getCurrentWindow,
+  type Theme as TauriTheme,
+} from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 import { generalSettingsStore } from "./store";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { commands } from "./utils/tauri";
+import { commands, type AppTheme } from "./utils/tauri";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { setTheme } from "@tauri-apps/api/app";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -74,27 +81,59 @@ function Inner() {
   );
 }
 
+const browserPrefersDarkScheme = () =>
+  window.matchMedia("(prefers-color-scheme: dark)").matches;
+
 function createThemeListener() {
-  const [theme, themeActions] = createResource(() =>
-    generalSettingsStore.get().then((s) => s?.darkMode ?? null)
+  // Check theme(). if `system` then check CSS media
+  const currentWindow = getCurrentWebviewWindow();
+  let systemThemeUnlisten: UnlistenFn | undefined;
+  const [theme, themeActions] = createResource<AppTheme>(() =>
+    generalSettingsStore.get().then((s) => s?.theme ?? "system")
+  );
+  const [darkMode, setDarkMode] = createSignal(
+    theme() === "dark" || (theme() === "system" && browserPrefersDarkScheme())
   );
 
+  createEffect(() => {
+    console.log(`Theme is: ${theme()}`);
+    console.log(`dark mode initialized to: ${darkMode()}`);
+    console.log(`Browser prefers dark: ${browserPrefersDarkScheme()}`);
+  });
+
+  onMount(async () => {
+    // Listen to system theme changed.
+    systemThemeUnlisten = await currentWindow.onThemeChanged(
+      ({ payload: systemTheme }) => {
+        console.log(`System theme: ${systemTheme}`);
+        if (theme() === "system") setDarkMode(systemTheme === "dark");
+      }
+    );
+  });
+
+  onCleanup(() => {
+    systemThemeUnlisten?.();
+  });
+
   generalSettingsStore.listen((s) => {
-    themeActions.mutate(s?.darkMode);
+    setDarkMode(s?.theme === "dark");
+    themeActions.mutate(s?.theme);
   });
 
   createEffect(() => {
-    let t = theme();
+    let darkModeEnabled = darkMode();
+    console.log(`Dark Mode enabled?: ${darkModeEnabled}`);
     if (
       location.pathname === "/camera" ||
       location.pathname === "/prev-recordings"
     )
-      t = false;
-    if (t === undefined) return;
+      darkModeEnabled = false;
 
-    commands.setWindowTheme(!!t);
+    currentWindow.setTheme(
+      theme() === "system" ? null : darkModeEnabled ? "dark" : "light"
+    );
 
-    if (t) {
+    if (darkModeEnabled) {
       document.documentElement.classList.add("dark");
     } else {
       document.documentElement.classList.remove("dark");
