@@ -34,6 +34,9 @@ objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
 nokhwa-bindings-macos.workspace = true
 cidre = { git = "https://github.com/yury/cidre", rev = "1e008bec49a0f97aeaaea6130a0ba20fe00aa03b", default-features = false, feautres = [
 	"macos_13_0",
+	"private",
+	"blocks",
+	"async",
 	"app",
 	"am",
 	"at",
