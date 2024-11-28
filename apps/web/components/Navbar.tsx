@@ -139,6 +139,9 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                   </NavigationMenuTrigger>
                   <NavigationMenuContent>
                     <ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-[.75fr_1fr]">
+                      <ListItem href="/docs" title="Documentation">
+                        Documentation for using Cap.
+                      </ListItem>
                       <ListItem href="/faq" title="FAQs">
                         Frequently asked questions about Cap.
                       </ListItem>

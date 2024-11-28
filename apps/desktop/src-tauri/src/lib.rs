@@ -1431,49 +1431,82 @@ struct RecordingMetaChanged {
 
 #[tauri::command(async)]
 #[specta::specta]
-fn get_recording_meta(app: AppHandle, id: String, file_type: String) -> RecordingMeta {
+fn get_recording_meta(
+    app: AppHandle,
+    id: String,
+    file_type: String,
+) -> Result<RecordingMeta, String> {
     let meta_path = match file_type.as_str() {
         "recording" => recording_path(&app, &id),
         "screenshot" => screenshot_path(&app, &id),
-        _ => panic!("Invalid file type: {}", file_type),
+        _ => return Err("Invalid file type".to_string()),
     };
 
-    RecordingMeta::load_for_project(&meta_path).unwrap()
+    RecordingMeta::load_for_project(&meta_path)
+        .map_err(|e| format!("Failed to load recording meta: {}", e))
 }
+
 #[tauri::command]
 #[specta::specta]
 fn list_recordings(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta)>, String> {
     let recordings_dir = recordings_path(&app);
 
+    // First check if directory exists
+    if !recordings_dir.exists() {
+        return Ok(Vec::new());
+    }
+
     let mut result = std::fs::read_dir(&recordings_dir)
         .map_err(|e| format!("Failed to read recordings directory: {}", e))?
         .filter_map(|entry| {
-            let entry = entry.ok()?;
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => return None,
+            };
+
             let path = entry.path();
-            if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
-                let id = path.file_stem()?.to_str()?.to_string();
-                let meta = get_recording_meta(app.clone(), id.clone(), "recording".to_string());
-                Some((id, path.clone(), meta))
-            } else {
-                None
+
+            // Multiple validation checks
+            if !path.is_dir() {
+                return None;
+            }
+
+            let extension = match path.extension().and_then(|s| s.to_str()) {
+                Some("cap") => "cap",
+                _ => return None,
+            };
+
+            let id = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(stem) => stem.to_string(),
+                None => return None,
+            };
+
+            // Try to get recording meta, skip if it fails
+            match get_recording_meta(app.clone(), id.clone(), "recording".to_string()) {
+                Ok(meta) => Some((id, path.clone(), meta)),
+                Err(_) => None,
             }
         })
         .collect::<Vec<_>>();
 
     // Sort the result by creation date of the actual file, newest first
     result.sort_by(|a, b| {
-        b.1.metadata()
-            .and_then(|m| m.created())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-            .cmp(
-                &a.1.metadata()
-                    .and_then(|m| m.created())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH),
-            )
+        let b_time =
+            b.1.metadata()
+                .and_then(|m| m.created())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+        let a_time =
+            a.1.metadata()
+                .and_then(|m| m.created())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+        b_time.cmp(&a_time)
     });
 
     Ok(result)
 }
+
 #[tauri::command]
 #[specta::specta]
 fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMeta)>, String> {
@@ -1486,7 +1519,11 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
             let path = entry.path();
             if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
                 let id = path.file_stem()?.to_str()?.to_string();
-                let meta = get_recording_meta(app.clone(), id.clone(), "screenshot".to_string());
+                let meta =
+                    match get_recording_meta(app.clone(), id.clone(), "screenshot".to_string()) {
+                        Ok(meta) => meta,
+                        Err(_) => return None, // Skip this entry if metadata can't be loaded
+                    };
 
                 // Find the nearest .png file inside the .cap folder
                 let png_path = std::fs::read_dir(&path)
@@ -2006,24 +2043,26 @@ pub async fn run() {
         .run(|handle, event| match event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
-                // Check if any editor window is open
-                let has_editor = handle
+                // Check if any editor or settings window is open
+                let has_editor_or_settings = handle
                     .webview_windows()
                     .iter()
-                    .any(|(label, _)| label.starts_with("editor-"));
+                    .any(|(label, _)| label.starts_with("editor-") || label.as_str() == "settings");
 
-                if has_editor {
-                    // Find and focus the editor window
-                    if let Some(editor_window) = handle
+                if has_editor_or_settings {
+                    // Find and focus the editor or settings window
+                    if let Some(window) = handle
                         .webview_windows()
                         .iter()
-                        .find(|(label, _)| label.starts_with("editor-"))
+                        .find(|(label, _)| {
+                            label.starts_with("editor-") || label.as_str() == "settings"
+                        })
                         .map(|(_, window)| window.clone())
                     {
-                        editor_window.set_focus().ok();
+                        window.set_focus().ok();
                     }
                 } else {
-                    // No editor window open, show main window
+                    // No editor or settings window open, show main window
                     open_main_window(handle.clone());
                 }
             }
@@ -2096,7 +2135,9 @@ async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<E
 
 // use EditorInstance.project_path instead of this
 fn recordings_path(app: &AppHandle) -> PathBuf {
-    app.path().app_data_dir().unwrap().join("recordings")
+    let path = app.path().app_data_dir().unwrap().join("recordings");
+    std::fs::create_dir_all(&path).unwrap_or_default();
+    path
 }
 
 fn recording_path(app: &AppHandle, recording_id: &str) -> PathBuf {
@@ -2104,7 +2145,9 @@ fn recording_path(app: &AppHandle, recording_id: &str) -> PathBuf {
 }
 
 fn screenshots_path(app: &AppHandle) -> PathBuf {
-    app.path().app_data_dir().unwrap().join("screenshots")
+    let path = app.path().app_data_dir().unwrap().join("screenshots");
+    std::fs::create_dir_all(&path).unwrap_or_default();
+    path
 }
 
 fn screenshot_path(app: &AppHandle, screenshot_id: &str) -> PathBuf {
