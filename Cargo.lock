@@ -1052,16 +1052,6 @@ dependencies = [
 name = "cidre"
 version = "0.4.0"
 source = "git+https://github.com/yury/cidre?rev=1e008bec49a0f97aeaaea6130a0ba20fe00aa03b#1e008bec49a0f97aeaaea6130a0ba20fe00aa03b"
-dependencies = [
- "cidre-macros",
- "parking_lot",
- "tokio",
-]
-
-[[package]]
-name = "cidre-macros"
-version = "0.1.0"
-source = "git+https://github.com/yury/cidre?rev=1e008bec49a0f97aeaaea6130a0ba20fe00aa03b#1e008bec49a0f97aeaaea6130a0ba20fe00aa03b"
 
 [[package]]
 name = "clang-sys"
@@ -1739,7 +1729,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.1-alpha.25"
+version = "0.3.2-beta.1"
 dependencies = [
  "anyhow",
  "axum",
