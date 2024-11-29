@@ -55,7 +55,6 @@ cidre = { git = "https://github.com/yury/cidre", rev = "1e008bec49a0f97aeaaea613
 	"nl",
 	"vt",
 	"sc",
-	"sec",
 	"mc",
 	"mtl",
 	"mtk",
