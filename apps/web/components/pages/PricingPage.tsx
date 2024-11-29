@@ -154,15 +154,6 @@ export const PricingPage = () => {
               for the lifetime of your subscription.
             </p>
           </div>
-          <div className="bg-[#FF6154] text-center flex items-center justify-center p-3 mb-6 rounded-lg max-w-3xl mx-auto">
-            <p className="sm:text-sm md:text-lg text-white">
-              Product Hunt Exclusive: Cap Pro for $50 (33% off). Use code{" "}
-              <span className="text-sm md:text-lg font-bold text-white">
-                PH50
-              </span>{" "}
-              at checkout!
-            </p>
-          </div>
           <div>
             <div className="text-center max-w-[800px] mx-auto mb-8 lg:mb-4">
               <h2 className="text-xl text-gray-400">
