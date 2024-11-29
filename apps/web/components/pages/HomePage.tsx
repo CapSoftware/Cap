@@ -91,7 +91,22 @@ export const HomePage = () => {
         <div className="w-full relative z-10 flex">
           <div className="wrapper wrapper-sm mx-auto">
             <div className="mb-auto text-center px-4 pt-60 pb-72 sm:pb-80 -mt-40">
-              <Link
+              <div className="flex items-center justify-center mb-4">
+                <a
+                  href="https://www.producthunt.com/posts/cap-4?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-cap-4"
+                  target="_blank"
+                >
+                  <img
+                    src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=655117&theme=light"
+                    alt="Cap - Beautiful screen recordings, owned by you | Product Hunt"
+                    style={{ width: 250, height: 54 }}
+                    width={250}
+                    height={54}
+                  />
+                </a>
+              </div>
+
+              {/* <Link
                 href="/updates/cap-v03-launch"
                 className="mx-auto mb-4 inline-flex justify-center font-medium transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 bg-blue-400 hover:bg-blue-500 h-9 px-4 py-2 rounded-full space-x-2 items-center animate-pulse"
               >
@@ -110,7 +125,7 @@ export const HomePage = () => {
                     d="M8.783 6.667H.667V5.333h8.116L5.05 1.6 6 .667 11.333 6 6 11.333l-.95-.933 3.733-3.733Z"
                   />
                 </svg>
-              </Link>
+              </Link> */}
 
               <h1 className="fade-in-down text-[2rem] leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-white mb-4">
                 Beautiful screen recordings,
