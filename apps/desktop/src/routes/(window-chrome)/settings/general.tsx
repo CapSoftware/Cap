@@ -7,7 +7,7 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
-import { AppTheme, commands, type GeneralSettingsStore } from "~/utils/tauri";
+import type { AppTheme, GeneralSettingsStore } from "~/utils/tauri";
 // import { themeStore } from "~/store/theme";
 import {
   isPermissionGranted,
@@ -91,7 +91,7 @@ function AppearanceSection(props: {
 
   return (
     <div class="flex flex-col gap-4">
-      <p class="text-[--text-primary] font-semibold">Appearance</p>
+      <p class="text-[--text-primary]">Appearance</p>
       <div
         class="flex justify-start items-center text-[--text-primary]"
         on:contextmenu={(e) => e.preventDefault()}
@@ -107,7 +107,7 @@ function AppearanceSection(props: {
                 <div
                   class={`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none transition-all duration-200 ${
                     props.currentTheme === theme.id
-                      ? "ring-4 ring-blue-100 ring-opacity-50 ring-offset-2"
+                      ? "ring-4 ring-blue-100 ring-opacity-50 ring-offset-2 ring-offset-gray-50"
                       : "group-hover:ring-2 group-hover:ring-gray-300"
                   }`}
                   aria-label={`Select theme: ${theme.name}`}
