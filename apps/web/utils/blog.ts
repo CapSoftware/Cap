@@ -6,6 +6,7 @@ export type PostMetadata = {
   author: string;
   publishedAt: string;
   summary: string;
+  description: string;
   tags?: string;
   image?: string;
 };
@@ -13,6 +14,7 @@ export type PostMetadata = {
 export type DocMetadata = {
   title: string;
   summary: string;
+  description?: string;
   tags?: string;
   image?: string;
 };

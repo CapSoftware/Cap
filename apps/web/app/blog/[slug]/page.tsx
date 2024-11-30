@@ -22,12 +22,7 @@ export async function generateMetadata({
     return;
   }
 
-  let {
-    title,
-    publishedAt: publishedTime,
-    summary: description,
-    image,
-  } = post.metadata;
+  let { title, publishedAt: publishedTime, description, image } = post.metadata;
   let ogImage = `${process.env.NEXT_PUBLIC_URL}${image}`;
 
   return {
