@@ -123,8 +123,6 @@ impl AsyncVideoDecoder {
             while let Ok(r) = peekable_requests.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_frame, sender) => {
-                        let time_in = Instant::now();
-
                         let mut sender = if let Some(cached) = cache.get(&requested_frame) {
                             sender.send(Some(cached.clone())).ok();
                             last_sent_frame = Some((requested_frame, cached.clone()));
@@ -180,13 +178,14 @@ impl AsyncVideoDecoder {
 
                         last_active_frame = Some(requested_frame);
 
-                        let now = Instant::now();
                         loop {
                             if peekable_requests.peek().is_some() {
                                 break;
                             }
                             let Some((stream, packet)) = packets.next() else {
-                                sender.take().map(|s| s.send(None));
+                                sender
+                                    .take()
+                                    .map(|s| s.send(last_sent_frame.clone().map(|f| f.1)));
                                 break;
                             };
 
@@ -329,7 +328,8 @@ impl AsyncVideoDecoderHandle {
         self.sender
             .send(VideoDecoderMessage::GetFrame(time, tx))
             .unwrap();
-        rx.await.ok().flatten()
+        let res = rx.await.ok().flatten();
+        res
     }
 }
 

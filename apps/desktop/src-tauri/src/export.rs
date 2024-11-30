@@ -39,9 +39,11 @@ pub async fn export_video(
     cap_export::export_video_to_file(
         project,
         output_path.clone(),
-        move |current_frame| {
+        move |frame_index| {
             progress
-                .send(RenderProgress::FrameRendered { current_frame })
+                .send(RenderProgress::FrameRendered {
+                    current_frame: frame_index + 1,
+                })
                 .ok();
         },
         &editor_instance.project_path,

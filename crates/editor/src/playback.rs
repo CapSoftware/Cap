@@ -91,29 +91,27 @@ impl Playback {
                 if let Some((time, segment)) = time {
                     let segment = &self.segments[segment.unwrap_or(0) as usize];
 
-                    let now = Instant::now();
-                    println!("going to decode frame");
                     tokio::select! {
                         _ = stop_rx.changed() => {
                            break;
                         },
-                        Some((screen_frame, camera_frame)) = segment.decoders.get_frames((time * FPS as f64) as u32) => {
-                            println!("decoded frame in {:?}", now.elapsed());
-                            let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32);
+                        value = segment.decoders.get_frames((time * FPS as f64) as u32) => {
+                            if let Some((screen_frame, camera_frame)) = value {
+                                let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32);
 
-                            self
-                                .renderer
-                                .render_frame(
-                                    screen_frame,
-                                    camera_frame,
-                                    project.background.source.clone(),
-                                    uniforms.clone(),
-                                    time as f32  // Add the time parameter
-                                )
-                                .await;
+                                self
+                                    .renderer
+                                    .render_frame(
+                                        screen_frame,
+                                        camera_frame,
+                                        project.background.source.clone(),
+                                        uniforms.clone(),
+                                        time as f32  // Add the time parameter
+                                    )
+                                    .await;
+                            }
                         }
                         else => {
-                            println!("no frame decoded");
                         }
                     }
                 }

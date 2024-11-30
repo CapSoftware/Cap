@@ -163,7 +163,7 @@ pub async fn render_video_to_channel(
             break;
         };
 
-        let (time, segment) = if let Some(timeline) = project.timeline() {
+        let (time, segment_i) = if let Some(timeline) = project.timeline() {
             match timeline.get_recording_time(frame_number as f64 / 30_f64) {
                 Some(value) => value,
                 None => {
@@ -177,28 +177,27 @@ pub async fn render_video_to_channel(
 
         // dbg!(time, segment);
 
-        let segment = &segments[segment.unwrap_or(0) as usize];
+        let segment = &segments[segment_i.unwrap_or(0) as usize];
 
         let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
 
-        let Some((screen_frame, camera_frame)) =
+        if let Some((screen_frame, camera_frame)) =
             segment.decoders.get_frames((time * 30.0) as u32).await
-        else {
-            println!("no decoder frames: {time}");
-            break;
+        {
+            let frame = produce_frame(
+                &constants,
+                &screen_frame,
+                &camera_frame,
+                background,
+                &uniforms,
+                time as f32,
+            )
+            .await?;
+
+            sender.send(frame).await?;
+        } else {
+            println!("no decoder frames: {:?}", (time, segment_i));
         };
-
-        let frame = produce_frame(
-            &constants,
-            &screen_frame,
-            &camera_frame,
-            background,
-            &uniforms,
-            time as f32,
-        )
-        .await?;
-
-        sender.send(frame).await?;
 
         frame_number += 1;
         if frame_number % 60 == 0 {
