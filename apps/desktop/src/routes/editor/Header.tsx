@@ -102,7 +102,13 @@ export function Header() {
                         />
                       </div>
 
-                      <p class="text-xs mt-3 relative z-10">{state.message}</p>
+                      <p class="text-xs mt-3 relative z-10">
+                        {state.stage === "rendering" &&
+                        state.renderProgress &&
+                        state.totalFrames
+                          ? `${state.message} (${state.renderProgress}/${state.totalFrames} frames)`
+                          : state.message}
+                      </p>
                     </div>
                   );
                 }}
@@ -139,7 +145,13 @@ export function Header() {
                         />
                       </div>
 
-                      <p class="text-xs mt-3 relative z-10">{state.message}</p>
+                      <p class="text-xs mt-3 relative z-10">
+                        {state.stage === "rendering" &&
+                        state.renderProgress &&
+                        state.totalFrames
+                          ? `${state.message} (${state.renderProgress}/${state.totalFrames} frames)`
+                          : state.message}
+                      </p>
                     </div>
                   );
                 }}
@@ -225,9 +237,13 @@ function ExportButton() {
       const progress = new Channel<RenderProgress>();
       progress.onmessage = (p) => {
         if (p.type === "FrameRendered" && progressState.type === "saving") {
+          const percentComplete = Math.round(
+            (p.current_frame / (progressState.totalFrames || 1)) * 100
+          );
           setProgressState({
             ...progressState,
             renderProgress: p.current_frame,
+            message: `Rendering video - ${percentComplete}%`,
           });
         }
         if (
@@ -237,6 +253,7 @@ function ExportButton() {
           setProgressState({
             ...progressState,
             totalFrames: p.total_frames,
+            message: "Starting render...",
           });
         }
       };

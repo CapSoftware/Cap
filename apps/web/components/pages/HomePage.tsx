@@ -93,15 +93,15 @@ export const HomePage = () => {
             <div className="mb-auto text-center px-4 pt-60 pb-72 sm:pb-80 -mt-40">
               <div className="flex items-center justify-center mb-4">
                 <a
-                  href="https://www.producthunt.com/posts/cap-4?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-cap-4"
+                  href="https://www.producthunt.com/posts/cap-4"
                   target="_blank"
                 >
                   <img
                     src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=655117&theme=light"
-                    alt="Cap - Beautiful screen recordings, owned by you | Product Hunt"
-                    style={{ width: 250, height: 54 }}
-                    width={250}
-                    height={54}
+                    alt="Cap on Product Hunt"
+                    style={{ width: 200, height: 43 }}
+                    width={200}
+                    height={43}
                   />
                 </a>
               </div>

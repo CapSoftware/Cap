@@ -296,9 +296,7 @@ function Dialogs() {
                     }
                   >
                     <p class="text-gray-400">
-                      Lorem ipsum dolor sit amet, consectetur adipiscing elit
-                      sed do eiusmod tempor incididunt ut labore et dolore magna
-                      aliqua.
+                      Are you sure you want to delete this preset?
                     </p>
                   </DialogContent>
                 );
