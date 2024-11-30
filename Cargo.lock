@@ -1056,7 +1056,6 @@ source = "git+https://github.com/yury/cidre?rev=1e008bec49a0f97aeaaea6130a0ba20f
 dependencies = [
  "cidre-macros",
  "parking_lot",
- "tokio",
 ]
 
 [[package]]
@@ -1740,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.2-beta.1"
+version = "0.3.1-alpha.26"
 dependencies = [
  "anyhow",
  "arboard",

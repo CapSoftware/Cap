@@ -322,28 +322,35 @@ export default function () {
                                       )
                                         return 0;
 
-                                      if (progressState.type === "uploading") {
-                                        return progressState.stage ===
-                                          "rendering"
-                                          ? Math.min(
-                                              progressState.renderProgress || 0,
-                                              100
-                                            )
-                                          : Math.min(
-                                              progressState.uploadProgress || 0,
-                                              100
-                                            );
-                                      }
-
-                                      if (progressState.stage === "rendering") {
+                                      // For rendering progress
+                                      if (
+                                        progressState.stage === "rendering" &&
+                                        progressState.renderProgress !==
+                                          undefined &&
+                                        progressState.totalFrames
+                                      ) {
                                         return Math.min(
-                                          ((progressState.renderProgress || 0) /
-                                            (progressState.totalFrames || 1)) *
-                                            100,
+                                          Math.round(
+                                            (progressState.renderProgress /
+                                              progressState.totalFrames) *
+                                              100
+                                          ),
                                           100
                                         );
                                       }
 
+                                      // For upload progress
+                                      if (
+                                        progressState.type === "uploading" &&
+                                        progressState.stage === "uploading"
+                                      ) {
+                                        return Math.min(
+                                          progressState.uploadProgress * 100,
+                                          100
+                                        );
+                                      }
+
+                                      // For other progress types
                                       return Math.min(
                                         progressState.progress || 0,
                                         100
@@ -354,9 +361,31 @@ export default function () {
                               </div>
 
                               <p class="text-xs text-gray-50 dark:text-gray-500 mt-2">
-                                {"message" in progressState
-                                  ? progressState.message
-                                  : undefined}
+                                {(() => {
+                                  if (
+                                    !progressState ||
+                                    progressState.type === "idle"
+                                  )
+                                    return;
+
+                                  if (
+                                    progressState.stage === "rendering" &&
+                                    progressState.renderProgress !==
+                                      undefined &&
+                                    progressState.totalFrames
+                                  ) {
+                                    return `${Math.min(
+                                      Math.round(
+                                        (progressState.renderProgress /
+                                          progressState.totalFrames) *
+                                          100
+                                      ),
+                                      100
+                                    )}%`;
+                                  }
+
+                                  return progressState.message;
+                                })()}
                               </p>
                             </div>
                           </div>
@@ -822,7 +851,7 @@ function createRecordingMutations(
               );
               setProgressState({
                 ...progressState,
-                message: "Rendering video...",
+                message: "Rendering video",
                 renderProgress: p.current_frame,
               });
             }

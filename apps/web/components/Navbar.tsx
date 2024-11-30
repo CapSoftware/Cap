@@ -38,19 +38,6 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
 
   return (
     <>
-      <div className="bg-[#FF6154] text-center flex items-center justify-center p-3 relative z-[999999]">
-        <a
-          href="https://cap.link/ph"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs sm:text-sm md:text-lg text-white cursor-pointer"
-        >
-          Cap is LIVE on Product Hunt!{" "}
-          <span className="block sm:inline text-xs sm:text-sm md:text-lg font-bold underline text-white">
-            Help us reach #1 Product of the Day →
-          </span>
-        </a>
-      </div>
       <div
         className={`${
           isHomePage || isSeoPage
