@@ -68,7 +68,7 @@ async copyScreenshotToClipboard(path: string) : Promise<null> {
 async openFilePath(path: string) : Promise<null> {
     return await TAURI_INVOKE("open_file_path", { path });
 },
-async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<[number, number]> {
+async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<VideoRecordingMetadata> {
     return await TAURI_INVOKE("get_video_metadata", { videoId, videoType });
 },
 async createEditorInstance(videoId: string) : Promise<SerializedEditorInstance> {
@@ -279,6 +279,7 @@ export type UploadMode = { Initial: { pre_created_video: PreCreatedVideo | null 
 export type UploadProgress = { stage: string; progress: number; message: string }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
 export type Video = { duration: number; width: number; height: number }
+export type VideoRecordingMetadata = { duration: number; size: number }
 export type VideoType = "screen" | "output"
 export type XY<T> = { x: T; y: T }
 export type ZoomSegment = { start: number; end: number; amount: number }

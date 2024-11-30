@@ -152,6 +152,8 @@ pub async fn render_video_to_channel(
 
     let duration = project.timeline().map(|t| t.duration()).unwrap_or(f64::MAX);
 
+    dbg!(duration);
+
     let mut frame_number = 0;
 
     let background = Background::from(project.background.source.clone());
@@ -164,11 +166,16 @@ pub async fn render_video_to_channel(
         let (time, segment) = if let Some(timeline) = project.timeline() {
             match timeline.get_recording_time(frame_number as f64 / 30_f64) {
                 Some(value) => value,
-                None => break,
+                None => {
+                    println!("no time");
+                    break;
+                }
             }
         } else {
             (frame_number as f64 / 30_f64, None)
         };
+
+        // dbg!(time, segment);
 
         let segment = &segments[segment.unwrap_or(0) as usize];
 
@@ -177,6 +184,7 @@ pub async fn render_video_to_channel(
         let Some((screen_frame, camera_frame)) =
             segment.decoders.get_frames((time * 30.0) as u32).await
         else {
+            println!("no decoder frames: {time}");
             break;
         };
 
