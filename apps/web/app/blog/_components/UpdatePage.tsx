@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { format, parseISO } from "date-fns";
 import { MDXRemote } from "next-mdx-remote/rsc";
-import { getBlogPosts } from "@/utils/updates";
+import { getBlogPosts } from "@/utils/blog";
 
 export const UpdatePage = ({ postSlug }: { postSlug: string }) => {
   const post = getBlogPosts().find((post) => post.slug === postSlug);

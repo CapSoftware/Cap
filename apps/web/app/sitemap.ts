@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { getBlogPosts } from "@/utils/updates";
+import { getBlogPosts } from "@/utils/blog";
 import { seoPages } from "../lib/seo-pages";
 
 async function getPagePaths(
@@ -15,7 +15,7 @@ async function getPagePaths(
       entry.isDirectory() &&
       entry.name !== "dashboard" &&
       !entry.name.startsWith("s") &&
-      entry.name !== "updates" &&
+      entry.name !== "blog" &&
       !entry.name.startsWith("[")
     ) {
       const subPaths = await getPagePaths(fullPath);
@@ -53,7 +53,7 @@ export default async function sitemap() {
     const publishDate = new Date(post.metadata.publishedAt);
     publishDate.setHours(9, 0, 0, 0); // Set time to 9:00 AM
     return {
-      path: `/updates/${post.slug}`,
+      path: `/blog/${post.slug}`,
       lastModified: publishDate.toISOString(),
     };
   });

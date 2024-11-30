@@ -114,7 +114,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                   </Link>
                 </NavigationMenuItem>
                 <NavigationMenuItem>
-                  <Link href="/updates" legacyBehavior passHref>
+                  <Link href="/blog" legacyBehavior passHref>
                     <NavigationMenuLink
                       className={classNames(
                         navigationMenuTriggerStyle(),
@@ -123,7 +123,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
                           : ""
                       )}
                     >
-                      Updates
+                      Blog
                     </NavigationMenuLink>
                   </Link>
                 </NavigationMenuItem>

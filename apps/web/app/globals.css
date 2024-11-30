@@ -398,6 +398,10 @@ footer a {
   @apply text-2xl font-semibold mt-6;
 }
 
-.prose p {
-  @apply text-lg text-gray-400;
+.prose p, .prose li, .prose a {
+  @apply tracking-tight font-normal text-[1.125rem] leading-[1.75rem] !important;
+}
+
+.prose p, .prose li {
+  @apply text-gray-500/80 !important;
 }

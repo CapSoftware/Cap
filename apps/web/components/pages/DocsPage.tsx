@@ -1,6 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
-import { getDocs } from "@/utils/updates";
+import { getDocs } from "@/utils/blog";
 
 export const DocsPage = () => {
   const allDocs = getDocs();

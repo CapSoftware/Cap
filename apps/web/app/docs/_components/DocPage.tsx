@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { MDXRemote } from "next-mdx-remote/rsc";
-import { getDocs } from "@/utils/updates";
+import { getDocs } from "@/utils/blog";
 
 export const DocPage = ({ docSlug }: { docSlug: string }) => {
   const doc = getDocs().find((doc) => doc.slug === docSlug);

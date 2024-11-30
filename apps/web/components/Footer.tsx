@@ -49,7 +49,7 @@ export const Footer = () => {
             <h3 className="text-lg font-semibold">Product</h3>
             <ul className="space-y-2">
               <li>
-                <a href="/updates">Updates</a>
+                <a href="/blog">Blog</a>
               </li>
               <li>
                 <a href="/docs">Docs</a>

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Image from "next/image";
 import { MDXRemote } from "next-mdx-remote/rsc";
-import { getDocs } from "@/utils/updates";
+import { getDocs } from "@/utils/blog";
 import type { Metadata } from "next";
 
 interface DocProps {

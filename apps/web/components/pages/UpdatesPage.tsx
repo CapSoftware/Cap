@@ -1,7 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { format, parseISO } from "date-fns";
-import { getBlogPosts } from "@/utils/updates";
+import { getBlogPosts } from "@/utils/blog";
 
 export const UpdatesPage = () => {
   const allUpdates = getBlogPosts();
@@ -9,7 +9,7 @@ export const UpdatesPage = () => {
   return (
     <div className="wrapper wrapper-sm py-20">
       <div className="text-center page-intro mb-14">
-        <h1>Updates</h1>
+        <h1>Blog</h1>
       </div>
       <div>
         <div className="space-y-8">
@@ -21,7 +21,7 @@ export const UpdatesPage = () => {
                 key={post.slug}
                 className="w-full rounded-xl overflow-hidden border"
               >
-                <Link href={"/updates/" + post.slug}>
+                <Link href={"/blog/" + post.slug}>
                   {post.metadata.image && (
                     <div className="w-full border-b">
                       <Image
