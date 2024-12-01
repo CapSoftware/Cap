@@ -2,7 +2,7 @@ import { UpdatesPage } from "@/components/pages/UpdatesPage";
 import { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Updates — Cap",
+  title: "Blog — Cap",
 };
 
 export default function App() {

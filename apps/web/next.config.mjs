@@ -60,6 +60,16 @@ const nextConfig = {
           "https://capso.notion.site/7aac740edeee49b5a23be901a7cb734e?v=9d4a3bf3d72d488cad9b899ab73116a1",
         permanent: true,
       },
+      {
+        source: "/updates",
+        destination: "/blog",
+        permanent: true,
+      },
+      {
+        source: "/updates/:slug",
+        destination: "/blog/:slug",
+        permanent: true,
+      },
     ];
   },
   env: {

@@ -9,6 +9,7 @@ import { Button } from "@cap/ui";
 import Link from "next/link";
 import { useEffect } from "react";
 import { LogoSection } from "./_components/LogoSection";
+import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 
 export const HomePage = () => {
   useEffect(() => {
@@ -107,7 +108,7 @@ export const HomePage = () => {
               </div>
 
               {/* <Link
-                href="/updates/cap-v03-launch"
+                href="/blog/cap-v03-launch"
                 className="mx-auto mb-4 inline-flex justify-center font-medium transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 bg-blue-400 hover:bg-blue-500 h-9 px-4 py-2 rounded-full space-x-2 items-center animate-pulse"
               >
                 <span className="text-sm text-white">
@@ -228,129 +229,6 @@ export const HomePage = () => {
           </svg>
         </div>
         <div className="text-center max-w-[800px] mx-auto mb-8">
-          <h2 className="mb-3">
-            Capture your screen effortlessly,
-            <br />
-            share it instantly.
-          </h2>
-          <p className="text-[1.125rem] leading-[1.75rem]">
-            Tired of spending ages setting up screen recordings and editing
-            videos? We&apos;ve made it super easy. Whether you&apos;re recording
-            a tutorial, presentation, or just showing something off, you&apos;ll
-            get it done faster without the stress.
-          </p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 max-w-[1000px] mx-auto gap-4">
-          <div
-            className="border-[1px] border-gray-200 rounded-[20px] overflow-hidden"
-            style={{
-              boxShadow: "0px 2px 8px rgba(18, 22, 31, 0.02)",
-            }}
-          >
-            <div>
-              <img
-                className="w-full h-auto"
-                src="/features/app-view.png"
-                alt="App View Illustration"
-              />
-            </div>
-            <div className="p-4">
-              <h3 className="text-[1.125rem] leading-[1.75rem] text-gray-500 font-medium">
-                A tool that just works.
-              </h3>
-              <p className="text-[1.125rem] leading-[1.75rem] text-gray-400">
-                No more complicated software that slows you down. Our app feels
-                natural and smooth from the moment you open it.
-              </p>
-            </div>
-          </div>
-          <div
-            className="border-[1px] border-gray-200 rounded-[20px] overflow-hidden"
-            style={{
-              boxShadow: "0px 2px 8px rgba(18, 22, 31, 0.02)",
-            }}
-          >
-            <div>
-              <img
-                className="w-full h-auto"
-                src="/features/record-view.png"
-                alt="Record View Illustration"
-              />
-            </div>
-            <div className="p-4">
-              <h3 className="text-[1.125rem] leading-[1.75rem] text-gray-500 font-medium">
-                Click, record, done.
-              </h3>
-              <p className="text-[1.125rem] leading-[1.75rem] text-gray-400">
-                Recording your screen shouldn&apos;t be rocket science. Just hit
-                record, and we&apos;ll take care of the rest.
-              </p>
-            </div>
-          </div>
-          <div
-            className="border-[1px] border-gray-200 rounded-[20px] overflow-hidden"
-            style={{
-              boxShadow: "0px 2px 8px rgba(18, 22, 31, 0.02)",
-            }}
-          >
-            <div>
-              <img
-                className="w-full h-auto"
-                src="/features/editor-view.png"
-                alt="Editor View Illustration"
-              />
-            </div>
-            <div className="p-4">
-              <h3 className="text-[1.125rem] leading-[1.75rem] text-gray-500 font-medium">
-                Edit like a pro — no skills required.
-              </h3>
-              <p className="text-[1.125rem] leading-[1.75rem] text-gray-400">
-                Editing doesn&apos;t have to be hard. Our tool makes it a breeze
-                to polish your video, so you can focus on what matters — getting
-                your message out there.
-              </p>
-            </div>
-          </div>
-          <div
-            className="border-[1px] border-gray-200 rounded-[20px] overflow-hidden"
-            style={{
-              boxShadow: "0px 2px 8px rgba(18, 22, 31, 0.02)",
-            }}
-          >
-            <div>
-              <img
-                className="w-full h-auto"
-                src="/features/share-view.png"
-                alt="Share View Illustration"
-              />
-            </div>
-            <div className="p-4">
-              <h3 className="text-[1.125rem] leading-[1.75rem] text-gray-500 font-medium">
-                Instantly share your video with anyone, anywhere.
-              </h3>
-              <p className="text-[1.125rem] leading-[1.75rem] text-gray-400">
-                Hit share, and your video is live. No waiting, no fuss — just
-                quick, simple sharing, wherever you need it to go.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div className="wrapper pb-32 md:pb-40">
-        <div className="mb-4">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="w-[84px] h-auto mx-auto"
-            fill="none"
-            viewBox="0 0 84 25"
-          >
-            <path
-              fill="#8991A3"
-              d="M12.283 15.264c-.17.235-.362.395-.576.48a2.027 2.027 0 01-.576.096 1.697 1.697 0 01-.832-.288c-.256-.192-.416-.384-.48-.576a73.92 73.92 0 01-.416-1.216l-.448-1.344c-.128-.47-.266-.917-.416-1.344-.149-.448-.288-.853-.416-1.216a46.406 46.406 0 00-1.216 2.272c-.384.747-.81 1.526-1.28 2.336-.213.32-.458.544-.736.672-.277.107-.512.15-.704.128a1.359 1.359 0 01-.768-.32 3.906 3.906 0 01-.512-.544 9.584 9.584 0 01-.704-1.472 40.314 40.314 0 01-.672-1.92 96.671 96.671 0 01-.544-2.016C.817 8.31.678 7.702.571 7.168a2.752 2.752 0 010-1.024c.086-.32.278-.501.576-.544.363-.021.694.107.992.384.3.256.47.512.512.768.086.427.182.896.288 1.408.128.49.256.992.384 1.504.15.512.288 1.014.416 1.504.15.49.3.928.448 1.312.32-.512.672-1.098 1.056-1.76.406-.682.79-1.333 1.152-1.952.363-.64.694-1.194.992-1.664.3-.47.534-.757.704-.864.128-.085.31-.074.544.032.235.086.406.214.512.384.47.939.854 1.974 1.152 3.104.32 1.11.63 2.144.928 3.104.3-.384.62-.885.96-1.504.342-.64.672-1.312.992-2.016.32-.704.62-1.408.896-2.112a26.38 26.38 0 00.672-1.888c.171-.576.406-.853.704-.832.384.043.715.171.992.384.278.214.384.438.32.672-.469 1.878-1.077 3.606-1.824 5.184a31.225 31.225 0 01-2.656 4.512zM20.679 1.824c0 .512-.01 1.088-.032 1.728v1.984c.021.683.032 1.387.032 2.112.021.726.043 1.419.064 2.08.213-.426.47-.842.768-1.248.299-.426.63-.8.992-1.12.384-.32.779-.576 1.184-.768a3.314 3.314 0 011.376-.288c.533 0 1.003.17 1.408.512.427.342.79.8 1.088 1.376.32.555.587 1.184.8 1.888.213.683.384 1.387.512 2.112.15.704.256 1.387.32 2.048.064.64.117 1.195.16 1.664 0 .342-.085.619-.256.832-.17.214-.373.32-.608.32-.17 0-.384-.106-.64-.32a2.1 2.1 0 01-.512-.832c-.064-.256-.128-.63-.192-1.12a68.774 68.774 0 00-.224-1.568 24.527 24.527 0 00-.32-1.728 8.696 8.696 0 00-.48-1.536c-.17-.469-.384-.832-.64-1.088-.256-.256-.555-.352-.896-.288-.533.107-1.003.48-1.408 1.12-.384.64-.725 1.366-1.024 2.176a24.92 24.92 0 00-.704 2.464c-.17.832-.299 1.504-.384 2.016-.085.384-.203.65-.352.8a.614.614 0 01-.448.192c-.17 0-.33-.085-.48-.256a5.042 5.042 0 01-.384-.608 11.3 11.3 0 01-.288-.768 3.972 3.972 0 01-.16-.704c-.107-1.152-.192-2.25-.256-3.296a160.869 160.869 0 01-.16-3.2 163.526 163.526 0 01-.032-3.264c0-1.13.021-2.336.064-3.616 0-1.066.384-1.546 1.152-1.44.256.043.48.235.672.576.192.32.288.672.288 1.056zM40.938 5.92l.192 3.488a31.82 31.82 0 01.064 3.488c-.043 1.13-.16 2.24-.352 3.328a13.203 13.203 0 01-.896 3.136 11.028 11.028 0 01-1.728 2.752c-.704.854-1.6 1.622-2.688 2.304a1.32 1.32 0 01-.576.192 1.75 1.75 0 01-.576-.032 1.314 1.314 0 01-.512-.16.48.48 0 01-.288-.288c-.064-.192-.032-.405.096-.64.128-.234.341-.48.64-.736.938-.704 1.728-1.45 2.368-2.24.64-.79 1.152-1.642 1.536-2.56.384-.917.629-1.91.736-2.976.128-1.088.128-2.272 0-3.552-.256.32-.555.65-.896.992-.342.342-.704.65-1.088.928-.384.256-.779.48-1.184.672-.406.17-.79.256-1.152.256-.299 0-.598-.064-.896-.192-.299-.128-.598-.373-.896-.736a9.441 9.441 0 01-.928-1.504c-.256-.576-.48-1.13-.672-1.664a28.368 28.368 0 01-.48-1.44 8.927 8.927 0 01-.192-.896 1.458 1.458 0 010-.608c.042-.192.181-.31.416-.352.32-.064.618-.042.896.064.277.107.469.278.576.512.085.235.202.598.352 1.088.149.49.33.982.544 1.472.213.47.437.886.672 1.248.256.363.522.544.8.544.32 0 .693-.16 1.12-.48.448-.32.874-.736 1.28-1.248a7.974 7.974 0 001.024-1.696c.298-.64.448-1.258.448-1.856 0-.128.021-.277.064-.448.042-.17.106-.33.192-.48.085-.17.181-.31.288-.416.128-.128.256-.202.384-.224.341-.042.64.054.896.288.277.214.416.438.416.672zM59.066 7.776a.894.894 0 01-.544.096c-.213-.042-.394-.181-.544-.416-.34-.448-.757-.672-1.248-.672-.448 0-.853.107-1.216.32-.34.192-.65.459-.928.8-.256.32-.469.683-.64 1.088-.17.406-.288.81-.352 1.216-.106.747.022 1.376.384 1.888.363.512.928.768 1.696.768.62.022 1.312-.096 2.08-.352.79-.277 1.526-.63 2.208-1.056a2.7 2.7 0 01.832-.224c.256-.021.47.107.64.384.214.342.16.694-.16 1.056-.32.342-.746.65-1.28.928-.533.299-1.098.566-1.696.8-.576.214-1.162.374-1.76.48a6.306 6.306 0 01-1.792 0 4.22 4.22 0 01-1.632-.608c-.81-.554-1.3-1.344-1.472-2.368-.17-1.024-.096-2.08.224-3.168.128-.405.31-.81.544-1.216.235-.426.512-.81.832-1.152.342-.341.715-.63 1.12-.864a3.668 3.668 0 011.344-.512 4.122 4.122 0 012.272.256c.726.278 1.206.8 1.44 1.568.043.171.043.352 0 .544-.042.17-.16.31-.352.416zM70.66 4.16c.086.598.15 1.238.192 1.92.064.662.107 1.334.128 2.016.043.683.064 1.344.064 1.984 0 .64-.01 1.216-.032 1.728.683.47 1.088.886 1.216 1.248.15.363.17.683.064.96-.128.384-.362.587-.704.608-.32 0-.693-.117-1.12-.352-.299.214-.64.448-1.024.704-.384.235-.79.47-1.216.704-.426.214-.853.406-1.28.576-.426.17-.821.288-1.184.352-.682.107-1.301-.021-1.856-.384-.533-.362-.896-.906-1.088-1.632a3.96 3.96 0 01-.096-1.504 4.143 4.143 0 01.48-1.504c.256-.49.597-.928 1.024-1.312a4.93 4.93 0 011.568-.896 2.73 2.73 0 01.608-.16c.278-.042.555-.053.832-.032.299 0 .597.054.896.16.299.107.576.288.832.544 0-.362-.01-.757-.032-1.184 0-.448-.01-.896-.032-1.344a20.028 20.028 0 00-.096-1.248 10.584 10.584 0 00-.096-1.024c-.043-.32-.17-.512-.384-.576-.192-.085-.437-.074-.736.032-.512.171-1.11.502-1.792.992a23.225 23.225 0 00-1.952 1.568.817.817 0 01-.672.256.96.96 0 01-.608-.288.933.933 0 01-.288-.576c-.021-.234.064-.48.256-.736.363-.384.768-.778 1.216-1.184.448-.405.917-.768 1.408-1.088.49-.341.992-.618 1.504-.832a4.456 4.456 0 011.536-.352c.747-.021 1.323.15 1.728.512.405.342.65.79.736 1.344zm-3.712 6.88c-.277.064-.576.203-.896.416a3.819 3.819 0 00-.832.736 3.032 3.032 0 00-.544.96 1.678 1.678 0 000 1.024.485.485 0 00.256.288c.15.064.31.075.48.032.512-.106 1.088-.31 1.728-.608.662-.32 1.184-.661 1.568-1.024 0-.128-.064-.288-.192-.48a4.055 4.055 0 00-.448-.608 2.772 2.772 0 00-.576-.544c-.192-.15-.373-.213-.544-.192zM78.96 19.488a1.025 1.025 0 01-.32.64c-.192.214-.405.31-.64.288-.362-.021-.64-.16-.832-.416-.192-.256-.288-.47-.288-.64 0-.81-.021-1.653-.064-2.528-.043-.896-.096-1.813-.16-2.752a1.534 1.534 0 01-.768-.064.895.895 0 01-.448-.48c-.15-.362-.128-.682.064-.96.192-.277.501-.544.928-.8a638.62 638.62 0 00-.32-2.336 63.75 63.75 0 00-.288-2.24.646.646 0 01.032-.352c.043-.106.096-.202.16-.288.064-.106.181-.202.352-.288.278-.106.587-.021.928.256.363.278.608.63.736 1.056.064.406.128.875.192 1.408.085.512.16 1.078.224 1.696.448-.277.864-.576 1.248-.896a5.81 5.81 0 001.024-1.024 4.11 4.11 0 00.672-1.12c.15-.405.192-.821.128-1.248a1.594 1.594 0 00-.48-.96c-.277-.298-.715-.458-1.312-.48a6.755 6.755 0 00-1.6.128c-.512.107-1.024.246-1.536.416-.49.171-.981.374-1.472.608-.47.235-.928.47-1.376.704a1.56 1.56 0 01-.896.224c-.277-.042-.459-.149-.544-.32-.192-.426-.181-.81.032-1.152.235-.341.587-.661 1.056-.96.406-.234.886-.469 1.44-.704a12.76 12.76 0 011.792-.64c.64-.192 1.28-.32 1.92-.384a6.189 6.189 0 011.888.032c.597.086 1.13.288 1.6.608.49.299.886.747 1.184 1.344.363.982.459 1.888.288 2.72-.15.811-.47 1.558-.96 2.24a8.855 8.855 0 01-1.76 1.824 21.398 21.398 0 01-2.08 1.44c.107 1.152.181 2.294.224 3.424.043 1.13.053 2.123.032 2.976z"
-            ></path>
-          </svg>
-        </div>
-        <div className="text-center max-w-[800px] mx-auto mb-8">
           <h2 className="mb-3">Crafted for simplicity</h2>
           <p className="text-[1.125rem] leading-[1.75rem]">
             We believe great tools should make your life easier, not more
@@ -389,73 +267,9 @@ export const HomePage = () => {
           </div>
         </div>
       </div>
-      <div
-        className="wrapper custom-bg max-w-[1000px] mx-auto rounded-[20px] overflow-hidden mb-32 md:mb-40 relative flex flex-col justify-center p-8"
-        style={{ minHeight: "264px" }}
-      >
-        <div
-          id="cloud-4"
-          className="absolute top-0 -right-20 opacity-50 z-0 pointer-events-none"
-        >
-          <img
-            className="max-w-[40vw] h-auto"
-            src="/illustrations/cloud-1.png"
-            alt="Footer Cloud One"
-          />
-        </div>
-        <div
-          id="cloud-5"
-          className="absolute bottom-0 left-0 opacity-50 z-0 pointer-events-none"
-        >
-          <img
-            className="max-w-[40vw] h-auto"
-            src="/illustrations/cloud-2.png"
-            alt="Footer Cloud Two"
-          />
-        </div>
-        <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
-          <div className="text-center max-w-[800px] mx-auto mb-8">
-            <h2 className="text-white mb-3">Ready to get started?</h2>
-            <p className="text-[1.125rem] leading-[1.75rem] text-white">
-              Join thousands of users who are already enjoying Cap's beautiful,
-              shareable screen recordings. Start creating stunning videos today!
-            </p>
-          </div>
-          <div className="flex flex-col sm:flex-row items-center justify-center space-y-2 sm:space-y-0 sm:space-x-2">
-            <Button
-              variant="white"
-              href="/pricing"
-              size="lg"
-              className="w-full sm:w-auto"
-            >
-              Get Started
-            </Button>
-            <Button
-              variant="secondary"
-              href="/download"
-              size="lg"
-              className="w-full sm:w-auto"
-            >
-              Download App
-            </Button>
-          </div>
-        </div>
+      <div className="mb-32 md:mb-40">
+        <ReadyToGetStarted />
       </div>
-      {/* <div className="pt-6 pb-16 md:pt-16 md:pb-32">
-        <div className="wrapper">
-          <div
-            className="senja-embed"
-            data-id="b40c5cc6-3d88-468e-a763-c7e515c3f000"
-            data-lazyload="false"
-            data-mode="shadow"
-          />
-          <script
-            async
-            src="https://widget.senja.io/widget/b40c5cc6-3d88-468e-a763-c7e515c3f000/platform.js"
-            type="text/javascript"
-          />
-        </div>
-      </div> */}
     </ParallaxProvider>
   );
 };

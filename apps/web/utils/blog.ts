@@ -6,6 +6,7 @@ export type PostMetadata = {
   author: string;
   publishedAt: string;
   summary: string;
+  description: string;
   tags?: string;
   image?: string;
 };
@@ -13,6 +14,7 @@ export type PostMetadata = {
 export type DocMetadata = {
   title: string;
   summary: string;
+  description?: string;
   tags?: string;
   image?: string;
 };
@@ -58,7 +60,7 @@ function getMDXData(dir: string) {
 }
 
 export function getBlogPosts() {
-  return getMDXData(path.join(process.cwd(), "content/updates"));
+  return getMDXData(path.join(process.cwd(), "content/blog"));
 }
 
 export function getDocs() {
