@@ -1,5 +1,5 @@
 // Credits: tauri-controls
-import { ComponentProps, Match, splitProps, Switch } from "solid-js";
+import { type ComponentProps, Match, splitProps, Switch } from "solid-js";
 import { type } from "@tauri-apps/plugin-os";
 import CaptionControlsWindows11 from "./controls/CaptionControlsWindows11";
 import titlebarState from "~/utils/titlebar-state";
@@ -51,7 +51,7 @@ function WindowControls(props: ComponentProps<"div">) {
         />
       </Match>
       <Match when={ostype === "macos"}>
-        <div data-tauri-drag-region class="flex h-full w-20"></div>
+        <div data-tauri-drag-region class="flex h-full w-20" />
       </Match>
     </Switch>
   );

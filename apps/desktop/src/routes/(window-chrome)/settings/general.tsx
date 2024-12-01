@@ -94,26 +94,28 @@ function AppearanceSection(props: {
       <p class="text-[--text-primary]">Appearance</p>
       <div
         class="flex justify-start items-center text-[--text-primary]"
-        on:contextmenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => e.preventDefault()}
       >
         <div class="flex justify-between m-1 min-w-[20rem] w-[22.2rem] flex-nowrap">
           <For each={options}>
             {(theme) => (
               <button
                 type="button"
+                aria-checked={props.currentTheme === theme.id}
                 class="flex flex-col items-center group"
                 onClick={() => props.onThemeChange(theme.id)}
               >
                 <div
-                  class={`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none transition-all duration-200 ${
+                  class={`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200 ${
                     props.currentTheme === theme.id
-                      ? "ring-4 ring-blue-100 ring-opacity-50 ring-offset-2 ring-offset-gray-50"
-                      : "group-hover:ring-2 group-hover:ring-gray-300"
+                      ? "ring-2 ring-offset-2"
+                      : "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-300"
                   }`}
                   aria-label={`Select theme: ${theme.name}`}
                 >
-                  <div class="w-full h-full bg-gray-200 flex items-center justify-center">
+                  <div class="w-full h-full flex items-center justify-center">
                     <img
+                      draggable={false}
                       src={theme.preview}
                       alt={`Preview of ${theme.name} theme`}
                     />
@@ -122,8 +124,8 @@ function AppearanceSection(props: {
                 <span
                   class={`mt-2 text-sm ${
                     props.currentTheme === theme.id
-                      ? "font-medium"
-                      : "font-light"
+                      ? "font-semibold text-blue-400"
+                      : ""
                   }`}
                 >
                   {theme.name}

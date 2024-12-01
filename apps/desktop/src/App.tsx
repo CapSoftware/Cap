@@ -24,6 +24,7 @@ import { commands, type AppTheme } from "./utils/tauri";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { setTheme } from "@tauri-apps/api/app";
+import Page from "./routes/notifications";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -81,62 +82,63 @@ function Inner() {
   );
 }
 
-const browserPrefersDarkScheme = () =>
-  window.matchMedia("(prefers-color-scheme: dark)").matches;
-
 function createThemeListener() {
-  // Check theme(). if `system` then check CSS media
+  const browserPrefersDarkScheme = () =>
+    window.matchMedia("(prefers-color-scheme: dark)").matches;
+
   const currentWindow = getCurrentWebviewWindow();
-  let systemThemeUnlisten: UnlistenFn | undefined;
   const [theme, themeActions] = createResource<AppTheme>(() =>
     generalSettingsStore.get().then((s) => s?.theme ?? "system")
   );
-  const [darkMode, setDarkMode] = createSignal(
-    theme() === "dark" || (theme() === "system" && browserPrefersDarkScheme())
-  );
+  const [darkMode, setDarkMode] = createSignal(false);
 
-  createEffect(() => {
-    console.log(`Theme is: ${theme()}`);
-    console.log(`dark mode initialized to: ${darkMode()}`);
-    console.log(`Browser prefers dark: ${browserPrefersDarkScheme()}`);
-  });
-
+  let unlisten: UnlistenFn | undefined;
   onMount(async () => {
-    // Listen to system theme changed.
-    systemThemeUnlisten = await currentWindow.onThemeChanged(
-      ({ payload: systemTheme }) => {
-        console.log(`System theme: ${systemTheme}`);
-        if (theme() === "system") setDarkMode(systemTheme === "dark");
+    unlisten = await currentWindow.onThemeChanged(
+      async ({ payload: windowTheme }) => {
+        if (theme() === "system") {
+          const prefersDark = browserPrefersDarkScheme();
+          setDarkMode(windowTheme === null || prefersDark);
+
+          console.log(
+            `Window Theme: ${windowTheme}, Browser Prefers Dark: ${prefersDark}, Dark Mode: ${darkMode()}`
+          );
+        }
       }
     );
   });
-
-  onCleanup(() => {
-    systemThemeUnlisten?.();
-  });
+  onCleanup(() => unlisten?.());
 
   generalSettingsStore.listen((s) => {
-    setDarkMode(s?.theme === "dark");
     themeActions.mutate(s?.theme);
+    setDarkMode(s?.theme === "dark");
   });
 
-  createEffect(() => {
-    let darkModeEnabled = darkMode();
-    console.log(`Dark Mode enabled?: ${darkModeEnabled}`);
+  createEffect(async () => {
+    const appTheme = theme();
+    if (appTheme === undefined) return;
     if (
       location.pathname === "/camera" ||
       location.pathname === "/prev-recordings"
     )
-      darkModeEnabled = false;
+      return;
 
-    currentWindow.setTheme(
-      theme() === "system" ? null : darkModeEnabled ? "dark" : "light"
+    await currentWindow.setTheme(
+      appTheme === "system" ? null : (appTheme as TauriTheme)
     );
 
-    if (darkModeEnabled) {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
+    const darkModeEnabled =
+      appTheme === "system" ? browserPrefersDarkScheme() : appTheme === "dark";
+
+    console.log(
+      `App Theme: ${appTheme}, Window Theme: ${await currentWindow.theme()}, Dark Mode Enabled: ${darkModeEnabled}`
+    );
+
+    document.documentElement.classList.toggle("dark", darkModeEnabled);
+  });
+
+  createEffect(() => {
+    const isDarkMode = darkMode();
+    document.documentElement.classList.toggle("dark", isDarkMode);
   });
 }
