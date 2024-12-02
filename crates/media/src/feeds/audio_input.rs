@@ -90,6 +90,7 @@ impl AudioInputFeed {
                         b.sample_format()
                             .sample_size()
                             .cmp(&a.sample_format().sample_size())
+                            .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
                     });
                     configs
                         .into_iter()
