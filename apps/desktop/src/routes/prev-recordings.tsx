@@ -141,7 +141,7 @@ export default function () {
         "scrollbar-color": "auto transparent",
       }}
     >
-      <div class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto">
+      <div class="w-full relative left-0 bottom-0 flex flex-col-reverse pl-[40px] pb-[80px] gap-4 h-full overflow-y-auto scrollbar-none">
         <div class="pt-12 w-full flex flex-col gap-4">
           <TransitionGroup
             enterToClass="translate-y-0"
