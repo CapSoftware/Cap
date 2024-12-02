@@ -10,7 +10,7 @@ export default function (props: ComponentProps<"div">) {
 
   return (
     <div
-      class={`h-full align-baseline cursor-default rounded-none select-none *:outline-none *:transition-all *:duration-150 ${local.class}`}
+      class={`h-full align-baseline cursor-default rounded-none select-none *:outline-none *:transition-all *:duration-200 ${local.class}`}
       {...otherProps}
     >
       <ControlButton
@@ -51,7 +51,7 @@ export default function (props: ComponentProps<"div">) {
         onClick={titlebarState.closable ? window.close : undefined}
         disabled={!titlebarState.closable}
         class={cx(
-          "max-h-20 w-[46px] rounded-none bg-transparent text-black-transparent-80",
+          "max-h-20 w-[46px] rounded-none bg-transparent text-black-transparent-80 hover:text-gray-50",
           "hover:bg-[#c42b1c] dark:hover:bg-[#c42b1c active:bg-[#c42b1c]/90 dark:active:bg-[#c42b1c]/90",
           "disabled:hover:bg-transparent dark:disabled:hover:bg-transparent disabled:text-black-transparent-40",
         )}

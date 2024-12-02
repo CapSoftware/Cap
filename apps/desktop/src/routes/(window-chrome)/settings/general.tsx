@@ -100,7 +100,7 @@ function AppearanceSection(props: {
               <button
                 type="button"
                 aria-checked={props.currentTheme === theme.id}
-                class="flex flex-col items-center group rounded-md focus:outline-none focus:ring-gray-300 focus:ring-offset-gray-50 focus:ring-offset-2 focus:ring-4"
+                class="flex flex-col items-center group rounded-md focus:outline-none focus-visible:ring-gray-300 focus-visible:ring-offset-gray-50 focus-visible:ring-offset-2 focus-visible:ring-4"
                 onClick={() => props.onThemeChange(theme.id)}
               >
                 <div

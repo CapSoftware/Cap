@@ -79,12 +79,17 @@ function Inner() {
 
 function createThemeListener() {
   const currentWindow = getCurrentWebviewWindow();
-  const [theme, themeActions] = createResource<AppTheme>(() =>
-    generalSettingsStore.get().then((s) => s?.theme ?? "system")
+  const [theme, themeActions] = createResource<AppTheme | null>(() =>
+    generalSettingsStore.get().then((s) => {
+      const t = s?.theme ?? null;
+      update(t);
+      return t
+    })
   );
   generalSettingsStore.listen((s) => {
-    themeActions.mutate(s?.theme);
+    themeActions.mutate(s?.theme ?? null);
     update(theme());
+    console.log(`updating: ${s?.theme}`);
   });
 
   let unlisten: UnlistenFn | undefined;
@@ -93,7 +98,8 @@ function createThemeListener() {
   });
   onCleanup(() => unlisten?.());
 
-  function update(appTheme: AppTheme | undefined) {
+  function update(appTheme: AppTheme | null | undefined) {
+    console.log(`apptheme: ${appTheme}`);
     if (appTheme === undefined) return;
     if (
       location.pathname === "/camera" ||
