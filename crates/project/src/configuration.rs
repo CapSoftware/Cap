@@ -304,14 +304,11 @@ impl TimelineConfiguration {
     pub fn get_recording_time(&self, tick_time: f64) -> Option<(f64, Option<u32>)> {
         let mut accum_duration = 0.0;
 
-        for (i, segment) in self.segments.iter().enumerate() {
+        for segment in self.segments.iter() {
             if tick_time < accum_duration + segment.duration() {
                 return segment
                     .interpolate_time(tick_time - accum_duration)
-                    .map(|t| {
-                        // dbg!((t, i));
-                        (t, segment.recording_segment)
-                    });
+                    .map(|t| (t, segment.recording_segment));
             }
 
             accum_duration += segment.duration();

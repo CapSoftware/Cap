@@ -152,8 +152,6 @@ pub async fn render_video_to_channel(
 
     let duration = project.timeline().map(|t| t.duration()).unwrap_or(f64::MAX);
 
-    dbg!(duration);
-
     let mut frame_number = 0;
 
     let background = Background::from(project.background.source.clone());
@@ -174,8 +172,6 @@ pub async fn render_video_to_channel(
         } else {
             (frame_number as f64 / 30_f64, None)
         };
-
-        // dbg!(time, segment);
 
         let segment = &segments[segment_i.unwrap_or(0) as usize];
 
