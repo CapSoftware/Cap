@@ -89,7 +89,6 @@ function createThemeListener() {
   generalSettingsStore.listen((s) => {
     themeActions.mutate(s?.theme ?? null);
     update(theme());
-    console.log(`updating: ${s?.theme}`);
   });
 
   let unlisten: UnlistenFn | undefined;
