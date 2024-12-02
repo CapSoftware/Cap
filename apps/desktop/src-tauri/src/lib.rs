@@ -568,7 +568,11 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
 
 #[tauri::command]
 #[specta::specta]
-async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(), String> {
+async fn copy_screenshot_to_clipboard(
+    app: AppHandle,
+    clipboard: MutableState<'_, Clipboard>,
+    path: PathBuf,
+) -> Result<(), String> {
     println!("Copying screenshot to clipboard: {:?}", path);
 
     let image = match image::open(&path) {
@@ -594,15 +598,11 @@ async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(
         }
     };
 
-    let _ = app
-        .state::<MutableState<'_, Clipboard>>()
-        .write()
-        .await
-        .set_image(arboard::ImageData {
-            width: image.width() as usize,
-            height: image.height() as usize,
-            bytes: std::borrow::Cow::Borrowed(data),
-        });
+    let _ = clipboard.write().await.set_image(arboard::ImageData {
+        width: image.width() as usize,
+        height: image.height() as usize,
+        bytes: std::borrow::Cow::Borrowed(data),
+    });
 
     Ok(())
 }
@@ -724,13 +724,13 @@ async fn create_editor_instance(
 
 #[tauri::command]
 #[specta::specta]
-async fn copy_video_to_clipboard(app: AppHandle, path: String) -> Result<(), String> {
+async fn copy_video_to_clipboard(
+    app: AppHandle,
+    clipboard: MutableState<'_, Clipboard>,
+    path: String,
+) -> Result<(), String> {
     println!("copying");
-    let _ = app
-        .state::<MutableState<'_, Clipboard>>()
-        .write()
-        .await
-        .set_text(path);
+    let _ = clipboard.write().await.set_text(path);
 
     notifications::send_notification(
         &app,
@@ -1739,7 +1739,6 @@ pub async fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({

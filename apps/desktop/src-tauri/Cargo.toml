@@ -78,7 +78,6 @@ cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
 tauri-plugin-window-state = "2.0.2"
-tauri-plugin-clipboard-manager = "2.0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

@@ -24,7 +24,6 @@ import { TransitionGroup } from "solid-transition-group";
 import { makePersisted } from "@solid-primitives/storage";
 import { Channel } from "@tauri-apps/api/core";
 import { createStore, produce } from "solid-js/store";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 
 import {
   commands,
@@ -563,7 +562,7 @@ export default function () {
                         <Show when={metadata()}>
                           {(metadata) => (
                             <div
-                              style={{ 
+                              style={{
                                 color: "white",
                                 "font-size": "14px",
                                 "border-end-end-radius": "7.4px",
@@ -929,7 +928,7 @@ function createRecordingMutations(
           setProgressState({ type: "idle" });
         }, 1500);
 
-        await writeText(recordingMeta.data.sharing.link);
+        await commands.writeClipboardString(recordingMeta.data.sharing.link);
 
         return;
       }

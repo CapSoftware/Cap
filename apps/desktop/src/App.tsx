@@ -17,8 +17,8 @@ import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 import { generalSettingsStore } from "./store";
-import { type AppTheme } from "./utils/tauri";
-import { type UnlistenFn } from "@tauri-apps/api/event";
+import { commands, type AppTheme } from "./utils/tauri";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const queryClient = new QueryClient({
@@ -104,7 +104,8 @@ function createThemeListener() {
     currentWindow.setTheme(appTheme === "system" ? null : appTheme).then(() => {
       document.documentElement.classList.toggle(
         "dark",
-        appTheme === "dark" || window.matchMedia("(prefers-color-scheme: dark)").matches
+        appTheme === "dark" ||
+          window.matchMedia("(prefers-color-scheme: dark)").matches
       );
     });
   }

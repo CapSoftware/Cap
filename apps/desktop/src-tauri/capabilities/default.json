@@ -33,7 +33,6 @@
     {
       "identifier": "http:default",
       "allow": [{ "url": "https://cap.so" }]
-    },
-    "clipboard-manager:allow-write-text"
+    }
   ]
 }
