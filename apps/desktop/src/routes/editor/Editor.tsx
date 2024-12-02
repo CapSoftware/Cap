@@ -145,7 +145,7 @@ function Inner() {
     <div class="w-screen h-screen flex flex-col">
       <Header />
       <div
-        class="p-5 pt-0 flex-1 w-full overflow-y-hidden flex flex-col gap-4 bg-gray-50 rounded-lg leading-5 animate-in fade-in"
+        class="p-5 pt-0 flex-1 w-full overflow-y-hidden flex flex-col gap-4 bg-gray-50 leading-5 animate-in fade-in"
         data-tauri-drag-region
       >
         <div class="rounded-2xl overflow-hidden  shadow border flex-1 flex flex-col divide-y bg-white">

@@ -55,26 +55,28 @@ impl AudioData {
 }
 
 pub struct AudioFrameBuffer {
-    data: AudioData,
-    cursor: usize,
+    data: Vec<AudioData>,
+    cursor: (usize, usize),
     elapsed_samples: usize,
     sample_size: usize,
 }
 
 impl AudioFrameBuffer {
-    pub fn new(data: AudioData) -> Self {
-        let sample_size = data.info.channels * data.info.sample_format.bytes();
+    pub fn new(data: Vec<AudioData>) -> Self {
+        let info = data[0].info;
+        let sample_size = info.channels * info.sample_format.bytes();
 
         Self {
             data,
-            cursor: 0,
+            cursor: (0, 0),
             elapsed_samples: 0,
             sample_size,
         }
     }
 
     pub fn info(&self) -> AudioInfo {
-        self.data.info
+        self.data[0].info
+        // self.data.info
     }
 
     pub fn set_playhead(&mut self, playhead: f64, maybe_timeline: Option<&TimelineConfiguration>) {
@@ -82,10 +84,13 @@ impl AudioFrameBuffer {
 
         self.cursor = match maybe_timeline {
             Some(timeline) => match timeline.get_recording_time(playhead) {
-                Some((time, _)) => self.playhead_to_samples(time) * self.sample_size,
-                None => self.data.buffer.len(),
+                Some((time, segment)) => {
+                    let index = segment.unwrap_or(0) as usize;
+                    (index, self.playhead_to_samples(time) * self.sample_size)
+                }
+                None => (0, self.data[0].buffer.len()),
             },
-            None => self.elapsed_samples * self.sample_size,
+            None => (0, self.elapsed_samples * self.sample_size),
         };
     }
 
@@ -97,23 +102,28 @@ impl AudioFrameBuffer {
         // (corresponding to a trim or split point). Currently this change is at least 0.2 seconds
         // - not sure we offer that much precision in the editor even!
         let new_cursor = match timeline.get_recording_time(playhead) {
-            Some((time, _)) => self.playhead_to_samples(time) * self.sample_size,
-            None => self.data.buffer.len(),
+            Some((time, segment)) => (
+                segment.unwrap_or(0) as usize,
+                self.playhead_to_samples(time) * self.sample_size,
+            ),
+            None => (0, self.data[0].buffer.len()),
         };
 
-        let cursor_diff = new_cursor as isize - self.cursor as isize;
-        if cursor_diff.unsigned_abs() > (self.data.info.sample_rate as usize) / 5 {
+        let cursor_diff = new_cursor.1 as isize - self.cursor.1 as isize;
+        if new_cursor.0 != self.cursor.0
+            || cursor_diff.unsigned_abs() > (self.info().sample_rate as usize) / 5
+        {
             self.cursor = new_cursor;
         }
     }
 
     fn playhead_to_samples(&self, playhead: f64) -> usize {
-        let estimated_start_sample = playhead * f64::from(self.data.info.sample_rate);
+        let estimated_start_sample = playhead * f64::from(self.info().sample_rate);
         num_traits::cast(estimated_start_sample).unwrap()
     }
 
     fn elapsed_samples_to_playhead(&self) -> f64 {
-        self.elapsed_samples as f64 / f64::from(self.data.info.sample_rate)
+        self.elapsed_samples as f64 / f64::from(self.info().sample_rate)
     }
 
     pub fn next_frame(
@@ -121,9 +131,9 @@ impl AudioFrameBuffer {
         requested_samples: usize,
         timeline: Option<&TimelineConfiguration>,
     ) -> Option<FFAudio> {
-        let format = self.data.info.sample_format;
-        let channels = self.data.info.channel_layout();
-        let sample_rate = self.data.info.sample_rate;
+        let format = self.info().sample_format;
+        let channels = self.info().channel_layout();
+        let sample_rate = self.info().sample_rate;
 
         self.next_frame_data(requested_samples, timeline)
             .map(move |(samples, data)| {
@@ -144,13 +154,14 @@ impl AudioFrameBuffer {
             self.adjust_cursor(timeline);
         }
 
-        if self.cursor >= self.data.buffer.len() {
+        let buffer = &self.data[self.cursor.0].buffer;
+        if self.cursor.1 >= buffer.len() {
             return None;
         }
 
         let mut bytes_size = self.sample_size * samples;
 
-        let remaining_data = self.data.buffer.len() - self.cursor;
+        let remaining_data = buffer.len() - self.cursor.1;
         if remaining_data < bytes_size {
             bytes_size = remaining_data;
             samples = remaining_data / self.sample_size;
@@ -158,8 +169,8 @@ impl AudioFrameBuffer {
 
         let start = self.cursor;
         self.elapsed_samples += samples;
-        self.cursor += bytes_size;
-        Some((samples, &self.data.buffer[start..self.cursor]))
+        self.cursor.1 += bytes_size;
+        Some((samples, &buffer[start.1..self.cursor.1]))
     }
 }
 
@@ -173,11 +184,11 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     pub const PLAYBACK_SAMPLES_COUNT: u32 = 256;
     const PROCESSING_SAMPLES_COUNT: u32 = 1024;
 
-    pub fn new(data: AudioData, output_info: AudioInfo) -> Self {
-        println!("Input info: {:?}", data.info);
+    pub fn new(data: Vec<AudioData>, output_info: AudioInfo) -> Self {
+        println!("Input info: {:?}", data[0].info);
         println!("Output info: {:?}", output_info);
 
-        let resampler = AudioResampler::new(data.info, output_info).unwrap();
+        let resampler = AudioResampler::new(data[0].info, output_info).unwrap();
 
         // Up to 1 second of pre-rendered audio
         let capacity = (output_info.sample_rate as usize)
@@ -199,7 +210,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         self.resampled_buffer.clear();
         self.frame_buffer.set_playhead(playhead, maybe_timeline);
 
-        println!("Successful seek to sample {}", self.frame_buffer.cursor);
+        println!("Successful seek to sample {:?}", self.frame_buffer.cursor);
     }
 
     pub fn buffer_reaching_limit(&self) -> bool {

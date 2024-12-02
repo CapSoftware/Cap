@@ -6,7 +6,7 @@ use crate::{
     create_screenshot,
     export::export_video,
     general_settings::GeneralSettingsStore,
-    notifications, open_editor, open_external_link, platform,
+    list_recordings, notifications, open_editor, open_external_link, platform,
     upload::get_s3_config,
     upload_exported_video, web_api,
     windows::{CapWindowId, ShowCapWindow},
@@ -46,10 +46,6 @@ pub fn list_cameras() -> Vec<String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
-    sentry::configure_scope(|scope| {
-        scope.set_tag("cmd", "start_recording");
-    });
-
     let mut state = state.write().await;
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -149,10 +145,6 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 #[tauri::command]
 #[specta::specta]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
-    sentry::configure_scope(|scope| {
-        scope.set_tag("cmd", "stop_recording");
-    });
-
     let mut state = state.write().await;
     let Some(current_recording) = state.clear_current_recording() else {
         return Err("Recording not in progress".to_string())?;
@@ -210,50 +202,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
     let recordings = ProjectRecordings::new(&completed_recording.meta);
 
-    let config = {
-        let segments = {
-            let mut segments = vec![];
-            let mut passed_duration = 0.0;
-
-            // multi-segment
-            // for segment in &completed_recording.segments {
-            //     let start = passed_duration;
-            //     passed_duration += segment.end - segment.start;
-            //     segments.push(TimelineSegment {
-            //         recording_segment: None,
-            //         start,
-            //         end: passed_duration.min(recordings.duration()),
-            //         timescale: 1.0,
-            //     });
-            // }
-
-            // single-segment
-            for i in (0..completed_recording.segments.len()).step_by(2) {
-                let start = passed_duration;
-                passed_duration +=
-                    completed_recording.segments[i + 1] - completed_recording.segments[i];
-                segments.push(TimelineSegment {
-                    recording_segment: None,
-                    start,
-                    end: passed_duration.min(recordings.duration()),
-                    timescale: 1.0,
-                });
-            }
-
-            segments
-        };
-
-        ProjectConfiguration {
-            timeline: Some(TimelineConfiguration {
-                segments,
-                zoom_segments: generate_zoom_segments_from_clicks(
-                    &completed_recording,
-                    &recordings,
-                ),
-            }),
-            ..Default::default()
-        }
-    };
+    let config = project_config_from_recording(&completed_recording, &recordings);
 
     config
         .write(&completed_recording.recording_dir)
@@ -390,4 +339,27 @@ fn generate_zoom_segments_from_clicks(
     }
 
     segments
+}
+
+fn project_config_from_recording(
+    completed_recording: &CompletedRecording,
+    recordings: &ProjectRecordings,
+) -> ProjectConfiguration {
+    ProjectConfiguration {
+        timeline: Some(TimelineConfiguration {
+            segments: recordings
+                .segments
+                .iter()
+                .enumerate()
+                .map(|(i, segment)| TimelineSegment {
+                    recording_segment: Some(i as u32),
+                    start: 0.0,
+                    end: segment.duration(),
+                    timescale: 1.0,
+                })
+                .collect(),
+            zoom_segments: generate_zoom_segments_from_clicks(&completed_recording, &recordings),
+        }),
+        ..Default::default()
+    }
 }

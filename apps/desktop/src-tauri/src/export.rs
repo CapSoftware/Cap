@@ -1,5 +1,6 @@
 use crate::{
-    get_video_metadata, upsert_editor_instance, windows::ShowCapWindow, RenderProgress, VideoType,
+    get_video_metadata, upsert_editor_instance, windows::ShowCapWindow, RenderProgress,
+    VideoRecordingMetadata, VideoType,
 };
 use cap_project::ProjectConfiguration;
 use std::path::PathBuf;
@@ -14,11 +15,7 @@ pub async fn export_video(
     progress: tauri::ipc::Channel<RenderProgress>,
     force: bool,
 ) -> Result<PathBuf, String> {
-    sentry::configure_scope(|scope| {
-        scope.set_tag("cmd", "export_video");
-    });
-
-    let (duration, _size) =
+    let VideoRecordingMetadata { duration, .. } =
         get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
             .await
             .unwrap();
@@ -42,9 +39,11 @@ pub async fn export_video(
     cap_export::export_video_to_file(
         project,
         output_path.clone(),
-        move |current_frame| {
+        move |frame_index| {
             progress
-                .send(RenderProgress::FrameRendered { current_frame })
+                .send(RenderProgress::FrameRendered {
+                    current_frame: frame_index + 1,
+                })
                 .ok();
         },
         &editor_instance.project_path,
