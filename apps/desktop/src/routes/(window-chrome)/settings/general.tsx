@@ -2,8 +2,6 @@ import {
   createResource,
   Show,
   For,
-  createSignal,
-  createEffect,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
@@ -13,7 +11,7 @@ import {
   isPermissionGranted,
   requestPermission,
 } from "@tauri-apps/plugin-notification";
-import { type OsType, Platform, type } from "@tauri-apps/plugin-os";
+import { type OsType, type } from "@tauri-apps/plugin-os";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
@@ -102,14 +100,14 @@ function AppearanceSection(props: {
               <button
                 type="button"
                 aria-checked={props.currentTheme === theme.id}
-                class="flex flex-col items-center group"
+                class="flex flex-col items-center group rounded-md focus:outline-none focus:ring-gray-300 focus:ring-offset-gray-50 focus:ring-offset-2 focus:ring-4"
                 onClick={() => props.onThemeChange(theme.id)}
               >
                 <div
                   class={`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200 ${
                     props.currentTheme === theme.id
                       ? "ring-2 ring-offset-2"
-                      : "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-300"
+                      : "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-300" 
                   }`}
                   aria-label={`Select theme: ${theme.name}`}
                 >
@@ -122,9 +120,9 @@ function AppearanceSection(props: {
                   </div>
                 </div>
                 <span
-                  class={`mt-2 text-sm ${
+                  class={`mt-2 text-sm transition-color duration-200 ${
                     props.currentTheme === theme.id
-                      ? "font-semibold text-blue-400"
+                      ? "text-blue-400"
                       : ""
                   }`}
                 >
