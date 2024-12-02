@@ -715,7 +715,7 @@ function RgbInput(props: {
         }}
       />
       <input
-        class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem]"
+        class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem] bg-gray-50"
         value={text()}
         onFocus={() => {
           prevHex = rgbToHex(props.value);
