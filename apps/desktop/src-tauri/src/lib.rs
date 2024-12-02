@@ -17,7 +17,6 @@ mod upload;
 mod web_api;
 mod windows;
 
-use arboard::Clipboard;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid};
 use cap_editor::EditorState;
@@ -30,6 +29,8 @@ use cap_media::{
 };
 use cap_project::{Content, ProjectConfiguration, RecordingMeta, SharingMeta};
 use cap_recording::RecordingOptions;
+use clipboard_rs::common::RustImage;
+use clipboard_rs::{Clipboard, ClipboardContext};
 use fake_window::FakeWindowBounds;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
@@ -569,41 +570,14 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
 #[tauri::command]
 #[specta::specta]
 async fn copy_screenshot_to_clipboard(
-    app: AppHandle,
-    clipboard: MutableState<'_, Clipboard>,
-    path: PathBuf,
+    clipboard: MutableState<'_, ClipboardContext>,
+    path: String,
 ) -> Result<(), String> {
     println!("Copying screenshot to clipboard: {:?}", path);
 
-    let image = match image::open(&path) {
-        Ok(data) => data,
-        Err(e) => {
-            println!("Failed to read screenshot file: {}", e);
-            notifications::send_notification(
-                &app,
-                notifications::NotificationType::ScreenshotCopyFailed,
-            );
-            return Err(format!("Failed to read screenshot file: {}", e));
-        }
-    };
-    let data = match image.as_rgba8() {
-        Some(data) => data,
-        None => {
-            println!("Failed to load image as 8bit RGBA");
-            notifications::send_notification(
-                &app,
-                notifications::NotificationType::ScreenshotCopyFailed,
-            );
-            return Err("Failed to load image as 8bit RGBA".into());
-        }
-    };
-
-    let _ = clipboard.write().await.set_image(arboard::ImageData {
-        width: image.width() as usize,
-        height: image.height() as usize,
-        bytes: std::borrow::Cow::Borrowed(data),
-    });
-
+    let img_data = clipboard_rs::RustImageData::from_path(&path)
+        .map_err(|e| format!("Failed to copy screenshot to clipboard: {}", e))?;
+    clipboard.write().await.set_image(img_data);
     Ok(())
 }
 
@@ -726,11 +700,11 @@ async fn create_editor_instance(
 #[specta::specta]
 async fn copy_video_to_clipboard(
     app: AppHandle,
-    clipboard: MutableState<'_, Clipboard>,
+    clipboard: MutableState<'_, ClipboardContext>,
     path: String,
 ) -> Result<(), String> {
     println!("copying");
-    let _ = clipboard.write().await.set_text(path);
+    let _ = clipboard.write().await.set_files(vec![path]);
 
     notifications::send_notification(
         &app,
@@ -1032,7 +1006,7 @@ async fn upload_exported_video(
             RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
             let _ = app
-                .state::<MutableState<'_, Clipboard>>()
+                .state::<MutableState<'_, ClipboardContext>>()
                 .write()
                 .await
                 .set_text(uploaded_video.link.clone());
@@ -1051,6 +1025,7 @@ async fn upload_exported_video(
 #[specta::specta]
 async fn upload_screenshot(
     app: AppHandle,
+    clipboard: MutableState<'_, ClipboardContext>,
     screenshot_path: PathBuf,
 ) -> Result<UploadResult, String> {
     let Ok(Some(mut auth)) = AuthStore::get(&app) else {
@@ -1122,11 +1097,7 @@ async fn upload_screenshot(
     println!("Copying to clipboard: {:?}", share_link);
 
     // Copy link to clipboard
-    let _ = app
-        .state::<MutableState<'_, Clipboard>>()
-        .write()
-        .await
-        .set_text(share_link.clone());
+    let _ = clipboard.write().await.set_text(share_link.clone());
 
     // Send notification after successful upload and clipboard copy
     notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
@@ -1834,7 +1805,7 @@ pub async fn run() {
             })));
 
             app.manage(Arc::new(RwLock::new(
-                Clipboard::new().expect("Failed to create clipboard context"),
+                ClipboardContext::new().expect("Failed to create clipboard context"),
             )));
 
             tray::create_tray(&app).unwrap();
@@ -2125,10 +2096,10 @@ fn global_message_dialog(app: AppHandle, message: String) {
 #[tauri::command]
 #[specta::specta]
 async fn write_clipboard_string(
-    clipboard: MutableState<'_, Clipboard>,
+    clipboard: MutableState<'_, ClipboardContext>,
     text: String,
 ) -> Result<(), String> {
-    let mut writer = clipboard
+    let writer = clipboard
         .try_write()
         .map_err(|e| format!("Failed to acquire lock on clipboard state: {e}"))?;
     writer

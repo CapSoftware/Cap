@@ -22,6 +22,7 @@ use cap_project::{
 };
 use cap_recording::CompletedRecording;
 use cap_rendering::ZOOM_DURATION;
+use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 
@@ -219,7 +220,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
             if let Some(pre_created_video) = state.pre_created_video.take() {
                 // Copy link to clipboard
                 let _ = app
-                    .state::<MutableState<'_, arboard::Clipboard>>()
+                    .state::<MutableState<'_, ClipboardContext>>()
                     .write()
                     .await
                     .set_text(pre_created_video.link.clone());
