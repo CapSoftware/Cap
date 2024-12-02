@@ -10,7 +10,10 @@ fn main() {
         sentry::ClientOptions {
             release: sentry::release_name!(),
             debug: cfg!(debug_assertions),
-            before_send: Some(Arc::new(|event| {
+            before_send: Some(Arc::new(|mut event| {
+                // this is irrelevant to us + users probably don't want us knowing their computer names
+                event.server_name = None;
+
                 #[cfg(debug_assertions)]
                 {
                     let msg = event.message.clone().unwrap_or("No message".into());

@@ -177,7 +177,7 @@ export default function () {
                     });
                   if (!result) return;
 
-                  const [duration, size] = result;
+                  const { duration, size } = result;
                   console.log(
                     `Metadata for ${media.path}: duration=${duration}, size=${size}`
                   );
@@ -352,7 +352,9 @@ export default function () {
 
                                       // For other progress types
                                       return Math.min(
-                                        progressState.progress || 0,
+                                        ("progress" in progressState &&
+                                          progressState.progress) ||
+                                          0,
                                         100
                                       );
                                     })()}%`,

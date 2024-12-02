@@ -28,7 +28,7 @@ use cap_media::{
     feeds::{CameraFeed, CameraFrameSender},
     sources::ScreenCaptureTarget,
 };
-use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta};
+use cap_project::{Content, ProjectConfiguration, RecordingMeta, SharingMeta};
 use cap_recording::RecordingOptions;
 use fake_window::FakeWindowBounds;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
@@ -132,7 +132,6 @@ impl App {
     async fn set_start_recording_options(&mut self, new_options: RecordingOptions) {
         let options = new_options.clone();
         sentry::configure_scope(move |scope| {
-            scope.set_tag("cmd", "set_start_recording_options");
             let mut ctx = std::collections::BTreeMap::new();
             ctx.insert(
                 "capture_target".into(),
@@ -570,10 +569,6 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
 #[tauri::command]
 #[specta::specta]
 async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(), String> {
-    sentry::configure_scope(|scope| {
-        scope.set_tag("cmd", "copy_screenshot_to_clipboard");
-    });
-
     println!("Copying screenshot to clipboard: {:?}", path);
 
     let image = match image::open(&path) {
@@ -744,100 +739,95 @@ async fn copy_video_to_clipboard(app: AppHandle, path: String) -> Result<(), Str
     Ok(())
 }
 
+#[derive(Serialize, Deserialize, specta::Type)]
+pub struct VideoRecordingMetadata {
+    duration: f64,
+    size: f64,
+}
+
 #[tauri::command]
 #[specta::specta]
 async fn get_video_metadata(
     app: AppHandle,
     video_id: String,
     video_type: Option<VideoType>,
-) -> Result<(f64, f64), String> {
+) -> Result<VideoRecordingMetadata, String> {
     let video_id = if video_id.ends_with(".cap") {
         video_id.trim_end_matches(".cap").to_string()
     } else {
         video_id
     };
 
-    let video_dir = app
+    let project_path = app
         .path()
         .app_data_dir()
         .unwrap()
         .join("recordings")
         .join(format!("{}.cap", video_id));
 
-    let screen_video_path = video_dir.join("content").join("display.mp4");
-    let output_video_path = video_dir.join("output").join("result.mp4");
+    let meta = RecordingMeta::load_for_project(&project_path)?;
 
-    println!("video_dir: {:?} \n video_id: {:?}", video_dir, video_id);
-
-    let video_path = match video_type {
-        Some(VideoType::Screen) => {
-            println!("Using screen video path: {:?}", screen_video_path);
-            if !screen_video_path.exists() {
-                return Err(format!(
-                    "Screen video does not exist: {:?}",
-                    screen_video_path
-                ));
+    fn content_paths(project_path: &PathBuf, meta: &RecordingMeta) -> Vec<PathBuf> {
+        match &meta.content {
+            Content::SingleSegment { segment } => {
+                vec![segment.path(&meta, &segment.display.path)]
             }
-            screen_video_path
+            Content::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .map(|s| inner.path(&meta, &s.display.path))
+                .collect(),
         }
+    }
+
+    let paths = match video_type {
+        Some(VideoType::Screen) => content_paths(&project_path, &meta),
         Some(VideoType::Output) | None => {
+            let output_video_path = project_path.join("output").join("result.mp4");
             println!("Using output video path: {:?}", output_video_path);
             if output_video_path.exists() {
-                output_video_path
+                vec![output_video_path]
             } else {
-                println!(
-                    "Output video not found, falling back to screen video path: {:?}",
-                    screen_video_path
-                );
-                if !screen_video_path.exists() {
-                    return Err(format!(
-                        "Screen video does not exist: {:?}",
-                        screen_video_path
-                    ));
-                }
-                screen_video_path
+                println!("Output video not found, falling back to screen paths");
+                content_paths(&project_path, &meta)
             }
         }
     };
 
-    let file = File::open(&video_path).map_err(|e| {
-        println!("Failed to open video file: {}", e);
-        format!("Failed to open video file: {}", e)
-    })?;
-
-    let size = (file
-        .metadata()
-        .map_err(|e| {
-            println!("Failed to get file metadata: {}", e);
-            format!("Failed to get file metadata: {}", e)
-        })?
-        .len() as f64)
-        / (1024.0 * 1024.0);
-
-    println!("File size: {} MB", size);
-
-    let reader = BufReader::new(file);
-    let file_size = video_path
-        .metadata()
-        .map_err(|e| {
-            println!("Failed to get file metadata: {}", e);
-            format!("Failed to get file metadata: {}", e)
-        })?
-        .len();
-
-    let duration = match Mp4Reader::read_header(reader, file_size) {
-        Ok(mp4) => mp4.duration().as_secs_f64(),
-        Err(e) => {
-            println!(
-                "Failed to read MP4 header: {}. Falling back to default duration.",
-                e
-            );
-            // Return a default duration (e.g., 0.0) or try to estimate it based on file size
-            0.0 // or some estimated value
-        }
+    let mut ret = VideoRecordingMetadata {
+        size: 0.0,
+        duration: 0.0,
     };
 
-    Ok((duration, size))
+    for path in paths {
+        let file = File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?;
+
+        ret.size += (file
+            .metadata()
+            .map_err(|e| format!("Failed to get file metadata: {}", e))?
+            .len() as f64)
+            / (1024.0 * 1024.0);
+
+        let reader = BufReader::new(file);
+        let file_size = path
+            .metadata()
+            .map_err(|e| format!("Failed to get file metadata: {}", e))?
+            .len();
+
+        ret.duration += match Mp4Reader::read_header(reader, file_size) {
+            Ok(mp4) => mp4.duration().as_secs_f64(),
+            Err(e) => {
+                println!(
+                    "Failed to read MP4 header: {}. Falling back to default duration.",
+                    e
+                );
+                // Return a default duration (e.g., 0.0) or try to estimate it based on file size
+                0.0 // or some estimated value
+            }
+        };
+    }
+
+    Ok(ret)
 }
 
 #[tauri::command(async)]
@@ -1772,7 +1762,17 @@ pub async fn run() {
                 .build(),
         )
         .plugin(flags::plugin::init())
-        .invoke_handler(specta_builder.invoke_handler())
+        .invoke_handler({
+            let handler = specta_builder.invoke_handler();
+
+            move |invoke| {
+                sentry::configure_scope(|scope| {
+                    scope.set_tag("cmd", invoke.message.command());
+                });
+
+                handler(invoke)
+            }
+        })
         .setup(move |app| {
             let app = app.handle().clone();
             specta_builder.mount_events(&app);

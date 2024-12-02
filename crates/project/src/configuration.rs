@@ -304,7 +304,7 @@ impl TimelineConfiguration {
     pub fn get_recording_time(&self, tick_time: f64) -> Option<(f64, Option<u32>)> {
         let mut accum_duration = 0.0;
 
-        for segment in &self.segments {
+        for segment in self.segments.iter() {
             if tick_time < accum_duration + segment.duration() {
                 return segment
                     .interpolate_time(tick_time - accum_duration)

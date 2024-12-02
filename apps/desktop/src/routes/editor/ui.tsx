@@ -113,7 +113,7 @@ export const Dialog = {
       <KDialog {...props}>
         <KDialog.Portal>
           {!props.hideOverlay && (
-            <KDialog.Overlay class="fixed inset-0 z-50 bg-black-transparent-80 ui-expanded:animate-in ui-expanded:fade-in ui-closed:animate-out ui-closed:fade-out" />
+            <KDialog.Overlay class="fixed inset-0 z-50 bg-[#000]/80 ui-expanded:animate-in ui-expanded:fade-in ui-closed:animate-out ui-closed:fade-out" />
           )}
           <div class="fixed inset-0 z-50 flex items-center justify-center">
             <KDialog.Content

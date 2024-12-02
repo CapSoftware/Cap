@@ -64,10 +64,13 @@ impl Playback {
             // TODO: make this work with >1 segment
             if let Some(audio_data) = self.segments[0].audio.as_ref() {
                 AudioPlayback {
-                    audio: audio_data.clone(),
+                    segments: self
+                        .segments
+                        .iter()
+                        .map(|s| s.audio.as_ref().as_ref().unwrap().clone())
+                        .collect(),
                     stop_rx: stop_rx.clone(),
                     start_frame_number: self.start_frame_number,
-                    duration,
                     project: self.project.clone(),
                 }
                 .spawn();
@@ -80,47 +83,52 @@ impl Playback {
 
                 let project = self.project.borrow().clone();
 
-                let (time, segment) = if let Some(timeline) = project.timeline() {
-                    match timeline.get_recording_time(frame_number as f64 / FPS as f64) {
-                        Some(time) => time,
-                        None => break,
-                    }
-                } else {
-                    (frame_number as f64 / FPS as f64, None)
-                };
+                let time = project
+                    .timeline()
+                    .map(|t| t.get_recording_time(frame_number as f64 / FPS as f64))
+                    .unwrap_or(Some((frame_number as f64 / FPS as f64, None)));
 
-                let segment = &self.segments[segment.unwrap_or(0) as usize];
+                if let Some((time, segment)) = time {
+                    let segment = &self.segments[segment.unwrap_or(0) as usize];
 
-                tokio::select! {
-                    _ = stop_rx.changed() => {
-                       break;
-                    },
-                    Some((screen_frame, camera_frame)) =                    segment.decoders.get_frames((time * FPS as f64) as u32) => {
-                        // println!("decoded frame in {:?}", debug.elapsed());
-                        let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32);
+                    tokio::select! {
+                        _ = stop_rx.changed() => {
+                           break;
+                        },
+                        value = segment.decoders.get_frames((time * FPS as f64) as u32) => {
+                            if let Some((screen_frame, camera_frame)) = value {
+                                let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32);
 
-                        self
-                            .renderer
-                            .render_frame(
-                                screen_frame,
-                                camera_frame,
-                                project.background.source.clone(),
-                                uniforms.clone(),
-                                time as f32  // Add the time parameter
-                            )
-                            .await;
-
-                        tokio::time::sleep_until(start + (frame_number - self.start_frame_number) * Duration::from_secs_f32(1.0 / FPS as f32)).await;
-
-                        event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
-
-                        frame_number += 1;
-                    }
-                    else => {
-                        break;
+                                self
+                                    .renderer
+                                    .render_frame(
+                                        screen_frame,
+                                        camera_frame,
+                                        project.background.source.clone(),
+                                        uniforms.clone(),
+                                        time as f32  // Add the time parameter
+                                    )
+                                    .await;
+                            }
+                        }
+                        else => {
+                        }
                     }
                 }
+
+                tokio::time::sleep_until(
+                    start
+                        + (frame_number - self.start_frame_number)
+                            * Duration::from_secs_f32(1.0 / FPS as f32),
+                )
+                .await;
+
+                event_tx.send(PlaybackEvent::Frame(frame_number)).ok();
+
+                frame_number += 1;
             }
+
+            println!("stopped playback");
 
             stop_tx.send(true).ok();
 
@@ -143,10 +151,9 @@ impl PlaybackHandle {
 }
 
 struct AudioPlayback {
-    audio: AudioData,
+    segments: Vec<AudioData>,
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
-    duration: f64,
     project: watch::Receiver<ProjectConfiguration>,
 }
 
@@ -191,10 +198,10 @@ impl AudioPlayback {
         supported_config: cpal::SupportedStreamConfig,
     ) -> (watch::Receiver<bool>, cpal::Stream) {
         let AudioPlayback {
-            audio,
             stop_rx,
             start_frame_number,
             project,
+            segments,
             ..
         } = self;
 
@@ -204,7 +211,7 @@ impl AudioPlayback {
         // TODO: Get fps and duration from video (once we start supporting other frame rates)
         // Also, it's a bit weird that self.duration can ever be infinity to begin with, since
         // pre-recorded videos are obviously a fixed size
-        let mut audio_renderer = AudioPlaybackBuffer::new(audio, output_info);
+        let mut audio_renderer = AudioPlaybackBuffer::new(segments, output_info);
         let playhead = f64::from(start_frame_number) / f64::from(FPS);
         audio_renderer.set_playhead(playhead, project.borrow().timeline());
 

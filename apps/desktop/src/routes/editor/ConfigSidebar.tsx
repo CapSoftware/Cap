@@ -528,13 +528,16 @@ export function ConfigSidebar() {
             </ComingSoonTooltip>
           </Field>
           <Field name="Size" icon={<IconCapEnlarge />}>
-            <Slider
-              value={[project.cursor.size]}
-              onChange={(v) => setProject("cursor", "size", v[0])}
-              minValue={20}
-              maxValue={300}
-              step={1}
-            />
+            <ComingSoonTooltip>
+              <Slider
+                disabled
+                value={[project.cursor.size]}
+                onChange={(v) => setProject("cursor", "size", v[0])}
+                minValue={20}
+                maxValue={300}
+                step={1}
+              />
+            </ComingSoonTooltip>
           </Field>
           {window.FLAGS.zoom && (
             <Field name="Animation Style" icon={<IconLucideRabbit />}>
@@ -712,7 +715,7 @@ function RgbInput(props: {
         }}
       />
       <input
-        class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem]"
+        class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem] bg-gray-50"
         value={text()}
         onFocus={() => {
           prevHex = rgbToHex(props.value);

@@ -199,7 +199,12 @@ export function Timeline() {
                   onMouseDown={(downEvent) => {
                     const start = segment.start;
 
-                    const maxDuration =
+                    const maxSegmentDuration =
+                      editorInstance.recordings.segments[
+                        segment.recordingSegment ?? 0
+                      ].display.duration;
+
+                    const availableTimelineDuration =
                       editorInstance.recordingDuration -
                       segments().reduce(
                         (acc, segment, segmentI) =>
@@ -209,6 +214,11 @@ export function Timeline() {
                               (segment.end - segment.start) / segment.timescale,
                         0
                       );
+
+                    const maxDuration = Math.min(
+                      maxSegmentDuration,
+                      availableTimelineDuration
+                    );
 
                     function update(event: MouseEvent) {
                       const { width } = timelineBounds;
@@ -250,7 +260,7 @@ export function Timeline() {
                   <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
                     {formatTime(segment.start)}
                   </span>
-                  <Show when={segments().length > 1}>
+                  {/* <Show when={segments().length > 1}>
                     <button
                       onClick={() => {
                         setProject(
@@ -265,7 +275,7 @@ export function Timeline() {
                     >
                       <IconCapTrash class="size-4 text-gray-400 group-hover/button:text-gray-500 transition-colors" />
                     </button>
-                  </Show>
+                  </Show> */}
                   <span class="text-black-transparent-60 text-[0.625rem] mt-auto">
                     {formatTime(segment.end)}
                   </span>
@@ -275,7 +285,12 @@ export function Timeline() {
                   onMouseDown={(downEvent) => {
                     const end = segment.end;
 
-                    const maxDuration =
+                    const maxSegmentDuration =
+                      editorInstance.recordings.segments[
+                        segment.recordingSegment ?? 0
+                      ].display.duration;
+
+                    const availableTimelineDuration =
                       editorInstance.recordingDuration -
                       segments().reduce(
                         (acc, segment, segmentI) =>
@@ -285,6 +300,11 @@ export function Timeline() {
                               (segment.end - segment.start) / segment.timescale,
                         0
                       );
+
+                    const maxDuration = Math.min(
+                      maxSegmentDuration,
+                      availableTimelineDuration
+                    );
 
                     function update(event: MouseEvent) {
                       const { width } = timelineBounds;
@@ -658,9 +678,10 @@ function SegmentRoot(
     <div
       {...props}
       class={cx(
-        "absolute border rounded-[calc(0.75rem+1px)] h-[3rem] w-full",
+        "border rounded-[calc(0.75rem+1px)] h-[3rem] w-full",
         props.class,
-        isSelected() && "wobble-wrapper"
+        isSelected() && "wobble-wrapper",
+        isFreeForm() && "absolute"
       )}
       style={{
         "--segment-x": `${translateX()}px`,
