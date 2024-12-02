@@ -2,16 +2,17 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     sync::{mpsc, Arc},
-    time::Instant,
 };
 
 use ffmpeg::{
     codec::{self, Capabilities},
     format::{self},
-    frame, rescale, Codec, Rational, Rescale,
+    frame, rescale,
+    software::{self, scaling},
+    Codec, Rational, Rescale,
 };
-use ffmpeg_hw_device::HwDevice;
-use ffmpeg_sys_next::avcodec_find_decoder;
+use ffmpeg_hw_device::{CodecContextExt, HwDevice};
+use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 
 pub type DecodedFrame = Arc<Vec<u8>>;
 
@@ -29,6 +30,69 @@ const FRAME_CACHE_SIZE: usize = 50;
 // or changing `get_frame` to take the requested time instead of frame number,
 // so that the lookup can be done by PTS instead of frame number.
 const FPS: u32 = 30;
+
+#[derive(Clone)]
+struct CachedFrame {
+    data: CachedFrameData,
+}
+
+impl CachedFrame {
+    fn process(
+        &mut self,
+        scaler_input_format: &mut format::Pixel,
+        scaler: &mut scaling::Context,
+        decoder: &codec::decoder::Video,
+    ) -> Arc<Vec<u8>> {
+        match &mut self.data {
+            CachedFrameData::Raw(frame) => {
+                if frame.format() != *scaler_input_format {
+                    // Reinitialize the scaler with the new input format
+                    *scaler_input_format = frame.format();
+                    *scaler = software::scaling::Context::get(
+                        *scaler_input_format,
+                        decoder.width(),
+                        decoder.height(),
+                        format::Pixel::RGBA,
+                        decoder.width(),
+                        decoder.height(),
+                        software::scaling::Flags::BILINEAR,
+                    )
+                    .unwrap();
+                }
+
+                let mut rgb_frame = frame::Video::empty();
+                scaler.run(&frame, &mut rgb_frame).unwrap();
+
+                let width = rgb_frame.width() as usize;
+                let height = rgb_frame.height() as usize;
+                let stride = rgb_frame.stride(0);
+                let data = rgb_frame.data(0);
+
+                let expected_size = width * height * 4;
+
+                let mut frame_buffer = Vec::with_capacity(expected_size);
+
+                // account for stride > width
+                for line_data in data.chunks_exact(stride) {
+                    frame_buffer.extend_from_slice(&line_data[0..width * 4]);
+                }
+
+                let data = Arc::new(frame_buffer);
+
+                self.data = CachedFrameData::Processed(data.clone());
+
+                data
+            }
+            CachedFrameData::Processed(data) => data.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum CachedFrameData {
+    Raw(frame::Video),
+    Processed(Arc<Vec<u8>>),
+}
 
 pub struct AsyncVideoDecoder;
 
@@ -73,17 +137,17 @@ impl AsyncVideoDecoder {
             }
 
             let hw_device: Option<HwDevice> = {
-                // #[cfg(target_os = "macos")]
-                // {
-                //     decoder
-                //         .try_use_hw_device(
-                //             AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
-                //             Pixel::NV12,
-                //         )
-                //         .ok()
-                // }
+                #[cfg(target_os = "macos")]
+                {
+                    decoder
+                        .try_use_hw_device(
+                            AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                            Pixel::NV12,
+                        )
+                        .ok()
+                }
 
-                // #[cfg(not(target_os = "macos"))]
+                #[cfg(not(target_os = "macos"))]
                 None
             };
 
@@ -108,7 +172,7 @@ impl AsyncVideoDecoder {
 
             let mut temp_frame = ffmpeg::frame::Video::empty();
 
-            let mut cache = BTreeMap::<u32, Arc<Vec<u8>>>::new();
+            let mut cache = BTreeMap::<u32, CachedFrame>::new();
             // active frame is a frame that triggered decode.
             // frames that are within render_more_margin of this frame won't trigger decode.
             let mut last_active_frame = None::<u32>;
@@ -123,9 +187,12 @@ impl AsyncVideoDecoder {
             while let Ok(r) = peekable_requests.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_frame, sender) => {
-                        let mut sender = if let Some(cached) = cache.get(&requested_frame) {
-                            sender.send(Some(cached.clone())).ok();
-                            last_sent_frame = Some((requested_frame, cached.clone()));
+                        let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
+                            let data =
+                                cached.process(&mut scaler_input_format, &mut scaler, &decoder);
+
+                            sender.send(Some(data.clone())).ok();
+                            last_sent_frame = Some((requested_frame, data));
                             continue;
                         } else {
                             Some(sender)
@@ -223,52 +290,31 @@ impl AsyncVideoDecoder {
                                     let hw_frame =
                                         hw_device.as_ref().and_then(|d| d.get_hwframe(&temp_frame));
 
-                                    let frame = hw_frame.as_ref().unwrap_or(&temp_frame);
-
-                                    if frame.format() != scaler_input_format {
-                                        // Reinitialize the scaler with the new input format
-                                        scaler_input_format = frame.format();
-                                        scaler = Context::get(
-                                            scaler_input_format,
-                                            decoder.width(),
-                                            decoder.height(),
-                                            Pixel::RGBA,
-                                            decoder.width(),
-                                            decoder.height(),
-                                            Flags::BILINEAR,
-                                        )
-                                        .unwrap();
-                                    }
-
-                                    let mut rgb_frame = frame::Video::empty();
-                                    scaler.run(frame, &mut rgb_frame).unwrap();
-
-                                    let width = rgb_frame.width() as usize;
-                                    let height = rgb_frame.height() as usize;
-                                    let stride = rgb_frame.stride(0);
-                                    let data = rgb_frame.data(0);
-
-                                    let expected_size = width * height * 4;
-
-                                    let mut frame_buffer = Vec::with_capacity(expected_size);
-
-                                    // account for stride > width
-                                    for line_data in data.chunks_exact(stride) {
-                                        frame_buffer.extend_from_slice(&line_data[0..width * 4]);
-                                    }
-
-                                    let frame = Arc::new(frame_buffer);
-
-                                    if current_frame == requested_frame {
-                                        if let Some(sender) = sender.take() {
-                                            last_sent_frame = Some((current_frame, frame.clone()));
-                                            sender.send(Some(frame.clone())).ok();
-
-                                            break;
-                                        }
-                                    }
+                                    let frame = hw_frame.unwrap_or(std::mem::replace(
+                                        &mut temp_frame,
+                                        frame::Video::empty(),
+                                    ));
 
                                     if !too_small_for_cache_bounds {
+                                        let mut cache_frame = CachedFrame {
+                                            data: CachedFrameData::Raw(frame),
+                                        };
+
+                                        if current_frame == requested_frame {
+                                            if let Some(sender) = sender.take() {
+                                                let data = cache_frame.process(
+                                                    &mut scaler_input_format,
+                                                    &mut scaler,
+                                                    &decoder,
+                                                );
+                                                last_sent_frame =
+                                                    Some((current_frame, data.clone()));
+                                                sender.send(Some(data)).ok();
+
+                                                break;
+                                            }
+                                        }
+
                                         if cache.len() >= FRAME_CACHE_SIZE {
                                             if let Some(last_active_frame) = &last_active_frame {
                                                 let frame = if requested_frame > *last_active_frame
@@ -293,7 +339,7 @@ impl AsyncVideoDecoder {
                                             }
                                         }
 
-                                        cache.insert(current_frame, frame);
+                                        cache.insert(current_frame, cache_frame);
                                     }
 
                                     exit = exit || exceeds_cache_bounds;
