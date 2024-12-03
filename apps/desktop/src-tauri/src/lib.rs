@@ -1643,6 +1643,7 @@ pub async fn run() {
             seek_to,
             send_feedback_request,
             windows::position_traffic_lights,
+            windows::set_theme,
             global_message_dialog,
             show_window,
             write_clipboard_string,

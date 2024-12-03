@@ -1,6 +1,6 @@
 #![allow(unused_mut)]
 
-use crate::fake_window;
+use crate::{fake_window, general_settings::AppTheme};
 use cap_flags::FLAGS;
 use serde::Deserialize;
 use specta::Type;
@@ -400,9 +400,30 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
 
 #[tauri::command]
 #[specta::specta]
+pub fn set_theme(window: tauri::Window, theme: AppTheme) {
+    let _ = window.set_theme(match theme {
+        AppTheme::System => None,
+        AppTheme::Light => Some(tauri::Theme::Light),
+        AppTheme::Dark => Some(tauri::Theme::Dark),
+    });
+
+    #[cfg(target_os = "macos")]
+    position_traffic_lights(window, None);
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn position_traffic_lights(window: tauri::Window, controls_inset: Option<(f64, f64)>) {
     #[cfg(target_os = "macos")]
-    position_traffic_lights_impl(&window, controls_inset.map(LogicalPosition::from));
+    position_traffic_lights_impl(
+        &window,
+        controls_inset.map(LogicalPosition::from).or_else(|| {
+            // Attempt to get the default inset from the window's traffic lights position
+            CapWindowId::from_str(window.label())
+                .ok()
+                .and_then(|id| id.traffic_lights_position().flatten())
+        }),
+    );
 }
 
 #[cfg(target_os = "macos")]

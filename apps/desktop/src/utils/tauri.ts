@@ -149,6 +149,9 @@ async sendFeedbackRequest(feedback: string) : Promise<null> {
 async positionTrafficLights(controlsInset: [number, number] | null) : Promise<void> {
     await TAURI_INVOKE("position_traffic_lights", { controlsInset });
 },
+async setTheme(theme: AppTheme) : Promise<void> {
+    await TAURI_INVOKE("set_theme", { theme });
+},
 async globalMessageDialog(message: string) : Promise<void> {
     await TAURI_INVOKE("global_message_dialog", { message });
 },

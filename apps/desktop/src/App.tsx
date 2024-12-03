@@ -14,7 +14,7 @@ import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 import { generalSettingsStore } from "./store";
-import type { AppTheme } from "./utils/tauri";
+import { commands, type AppTheme } from "./utils/tauri";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -95,18 +95,18 @@ function createThemeListener(currentWindow: WebviewWindow) {
   onCleanup(() => unlisten?.());
 
   function update(appTheme: AppTheme | null | undefined) {
-    if (appTheme === undefined) return;
+    if (appTheme === undefined || appTheme === null) return;
     if (
       location.pathname === "/camera" ||
       location.pathname === "/prev-recordings"
     )
       return;
 
-    currentWindow.setTheme(appTheme === "system" ? null : appTheme).then(() => {
+    commands.setTheme(appTheme).then(() => {
       document.documentElement.classList.toggle(
         "dark",
         appTheme === "dark" ||
-          window.matchMedia("(prefers-color-scheme: dark)").matches
+        window.matchMedia("(prefers-color-scheme: dark)").matches
       );
     });
   }
