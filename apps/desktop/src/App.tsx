@@ -1,25 +1,22 @@
 import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
 import {
-  createEffect,
   createResource,
-  createSignal,
   ErrorBoundary,
   onCleanup,
   onMount,
   Suspense,
 } from "solid-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 import { generalSettingsStore } from "./store";
-import { commands, type AppTheme } from "./utils/tauri";
+import type { AppTheme } from "./utils/tauri";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,7 +37,8 @@ export default function App() {
 }
 
 function Inner() {
-  createThemeListener();
+  const currentWindow = getCurrentWebviewWindow();
+  createThemeListener(currentWindow);
 
   return (
     <ErrorBoundary
@@ -64,7 +62,7 @@ function Inner() {
                 if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
               }
 
-              getCurrentWindow().show();
+              currentWindow.show();
             });
 
             return <Suspense>{props.children}</Suspense>;
@@ -77,8 +75,7 @@ function Inner() {
   );
 }
 
-function createThemeListener() {
-  const currentWindow = getCurrentWebviewWindow();
+function createThemeListener(currentWindow: WebviewWindow) {
   const [theme, themeActions] = createResource<AppTheme | null>(() =>
     generalSettingsStore.get().then((s) => {
       const t = s?.theme ?? null;
@@ -98,7 +95,6 @@ function createThemeListener() {
   onCleanup(() => unlisten?.());
 
   function update(appTheme: AppTheme | null | undefined) {
-    console.log(`apptheme: ${appTheme}`);
     if (appTheme === undefined) return;
     if (
       location.pathname === "/camera" ||

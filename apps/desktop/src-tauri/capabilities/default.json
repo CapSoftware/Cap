@@ -19,6 +19,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-set-position",
     "core:window:allow-set-theme",
+    "core:window:allow-set-progress-bar",
     "core:webview:default",
     "core:webview:allow-create-webview-window",
     "core:app:allow-version",

@@ -4,6 +4,7 @@ import {
   Match,
   Show,
   Switch,
+  createEffect,
   createResource,
   onCleanup,
   onMount,
@@ -21,17 +22,41 @@ import {
   progressState,
   setProgressState,
 } from "~/store/progress";
+
 import { events } from "~/utils/tauri";
+import Titlebar from "~/components/titlebar/Titlebar";
+import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 
 export function Header() {
-  let unlistenTitlebar: UnlistenFn | undefined;
+  const currentWindow = getCurrentWindow();
 
+  let unlistenTitlebar: UnlistenFn | undefined;
   onMount(async () => {
     unlistenTitlebar = await initializeTitlebar();
   });
+  onCleanup(() => unlistenTitlebar?.());
 
-  onCleanup(() => {
-    unlistenTitlebar?.();
+  createEffect(() => {
+    const state = progressState;
+    if (state === undefined || state.type === "idle") {
+      currentWindow.setProgressBar({ status: ProgressBarStatus.None });
+      return;
+    }
+
+    let percentage: number | undefined;
+    if (state.type === "saving") {
+      percentage = state.stage === "rendering" ? Math.min(
+        ((state.renderProgress || 0) /
+          (state.totalFrames || 1)) *
+        100,
+        100
+      ) : Math.min(state.progress || 0, 100);
+    }
+
+
+    if (percentage) currentWindow.setProgressBar({ progress: percentage });
   });
 
   setTitlebar("border", false);
@@ -56,14 +81,14 @@ export function Header() {
   return (
     <>
       <Titlebar />
-      <Dialog.Root open={progressState.type !== "idle"} onOpenChange={() => {}}>
+      <Dialog.Root open={progressState.type !== "idle"} onOpenChange={() => { }}>
         <DialogContent
           title={
             progressState.type === "copying"
               ? "Link Copied"
               : progressState.type === "uploading"
-              ? "Creating Shareable Link"
-              : "Exporting Recording"
+                ? "Creating Shareable Link"
+                : "Exporting Recording"
           }
           confirm={<></>}
           class="bg-gray-600 text-gray-500 dark:text-gray-500"
@@ -88,24 +113,23 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${
-                              state.stage === "rendering"
+                            width: `${state.stage === "rendering"
                                 ? Math.min(
-                                    ((state.renderProgress || 0) /
-                                      (state.totalFrames || 1)) *
-                                      100,
-                                    100
-                                  )
+                                  ((state.renderProgress || 0) /
+                                    (state.totalFrames || 1)) *
+                                  100,
+                                  100
+                                )
                                 : Math.min(state.progress || 0, 100)
-                            }%`,
+                              }%`,
                           }}
                         />
                       </div>
 
                       <p class="text-xs mt-3 relative z-10">
                         {state.stage === "rendering" &&
-                        state.renderProgress &&
-                        state.totalFrames
+                          state.renderProgress &&
+                          state.totalFrames
                           ? `${state.message} (${state.renderProgress}/${state.totalFrames} frames)`
                           : state.message}
                       </p>
@@ -131,24 +155,23 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${
-                              state.stage === "rendering"
+                            width: `${state.stage === "rendering"
                                 ? Math.min(
-                                    ((state.renderProgress || 0) /
-                                      (state.totalFrames || 1)) *
-                                      100,
-                                    100
-                                  )
+                                  ((state.renderProgress || 0) /
+                                    (state.totalFrames || 1)) *
+                                  100,
+                                  100
+                                )
                                 : Math.min(state.progress || 0, 100)
-                            }%`,
+                              }%`,
                           }}
                         />
                       </div>
 
                       <p class="text-xs mt-3 relative z-10">
                         {state.stage === "rendering" &&
-                        state.renderProgress &&
-                        state.totalFrames
+                          state.renderProgress &&
+                          state.totalFrames
                           ? `${state.message} (${state.renderProgress}/${state.totalFrames} frames)`
                           : state.message}
                       </p>
@@ -174,14 +197,13 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${
-                              state.stage === "rendering"
+                            width: `${state.stage === "rendering"
                                 ? Math.min(state.renderProgress || 0, 100)
                                 : Math.min(
-                                    (state.uploadProgress || 0) * 100,
-                                    100
-                                  )
-                            }%`,
+                                  (state.uploadProgress || 0) * 100,
+                                  100
+                                )
+                              }%`,
                           }}
                         />
                       </div>
@@ -189,8 +211,8 @@ export function Header() {
                       <p class="text-xs text-white mt-3 relative z-10">
                         {state.stage === "rendering"
                           ? `Rendering - ${Math.round(
-                              state.renderProgress || 0
-                            )}%`
+                            state.renderProgress || 0
+                          )}%`
                           : state.message}
                       </p>
                     </div>
@@ -209,9 +231,6 @@ import { Channel } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { createMutation } from "@tanstack/solid-query";
-import Titlebar from "~/components/titlebar/Titlebar";
-import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
-import { UnlistenFn } from "@tauri-apps/api/event";
 
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
@@ -387,8 +406,8 @@ function ShareButton() {
         const result = recordingMeta()?.sharing
           ? await commands.uploadExportedVideo(videoId, "Reupload")
           : await commands.uploadExportedVideo(videoId, {
-              Initial: { pre_created_video: null },
-            });
+            Initial: { pre_created_video: null },
+          });
 
         console.log("Upload result:", result);
 
