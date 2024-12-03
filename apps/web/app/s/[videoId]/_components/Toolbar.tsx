@@ -162,6 +162,36 @@ export const Toolbar = ({
     </div>
   );
 
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      // Only trigger if 'c' is pressed and comment box isn't already open
+      // Also check if user isn't typing in an input field
+      if (
+        e.key.toLowerCase() === "c" &&
+        !commentBoxOpen &&
+        !(
+          e.target instanceof HTMLInputElement ||
+          e.target instanceof HTMLTextAreaElement
+        )
+      ) {
+        e.preventDefault(); // Prevent the 'c' from being added to the input
+        if (!user) {
+          push(`/login?next=${window.location.pathname}`);
+          return;
+        }
+        if (videoElement) {
+          videoElement.pause();
+        }
+        setCommentBoxOpen(true);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyPress);
+    return () => {
+      window.removeEventListener("keydown", handleKeyPress);
+    };
+  }, [commentBoxOpen, user, push, videoElement]);
+
   return (
     <div
       className={`${
@@ -174,7 +204,7 @@ export const Toolbar = ({
         }`}
       >
         <div className="flex">
-          <div className="flex-grow p-2">
+          <div className="flex-grow p-1">
             {commentBoxOpen === true ? (
               <div className="w-full flex items-center justify-between">
                 <input
@@ -206,7 +236,7 @@ export const Toolbar = ({
                       handleCommentSubmit();
                     }}
                   >
-                    {videoElement
+                    {videoElement && getTimestamp() > 0
                       ? `Comment at ${getTimestamp().toFixed(2)}`
                       : "Comment"}
                   </Button>
@@ -232,7 +262,7 @@ export const Toolbar = ({
                     label={reaction.label}
                   />
                 ))}
-                <div className="w-[2px] bg-gray-200 h-full mx-2"></div>
+                <div className="w-[1px] bg-gray-200 h-[16px] mx-4"></div>
                 <div className="flex items-center">
                   <button
                     onClick={() => {
@@ -245,10 +275,11 @@ export const Toolbar = ({
                       }
                       setCommentBoxOpen(true);
                     }}
-                    className="font-medium bg-transparent py-1 px-2 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
+                    className="font-medium bg-gray-200 py-1 px-3 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
                   >
-                    <MessageSquare className="w-[16px] sm:w-[22px] h-auto" />
-                    <span className="text-sm ml-1">Comment</span>
+                    <span className="text-sm text-gray-500 font-medium">
+                      Comment (c)
+                    </span>
                   </button>
                 </div>
               </div>
