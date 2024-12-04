@@ -14,12 +14,6 @@ async function handlePost(request: NextRequest) {
   const userId = user?.id || "anonymous";
   const parentCommentIdSanitized = parentCommentId ? parentCommentId.replace("temp-", "") : null;
 
-  console.log("type", type);
-  console.log("content", content);
-  console.log("videoId", videoId);
-  console.log("timestamp", timestamp);
-  console.log("parentCommentIdSanitized", parentCommentIdSanitized);
-
   if (!type || !content || !videoId) {
     console.error("Missing required data in /api/video/comment/route.ts");
 
@@ -37,7 +31,7 @@ async function handlePost(request: NextRequest) {
   const id = nanoId();
 
   try {
-    await db.insert(comments).values({
+    const newComment = {
       id: id,
       authorId: userId,
       type: type,
@@ -45,12 +39,16 @@ async function handlePost(request: NextRequest) {
       videoId: videoId,
       timestamp: timestamp || null,
       parentCommentId: parentCommentIdSanitized || null,
-    });
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    await db.insert(comments).values(newComment);
 
     return new Response(
       JSON.stringify({
-        success: true,
-        commentId: id
+        ...newComment,
+        authorName: user?.name || "Anonymous",
       }), {
         status: 200,
         headers: {
