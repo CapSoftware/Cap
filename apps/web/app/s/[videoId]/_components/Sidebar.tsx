@@ -112,7 +112,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <div className="new-card-style overflow-hidden h-full flex flex-col lg:aspect-video">
+    <div className="new-card-style overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video">
       <div className="flex-none">
         <div className="flex border-b border-gray-200">
           {tabs.map((tab) => (
@@ -151,21 +151,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
           ))}
         </div>
       </div>
-      <div className="flex-1 min-h-0 relative">
-        <AnimatePresence initial={false} custom={direction}>
-          <TabContent
-            key={activeTab}
-            custom={direction}
-            variants={tabVariants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={tabTransition}
-            className="absolute inset-0"
-          >
-            {renderTabContent()}
-          </TabContent>
-        </AnimatePresence>
+      <div className="flex-1 min-h-0">
+        <div className="h-full relative overflow-hidden">
+          <AnimatePresence initial={false} custom={direction}>
+            <TabContent
+              key={activeTab}
+              custom={direction}
+              variants={tabVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={tabTransition}
+              className="absolute inset-0 overflow-auto"
+            >
+              <div className="h-full">{renderTabContent()}</div>
+            </TabContent>
+          </AnimatePresence>
+        </div>
       </div>
     </div>
   );
