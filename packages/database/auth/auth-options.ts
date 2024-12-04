@@ -8,7 +8,8 @@ import type { NextAuthOptions } from "next-auth";
 import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
 import { nanoId } from "../helpers";
-import { stripe } from "@cap/utils";
+import WorkOSProvider from 'next-auth/providers/workos';
+
 
 export const config = {
   maxDuration: 120,
@@ -42,6 +43,20 @@ export const authOptions: NextAuthOptions = {
           prompt: "select_account"
         }
       }
+    }),
+    WorkOSProvider({
+      clientId: process.env.WORKOS_CLIENT_ID as string,
+      clientSecret: process.env.WORKOS_API_KEY as string,
+      profile(profile) {
+        return {
+          id: profile.id,
+          name: profile.first_name 
+            ? `${profile.first_name} ${profile.last_name || ''}`
+            : profile.email?.split('@')[0] || profile.id,
+          email: profile.email,
+          image: profile.profile_picture_url,
+        };
+      },
     }),
     EmailProvider({
       sendVerificationRequest({ identifier, url }) {

@@ -31,6 +31,7 @@
     "@tanstack/react-query": "^5.51.11",
     "@tanstack/react-store": "^0.5.5",
     "@tanstack/store": "^0.5.5",
+    "@workos-inc/node": "^7.34.0",
     "aws-sdk": "^2.1530.0",
     "clsx": "^2.0.0",
     "cookies-next": "^4.1.0",
