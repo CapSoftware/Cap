@@ -39,6 +39,7 @@
     "drizzle-orm": "0.30.9",
     "dub": "^0.33.1",
     "file-saver": "^2.0.5",
+    "framer-motion": "^11.13.1",
     "hls.js": "^1.5.3",
     "jszip": "^3.10.1",
     "lodash": "^4.17.21",

@@ -6,6 +6,7 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { useRouter } from "next/navigation";
 import { Button } from "@cap/ui";
 import toast from "react-hot-toast";
+import { AuthOverlay } from "./AuthOverlay";
 
 // million-ignore
 export const Toolbar = ({
@@ -15,9 +16,10 @@ export const Toolbar = ({
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
 }) => {
-  const { refresh, push } = useRouter();
+  const { refresh } = useRouter();
   const [commentBoxOpen, setCommentBoxOpen] = useState(false);
   const [comment, setComment] = useState("");
+  const [showAuthOverlay, setShowAuthOverlay] = useState(false);
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(
     null
   );
@@ -164,19 +166,21 @@ export const Toolbar = ({
 
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
-      // Only trigger if 'c' is pressed and comment box isn't already open
-      // Also check if user isn't typing in an input field
       if (
         e.key.toLowerCase() === "c" &&
         !commentBoxOpen &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.shiftKey &&
         !(
           e.target instanceof HTMLInputElement ||
           e.target instanceof HTMLTextAreaElement
         )
       ) {
-        e.preventDefault(); // Prevent the 'c' from being added to the input
+        e.preventDefault();
         if (!user) {
-          push(`/login?next=${window.location.pathname}`);
+          setShowAuthOverlay(true);
           return;
         }
         if (videoElement) {
@@ -190,104 +194,113 @@ export const Toolbar = ({
     return () => {
       window.removeEventListener("keydown", handleKeyPress);
     };
-  }, [commentBoxOpen, user, push, videoElement]);
+  }, [commentBoxOpen, user, videoElement]);
+
+  const handleCommentClick = () => {
+    if (!user) {
+      setShowAuthOverlay(true);
+      return;
+    }
+    if (videoElement) {
+      videoElement.pause();
+    }
+    setCommentBoxOpen(true);
+  };
 
   return (
-    <div
-      className={`${
-        !commentBoxOpen ? "max-w-[350px]" : "max-w-[500px]"
-      } mx-auto`}
-    >
+    <>
       <div
-        className={`bg-white border border-gray-200 rounded-full mx-auto shadow-lg transition-all ${
-          commentBoxOpen === true && "w-full"
-        }`}
+        className={`${
+          !commentBoxOpen ? "max-w-[350px]" : "max-w-[500px]"
+        } mx-auto`}
       >
-        <div className="flex">
-          <div className="flex-grow p-1">
-            {commentBoxOpen === true ? (
-              <div className="w-full flex items-center justify-between">
-                <input
-                  autoFocus
-                  type="text"
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  placeholder="Add a comment"
-                  className="flex-grow h-full outline-none px-3"
-                  maxLength={255}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      handleCommentSubmit();
-                    }
-                    if (e.key === "Escape") {
-                      setCommentBoxOpen(false);
-                      setComment("");
-                    }
-                  }}
-                />
-                <div className="flex items-center space-x-2">
-                  <Button
-                    className="min-w-[160px]"
-                    disabled={comment.length === 0}
-                    variant="primary"
-                    size="sm"
-                    onClick={() => {
-                      handleCommentSubmit();
+        <div
+          className={`new-card-style mx-auto transition-all ${
+            commentBoxOpen === true && "w-full"
+          }`}
+        >
+          <div className="flex">
+            <div className="flex-grow p-1">
+              {commentBoxOpen === true ? (
+                <div className="w-full flex items-center justify-between">
+                  <input
+                    autoFocus
+                    type="text"
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    placeholder="Add a comment"
+                    className="flex-grow h-full outline-none px-3"
+                    maxLength={255}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleCommentSubmit();
+                      }
+                      if (e.key === "Escape") {
+                        setCommentBoxOpen(false);
+                        setComment("");
+                      }
                     }}
-                  >
-                    {videoElement && getTimestamp() > 0
-                      ? `Comment at ${getTimestamp().toFixed(2)}`
-                      : "Comment"}
-                  </Button>
-                  <Button
-                    className="min-w-[100px]"
-                    variant="white"
-                    size="sm"
-                    onClick={() => {
-                      setCommentBoxOpen(false);
-                      setComment("");
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="grid items-center justify-center grid-flow-col">
-                {REACTIONS.map((reaction) => (
-                  <Emoji
-                    key={reaction.emoji}
-                    emoji={reaction.emoji}
-                    label={reaction.label}
                   />
-                ))}
-                <div className="w-[1px] bg-gray-200 h-[16px] mx-4"></div>
-                <div className="flex items-center">
-                  <button
-                    onClick={() => {
-                      if (!user) {
-                        push(`/login?next=${window.location.pathname}`);
-                        return;
-                      }
-                      if (videoElement) {
-                        videoElement.pause();
-                      }
-                      setCommentBoxOpen(true);
-                    }}
-                    className="font-medium bg-gray-200 py-1 px-3 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
-                  >
-                    <span className="text-sm text-gray-500 font-medium">
-                      Comment (c)
-                    </span>
-                  </button>
+                  <div className="flex items-center space-x-2">
+                    <Button
+                      className="min-w-[160px]"
+                      disabled={comment.length === 0}
+                      variant="primary"
+                      size="sm"
+                      onClick={() => {
+                        handleCommentSubmit();
+                      }}
+                    >
+                      {videoElement && getTimestamp() > 0
+                        ? `Comment at ${getTimestamp().toFixed(2)}`
+                        : "Comment"}
+                    </Button>
+                    <Button
+                      className="min-w-[100px]"
+                      variant="white"
+                      size="sm"
+                      onClick={() => {
+                        setCommentBoxOpen(false);
+                        setComment("");
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="grid items-center justify-center grid-flow-col">
+                  {REACTIONS.map((reaction) => (
+                    <Emoji
+                      key={reaction.emoji}
+                      emoji={reaction.emoji}
+                      label={reaction.label}
+                    />
+                  ))}
+                  <div className="w-[1px] bg-gray-200 h-[16px] mx-4"></div>
+                  <div className="flex items-center">
+                    <button
+                      onClick={handleCommentClick}
+                      className="font-medium bg-gray-200 py-1 px-3 relative transition-bg-color duration-600 flex justify-center items-center rounded-full ease-in-out hover:bg-gray-200 active:bg-gray-400 active:duration-0"
+                    >
+                      <span className="text-sm text-gray-500 font-medium">
+                        Comment (c)
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
-    </div>
+
+      <AuthOverlay
+        isOpen={showAuthOverlay}
+        onClose={() => setShowAuthOverlay(false)}
+      />
+    </>
   );
 };
 
