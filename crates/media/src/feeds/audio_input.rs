@@ -300,7 +300,7 @@ impl InputResampler {
 
         AudioInputSamples {
             data: resampled_data,
-            format: SampleFormat::F32, // Update format to match our resampled data
+            format: SampleFormat::F32,
             info: samples.info,
         }
     }

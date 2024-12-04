@@ -181,16 +181,21 @@ pub struct AudioPlaybackBuffer<T: FromSampleBytes> {
 }
 
 impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
-    pub const PLAYBACK_SAMPLES_COUNT: u32 = 256;
-    const PROCESSING_SAMPLES_COUNT: u32 = 1024;
+    pub const PLAYBACK_SAMPLES_COUNT: u32 = 1024;
 
     pub fn new(data: Vec<AudioData>, output_info: AudioInfo) -> Self {
         println!("Input info: {:?}", data[0].info);
         println!("Output info: {:?}", output_info);
 
+        // Ensure consistent sample rate for playback
+        let output_info = AudioInfo {
+            sample_rate: 48000, // Standardize on 48kHz
+            ..output_info
+        };
+
         let resampler = AudioResampler::new(data[0].info, output_info).unwrap();
 
-        // Up to 1 second of pre-rendered audio
+        // Calculate buffer size based on standardized rate
         let capacity = (output_info.sample_rate as usize)
             * output_info.channels
             * output_info.sample_format.bytes();
@@ -215,7 +220,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
 
     pub fn buffer_reaching_limit(&self) -> bool {
         self.resampled_buffer.vacant_len()
-            <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize)
+            <= 2 * (Self::PLAYBACK_SAMPLES_COUNT as usize)
                 * self.resampler.output.channels
                 * self.resampler.output.sample_format.bytes()
     }
@@ -228,7 +233,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         let bytes_per_sample = self.resampler.output.sample_size();
         let maybe_rendered = match self
             .frame_buffer
-            .next_frame(Self::PROCESSING_SAMPLES_COUNT as usize, timeline)
+            .next_frame(Self::PLAYBACK_SAMPLES_COUNT as usize, timeline)
         {
             Some(frame) => Some(self.resampler.queue_and_process_frame(&frame)),
             None => self.resampler.flush_frame(),

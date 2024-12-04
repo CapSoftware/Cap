@@ -86,8 +86,10 @@ pub async fn export_video_to_file(
 
             let audio_dir = tempfile::tempdir().unwrap();
             let video_dir = tempfile::tempdir().unwrap();
-            let mut audio = if let Some(audio_data) =
-                audio_segments.get(0).and_then(|d| d.as_ref().as_ref())
+            let mut audio = if let Some(audio_data) = audio_segments
+                .get(0)
+                .map(|arc| arc.as_ref())
+                .and_then(|opt| opt.as_ref())
             {
                 let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
 
@@ -97,7 +99,7 @@ pub async fn export_video_to_file(
                 ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
                     input: pipe_path,
                     sample_format: "f64le".to_string(),
-                    sample_rate: audio_data.info.sample_rate,
+                    sample_rate: 48000,
                     channels: audio_data.info.channels as u16,
                 });
 
@@ -105,7 +107,8 @@ pub async fn export_video_to_file(
                     buffer: AudioFrameBuffer::new(
                         audio_segments
                             .iter()
-                            .map(|s| s.as_ref().as_ref().unwrap().clone())
+                            .filter_map(|arc| Some(arc.as_ref()).and_then(|opt| opt.as_ref()))
+                            .cloned()
                             .collect(),
                     ),
                     pipe_tx: tx,

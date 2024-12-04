@@ -20,8 +20,8 @@ pub async fn export_video(
             .await
             .unwrap();
 
-    // 30 FPS (calculated for output video)
-    let total_frames = (duration * 30.0).round() as u32;
+    // Calculate total frames based on video duration, not audio
+    let total_frames = ((duration * 30.0).round() as u32).min(10000); // Add reasonable maximum to prevent runaway exports
 
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
 
