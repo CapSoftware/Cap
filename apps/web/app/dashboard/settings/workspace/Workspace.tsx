@@ -210,7 +210,7 @@ export const Workspace = () => {
                 if (!isOwner) showOwnerToast();
               }}
             />
-            <p className="text-sm text-gray-500 mt-1">
+            <p className="text-sm text-gray-400 mt-1">
               Only users with email addresses from this domain will be able to
               access videos shared in this workspace. Leave empty to allow all
               users.
