@@ -1,11 +1,10 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
-use crate::project_recordings::ProjectRecordings;
 use cap_media::feeds::AudioData;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
-    ProjectUniforms, RecordingSegmentDecoders, RenderOptions, RenderVideoConstants,
-    SegmentVideoPaths,
+    ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
+    RenderVideoConstants, SegmentVideoPaths,
 };
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
