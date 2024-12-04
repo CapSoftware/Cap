@@ -25,7 +25,9 @@ use std::path::Path;
 use std::time::Instant;
 
 pub mod decoder;
+mod project_recordings;
 pub use decoder::DecodedFrame;
+pub use project_recordings::{ProjectRecordings, SegmentRecordings};
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
 
@@ -143,6 +145,7 @@ pub async fn render_video_to_channel(
     segments: Vec<RenderSegment>,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, meta).await?;
+    let recordings = ProjectRecordings::new(meta);
 
     println!("Setting up FFmpeg input for screen recording...");
 
@@ -150,7 +153,10 @@ pub async fn render_video_to_channel(
 
     let start_time = Instant::now();
 
-    let duration = project.timeline().map(|t| t.duration()).unwrap_or(f64::MAX);
+    let duration = project
+        .timeline()
+        .map(|t| t.duration())
+        .unwrap_or(recordings.duration());
 
     let mut frame_number = 0;
 
