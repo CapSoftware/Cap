@@ -119,28 +119,6 @@ function Inner() {
     )
   );
 
-  const togglePlayback = async () => {
-    try {
-      if (playing()) {
-        await commands.stopPlayback(videoId);
-        setPlaying(false);
-      } else {
-        await commands.startPlayback(videoId);
-        setPlaying(true);
-      }
-    } catch (error) {
-      console.error("Error toggling playback:", error);
-      setPlaying(false);
-    }
-  };
-
-  createEventListener(document, "keydown", async (e: KeyboardEvent) => {
-    if (e.code === "Space" && e.target === document.body) {
-      e.preventDefault();
-      await togglePlayback();
-    }
-  });
-
   return (
     <div class="w-screen h-screen flex flex-col">
       <Header />

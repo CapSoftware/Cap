@@ -1,35 +1,28 @@
 import "~/styles/timeline.css";
 import { createElementBounds } from "@solid-primitives/bounds";
 import {
-  Accessor,
   ComponentProps,
   For,
   Show,
-  createContext,
   createRoot,
   createSignal,
   onMount,
-  useContext,
 } from "solid-js";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
-import { createStore, produce } from "solid-js/store";
+import { produce } from "solid-js/store";
 import { mergeRefs } from "@solid-primitives/refs";
-import { createContextProvider } from "@solid-primitives/context";
 import { createMemo } from "solid-js";
 
 import { commands, TimelineSegment } from "~/utils/tauri";
-import { useEditorContext } from "./context";
+import {
+  TimelineContextProvider,
+  TrackContextProvider,
+  useEditorContext,
+  useTimelineContext,
+  useTrackContext,
+} from "./context";
 import { formatTime } from "./utils";
-
-const [TimelineContextProvider, useTimelineContext] = createContextProvider(
-  (props: { duration: number }) => {
-    return {
-      duration: () => props.duration,
-    };
-  },
-  null!
-);
 
 export function Timeline() {
   const {
@@ -290,6 +283,12 @@ export function Timeline() {
                         segment.recordingSegment ?? 0
                       ].display.duration;
 
+                    console.log(
+                      editorInstance.recordings.segments[
+                        segment.recordingSegment ?? 0
+                      ]
+                    );
+
                     const availableTimelineDuration =
                       editorInstance.recordingDuration -
                       segments().reduce(
@@ -320,7 +319,11 @@ export function Timeline() {
                         i(),
                         "end",
                         Math.max(
-                          Math.min(newEnd, segment.start + maxDuration),
+                          Math.min(
+                            newEnd,
+                            maxSegmentDuration,
+                            availableTimelineDuration
+                          ),
                           segment.start + 1
                         )
                       );
@@ -611,26 +614,6 @@ export function Timeline() {
     </TimelineContextProvider>
   );
 }
-
-const [TrackContextProvider, useTrackContext] = createContextProvider(
-  (props: {
-    ref: Accessor<Element | undefined>;
-    isFreeForm: Accessor<boolean>;
-  }) => {
-    const [trackState, setTrackState] = createStore({
-      draggingHandle: false,
-    });
-    const bounds = createElementBounds(() => props.ref());
-
-    return {
-      trackBounds: bounds,
-      isFreeForm: () => props.isFreeForm(),
-      trackState,
-      setTrackState,
-    };
-  },
-  null!
-);
 
 function TrackRoot(props: ComponentProps<"div"> & { isFreeForm: boolean }) {
   const [ref, setRef] = createSignal<HTMLDivElement>();

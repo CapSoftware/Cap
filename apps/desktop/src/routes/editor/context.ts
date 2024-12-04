@@ -3,7 +3,7 @@ import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createUndoHistory } from "@solid-primitives/history";
 import { debounce } from "@solid-primitives/scheduled";
-import { createEffect, createSignal, on } from "solid-js";
+import { Accessor, createEffect, createSignal, on } from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
 
 import type { PresetsStore } from "../../store";
@@ -15,6 +15,7 @@ import {
 } from "~/utils/tauri";
 import { useEditorInstanceContext } from "./editorInstanceContext";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
+import { createElementBounds } from "@solid-primitives/bounds";
 
 export type CurrentDialog =
   | { type: "createPreset" }
@@ -148,3 +149,30 @@ type Static<T = unknown> =
       [K in number | string]: T;
     }
   | T[];
+
+export const [TimelineContextProvider, useTimelineContext] =
+  createContextProvider((props: { duration: number }) => {
+    return {
+      duration: () => props.duration,
+    };
+  }, null!);
+
+export const [TrackContextProvider, useTrackContext] = createContextProvider(
+  (props: {
+    ref: Accessor<Element | undefined>;
+    isFreeForm: Accessor<boolean>;
+  }) => {
+    const [trackState, setTrackState] = createStore({
+      draggingHandle: false,
+    });
+    const bounds = createElementBounds(() => props.ref());
+
+    return {
+      trackBounds: bounds,
+      isFreeForm: () => props.isFreeForm(),
+      trackState,
+      setTrackState,
+    };
+  },
+  null!
+);

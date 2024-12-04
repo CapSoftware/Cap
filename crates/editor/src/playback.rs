@@ -216,9 +216,10 @@ impl AudioPlayback {
         audio_renderer.set_playhead(playhead, project.borrow().timeline());
 
         // Prerender enough for smooth playback
-        while !audio_renderer.buffer_reaching_limit() {
-            audio_renderer.render(project.borrow().timeline());
-        }
+        // Disabled for now as it was infinite looping
+        // while !audio_renderer.buffer_reaching_limit() {
+        //     audio_renderer.render(project.borrow().timeline());
+        // }
 
         let mut config = supported_config.config();
         // Low-latency playback
