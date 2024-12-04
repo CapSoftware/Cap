@@ -7,6 +7,7 @@ import {
   users,
   sharedVideos,
   spaceMembers,
+  spaces,
 } from "@cap/database/schema";
 import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
@@ -137,6 +138,38 @@ export default async function ShareVideoPage(props: Props) {
   if (!video) {
     console.log("[ShareVideoPage] No video found for videoId:", videoId);
     return <p>No video found</p>;
+  }
+
+  if (video.sharedSpace?.spaceId) {
+    const space = await db
+      .select()
+      .from(spaces)
+      .where(eq(spaces.id, video.sharedSpace.spaceId))
+      .limit(1);
+
+    if (space[0]?.allowedEmailDomain) {
+      if (
+        !user?.email ||
+        !user.email.endsWith(`@${space[0].allowedEmailDomain}`)
+      ) {
+        console.log(
+          "[ShareVideoPage] Access denied - domain restriction:",
+          space[0].allowedEmailDomain
+        );
+        return (
+          <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
+            <h1 className="text-2xl font-bold mb-4">Access Restricted</h1>
+            <p className="text-gray-600 mb-2">
+              This video is only accessible to members of this organization.
+            </p>
+            <p className="text-gray-600">
+              Please sign in with your organization email address to access this
+              content.
+            </p>
+          </div>
+        );
+      }
+    }
   }
 
   const videoSource = video.source as (typeof videos.$inferSelect)["source"];

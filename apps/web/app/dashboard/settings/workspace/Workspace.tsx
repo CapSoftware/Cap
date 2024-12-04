@@ -61,6 +61,7 @@ export const Workspace = () => {
 
     const formData = new FormData(e.currentTarget);
     const workspaceName = formData.get("workspaceName") as string;
+    const allowedEmailDomain = formData.get("allowedEmailDomain") as string;
 
     try {
       const response = await fetch("/api/settings/workspace/details", {
@@ -68,18 +69,22 @@ export const Workspace = () => {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ workspaceName, spaceId: activeSpace?.space.id }),
+        body: JSON.stringify({
+          workspaceName,
+          allowedEmailDomain,
+          spaceId: activeSpace?.space.id,
+        }),
       });
 
       if (response.ok) {
-        toast.success("Name updated successfully");
+        toast.success("Settings updated successfully");
         router.refresh();
       } else {
-        toast.error("Failed to update name");
+        toast.error("Failed to update settings");
       }
     } catch (error) {
-      console.error("Error updating name:", error);
-      toast.error("An error occurred while updating name");
+      console.error("Error updating settings:", error);
+      toast.error("An error occurred while updating settings");
     }
   };
 
@@ -189,6 +194,27 @@ export const Workspace = () => {
                 if (!isOwner) showOwnerToast();
               }}
             />
+          </div>
+          <div>
+            <Label htmlFor="allowedEmailDomain">
+              Workspace Access Requirements
+            </Label>
+            <Input
+              type="text"
+              placeholder="e.g. company.com"
+              defaultValue={activeSpace?.space.allowedEmailDomain || ""}
+              id="allowedEmailDomain"
+              name="allowedEmailDomain"
+              disabled={!isOwner}
+              onChange={() => {
+                if (!isOwner) showOwnerToast();
+              }}
+            />
+            <p className="text-sm text-gray-500 mt-1">
+              Only users with email addresses from this domain will be able to
+              access videos shared in this workspace. Leave empty to allow all
+              users.
+            </p>
           </div>
         </div>
       </CardContent>

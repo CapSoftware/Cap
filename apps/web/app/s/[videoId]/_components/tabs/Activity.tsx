@@ -3,8 +3,6 @@
 import { useState, useRef, useEffect } from "react";
 import { comments as commentsSchema } from "@cap/database/schema";
 import { userSelectProps } from "@cap/database/auth/session";
-import { EyeIcon, MessageSquare, SmileIcon } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
 import { Tooltip } from "react-tooltip";
 import { AnimatePresence, motion } from "framer-motion";
 import { AuthOverlay } from "../AuthOverlay";
@@ -27,7 +25,7 @@ interface ActivityProps {
   isOwnerOrMember?: boolean;
 }
 
-const Avatar: React.FC<{
+export const Avatar: React.FC<{
   name: string | null | undefined;
   className?: string;
 }> = ({ name, className = "" }) => {
