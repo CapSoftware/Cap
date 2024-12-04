@@ -12,12 +12,22 @@ async function handlePost(request: NextRequest) {
     await request.json();
 
   const userId = user?.id || "anonymous";
+  const parentCommentIdSanitized = parentCommentId ? parentCommentId.replace("temp-", "") : null;
+
+  console.log("type", type);
+  console.log("content", content);
+  console.log("videoId", videoId);
+  console.log("timestamp", timestamp);
+  console.log("parentCommentIdSanitized", parentCommentIdSanitized);
 
   if (!type || !content || !videoId) {
     console.error("Missing required data in /api/video/comment/route.ts");
 
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
+    return new Response(JSON.stringify({ 
+      error: true,
+      message: "Missing required fields: type, content, or videoId" 
+    }), {
+      status: 400,
       headers: {
         "Content-Type": "application/json",
       },
@@ -26,24 +36,42 @@ async function handlePost(request: NextRequest) {
 
   const id = nanoId();
 
-  await db.insert(comments).values({
-    id: id,
-    authorId: userId,
-    type: type,
-    content: content,
-    videoId: videoId,
-    timestamp: timestamp || null,
-    parentCommentId: parentCommentId || null,
-  });
+  try {
+    await db.insert(comments).values({
+      id: id,
+      authorId: userId,
+      type: type,
+      content: content,
+      videoId: videoId,
+      timestamp: timestamp || null,
+      parentCommentId: parentCommentIdSanitized || null,
+    });
 
-  return new Response(
-    JSON.stringify({
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    })
-  );
+    return new Response(
+      JSON.stringify({
+        success: true,
+        commentId: id
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  } catch (error) {
+    console.error("Error creating comment:", error);
+    return new Response(
+      JSON.stringify({ 
+        error: true,
+        message: "Failed to create comment" 
+      }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  }
 }
 
 export const POST = (request: NextRequest) => {

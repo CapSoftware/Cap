@@ -389,7 +389,7 @@ export const Activity: React.FC<ActivityProps> = ({
       authorName: user?.name || "Anonymous",
       content,
       createdAt: new Date(),
-      videoId: comments[0]?.videoId || "",
+      videoId,
       parentCommentId: "",
       type: "text",
       timestamp: null,
@@ -407,7 +407,7 @@ export const Activity: React.FC<ActivityProps> = ({
         body: JSON.stringify({
           type: "text",
           content,
-          videoId: comments[0]?.videoId,
+          videoId,
           parentCommentId: "",
         }),
       });
@@ -582,7 +582,11 @@ export const Activity: React.FC<ActivityProps> = ({
                   <Comment
                     key={comment.id}
                     comment={comment}
-                    replies={allComments}
+                    replies={allComments.sort(
+                      (a, b) =>
+                        new Date(a.createdAt).getTime() -
+                        new Date(b.createdAt).getTime()
+                    )}
                     onReply={(id) => {
                       if (!user) {
                         setShowAuthOverlay(true);

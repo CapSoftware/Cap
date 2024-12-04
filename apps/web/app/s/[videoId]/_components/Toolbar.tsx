@@ -116,30 +116,35 @@ export const Toolbar = ({
       return;
     }
 
-    const timestamp = getTimestamp();
+    try {
+      const timestamp = getTimestamp();
 
-    const response = await fetch("/api/video/comment", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        type: "text",
-        content: comment,
-        videoId: data.id,
-        parentCommentId: null,
-        timestamp: timestamp,
-      }),
-    });
+      const response = await fetch("/api/video/comment", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "text",
+          content: comment,
+          videoId: data.id,
+          timestamp: timestamp || null,
+          parentCommentId: null,
+        }),
+      });
 
-    if (!response.ok) {
-      console.error("Failed to record comment");
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Comment submission error:", errorData);
+        return;
+      }
+
+      setComment("");
+      setCommentBoxOpen(false);
+      refresh();
+    } catch (error) {
+      console.error("Failed to submit comment:", error);
     }
-
-    setComment("");
-    setCommentBoxOpen(false);
-
-    refresh();
   };
 
   const Emoji = ({ label, emoji }: { label: string; emoji: string }) => (
