@@ -62,7 +62,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
   autoFocus = false,
 }) => {
   const [content, setContent] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (autoFocus && inputRef.current) {
@@ -78,7 +78,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -89,9 +89,8 @@ const CommentInput: React.FC<CommentInputProps> = ({
     <div className="flex items-start space-x-3">
       <div className="flex-1">
         <div className="bg-gray-100 rounded-lg p-4">
-          <input
+          <textarea
             ref={inputRef}
-            type="text"
             value={content}
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
