@@ -1,3 +1,4 @@
+use crate::TARGET_SAMPLE_RATE;
 use cpal::{SampleFormat, SupportedBufferSize, SupportedStreamConfig};
 pub use ffmpeg::format::{
     pixel::Pixel,
@@ -95,19 +96,19 @@ impl AudioInfo {
     }
 
     pub fn from_stream_config(config: &SupportedStreamConfig) -> Self {
-        let sample_format = ffmpeg_sample_format_for(config.sample_format()).unwrap();
-        let buffer_size = match config.buffer_size() {
-            SupportedBufferSize::Range { max, .. } => *max,
-            // TODO: Different buffer sizes for different contexts?
-            SupportedBufferSize::Unknown => 1024,
-        };
+        let sample_rate = config.sample_rate().0.min(TARGET_SAMPLE_RATE);
+        let sample_format =
+            ffmpeg_sample_format_for(config.sample_format()).expect("Unsupported sample format");
 
         Self {
             sample_format,
-            sample_rate: config.sample_rate().0,
-            channels: config.channels().into(),
-            time_base: FFRational(1, 1_000_000),
-            buffer_size,
+            sample_rate,
+            channels: config.channels() as usize,
+            time_base: FFRational(1, sample_rate as i32),
+            buffer_size: match config.buffer_size() {
+                SupportedBufferSize::Range { max, .. } => *max,
+                SupportedBufferSize::Unknown => 1024,
+            },
         }
     }
 

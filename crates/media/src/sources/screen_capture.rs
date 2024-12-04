@@ -119,7 +119,7 @@ impl<T> ScreenCaptureSource<T> {
     }
 
     fn create_options(&self) -> Options {
-        let targets = dbg!(scap::get_all_targets());
+        let targets = scap::get_all_targets();
 
         let excluded_targets: Vec<scap::Target> = targets
             .iter()

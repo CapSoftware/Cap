@@ -6,6 +6,9 @@
 
 use thiserror::Error;
 
+/// Target sample rate for audio recording (48kHz)
+pub const TARGET_SAMPLE_RATE: u32 = 48000;
+
 pub mod data;
 pub mod encoders;
 pub mod feeds;

@@ -301,7 +301,6 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
         let mic_config = mic_source.info();
         audio_output_path = Some(content_dir.join("audio-input.mp3"));
 
-        // let mic_filter = AudioFilter::init("microphone", mic_config, "aresample=async=1:min_hard_comp=0.100000:first_pts=0")?;
         let mic_encoder = MP3Encoder::init(
             "microphone",
             mic_config,
@@ -310,7 +309,6 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
         pipeline_builder = pipeline_builder
             .source("microphone_capture", mic_source)
-            // .pipe("microphone_filter", mic_filter)
             .sink("microphone_encoder", mic_encoder);
     }
 
