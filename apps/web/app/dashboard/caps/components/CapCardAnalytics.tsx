@@ -15,7 +15,7 @@ export const CapCardAnalytics: React.FC<CapCardAnalyticsProps> = ({
   totalReactions,
 }) => {
   return (
-    <div className="flex items-center space-x-3 mt-2 text-sm text-gray-60">
+    <div className="flex items-center space-x-3 text-sm text-gray-60">
       <div
         className="flex items-center"
         data-tooltip-id={capId + "_analytics"}

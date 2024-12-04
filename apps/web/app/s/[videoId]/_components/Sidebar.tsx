@@ -10,16 +10,28 @@ import { classNames } from "@cap/utils";
 
 type TabType = "activity" | "transcript" | "settings";
 
+type CommentType = typeof commentsSchema.$inferSelect & {
+  authorName?: string | null;
+};
+
+type VideoWithSpaceInfo = typeof videos.$inferSelect & {
+  spaceMembers?: string[];
+  spaceId?: string;
+};
+
+interface Analytics {
+  views: number;
+  comments: number;
+  reactions: number;
+}
+
 interface SidebarProps {
-  data: typeof videos.$inferSelect;
+  data: VideoWithSpaceInfo;
   user: typeof userSelectProps | null;
-  comments: (typeof commentsSchema.$inferSelect)[];
-  analytics: {
-    views: number;
-    comments: number;
-    reactions: number;
-  };
+  comments: CommentType[];
+  analytics: Analytics;
   onSeek?: (time: number) => void;
+  videoId: string;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -28,7 +40,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   comments,
   analytics,
   onSeek,
+  videoId,
 }) => {
+  const isOwnerOrMember: boolean = Boolean(
+    user?.id === data.ownerId ||
+      (data.spaceId && data.spaceMembers?.includes(user?.id ?? ""))
+  );
+
   const [activeTab, setActiveTab] = useState<TabType>("activity");
 
   const tabs = [
@@ -45,6 +63,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             comments={comments}
             user={user}
             onSeek={onSeek}
+            videoId={videoId}
+            isOwnerOrMember={isOwnerOrMember}
           />
         );
       case "transcript":

@@ -8,6 +8,7 @@ import { formatDistanceToNow } from "date-fns";
 import { Tooltip } from "react-tooltip";
 import { AnimatePresence, motion } from "framer-motion";
 import { AuthOverlay } from "../AuthOverlay";
+import { CapCardAnalytics } from "@/app/dashboard/caps/components/CapCardAnalytics";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
   authorName?: string | null;
@@ -22,6 +23,8 @@ interface ActivityProps {
   comments: CommentType[];
   user: typeof userSelectProps | null;
   onSeek?: (time: number) => void;
+  videoId: string;
+  isOwnerOrMember?: boolean;
 }
 
 const Avatar: React.FC<{
@@ -291,10 +294,12 @@ const Comment: React.FC<{
 };
 
 export const Activity: React.FC<ActivityProps> = ({
-  analytics,
+  analytics: initialAnalytics,
   comments: initialComments,
   user,
   onSeek,
+  videoId,
+  isOwnerOrMember = false,
 }) => {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [comments, setComments] = useState(initialComments);
@@ -302,7 +307,32 @@ export const Activity: React.FC<ActivityProps> = ({
     []
   );
   const [showAuthOverlay, setShowAuthOverlay] = useState(false);
+  const [analytics, setAnalytics] = useState(initialAnalytics);
   const commentsContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      try {
+        const response = await fetch(`/api/video/analytics?videoId=${videoId}`);
+        if (!response.ok) {
+          throw new Error("Failed to fetch analytics");
+        }
+        const analyticsData = await response.json();
+
+        setAnalytics({
+          views:
+            analyticsData.count === 0 ? comments.length : analyticsData.count,
+          comments: comments.length,
+          reactions:
+            (analyticsData.metadata as { reactions?: number })?.reactions || 0,
+        });
+      } catch (error) {
+        console.error("Error fetching analytics:", error);
+      }
+    };
+
+    fetchAnalytics();
+  }, [videoId, comments.length]);
 
   useEffect(() => {
     if (commentsContainerRef.current) {
@@ -493,28 +523,18 @@ export const Activity: React.FC<ActivityProps> = ({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-none border-b border-gray-200">
-        <div className="flex justify-between p-4">
-          <div className="flex items-center space-x-6">
-            <div className="flex items-center space-x-2">
-              <EyeIcon className="w-4 h-4 text-gray-400" />
-              <span className="text-sm text-gray-600">{analytics.views}</span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <MessageSquare className="w-4 h-4 text-gray-400" />
-              <span className="text-sm text-gray-600">
-                {analytics.comments}
-              </span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <SmileIcon className="w-4 h-4 text-gray-400" />
-              <span className="text-sm text-gray-600">
-                {analytics.reactions}
-              </span>
-            </div>
+      {user && isOwnerOrMember && (
+        <div className="flex-none border-b border-gray-200">
+          <div className="flex justify-between p-4">
+            <CapCardAnalytics
+              capId={videoId}
+              displayCount={analytics.views}
+              totalComments={analytics.comments}
+              totalReactions={analytics.reactions}
+            />
           </div>
         </div>
-      </div>
+      )}
 
       <div
         ref={commentsContainerRef}

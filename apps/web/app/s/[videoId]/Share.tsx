@@ -19,25 +19,34 @@ interface Analytics {
   reactions: number;
 }
 
-export const Share = ({
-  data,
-  user,
-  comments,
-  individualFiles,
-}: {
-  data: typeof videos.$inferSelect;
+type VideoWithSpaceInfo = typeof videos.$inferSelect & {
+  spaceMembers?: string[];
+  spaceId?: string;
+};
+
+interface ShareProps {
+  data: VideoWithSpaceInfo;
   user: typeof userSelectProps | null;
   comments: CommentWithAuthor[];
   individualFiles: {
     fileName: string;
     url: string;
   }[];
+  initialAnalytics: {
+    views: number;
+    comments: number;
+    reactions: number;
+  };
+}
+
+export const Share: React.FC<ShareProps> = ({
+  data,
+  user,
+  comments,
+  individualFiles,
+  initialAnalytics,
 }) => {
-  const [analytics, setAnalytics] = useState<Analytics>({
-    views: 0,
-    comments: 0,
-    reactions: 0,
-  });
+  const [analytics, setAnalytics] = useState(initialAnalytics);
 
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -48,27 +57,34 @@ export const Share = ({
   };
 
   useEffect(() => {
-    const fetchAnalytics = async () => {
+    const fetchViewCount = async () => {
       try {
         const response = await fetch(`/api/video/analytics?videoId=${data.id}`);
         if (!response.ok) {
           throw new Error("Failed to fetch analytics");
         }
-        const analyticsData = await response.json();
-        const metadata = (data.metadata as { reactions?: number }) || {};
+        const viewData = await response.json();
 
-        setAnalytics({
-          views: analyticsData.count || 0,
-          comments: comments.length,
-          reactions: metadata.reactions || 0,
-        });
+        setAnalytics((prev) => ({
+          ...prev,
+          views: viewData.count || 0,
+        }));
       } catch (error) {
-        console.error("Error fetching analytics:", error);
+        console.error("Error fetching view count:", error);
       }
     };
 
-    fetchAnalytics();
-  }, [data.id, comments.length, data.metadata]);
+    fetchViewCount();
+  }, [data.id]);
+
+  // Update analytics when comments change
+  useEffect(() => {
+    setAnalytics((prev) => ({
+      ...prev,
+      comments: comments.filter((c) => c.type === "text").length,
+      reactions: comments.filter((c) => c.type === "emoji").length,
+    }));
+  }, [comments]);
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
@@ -102,6 +118,7 @@ export const Share = ({
                 comments={comments}
                 analytics={analytics}
                 onSeek={handleSeek}
+                videoId={data.id}
               />
             </div>
           </div>
@@ -116,7 +133,7 @@ export const Share = ({
         <a
           target="_blank"
           href={`${process.env.NEXT_PUBLIC_URL}?ref=video_${data.id}`}
-          className="flex items-center justify-center space-x-2 py-2 px-4 bg-gray-100 border border-gray-200 rounded-full mx-auto w-fit"
+          className="flex items-center justify-center space-x-2 py-2 px-4 bg-gray-100 new-card-style rounded-full mx-auto w-fit"
         >
           <span className="text-sm">Recorded with</span>
           <Logo className="w-14 h-auto" />
