@@ -38,7 +38,7 @@ export function Player() {
     setSplit,
   } = useEditorContext();
 
-  let canvasRef: HTMLCanvasElement;
+  let canvasRef!: HTMLCanvasElement;
 
   createEffect(() => {
     const frame = latestFrame();
@@ -207,8 +207,7 @@ export function Player() {
                   height: `${size().height}px`,
                 }}
                 class="bg-blue-50 absolute rounded"
-                // biome-ignore lint/style/noNonNullAssertion: ref
-                ref={canvasRef!}
+                ref={canvasRef}
                 id="canvas"
                 width={currentFrame().width}
                 height={currentFrame().height}

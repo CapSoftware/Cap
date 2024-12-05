@@ -19,13 +19,21 @@ const publicContract = c.router({
   getChangelogPosts: {
     method: "GET",
     path: "/changelog",
+    query: z.object({
+      origin: z.string(),
+    }),
     responses: {
-      200: z.array(CHANGELOG),
+      200: z.array(
+        z.object({ content: z.string() }).and(CHANGELOG.shape.metadata)
+      ),
     },
   },
   getChangelogStatus: {
     method: "GET",
     path: "/changelog/status",
+    query: z.object({
+      version: z.string(),
+    }),
     responses: {
       200: z.object({ hasUpdate: z.boolean() }),
     },
@@ -50,14 +58,79 @@ const protectedContract = c.router(
         200: z.object({ upgraded: z.boolean() }),
       },
     },
+    getS3Config: {
+      method: "GET",
+      path: "/desktop/s3/config/get",
+      responses: {
+        200: z.object({
+          config: z.custom<{
+            provider: string;
+            accessKeyId: string | null;
+            secretAccessKey: string | null;
+            endpoint: string | null;
+            bucketName: string | null;
+            region: string | null;
+          }>(),
+        }),
+      },
+    },
+    setS3Config: {
+      method: "POST",
+      path: "/desktop/s3/config",
+      responses: {
+        200: z.object({ success: z.literal(true) }),
+      },
+      body: z.object({
+        provider: z.string(),
+        accessKeyId: z.string(),
+        secretAccessKey: z.string(),
+        endpoint: z.string(),
+        bucketName: z.string(),
+        region: z.string(),
+      }),
+    },
+    deleteS3Config: {
+      method: "DELETE",
+      path: "/dekstop/s3/config/delete",
+      responses: { 200: z.object({ success: z.literal(true) }) },
+    },
+    testS3Config: {
+      method: "POST",
+      path: "/desktop/s3/config/test",
+      body: z.object({
+        provider: z.string(),
+        accessKeyId: z.string(),
+        secretAccessKey: z.string(),
+        endpoint: z.string(),
+        bucketName: z.string(),
+        region: z.string(),
+      }),
+      responses: { 200: z.object({ success: z.literal(true) }) },
+    },
+    getProSubscribeURL: {
+      method: "POST",
+      path: "/desktop/subscribe",
+      body: z.object({ priceId: z.string() }),
+      responses: {
+        200: z.object({ url: z.string() }),
+        400: z.object({
+          error: z.literal(true),
+          subscription: z.literal(true).optional(),
+        }),
+        401: z.object({
+          error: z.literal(true),
+          auth: z.literal(false),
+        }),
+      },
+    },
   },
   {
-    baseHeaders: z.object({ authorization: z.string().optional() }),
+    baseHeaders: z.object({ authorization: z.string() }),
     commonResponses: { 401: z.object({ error: z.string().or(z.boolean()) }) },
   }
 );
 
 export const contract = c.router({
-  public: publicContract,
-  protected: protectedContract,
+  ...publicContract,
+  ...protectedContract,
 });

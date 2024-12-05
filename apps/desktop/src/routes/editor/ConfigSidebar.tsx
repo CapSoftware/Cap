@@ -693,7 +693,7 @@ function RgbInput(props: {
   const [text, setText] = createWritableMemo(() => rgbToHex(props.value));
   let prevHex = rgbToHex(props.value);
 
-  let colorInput: HTMLInputElement;
+  let colorInput!: HTMLInputElement;
 
   return (
     <div class="flex flex-row items-center gap-[0.75rem] relative">
@@ -706,7 +706,7 @@ function RgbInput(props: {
         onClick={() => colorInput.click()}
       />
       <input
-        ref={colorInput!}
+        ref={colorInput}
         type="color"
         class="absolute left-0 bottom-0 w-[3rem] opacity-0"
         onChange={(e) => {

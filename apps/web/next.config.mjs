@@ -19,7 +19,7 @@ const { version } = packageJson;
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
-  transpilePackages: ["@cap/ui", "@cap/utils"],
+  transpilePackages: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -27,7 +27,7 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   experimental: {
-    optimizePackageImports: ["@cap/ui", "@cap/utils"],
+    optimizePackageImports: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
     serverComponentsExternalPackages: [
       "@react-email/components",
       "@react-email/render",
