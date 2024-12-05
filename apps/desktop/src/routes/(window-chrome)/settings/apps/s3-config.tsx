@@ -4,6 +4,7 @@ import { createSignal, onMount } from "solid-js";
 import { authStore } from "~/store";
 import { clientEnv } from "~/utils/env";
 import { commands } from "~/utils/tauri";
+import { apiClient as apiClient, protectedHeaders } from "~/utils/web-api";
 
 interface S3Config {
   provider: string;
@@ -56,51 +57,16 @@ export default function S3ConfigPage() {
     window.close();
   };
 
-  const makeAuthenticatedRequest = async (
-    url: string,
-    options: RequestInit
-  ) => {
-    const auth = await authStore.get();
-    if (!auth) {
-      await handleAuthError();
-      return null;
-    }
-
-    const response = await fetch(
-      `${clientEnv.VITE_SERVER_URL}${url}?origin=${window.location.origin}`,
-      {
-        ...options,
-        credentials: "include",
-        headers: {
-          ...options.headers,
-          Authorization: `Bearer ${auth.token}`,
-        },
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to ${options.method?.toLowerCase() || "fetch"} S3 configuration`
-      );
-    }
-
-    return response;
-  };
-
   onMount(async () => {
     try {
-      const response = await makeAuthenticatedRequest(
-        "/api/desktop/s3/config/get",
-        {
-          method: "GET",
-        }
-      );
+      const response = await apiClient.getS3Config({
+        headers: await protectedHeaders(),
+      });
 
-      if (!response) return;
+      if (response.status !== 200) throw new Error("Failed to fetch S3 config");
 
-      const data = await response.json();
-      if (data.config) {
-        const config = data.config as S3Config;
+      if (response.body.config) {
+        const config = response.body.config;
         if (!config.accessKeyId) return;
 
         setProvider(config.provider || DEFAULT_CONFIG.provider);
@@ -123,25 +89,19 @@ export default function S3ConfigPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const response = await makeAuthenticatedRequest(
-        "/api/desktop/s3/config",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            provider: provider(),
-            accessKeyId: accessKeyId(),
-            secretAccessKey: secretAccessKey(),
-            endpoint: endpoint(),
-            bucketName: bucketName(),
-            region: region(),
-          }),
-        }
-      );
+      const response = await apiClient.setS3Config({
+        body: {
+          provider: provider(),
+          accessKeyId: accessKeyId(),
+          secretAccessKey: secretAccessKey(),
+          endpoint: endpoint(),
+          bucketName: bucketName(),
+          region: region(),
+        },
+        headers: await protectedHeaders(),
+      });
 
-      if (response) {
+      if (response.status === 200) {
         setHasConfig(true);
         await commands.globalMessageDialog(
           "S3 configuration saved successfully"
@@ -160,14 +120,11 @@ export default function S3ConfigPage() {
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      const response = await makeAuthenticatedRequest(
-        "/api/desktop/s3/config/delete",
-        {
-          method: "DELETE",
-        }
-      );
+      const response = await apiClient.deleteS3Config({
+        headers: await protectedHeaders(),
+      });
 
-      if (response) {
+      if (response.status === 200) {
         resetForm();
         await commands.globalMessageDialog(
           "S3 configuration deleted successfully"
@@ -189,28 +146,21 @@ export default function S3ConfigPage() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5500); // 5.5s timeout (slightly longer than backend)
 
-      const response = await makeAuthenticatedRequest(
-        "/api/desktop/s3/config/test",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            provider: provider(),
-            accessKeyId: accessKeyId(),
-            secretAccessKey: secretAccessKey(),
-            endpoint: endpoint(),
-            bucketName: bucketName(),
-            region: region(),
-          }),
-          signal: controller.signal,
-        }
-      );
+      const response = await apiClient.testS3Config({
+        body: {
+          provider: provider(),
+          accessKeyId: accessKeyId(),
+          secretAccessKey: secretAccessKey(),
+          endpoint: endpoint(),
+          bucketName: bucketName(),
+          region: region(),
+        },
+        headers: await protectedHeaders(),
+      });
 
       clearTimeout(timeoutId);
 
-      if (response) {
+      if (response.status === 200) {
         await commands.globalMessageDialog(
           "S3 configuration test successful! Connection is working."
         );
