@@ -4,7 +4,6 @@ import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
   ssr: false,
-  server: { preset: "static" },
   // https://vitejs.dev/config
   vite: () => ({
     // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

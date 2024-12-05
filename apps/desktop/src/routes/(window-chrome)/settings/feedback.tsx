@@ -1,71 +1,66 @@
 import { createSignal } from "solid-js";
 import { Button } from "@cap/ui-solid";
-import { commands } from "~/utils/tauri";
+import { action, useAction, useSubmission } from "@solidjs/router";
+
+import { apiClient, protectedHeaders } from "~/utils/web-api";
+
+const sendFeedbackAction = action(async (feedback: string) => {
+  const response = await apiClient.submitDesktopFeedback({
+    body: { feedback },
+    headers: await protectedHeaders(),
+  });
+
+  if (response.status !== 200) throw new Error("Failed to submit feedback");
+  return response.body;
+});
 
 export default function FeedbackTab() {
   const [feedback, setFeedback] = createSignal("");
-  const [isSubmitting, setIsSubmitting] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
-  const [success, setSuccess] = createSignal(false);
 
-  const handleSubmit = async (e: Event) => {
-    e.preventDefault();
-    if (!feedback().trim()) return;
-
-    setIsSubmitting(true);
-    setError(null);
-    setSuccess(false);
-
-    try {
-      await commands.sendFeedbackRequest(feedback());
-      setSuccess(true);
-      setFeedback("");
-    } catch (err) {
-      console.error("Error submitting feedback:", err);
-      setError(
-        err instanceof Error ? err.message : "Failed to submit feedback"
-      );
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+  const submission = useSubmission(sendFeedbackAction);
+  const sendFeedback = useAction(sendFeedbackAction);
 
   return (
     <div class="p-6 max-w-2xl">
-      <h2 class="text-[--text-primary] text-lg font-medium mb-2">Send Feedback</h2>
+      <h2 class="text-[--text-primary] text-lg font-medium mb-2">
+        Send Feedback
+      </h2>
       <p class="text-[--text-tertiary] mb-[1rem]">
         Help us improve Cap by submitting feedback or reporting bugs. We'll get
         right on it.
       </p>
-      <form class="space-y-4">
-        <div>
-          <textarea
-            value={feedback()}
-            onInput={(e) => setFeedback(e.currentTarget.value)}
-            placeholder="Tell us what you think about Cap..."
-            required
-            minLength={10}
-            class="w-full h-32 p-2 border border-[--gray-500] bg-[--gray-100] text-[--text-primary] rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-[--blue-400]"
-            disabled={isSubmitting()}
-          />
-        </div>
+      <form class="space-y-4" onSubmit={() => sendFeedback(feedback())}>
+        <fieldset disabled={submission.pending}>
+          <div>
+            <textarea
+              value={feedback()}
+              onInput={(e) => setFeedback(e.currentTarget.value)}
+              placeholder="Tell us what you think about Cap..."
+              required
+              minLength={10}
+              class="w-full h-32 p-2 border border-[--gray-500] bg-[--gray-100] text-[--text-primary] rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-[--blue-400]"
+            />
+          </div>
 
-        {error() && <p class="text-red-500 text-sm">{error()}</p>}
+          {submission.error && (
+            <p class="text-red-500 text-sm">{submission.error.toString()}</p>
+          )}
 
-        {success() && (
-          <p class="text-[--text-primary] text-sm">Thank you for your feedback!</p>
-        )}
+          {submission.result?.success && (
+            <p class="text-[--text-primary] text-sm">
+              Thank you for your feedback!
+            </p>
+          )}
 
-        <Button
-          onClick={handleSubmit}
-          type="button"
-          disabled={
-            isSubmitting() || !feedback().trim() || feedback().trim().length < 0
-          }
-          class="w-full bg-[--blue-400] text-[--text-primary]"
-        >
-          {isSubmitting() ? "Submitting..." : "Submit Feedback"}
-        </Button>
+          <Button
+            type="submit"
+            onClick={() => console.log("bruh")}
+            disabled={!feedback().trim() || feedback().trim().length < 0}
+            class="w-full bg-[--blue-400] text-[--text-primary]"
+          >
+            {submission.pending ? "Submitting..." : "Submit Feedback"}
+          </Button>
+        </fieldset>
       </form>
     </div>
   );

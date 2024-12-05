@@ -50,11 +50,17 @@ import {
 const getAuth = cache(async () => {
   const value = await authStore.get();
   const local = import.meta.env.VITE_LOCAL_MODE === "true";
-  if (!value && !local) return redirect("/signin");
-  const res = await fetch(`${clientEnv.VITE_SERVER_URL}/api/desktop/plan`, {
-    headers: { authorization: `Bearer ${value?.token}` },
+
+  if (!value) {
+    if (local) return;
+    return redirect("/signin");
+  }
+
+  const res = await apiClient.getUserPlan({
+    headers: await protectedHeaders(),
   });
   if (res.status !== 200 && !local) return redirect("/signin");
+
   return value;
 }, "getAuth");
 
@@ -258,6 +264,7 @@ import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
 import titlebarState, { setTitlebar } from "~/utils/titlebar-state";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -767,10 +774,11 @@ function ChangelogButton() {
       if (!version) {
         return { hasUpdate: false };
       }
-      const response = await fetch(
-        `${clientEnv.VITE_SERVER_URL}/api/changelog/status?version=${version}`
-      );
-      return await response.json();
+      const response = await apiClient.getChangelogStatus({
+        query: { version },
+      });
+      if (response.status === 200) return response.body;
+      return null;
     }
   );
 
