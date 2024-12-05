@@ -1,6 +1,6 @@
 import { useNavigate } from "@solidjs/router";
 import { check } from "@tauri-apps/plugin-updater";
-import { createEffect, createResource, Match, Show, Switch } from "solid-js";
+import { createResource, Match, Show, Switch } from "solid-js";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { Button } from "@cap/ui-solid";
 import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
