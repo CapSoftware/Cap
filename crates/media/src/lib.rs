@@ -31,7 +31,7 @@ pub enum MediaError {
     #[error("Cannot run any further operations on a pipeline that has been shut down")]
     ShutdownPipeline,
 
-    #[error("Failed to launch task: #{0}")]
+    #[error("Failed to launch task: {0}")]
     TaskLaunch(String),
 
     #[error("FFmpeg error: {0}")]
