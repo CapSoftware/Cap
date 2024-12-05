@@ -121,8 +121,10 @@ export default function () {
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">
-          <IconCapLogoFullDark class="w-[90px] h-auto text-[--text-primary] dark:block hidden" />
-          <IconCapLogoFull class="w-[90px] h-auto text-[--text-primary] dark:hidden block" />
+          <div class="*:w-[92px] *:h-auto text-[--text-primary] ">
+            <IconCapLogoFullDark class="dark:block hidden" />
+            <IconCapLogoFull class="dark:hidden block" />
+          </div>
           <span
             onClick={async () => {
               if (!isUpgraded()) {
