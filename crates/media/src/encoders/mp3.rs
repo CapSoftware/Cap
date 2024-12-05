@@ -33,6 +33,20 @@ impl MP3Encoder {
         encoder_ctx.set_threading(Config::count(4));
         let mut encoder = encoder_ctx.encoder().audio()?;
 
+        if !codec
+            .audio()
+            .unwrap()
+            .rates()
+            .into_iter()
+            .flatten()
+            .any(|r| r == config.rate())
+        {
+            return Err(MediaError::TaskLaunch(format!(
+                "MP3 Codec does not support sample rate {}",
+                config.rate()
+            )));
+        }
+
         encoder.set_bit_rate(Self::OUTPUT_BITRATE);
         encoder.set_rate(config.rate());
         encoder.set_format(config.sample_format);

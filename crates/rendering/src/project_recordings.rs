@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use cap_project::RecordingMeta;
+use crate::RecordingMeta;
 use serde::Serialize;
 use specta::Type;
 
@@ -64,7 +64,7 @@ pub struct ProjectRecordings {
 impl ProjectRecordings {
     pub fn new(meta: &RecordingMeta) -> Self {
         let segments = match &meta.content {
-            cap_project::Content::SingleSegment { segment } => {
+            crate::Content::SingleSegment { segment } => {
                 let display = Video::new(&meta.project_path.join(&segment.display.path));
                 let camera = segment
                     .camera
@@ -81,7 +81,7 @@ impl ProjectRecordings {
                     audio,
                 }]
             }
-            cap_project::Content::MultipleSegments { inner } => inner
+            crate::Content::MultipleSegments { inner } => inner
                 .segments
                 .iter()
                 .map(|s| {

@@ -291,11 +291,23 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     let mut audio_output_path = None;
     let mut camera_output_path = None;
 
-    pipeline_builder = TCaptureFormat::make_capture_pipeline(
-        pipeline_builder,
-        screen_source,
-        &display_output_path,
-    )?;
+    if let Some(camera_source) = camera_feed.map(CameraSource::init) {
+        let camera_config = camera_source.info();
+        let output_config = camera_config.scaled(1920, 30);
+        camera_output_path = Some(content_dir.join("camera.mp4"));
+
+        let camera_filter = VideoFilter::init("camera", camera_config, output_config)?;
+        let camera_encoder = H264Encoder::init(
+            "camera",
+            output_config,
+            Output::File(camera_output_path.clone().unwrap()),
+        )?;
+
+        pipeline_builder = pipeline_builder
+            .source("camera_capture", camera_source)
+            .pipe("camera_filter", camera_filter)
+            .sink("camera_encoder", camera_encoder);
+    }
 
     if let Some(mic_source) = audio_input_feed.map(AudioInputSource::init) {
         let mic_config = mic_source.info();
@@ -314,23 +326,15 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
             .sink("microphone_encoder", mic_encoder);
     }
 
-    if let Some(camera_source) = camera_feed.map(CameraSource::init) {
-        let camera_config = camera_source.info();
-        let output_config = camera_config.scaled(1920, 30);
-        camera_output_path = Some(content_dir.join("camera.mp4"));
+    // we do this last to frontload the majority of errors,
+    // as the screen pipeline crashes the app if an error occurs afterwards for some reason
+    pipeline_builder = TCaptureFormat::make_capture_pipeline(
+        pipeline_builder,
+        screen_source,
+        &display_output_path,
+    )?;
 
-        let camera_filter = VideoFilter::init("camera", camera_config, output_config)?;
-        let camera_encoder = H264Encoder::init(
-            "camera",
-            output_config,
-            Output::File(camera_output_path.clone().unwrap()),
-        )?;
-
-        pipeline_builder = pipeline_builder
-            .source("camera_capture", camera_source)
-            .pipe("camera_filter", camera_filter)
-            .sink("camera_encoder", camera_encoder);
-    }
+    //
 
     let mut pipeline = pipeline_builder.build().await?;
 

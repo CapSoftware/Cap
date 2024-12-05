@@ -13,7 +13,6 @@ use crate::{
     App, CurrentRecordingChanged, MutableState, NewRecordingAdded, PreCreatedVideo,
     RecordingStarted, RecordingStopped, UploadMode,
 };
-use cap_editor::ProjectRecordings;
 use cap_flags::FLAGS;
 use cap_media::feeds::CameraFeed;
 use cap_media::sources::{AVFrameCapture, CaptureScreen, CaptureWindow, ScreenCaptureSource};
@@ -21,7 +20,7 @@ use cap_project::{
     Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment,
 };
 use cap_recording::CompletedRecording;
-use cap_rendering::ZOOM_DURATION;
+use cap_rendering::{ProjectRecordings, ZOOM_DURATION};
 use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;

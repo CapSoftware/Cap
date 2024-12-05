@@ -10,13 +10,18 @@ async function handlePost(request: NextRequest) {
   const user = await getCurrentUser();
   const { type, content, videoId, timestamp, parentCommentId } =
     await request.json();
-  const userId = user?.id as string;
+
+  const userId = user?.id || "anonymous";
+  const parentCommentIdSanitized = parentCommentId ? parentCommentId.replace("temp-", "") : null;
 
   if (!type || !content || !videoId) {
     console.error("Missing required data in /api/video/comment/route.ts");
 
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
+    return new Response(JSON.stringify({ 
+      error: true,
+      message: "Missing required fields: type, content, or videoId" 
+    }), {
+      status: 400,
       headers: {
         "Content-Type": "application/json",
       },
@@ -25,24 +30,46 @@ async function handlePost(request: NextRequest) {
 
   const id = nanoId();
 
-  await db.insert(comments).values({
-    id: id,
-    authorId: userId ?? "anonymous",
-    type: type,
-    content: content,
-    videoId: videoId,
-    timestamp: timestamp || null,
-    parentCommentId: parentCommentId || null,
-  });
+  try {
+    const newComment = {
+      id: id,
+      authorId: userId,
+      type: type,
+      content: content,
+      videoId: videoId,
+      timestamp: timestamp || null,
+      parentCommentId: parentCommentIdSanitized || null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
 
-  return new Response(
-    JSON.stringify({
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    })
-  );
+    await db.insert(comments).values(newComment);
+
+    return new Response(
+      JSON.stringify({
+        ...newComment,
+        authorName: user?.name || "Anonymous",
+      }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  } catch (error) {
+    console.error("Error creating comment:", error);
+    return new Response(
+      JSON.stringify({ 
+        error: true,
+        message: "Failed to create comment" 
+      }), {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  }
 }
 
 export const POST = (request: NextRequest) => {

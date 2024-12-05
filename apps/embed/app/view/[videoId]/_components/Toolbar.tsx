@@ -182,7 +182,7 @@ export const Toolbar = ({
                   <Button
                     className="min-w-[160px]"
                     disabled={comment.length === 0}
-                    variant="default"
+                    variant="primary"
                     size="sm"
                     onClick={() => {
                       handleCommentSubmit();
@@ -192,7 +192,7 @@ export const Toolbar = ({
                   </Button>
                   <Button
                     className="min-w-[100px]"
-                    variant="outline"
+                    variant="secondary"
                     size="sm"
                     onClick={() => {
                       setCommentBoxOpen(false);

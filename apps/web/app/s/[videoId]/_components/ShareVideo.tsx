@@ -1,7 +1,7 @@
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { VideoPlayer } from "./VideoPlayer";
 import { MP4VideoPlayer } from "./MP4VideoPlayer";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, forwardRef } from "react";
 import {
   Play,
   Pause,
@@ -37,15 +37,14 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 };
 
 // Update the component props type
-export const ShareVideo = ({
-  data,
-  user,
-  comments,
-}: {
-  data: typeof videos.$inferSelect;
-  user: typeof userSelectProps | null;
-  comments: CommentWithAuthor[];
-}) => {
+export const ShareVideo = forwardRef<
+  HTMLVideoElement,
+  {
+    data: typeof videos.$inferSelect;
+    user: typeof userSelectProps | null;
+    comments: CommentWithAuthor[];
+  }
+>(({ data, user, comments }, ref) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -66,6 +65,16 @@ export const ShareVideo = ({
   const [forceHideControls, setForceHideControls] = useState(false);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const enterControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      if (typeof ref === "function") {
+        ref(videoRef.current);
+      } else if (ref) {
+        ref.current = videoRef.current;
+      }
+    }
+  }, [ref]);
 
   const showControls = () => {
     setOverlayVisible(true);
@@ -763,4 +772,4 @@ export const ShareVideo = ({
       </div>
     </div>
   );
-};
+});

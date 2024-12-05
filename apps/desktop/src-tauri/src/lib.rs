@@ -20,7 +20,7 @@ mod windows;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid};
 use cap_editor::EditorState;
-use cap_editor::{EditorInstance, ProjectRecordings, FRAMES_WS_PATH};
+use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::sources::CaptureScreen;
 use cap_media::{
@@ -29,9 +29,9 @@ use cap_media::{
 };
 use cap_project::{Content, ProjectConfiguration, RecordingMeta, SharingMeta};
 use cap_recording::RecordingOptions;
+use cap_rendering::ProjectRecordings;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
-use fake_window::FakeWindowBounds;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
@@ -809,7 +809,7 @@ async fn get_video_metadata(
 fn open_editor(app: AppHandle, id: String) {
     println!("Opening editor for recording: {}", id);
 
-    if let Some(window) = app.get_webview_window("camera") {
+    if let Some(window) = CapWindowId::Camera.get(&app) {
         window.close().ok();
     }
 

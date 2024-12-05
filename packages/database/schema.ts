@@ -132,8 +132,11 @@ export const spaces = mysqlTable(
     name: varchar("name", { length: 255 }).notNull(),
     ownerId: nanoId("ownerId").notNull(),
     metadata: json("metadata"),
+    allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    workosOrganizationId: varchar("workosOrganizationId", { length: 255 }),
+    workosConnectionId: varchar("workosConnectionId", { length: 255 }),
   },
   (table) => ({
     ownerIdIndex: index("owner_id_idx").on(table.ownerId),

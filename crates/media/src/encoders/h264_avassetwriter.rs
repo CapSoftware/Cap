@@ -24,13 +24,18 @@ impl H264AVAssetWriterEncoder {
                 .as_ns(),
             av::FileType::mp4(),
         )
-        .unwrap();
+        .map_err(|_| MediaError::Any("Failed to create AVAssetWriter"))?;
 
         let assistant =
             av::OutputSettingsAssistant::with_preset(av::OutputSettingsPreset::h264_3840x2160())
-                .unwrap();
+                .ok_or(MediaError::Any(
+                    "Failed to create output settings assistant",
+                ))?;
 
-        let mut output_settings = assistant.video_settings().unwrap().copy_mut();
+        let mut output_settings = assistant
+            .video_settings()
+            .ok_or(MediaError::Any("No assistant video settings"))?
+            .copy_mut();
 
         output_settings.insert(
             av::video_settings_keys::width(),
@@ -55,10 +60,12 @@ impl H264AVAssetWriterEncoder {
             av::MediaType::video(),
             Some(output_settings.as_ref()),
         )
-        .unwrap();
+        .map_err(|_| MediaError::Any("Failed to create AVAssetWriterInput"))?;
         video_input.set_expects_media_data_in_real_time(true);
 
-        asset_writer.add_input(&video_input).unwrap();
+        asset_writer
+            .add_input(&video_input)
+            .map_err(|_| MediaError::Any("Failed to add asset writer input"))?;
 
         asset_writer.start_writing();
 
@@ -92,7 +99,7 @@ impl H264AVAssetWriterEncoder {
 
         self.last_timestamp = Some(time);
 
-        self.video_input.append_sample_buf(sample_buf).unwrap();
+        self.video_input.append_sample_buf(sample_buf).ok();
     }
 
     fn process_frame(&mut self) {}
@@ -114,7 +121,7 @@ impl PipelineSinkTask for H264AVAssetWriterEncoder {
         input: flume::Receiver<Self::Input>,
     ) {
         println!("Starting {} video encoding thread", self.tag);
-        ready_signal.send(Ok(())).unwrap();
+        ready_signal.send(Ok(())).ok();
 
         while let Ok(frame) = input.recv() {
             self.queue_frame(frame);

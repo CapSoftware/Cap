@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Share2,
   Check,
+  Building,
 } from "lucide-react";
 import Link from "next/link";
 import { classNames } from "@cap/utils";
@@ -36,20 +37,7 @@ import { signOut } from "next-auth/react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { UsageButton } from "@/components/UsageButton";
 import { updateActiveSpace } from "./server";
-
-const Avatar = ({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) => (
-  <div
-    className={`flex items-center justify-center rounded-lg bg-gray-200 ${className}`}
-  >
-    {children}
-  </div>
-);
+import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 
 const Clapperboard = ({ className }: { className: string }) => (
   <svg
@@ -109,6 +97,12 @@ export const AdminNavItems = () => {
       name: "Download App",
       href: `/download`,
       icon: Download,
+      subNav: [],
+    },
+    {
+      name: "Workspace",
+      href: `/dashboard/settings/workspace`,
+      icon: Building,
       subNav: [],
     },
   ];
@@ -216,9 +210,7 @@ export const AdminNavItems = () => {
             <PopoverTrigger asChild>
               <div className="flex items-center justify-between cursor-pointer hover:bg-gray-100 p-2 rounded-lg transition-colors">
                 <div className="flex items-center">
-                  <Avatar className="h-8 w-8">
-                    <User className="h-4 w-4 text-gray-400" />
-                  </Avatar>
+                  <Avatar name={user.name ?? "User"} className="h-8 w-8" />
                   <span className="ml-2 text-sm">{user.name ?? "User"}</span>
                 </div>
                 <MoreVertical className="h-5 w-5 text-gray-500 group-hover:text-gray-500" />

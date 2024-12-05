@@ -6,10 +6,10 @@ import { eq } from "drizzle-orm";
 
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser();
-  const { workspaceName, allowedEmailDomain, spaceId } = await request.json();
+  const { spaceId, workosOrganizationId, workosConnectionId } = await request.json();
 
   if (!user) {
-    return new Response(JSON.stringify({ error: true }), {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: {
         "Content-Type": "application/json",
@@ -17,20 +17,13 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  const [space] = await db
+    .select()
+    .from(spaces)
+    .where(eq(spaces.id, spaceId));
 
-  const space = await db.select().from(spaces).where(eq(spaces.id, spaceId));
-
-  if (!space) {
-    return new Response(JSON.stringify({ error: true }), {
-      status: 404,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-  }
-
-  if (space.length > 0 && space[0]?.ownerId !== user.id) {
-    return new Response(JSON.stringify({ error: true }), {
+  if (!space || space.ownerId !== user.id) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 403,
       headers: {
         "Content-Type": "application/json",
@@ -41,17 +34,18 @@ export async function POST(request: NextRequest) {
   await db
     .update(spaces)
     .set({
-      name: workspaceName,
-      allowedEmailDomain: allowedEmailDomain || null,
+      workosOrganizationId,
+      workosConnectionId,
     })
     .where(eq(spaces.id, spaceId));
 
   return new Response(
-    JSON.stringify({
+    JSON.stringify({ success: true }),
+    {
       status: 200,
       headers: {
         "Content-Type": "application/json",
       },
-    })
+    }
   );
-}
+} 

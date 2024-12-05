@@ -391,7 +391,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         };
         let mut capturer = Capturer::new(dbg!(self.create_options()));
         let mut capturing = false;
-        ready_signal.send(Ok(())).unwrap();
+        ready_signal.send(Ok(())).ok();
 
         loop {
             match control_signal.last() {
