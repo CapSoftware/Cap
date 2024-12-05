@@ -915,7 +915,7 @@ async fn get_video_metadata(
 fn open_editor(app: AppHandle, id: String) {
     println!("Opening editor for recording: {}", id);
 
-    if let Some(window) = app.get_webview_window("camera") {
+    if let Some(window) = CapWindowId::Camera.get(&app) {
         window.close().ok();
     }
 

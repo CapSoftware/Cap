@@ -26,7 +26,7 @@ export const Footer = () => {
       >
         <div className="sm:grid space-y-8 sm:space-y-0 grid-cols-1 lg:grid-cols-12 gap-8 sm:items-start sm:justify-between z-10 relative">
           <div className="space-y-2 sm:space-y-4 col-span-12 lg:col-span-6">
-            <Logo showBeta={true} className="w-[104px] h-auto" />
+            <Logo className="w-[104px] h-auto" />
             <div className="w-full">
               <p className="text-gray-500 max-w-md">
                 Cap is the open source alternative to Loom. Lightweight,
