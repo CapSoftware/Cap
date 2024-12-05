@@ -71,6 +71,7 @@ rustflags = [
             macOS: {
               frameworks: [path.join(nativeDeps, "Spacedrive.framework")],
             },
+            icon: ["icons/macos/icon.icns"],
           },
         },
         null,
