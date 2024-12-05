@@ -94,6 +94,9 @@ impl AudioInputFeed {
                     });
                     configs
                         .into_iter()
+                        .filter(|c| {
+                            c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 <= 48000
+                        })
                         .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
                 })
                 .and_then(|config| {
