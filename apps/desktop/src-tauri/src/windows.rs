@@ -408,7 +408,10 @@ pub fn set_theme(window: tauri::Window, theme: AppTheme) {
     });
 
     #[cfg(target_os = "macos")]
-    position_traffic_lights(window, None);
+    match CapWindowId::from_str(window.label()) {
+        Ok(win) if win.traffic_lights_position().is_some() => position_traffic_lights(window, None),
+        Ok(_) | Err(_) => {}
+    }
 }
 
 #[tauri::command]
