@@ -12,12 +12,7 @@ export async function POST(request: NextRequest) {
 
   if (!user) {
     console.error("User not found");
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
 
   console.log(`User found: ${user.id}`);
@@ -31,22 +26,12 @@ export async function POST(request: NextRequest) {
 
   if (!space || space.length === 0) {
     console.error(`Space not found for spaceId: ${spaceId}`);
-    return new Response(JSON.stringify({ error: true }), {
-      status: 404,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 404 });
   }
 
   if (space[0]?.ownerId !== user.id) {
     console.error(`User ${user.id} is not the owner of space ${spaceId}`);
-    return new Response(JSON.stringify({ error: true }), {
-      status: 403,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 403 });
   }
 
   const result = await db
@@ -57,19 +42,9 @@ export async function POST(request: NextRequest) {
 
   if (result.rowsAffected === 0) {
     console.error(`No invite found with id ${inviteId} for space ${spaceId}`);
-    return new Response(JSON.stringify({ error: true }), {
-      status: 404,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 404 });
   }
 
   console.log("Workspace invite removed successfully");
-  return new Response(JSON.stringify({ success: true }), {
-    status: 200,
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
+  return Response.json({ success: true }, { status: 200 });
 }

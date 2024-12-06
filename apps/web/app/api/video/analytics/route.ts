@@ -9,12 +9,7 @@ export async function GET(request: NextRequest) {
   const videoId = searchParams.get("videoId");
 
   if (!videoId) {
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
 
   try {
@@ -25,41 +20,21 @@ export async function GET(request: NextRequest) {
     const { clicks: analytics } = response as ClicksCount;
 
     if (typeof analytics !== "number" || analytics === null) {
-      return new Response(JSON.stringify({ error: true }), {
-        status: 401,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+      return Response.json({ error: true }, { status: 401 });
     }
 
-    return new Response(JSON.stringify({ count: analytics }), {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ count: analytics }, { status: 200 });
   } catch (error: any) {
     if (error.code === "not_found") {
-      return new Response(
-        JSON.stringify({
+      return Response.json(
+        {
           error: true,
           message: "Video link not found.",
           docUrl: error.docUrl,
-        }),
-        {
-          status: 404,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
+        },
+        { status: 404 }
       );
     }
-    return new Response(JSON.stringify({ error: true }), {
-      status: 500,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 500 });
   }
 }

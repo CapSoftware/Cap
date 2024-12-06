@@ -9,33 +9,17 @@ export async function POST(request: NextRequest) {
   const { workspaceName, allowedEmailDomain, spaceId } = await request.json();
 
   if (!user) {
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
-
 
   const space = await db.select().from(spaces).where(eq(spaces.id, spaceId));
 
   if (!space) {
-    return new Response(JSON.stringify({ error: true }), {
-      status: 404,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 404 });
   }
 
   if (space.length > 0 && space[0]?.ownerId !== user.id) {
-    return new Response(JSON.stringify({ error: true }), {
-      status: 403,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 403 });
   }
 
   await db
@@ -46,12 +30,5 @@ export async function POST(request: NextRequest) {
     })
     .where(eq(spaces.id, spaceId));
 
-  return new Response(
-    JSON.stringify({
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    })
-  );
+  return Response.json(true, { status: 200 });
 }

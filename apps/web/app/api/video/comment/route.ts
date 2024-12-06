@@ -12,20 +12,20 @@ async function handlePost(request: NextRequest) {
     await request.json();
 
   const userId = user?.id || "anonymous";
-  const parentCommentIdSanitized = parentCommentId ? parentCommentId.replace("temp-", "") : null;
+  const parentCommentIdSanitized = parentCommentId
+    ? parentCommentId.replace("temp-", "")
+    : null;
 
   if (!type || !content || !videoId) {
     console.error("Missing required data in /api/video/comment/route.ts");
 
-    return new Response(JSON.stringify({ 
-      error: true,
-      message: "Missing required fields: type, content, or videoId" 
-    }), {
-      status: 400,
-      headers: {
-        "Content-Type": "application/json",
+    return Response.json(
+      {
+        error: true,
+        message: "Missing required fields: type, content, or videoId",
       },
-    });
+      { status: 400 }
+    );
   }
 
   const id = nanoId();
@@ -45,29 +45,21 @@ async function handlePost(request: NextRequest) {
 
     await db.insert(comments).values(newComment);
 
-    return new Response(
-      JSON.stringify({
+    return Response.json(
+      {
         ...newComment,
         authorName: user?.name || "Anonymous",
-      }), {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+      },
+      { status: 200 }
     );
   } catch (error) {
     console.error("Error creating comment:", error);
-    return new Response(
-      JSON.stringify({ 
+    return Response.json(
+      {
         error: true,
-        message: "Failed to create comment" 
-      }), {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+        message: "Failed to create comment",
+      },
+      { status: 500 }
     );
   }
 }

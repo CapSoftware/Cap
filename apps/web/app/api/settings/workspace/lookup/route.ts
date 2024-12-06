@@ -10,14 +10,9 @@ export async function GET(request: NextRequest) {
 
   if (!spaceId) {
     console.log("[workspace/lookup] Missing spaceId parameter");
-    return new Response(
-      JSON.stringify({ error: "Space ID parameter is required" }),
-      {
-        status: 400,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+    return Response.json(
+      { error: "Space ID parameter is required" },
+      { status: 400 }
     );
   }
 
@@ -32,32 +27,22 @@ export async function GET(request: NextRequest) {
     .where(eq(spaces.id, spaceId));
 
   console.log("[workspace/lookup] Found space:", space);
-  
+
   if (!space || !space.workosOrganizationId || !space.workosConnectionId) {
     console.log("[workspace/lookup] Space not found or missing SSO config");
-    return new Response(
-      JSON.stringify({ error: "Space not found or SSO not configured" }),
-      {
-        status: 404,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+    return Response.json(
+      { error: "Space not found or SSO not configured" },
+      { status: 404 }
     );
   }
 
   console.log("[workspace/lookup] Found space:", space.name);
-  return new Response(
-    JSON.stringify({
+  return Response.json(
+    {
       organizationId: space.workosOrganizationId,
       connectionId: space.workosConnectionId,
       name: space.name,
-    }),
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    }
+    },
+    { status: 200 }
   );
 }

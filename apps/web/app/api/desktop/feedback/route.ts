@@ -52,31 +52,32 @@ export async function POST(req: NextRequest) {
   const originalOrigin = req.nextUrl.origin;
 
   if (!user) {
-    return new Response(JSON.stringify({ error: "User not authenticated" }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin":
-          origin && allowedOrigins.includes(origin)
-            ? origin
-            : allowedOrigins.includes(originalOrigin)
-            ? originalOrigin
-            : "null",
-        "Access-Control-Allow-Credentials": "true",
-      },
-    });
+    return Response.json(
+      { error: "User not authenticated" },
+      {
+        status: 401,
+        headers: {
+          "Access-Control-Allow-Origin":
+            origin && allowedOrigins.includes(origin)
+              ? origin
+              : allowedOrigins.includes(originalOrigin)
+              ? originalOrigin
+              : "null",
+          "Access-Control-Allow-Credentials": "true",
+        },
+      }
+    );
   }
 
   const formData = await req.formData();
   const feedbackText = formData.get("feedback") as string;
 
   if (!feedbackText) {
-    return new Response(
-      JSON.stringify({ error: "Feedback text is required" }),
+    return Response.json(
+      { error: "Feedback text is required" },
       {
         status: 400,
         headers: {
-          "Content-Type": "application/json",
           "Access-Control-Allow-Origin":
             origin && allowedOrigins.includes(origin)
               ? origin
@@ -112,15 +113,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return new Response(
-      JSON.stringify({
+    return Response.json(
+      {
         success: true,
         message: "Feedback submitted successfully",
-      }),
+      },
       {
         status: 200,
         headers: {
-          "Content-Type": "application/json",
           "Access-Control-Allow-Origin":
             origin && allowedOrigins.includes(origin)
               ? origin
@@ -132,12 +132,11 @@ export async function POST(req: NextRequest) {
       }
     );
   } catch (error) {
-    return new Response(
-      JSON.stringify({ error: "Failed to submit feedback" }),
+    return Response.json(
+      { error: "Failed to submit feedback" },
       {
         status: 500,
         headers: {
-          "Content-Type": "application/json",
           "Access-Control-Allow-Origin":
             origin && allowedOrigins.includes(origin)
               ? origin
