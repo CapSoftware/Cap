@@ -10,7 +10,6 @@ import {
   onMount,
 } from "solid-js";
 import { type as ostype } from "@tauri-apps/plugin-os";
-import { createStore, reconcile } from "solid-js/store";
 import { Tooltip } from "@kobalte/core";
 
 import { type RenderProgress, commands } from "~/utils/tauri";
@@ -18,7 +17,7 @@ import { type RenderProgress, commands } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { Dialog, DialogContent } from "./ui";
 import {
-  ProgressState,
+  type ProgressState,
   progressState,
   setProgressState,
 } from "~/store/progress";
@@ -56,7 +55,7 @@ export function Header() {
     }
 
 
-    if (percentage) currentWindow.setProgressBar({ progress: percentage });
+    if (percentage) currentWindow.setProgressBar({ progress: Math.round(percentage) });
   });
 
   setTitlebar("border", false);
