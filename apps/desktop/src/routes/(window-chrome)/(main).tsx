@@ -375,6 +375,7 @@ function CameraSelect(props: {
 
   type Option = { isCamera: boolean; name: string };
 
+  const [loading, setLoading] = createSignal(false);
   const onChange = async (item: Option | null) => {
     if (!item && permissions?.data?.camera !== "granted") {
       return requestPermission("camera");
@@ -383,10 +384,10 @@ function CameraSelect(props: {
 
     let cameraLabel = !item || !item.isCamera ? null : item.name;
 
-    props.setOptions.mutate({
-      ...props.options,
-      cameraLabel,
-    });
+    setLoading(true);
+    props.setOptions
+      .mutateAsync({ ...props.options, cameraLabel })
+      .finally(() => setLoading(false));
   };
 
   const selectOptions = createMemo(() => [
@@ -426,7 +427,7 @@ function CameraSelect(props: {
         }}
       >
         <KSelect.Trigger
-          disabled={props.setOptions.isPending}
+          disabled={loading()}
           class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
         >
           <IconCapCamera class="text-gray-400 size-[1.25rem]" />
@@ -492,13 +493,17 @@ function MicrophoneSelect(props: {
 
   type Option = { name: string; deviceId: string };
 
+  const [loading, setLoading] = createSignal(false);
   const handleMicrophoneChange = async (item: Option | null) => {
     if (!item || !props.options) return;
 
-    props.setOptions.mutate({
-      ...props.options,
-      audioInputName: item.deviceId !== "" ? item.name : null,
-    });
+    setLoading(true);
+    props.setOptions
+      .mutateAsync({
+        ...props.options,
+        audioInputName: item.deviceId !== "" ? item.name : null,
+      })
+      .finally(() => setLoading(false));
     if (!item.deviceId) setDbs();
   };
 
@@ -565,7 +570,7 @@ function MicrophoneSelect(props: {
         }}
       >
         <KSelect.Trigger
-          disabled={props.setOptions.isPending}
+          disabled={loading()}
           class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
         >
           <Show when={dbs()}>
