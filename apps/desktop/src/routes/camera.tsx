@@ -138,7 +138,7 @@ export default function () {
                 <div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-500 border border-white-transparent-20 text-gray-400">
                   <ControlButton
                     onClick={() => {
-                      setOptions({
+                      setOptions.mutate({
                         ...options(),
                         cameraLabel: null,
                       });

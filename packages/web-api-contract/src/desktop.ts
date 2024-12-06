@@ -41,7 +41,7 @@ const publicContract = c.router({
 
 const protectedContract = c.router(
   {
-    submitDesktopFeedback: {
+    submitFeedback: {
       method: "POST",
       path: "/desktop/feedback",
       contentType: "application/x-www-form-urlencoded",

@@ -10,7 +10,7 @@ export default function Page() {
   const changelog = createQuery(() => ({
     queryKey: ["changelog"],
     queryFn: async () => {
-      const response = await apiClient.getChangelogPosts({
+      const response = await apiClient.desktop.getChangelogPosts({
         query: { origin: window.location.origin },
       });
 

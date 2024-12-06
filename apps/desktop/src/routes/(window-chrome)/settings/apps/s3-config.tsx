@@ -59,7 +59,7 @@ export default function S3ConfigPage() {
 
   onMount(async () => {
     try {
-      const response = await apiClient.getS3Config({
+      const response = await apiClient.desktop.getS3Config({
         headers: await protectedHeaders(),
       });
 
@@ -89,7 +89,7 @@ export default function S3ConfigPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const response = await apiClient.setS3Config({
+      const response = await apiClient.desktop.setS3Config({
         body: {
           provider: provider(),
           accessKeyId: accessKeyId(),
@@ -120,7 +120,7 @@ export default function S3ConfigPage() {
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      const response = await apiClient.deleteS3Config({
+      const response = await apiClient.desktop.deleteS3Config({
         headers: await protectedHeaders(),
       });
 
@@ -146,7 +146,7 @@ export default function S3ConfigPage() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5500); // 5.5s timeout (slightly longer than backend)
 
-      const response = await apiClient.testS3Config({
+      const response = await apiClient.desktop.testS3Config({
         body: {
           provider: provider(),
           accessKeyId: accessKeyId(),

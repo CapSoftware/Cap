@@ -56,7 +56,7 @@ const getAuth = cache(async () => {
     return redirect("/signin");
   }
 
-  const res = await apiClient.getUserPlan({
+  const res = await apiClient.desktop.getUserPlan({
     headers: await protectedHeaders(),
   });
   if (res.status !== 200 && !local) return redirect("/signin");
@@ -780,7 +780,7 @@ function ChangelogButton() {
       if (!version) {
         return { hasUpdate: false };
       }
-      const response = await apiClient.getChangelogStatus({
+      const response = await apiClient.desktop.getChangelogStatus({
         query: { version },
       });
       if (response.status === 200) return response.body;
