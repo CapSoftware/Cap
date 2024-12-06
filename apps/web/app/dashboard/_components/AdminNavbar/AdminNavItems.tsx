@@ -105,7 +105,13 @@ export const AdminNavItems = () => {
       icon: Building,
       subNav: [],
     },
-  ];
+    user.email.endsWith("@cap.so") && {
+      name: "Admin",
+      href: "/dashboard/admin",
+      icon: () => {},
+      subNav: [],
+    },
+  ].filter(Boolean);
 
   const navItemClass =
     "flex items-center justify-start py-2 px-3 rounded-full outline-none tracking-tight w-full";
