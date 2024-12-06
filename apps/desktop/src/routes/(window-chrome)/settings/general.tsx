@@ -1,8 +1,4 @@
-import {
-  createResource,
-  Show,
-  For,
-} from "solid-js";
+import { createResource, Show, For } from "solid-js";
 import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import type { AppTheme, GeneralSettingsStore } from "~/utils/tauri";
@@ -107,7 +103,7 @@ function AppearanceSection(props: {
                   class={`w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200 ${
                     props.currentTheme === theme.id
                       ? "ring-2 ring-offset-2"
-                      : "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-300" 
+                      : "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-300"
                   }`}
                   aria-label={`Select theme: ${theme.name}`}
                 >
@@ -121,9 +117,7 @@ function AppearanceSection(props: {
                 </div>
                 <span
                   class={`mt-2 text-sm transition-color duration-200 ${
-                    props.currentTheme === theme.id
-                      ? "text-blue-400"
-                      : ""
+                    props.currentTheme === theme.id ? "text-blue-400" : ""
                   }`}
                 >
                   {theme.name}
@@ -198,70 +192,55 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             }}
           />
           <For each={settingsList}>
-            {(setting) => (
-              <Show
-                when={!setting.platforms || setting.platforms.includes(ostype)}
-              >
-                <div class="space-y-2 py-3">
-                  {setting.pro && (
-                    <span class="text-xs font-medium bg-blue-400 text-gray-50 px-2 py-1 rounded-lg">
-                      Cap Pro
-                    </span>
-                  )}
-                  <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-2">
-                      <p class="text-[--text-primary]">{setting.label}</p>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={
-                        settings[setting.key as keyof GeneralSettingsStore]
-                      }
-                      data-state={
-                        settings[setting.key as keyof GeneralSettingsStore]
-                          ? "checked"
-                          : "unchecked"
-                      }
-                      value={
-                        settings[setting.key as keyof GeneralSettingsStore]
-                          ? "on"
-                          : "off"
-                      }
-                      class={`peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
-                        settings[setting.key as keyof GeneralSettingsStore]
-                          ? "bg-blue-400 border-blue-400"
-                          : "bg-gray-300 border-gray-300"
-                      }`}
-                      onClick={() =>
-                        handleChange(
-                          setting.key,
-                          !settings[setting.key as keyof GeneralSettingsStore]
-                        )
-                      }
-                    >
-                      <span
-                        data-state={
-                          settings[setting.key as keyof GeneralSettingsStore]
-                            ? "checked"
-                            : "unchecked"
-                        }
-                        class={`pointer-events-none block h-4 w-4 rounded-full bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 border-2 ${
-                          settings[setting.key as keyof GeneralSettingsStore]
-                            ? "border-blue-400"
-                            : "border-gray-300"
+            {(setting) => {
+              const value = () => !!settings[setting.key];
+
+              return (
+                <Show
+                  when={
+                    !setting.platforms || setting.platforms.includes(ostype)
+                  }
+                >
+                  <div class="space-y-2 py-3">
+                    {setting.pro && (
+                      <span class="text-xs font-medium bg-blue-400 text-gray-50 px-2 py-1 rounded-lg">
+                        Cap Pro
+                      </span>
+                    )}
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center gap-2">
+                        <p class="text-[--text-primary]">{setting.label}</p>
+                      </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={value()}
+                        data-state={value() ? "checked" : "unchecked"}
+                        value={value() ? "on" : "off"}
+                        class={`peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 ${
+                          value()
+                            ? "bg-blue-400 border-blue-400"
+                            : "bg-gray-300 border-gray-300"
                         }`}
-                      />
-                    </button>
+                        onClick={() => handleChange(setting.key, !value())}
+                      >
+                        <span
+                          data-state={value() ? "checked" : "unchecked"}
+                          class={`pointer-events-none block h-4 w-4 rounded-full bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0 border-2 ${
+                            value() ? "border-blue-400" : "border-gray-300"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    {setting.description && (
+                      <p class="text-xs text-[--text-tertiary]">
+                        {setting.description}
+                      </p>
+                    )}
                   </div>
-                  {setting.description && (
-                    <p class="text-xs text-[--text-tertiary]">
-                      {setting.description}
-                    </p>
-                  )}
-                </div>
-              </Show>
-            )}
+                </Show>
+              );
+            }}
           </For>
         </div>
       </div>

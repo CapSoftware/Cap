@@ -16,7 +16,10 @@ import "./styles/theme.css";
 import { generalSettingsStore } from "./store";
 import { commands, type AppTheme } from "./utils/tauri";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import {
+  getCurrentWebviewWindow,
+  WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -80,7 +83,7 @@ function createThemeListener(currentWindow: WebviewWindow) {
     generalSettingsStore.get().then((s) => {
       const t = s?.theme ?? null;
       update(t);
-      return t
+      return t;
     })
   );
   generalSettingsStore.listen((s) => {
@@ -106,7 +109,7 @@ function createThemeListener(currentWindow: WebviewWindow) {
       document.documentElement.classList.toggle(
         "dark",
         appTheme === "dark" ||
-        window.matchMedia("(prefers-color-scheme: dark)").matches
+          window.matchMedia("(prefers-color-scheme: dark)").matches
       );
     });
   }
