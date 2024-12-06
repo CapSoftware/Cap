@@ -11,12 +11,7 @@ export async function POST(request: NextRequest) {
   if (!user) {
     console.error("User not found");
 
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
 
   await db
@@ -27,12 +22,7 @@ export async function POST(request: NextRequest) {
     })
     .where(eq(users.id, user.id));
 
-  return new Response(
-    JSON.stringify({
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    })
-  );
+  return Response.json(true, {
+    status: 200,
+  });
 }

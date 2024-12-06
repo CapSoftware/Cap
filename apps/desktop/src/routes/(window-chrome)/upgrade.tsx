@@ -1,10 +1,11 @@
 import { createSignal, onCleanup, onMount } from "solid-js";
-import { getProPlanId } from "~/utils/plans";
-import { commands } from "~/utils/tauri";
-import { clientEnv } from "~/utils/env";
-import { authStore } from "../../store";
 import { Button } from "@cap/ui-solid";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+
+import { authStore } from "../../store";
+import { getProPlanId } from "~/utils/plans";
+import { commands } from "~/utils/tauri";
+import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 export default function Page() {
   const proFeatures = [
@@ -25,7 +26,7 @@ export default function Page() {
     setIsAnnual(!isAnnual());
   };
 
-  const getCheckoutUrl = async () => {
+  const openCheckoutInExternalBrowser = async () => {
     setLoading(true);
     const planId = getProPlanId(isAnnual() ? "yearly" : "monthly");
 
@@ -39,21 +40,13 @@ export default function Page() {
         return;
       }
 
-      const response = await fetch(
-        `${clientEnv.VITE_SERVER_URL}/api/desktop/subscribe?origin=${window.location.origin}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${auth.token}`,
-          },
-          body: JSON.stringify({ priceId: planId }),
-        }
-      );
+      const response = await apiClient.desktop.getProSubscribeURL({
+        body: { priceId: planId },
+        headers: await protectedHeaders(),
+      });
 
-      if (response.ok) {
-        const data = await response.json();
-        commands.openExternalLink(data.url);
+      if (response.status === 200) {
+        commands.openExternalLink(response.body.url);
       } else {
         console.error("Failed to get checkout URL");
       }
@@ -168,7 +161,7 @@ export default function Page() {
                 </div>
                 <div class="px-6 pb-4 pt-0">
                   <button
-                    onClick={getCheckoutUrl}
+                    onClick={openCheckoutInExternalBrowser}
                     class="flex items-center justify-center rounded-full bg-[--gray-50] text-[--text-primary] hover:bg-[--gray-200] disabled:bg-[--gray-100] border border-[--gray-300] font-medium text-lg px-6 h-12 w-full no-underline"
                     disabled={loading()}
                   >

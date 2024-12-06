@@ -1,28 +1,21 @@
-import { For, Show, createResource, ErrorBoundary, Suspense } from "solid-js";
-import { clientEnv } from "~/utils/env";
+import { For, Show, ErrorBoundary, Suspense } from "solid-js";
 import { SolidMarkdown } from "solid-markdown";
 import { createQuery } from "@tanstack/solid-query";
-import { AbsoluteInsetLoader } from "~/components/Loader";
 import { cx } from "cva";
 
-interface ChangelogEntry {
-  title: string;
-  app: string;
-  version: string;
-  publishedAt: string;
-  content: string;
-}
+import { AbsoluteInsetLoader } from "~/components/Loader";
+import { apiClient } from "~/utils/web-api";
 
 export default function Page() {
   const changelog = createQuery(() => ({
     queryKey: ["changelog"],
     queryFn: async () => {
-      const response = await fetch(
-        `${clientEnv.VITE_SERVER_URL}/api/changelog?origin=${window.location.origin}`
-      );
-      if (!response.ok) throw new Error("Failed to fetch changelog");
+      const response = await apiClient.desktop.getChangelogPosts({
+        query: { origin: window.location.origin },
+      });
 
-      return (await response.json()) as Array<ChangelogEntry>;
+      if (response.status !== 200) throw new Error("Failed to fetch changelog");
+      return response.body;
     },
   }));
 
@@ -40,7 +33,9 @@ export default function Page() {
           >
             <ErrorBoundary
               fallback={(e) => (
-                <div class="text-[--text-primary] font-medium">{e.toString()}</div>
+                <div class="text-[--text-primary] font-medium">
+                  {e.toString()}
+                </div>
               )}
             >
               <ul class="space-y-8">

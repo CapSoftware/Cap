@@ -7,6 +7,7 @@
     "beforeDevCommand": "node scripts/prepareSidecars.js && pnpm localdev",
     "devUrl": "http://localhost:3001",
     "beforeBuildCommand": "node scripts/prepareSidecars.js && pnpm turbo build --filter @cap/desktop",
+    "beforeBundleCommand": "node scripts/stripDebugSymbols.js",
     "frontendDist": "../.output/public"
   },
   "app": {

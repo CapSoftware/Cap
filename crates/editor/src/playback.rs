@@ -1,7 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
-use cap_media::data::{AudioInfo, FromSampleBytes};
+use cap_media::data::{AudioInfo, AudioInfoError, FromSampleBytes};
 use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
+use cap_media::MediaError;
 use cap_project::ProjectConfiguration;
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
@@ -181,7 +182,8 @@ impl AudioPlayback {
                 SampleFormat::F32 => self.create_stream::<f32>(device, supported_config),
                 SampleFormat::F64 => self.create_stream::<f64>(device, supported_config),
                 _ => unimplemented!(),
-            };
+            }
+            .unwrap();
 
             stream.play().unwrap();
 
@@ -196,7 +198,7 @@ impl AudioPlayback {
         self,
         device: cpal::Device,
         supported_config: cpal::SupportedStreamConfig,
-    ) -> (watch::Receiver<bool>, cpal::Stream) {
+    ) -> Result<(watch::Receiver<bool>, cpal::Stream), AudioInfoError> {
         let AudioPlayback {
             stop_rx,
             start_frame_number,
@@ -205,7 +207,7 @@ impl AudioPlayback {
             ..
         } = self;
 
-        let mut output_info = AudioInfo::from_stream_config(&supported_config);
+        let mut output_info = AudioInfo::from_stream_config(&supported_config)?;
         output_info.sample_format = output_info.sample_format.packed();
 
         // TODO: Get fps and duration from video (once we start supporting other frame rates)
@@ -216,9 +218,10 @@ impl AudioPlayback {
         audio_renderer.set_playhead(playhead, project.borrow().timeline());
 
         // Prerender enough for smooth playback
-        while !audio_renderer.buffer_reaching_limit() {
-            audio_renderer.render(project.borrow().timeline());
-        }
+        // disabled bc it causes weirdness during playback atm
+        // while !audio_renderer.buffer_reaching_limit() {
+        //     audio_renderer.render(project.borrow().timeline());
+        // }
 
         let mut config = supported_config.config();
         // Low-latency playback
@@ -236,6 +239,6 @@ impl AudioPlayback {
             )
             .unwrap();
 
-        (stop_rx, stream)
+        Ok((stop_rx, stream))
     }
 }

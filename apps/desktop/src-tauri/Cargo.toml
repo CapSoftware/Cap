@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.1-alpha.26"
+version = "0.3.3"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2021"
@@ -65,7 +65,7 @@ global-hotkey = "0.6.3"
 rand = "0.8.5"
 cpal.workspace = true
 keyed_priority_queue = "0.4.2"
-sentry.workspace = true
+sentry = { workspace = true }
 
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
@@ -106,4 +106,4 @@ panic = "abort"   # Strip expensive panic clean-up logic
 codegen-units = 1 # Compile crates one after another so the compiler can optimize better
 lto = true        # Enables link to optimizations
 opt-level = "s"   # Optimize for binary size
-strip = true      # Remove debug symbols
+debug = true

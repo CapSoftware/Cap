@@ -34,8 +34,8 @@ export function Button(
 ) {
   return (
     <button
-      {...props}
       type="button"
+      {...props}
       class={styles({ ...props, class: props.class })}
     />
   );

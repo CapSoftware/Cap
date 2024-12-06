@@ -15,6 +15,7 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import toast from "react-hot-toast";
 import { Tooltip } from "react-tooltip";
+import { apiClient } from "@/utils/web-api";
 
 declare global {
   interface Window {
@@ -417,15 +418,18 @@ export const ShareVideo = forwardRef<
           return;
         }
 
-        fetch(`/api/video/transcribe/status?videoId=${data.id}`)
-          .then((response) => response.json())
-          .then(({ transcriptionStatus }) => {
+        apiClient.video
+          .getTranscribeStatus({ query: { videoId: data.id } })
+          .then((data) => {
+            if (data.status !== 200) return;
+
+            const { transcriptionStatus } = data.body;
             if (transcriptionStatus === "PROCESSING") {
               setIsTranscriptionProcessing(true);
             } else if (transcriptionStatus === "COMPLETE") {
               fetchSubtitles();
               clearInterval(intervalId);
-            } else if (transcriptionStatus === "FAILED") {
+            } else if (transcriptionStatus === "ERROR") {
               clearInterval(intervalId);
             }
           });

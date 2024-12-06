@@ -164,7 +164,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
             } else if (transcriptionStatus === "COMPLETE") {
               fetchTranscript();
               clearInterval(intervalId);
-            } else if (transcriptionStatus === "FAILED") {
+            } else if (transcriptionStatus === "ERROR") {
               clearInterval(intervalId);
               setIsLoading(false);
             }

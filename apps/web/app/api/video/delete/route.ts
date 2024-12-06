@@ -21,12 +21,7 @@ export async function DELETE(request: NextRequest) {
   if (!videoId || !userId) {
     console.error("Missing required data in /api/video/delete/route.ts");
 
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
 
   const query = await db
@@ -84,12 +79,7 @@ export async function DELETE(request: NextRequest) {
     await s3Client.send(deleteObjectsCommand);
   }
 
-  return new Response(
-    JSON.stringify({
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    })
-  );
+  return Response.json(true, {
+    status: 200,
+  });
 }

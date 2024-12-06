@@ -6,29 +6,17 @@ import { eq } from "drizzle-orm";
 
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser();
-  const { spaceId, workosOrganizationId, workosConnectionId } = await request.json();
+  const { spaceId, workosOrganizationId, workosConnectionId } =
+    await request.json();
 
   if (!user) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const [space] = await db
-    .select()
-    .from(spaces)
-    .where(eq(spaces.id, spaceId));
+  const [space] = await db.select().from(spaces).where(eq(spaces.id, spaceId));
 
   if (!space || space.ownerId !== user.id) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 403,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: "Unauthorized" }, { status: 403 });
   }
 
   await db
@@ -39,13 +27,5 @@ export async function POST(request: NextRequest) {
     })
     .where(eq(spaces.id, spaceId));
 
-  return new Response(
-    JSON.stringify({ success: true }),
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    }
-  );
-} 
+  return Response.json({ success: true }, { status: 200 });
+}

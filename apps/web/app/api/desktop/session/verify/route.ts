@@ -6,21 +6,9 @@ export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
 
   if (session) {
-    return new Response(
-      JSON.stringify({ isLoggedIn: true, user: session.user }),
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+    return Response.json(
+      { isLoggedIn: true, user: session.user },
+      { status: 200 }
     );
-  } else {
-    return new Response(JSON.stringify({ isLoggedIn: false }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-  }
+  } else return Response.json({ isLoggedIn: false }, { status: 401 });
 }

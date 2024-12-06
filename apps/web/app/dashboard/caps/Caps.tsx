@@ -6,6 +6,7 @@ import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayou
 import { CapCard } from "./components/CapCard";
 import { EmptyCapState } from "./components/EmptyCapState";
 import { CapPagination } from "./components/CapPagination";
+import { apiClient } from "@/utils/web-api";
 
 type VideoData = {
   id: string;
@@ -40,15 +41,16 @@ export const Caps = ({
       const analyticsData: Record<string, number> = {};
 
       for (const video of data) {
-        const response = await fetch(
-          `/api/video/analytics?videoId=${video.id}`,
-          {
+        const response = await apiClient.video.getAnalytics({
+          query: { videoId: video.id },
+          fetchOptions: {
             cache: "force-cache",
-          }
-        );
-        const data = await response.json();
+          },
+        });
 
-        analyticsData[video.id] = data.count || 0;
+        if (response.status !== 200) continue;
+
+        analyticsData[video.id] = response.body.count || 0;
       }
       setAnalytics(analyticsData);
     };
@@ -65,11 +67,9 @@ export const Caps = ({
       return;
     }
 
-    const response = await fetch(`/api/video/delete?videoId=${videoId}`, {
-      method: "DELETE",
-    });
+    const response = await apiClient.video.delete({ query: { videoId } });
 
-    if (response.ok) {
+    if (response.status === 200) {
       refresh();
       toast.success("Cap deleted successfully");
     } else {

@@ -1,63 +1,35 @@
-import { initContract } from "@ts-rest/core";
 import { z } from "zod";
-
-const c = initContract();
-
-const CHANGELOG = z.object({
-  metadata: z.object({
-    title: z.string(),
-    app: z.string(),
-    publishedAt: z.string(),
-    version: z.string(),
-    image: z.string().optional(),
-  }),
-  content: z.string(),
-  slug: z.number(),
-});
-
-const publicContract = c.router({
-  getChangelogPosts: {
-    method: "GET",
-    path: "/changelog",
-    responses: {
-      200: z.array(CHANGELOG),
-    },
-  },
-  getChangelogStatus: {
-    method: "GET",
-    path: "/changelog/status",
-    responses: {
-      200: z.object({ hasUpdate: z.boolean() }),
-    },
-  },
-});
-
-const protectedContract = c.router(
-  {
-    submitDesktopFeedback: {
-      method: "POST",
-      path: "/desktop/feedback",
-      contentType: "application/x-www-form-urlencoded",
-      body: z.object({ feedback: z.string() }),
-      responses: {
-        200: z.object({ success: z.boolean() }),
-      },
-    },
-    getUserPlan: {
-      method: "GET",
-      path: "/desktop/plan",
-      responses: {
-        200: z.object({ upgraded: z.boolean() }),
-      },
-    },
-  },
-  {
-    baseHeaders: z.object({ authorization: z.string().optional() }),
-    commonResponses: { 401: z.object({ error: z.string().or(z.boolean()) }) },
-  }
-);
+import desktop from "./desktop";
+import { c } from "./util";
 
 export const contract = c.router({
-  public: publicContract,
-  protected: protectedContract,
+  desktop,
+  video: c.router({
+    getTranscribeStatus: {
+      method: "GET",
+      path: "/video/transcribe/status",
+      query: z.object({ videoId: z.string() }),
+      responses: {
+        200: z.object({
+          transcriptionStatus: z
+            .custom<"PROCESSING" | "COMPLETE" | "ERROR">()
+            .nullable(),
+        }),
+      },
+    },
+    delete: {
+      method: "DELETE",
+      path: "/video/delete",
+      query: z.object({ videoId: z.string() }),
+      responses: { 200: z.unknown() },
+    },
+    getAnalytics: {
+      method: "GET",
+      path: "/video/analytics",
+      query: z.object({ videoId: z.string() }),
+      responses: {
+        200: z.object({ count: z.number() }),
+      },
+    },
+  }),
 });
