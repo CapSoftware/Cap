@@ -1,3 +1,5 @@
+// @ts-check
+
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +35,7 @@ async function main() {
   const binaryPath = path.join(releaseDir, releaseFile);
 
   await exec(
-    `dsymutil "${binaryPath}" -o "${targetDir.join(releaseFile)}.dSYM"`
+    `dsymutil "${binaryPath}" -o "${path.join(targetDir, releaseFile)}.dSYM"`
   );
   await exec(`strip "${binaryPath}"`);
 }
