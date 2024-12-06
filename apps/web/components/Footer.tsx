@@ -108,7 +108,7 @@ export const Footer = () => {
               </li>
               <li>
                 <a
-                  href="https://linkedin.com/company/capsoftware"
+                  href="https://www.linkedin.com/company/caprecorder/"
                   target="_blank"
                 >
                   LinkedIn
