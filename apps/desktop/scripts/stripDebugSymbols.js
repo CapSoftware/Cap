@@ -13,13 +13,13 @@ const targetDir = path.join(__dirname, "../../../target");
 
 async function main() {
   const dirs = [];
-  const releaseDir = path.join(targetDir, "release");
+  let releaseDir = path.join(targetDir, "release");
   const releaseFiles = await fs.readdir(releaseDir);
   let releaseFile = releaseFiles.find((f) => f.startsWith("Cap"));
   dirs.push(releaseDir);
 
   if (!releaseFile) {
-    const releaseDir = path.join(
+    releaseDir = path.join(
       targetDir,
       `${process.env.TAURI_ENV_TARGET_TRIPLE}/release`
     );
