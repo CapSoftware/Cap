@@ -6,8 +6,6 @@ import { promisify } from "node:util";
 
 const exec = promisify(execCb);
 
-console.log(process.env);
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -23,7 +21,7 @@ async function main() {
   if (!releaseFile) {
     const releaseDir = path.join(
       targetDir,
-      `release/${process.env.TAURI_ENV_TARGET_TRIPLE}`
+      `${process.env.TAURI_ENV_TARGET_TRIPLE}/release`
     );
     dirs.push(releaseDir);
     const releaseFiles = await fs.readdir(releaseDir);
