@@ -74,6 +74,12 @@ impl PlanarData for FFAudio {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum AudioInfoError {
+    #[error("Unsupported number of channels: {0}")]
+    ChannelLayout(u16),
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct AudioInfo {
     pub sample_format: Sample,
@@ -84,17 +90,24 @@ pub struct AudioInfo {
 }
 
 impl AudioInfo {
-    pub fn new(sample_format: Sample, sample_rate: u32, channel_count: u16) -> Self {
-        Self {
+    pub fn new(
+        sample_format: Sample,
+        sample_rate: u32,
+        channel_count: u16,
+    ) -> Result<Self, AudioInfoError> {
+        Self::channel_layout_raw(channel_count)
+            .ok_or(AudioInfoError::ChannelLayout(channel_count))?;
+
+        Ok(Self {
             sample_format,
             sample_rate,
             channels: channel_count.into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size: 1024,
-        }
+        })
     }
 
-    pub fn from_stream_config(config: &SupportedStreamConfig) -> Self {
+    pub fn from_stream_config(config: &SupportedStreamConfig) -> Result<Self, AudioInfoError> {
         let sample_format = ffmpeg_sample_format_for(config.sample_format()).unwrap();
         let buffer_size = match config.buffer_size() {
             SupportedBufferSize::Range { max, .. } => *max,
@@ -102,24 +115,42 @@ impl AudioInfo {
             SupportedBufferSize::Unknown => 1024,
         };
 
-        Self {
+        Self::channel_layout_raw(config.channels())
+            .ok_or(AudioInfoError::ChannelLayout(config.channels()))?;
+
+        Ok(Self {
             sample_format,
             sample_rate: config.sample_rate().0,
             channels: config.channels().into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size,
-        }
+        })
     }
 
-    pub fn from_decoder(decoder: &ffmpeg::codec::decoder::Audio) -> Self {
-        Self {
+    pub fn from_decoder(decoder: &ffmpeg::codec::decoder::Audio) -> Result<Self, AudioInfoError> {
+        Self::channel_layout_raw(decoder.channels())
+            .ok_or(AudioInfoError::ChannelLayout(decoder.channels()))?;
+
+        Ok(Self {
             sample_format: decoder.format(),
             sample_rate: decoder.rate(),
             // TODO: Use channel layout when we support more than just mono/stereo
             channels: usize::from(decoder.channels()),
             time_base: decoder.time_base(),
             buffer_size: decoder.frame_size(),
-        }
+        })
+    }
+
+    fn channel_layout_raw(channels: u16) -> Option<ChannelLayout> {
+        Some(match channels {
+            1 => ChannelLayout::MONO,
+            2 => ChannelLayout::STEREO,
+            _ => return None,
+        })
+    }
+
+    pub fn channel_layout(&self) -> ChannelLayout {
+        Self::channel_layout_raw(self.channels as u16).unwrap()
     }
 
     pub fn sample_size(&self) -> usize {
@@ -128,16 +159,6 @@ impl AudioInfo {
 
     pub fn rate(&self) -> i32 {
         self.sample_rate.try_into().unwrap()
-    }
-
-    pub fn channel_layout(&self) -> ChannelLayout {
-        // TODO: Something other than panic. Pretty much all mics I know are either mono or stereo though.
-        // Also need to test the audio data capture with a stereo mic at some point.
-        match self.channels {
-            1 => ChannelLayout::MONO,
-            2 => ChannelLayout::STEREO,
-            _ => panic!("Unsupported number of audio channels"),
-        }
     }
 
     pub fn empty_frame(&self, sample_count: usize) -> FFAudio {

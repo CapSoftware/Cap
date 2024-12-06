@@ -32,7 +32,9 @@ async function main() {
 
   const binaryPath = path.join(releaseDir, releaseFile);
 
-  await exec(`dsymutil "${binaryPath}" -o "${binaryPath}.dSYM"`);
+  await exec(
+    `dsymutil "${binaryPath}" -o "${targetDir.join(releaseFile)}.dSYM"`
+  );
   await exec(`strip "${binaryPath}"`);
 }
 

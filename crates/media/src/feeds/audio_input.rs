@@ -63,7 +63,7 @@ impl AudioInputFeed {
             })
             .unwrap();
 
-        let audio_info = AudioInfo::from_stream_config(&config);
+        let audio_info = AudioInfo::from_stream_config(&config)?;
         let (control_tx, control_rx) = flume::bounded(1);
 
         std::thread::spawn(|| start_capturing(device, config, control_rx));
@@ -146,7 +146,7 @@ impl AudioInputFeed {
 
         dbg!(&config);
 
-        self.audio_info = AudioInfo::from_stream_config(&config);
+        self.audio_info = AudioInfo::from_stream_config(&config)?;
 
         Ok(())
     }

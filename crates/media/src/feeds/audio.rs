@@ -36,7 +36,7 @@ impl AudioData {
         decoder.set_parameters(input_stream.parameters())?;
         decoder.set_packet_time_base(input_stream.time_base());
 
-        let input_info = AudioInfo::from_decoder(&decoder);
+        let input_info = AudioInfo::from_decoder(&decoder)?;
         let mut output_info = input_info;
         output_info.sample_format = Self::FORMAT;
 

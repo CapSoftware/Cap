@@ -40,13 +40,17 @@ use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::fs::File;
-use std::future::Future;
-use std::io::BufWriter;
-use std::str::FromStr;
 use std::{
-    collections::HashMap, io::BufReader, marker::PhantomData, path::PathBuf, process::Command,
+    collections::HashMap,
+    fs::File,
+    future::Future,
+    io::{BufReader, BufWriter},
+    marker::PhantomData,
+    path::PathBuf,
+    process::Command,
+    str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
@@ -128,7 +132,10 @@ impl App {
         }
     }
 
-    async fn set_start_recording_options(&mut self, new_options: RecordingOptions) {
+    async fn set_start_recording_options(
+        &mut self,
+        new_options: RecordingOptions,
+    ) -> Result<(), String> {
         let options = new_options.clone();
         sentry::configure_scope(move |scope| {
             let mut ctx = std::collections::BTreeMap::new();
@@ -175,15 +182,15 @@ impl App {
                         .await
                         .switch_cameras(camera_label)
                         .await
-                        .map_err(|error| eprintln!("{error}"))
-                        .ok();
+                        .map_err(|e| e.to_string())?;
                 } else {
-                    self.camera_feed = CameraFeed::init(camera_label, self.camera_tx.clone())
-                        .await
-                        .map(Mutex::new)
-                        .map(Arc::new)
-                        .map_err(|error| eprintln!("{error}"))
-                        .ok();
+                    self.camera_feed = Some(
+                        CameraFeed::init(camera_label, self.camera_tx.clone())
+                            .await
+                            .map(Mutex::new)
+                            .map(Arc::new)
+                            .map_err(|e| e.to_string())?,
+                    );
                 }
             }
             None => {
@@ -191,36 +198,132 @@ impl App {
             }
         }
 
-        match new_options.audio_input_name() {
-            Some(audio_input_name) => {
-                if let Some(audio_input_feed) = self.audio_input_feed.as_mut() {
-                    audio_input_feed
-                        .switch_input(audio_input_name)
+        self.audio_input_feed = match new_options.audio_input_name() {
+            Some(audio_input_name) => Some(match self.audio_input_feed.take() {
+                Some(mut feed) => {
+                    feed.switch_input(audio_input_name)
                         .await
-                        .map_err(|error| eprintln!("{error}"))
-                        .ok();
-                } else {
-                    self.audio_input_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
-                        .await
-                        .map_err(|error| eprintln!("{error}"))
-                    {
-                        feed.add_sender(self.audio_input_tx.clone()).await.unwrap();
-                        Some(feed)
-                    } else {
-                        None
-                    };
+                        .map_err(|e| e.to_string())?;
+
+                    feed
                 }
-            }
-            None => {
-                self.audio_input_feed = None;
-            }
-        }
+                None => {
+                    let feed = AudioInputFeed::init(audio_input_name)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    feed.add_sender(self.audio_input_tx.clone()).await.unwrap();
+
+                    feed
+                }
+            }),
+            None => None,
+        };
 
         self.start_recording_options = new_options;
 
         RecordingOptionsChanged.emit(&self.handle).ok();
+
+        Ok(())
     }
 }
+
+// #[tauri::command]
+// #[specta::specta]
+// async fn set_camera_input(
+//     app: AppHandle,
+//     state: MutableState<'_, App>,
+//     name: Option<String>,
+// ) -> Result<(), String> {
+//     let mut state = state.write().await;
+
+//     match CapWindowId::Camera.get(&app) {
+//         Some(window) if name.is_none() => {
+//             println!("closing camera window");
+//             window.close().ok();
+//         }
+//         None if name.is_some() => {
+//             println!("creating camera window");
+//             ShowCapWindow::Camera {
+//                 ws_port: state.camera_ws_port,
+//             }
+//             .show(&app)
+//             .ok();
+//         }
+//         _ => {}
+//     }
+
+//     match &name {
+//         Some(camera_label) => {
+//             if let Some(camera_feed) = state.camera_feed.as_ref() {
+//                 camera_feed
+//                     .lock()
+//                     .await
+//                     .switch_cameras(camera_label)
+//                     .await
+//                     .map_err(|error| eprintln!("{error}"))
+//                     .ok();
+//             } else {
+//                 state.camera_feed = CameraFeed::init(camera_label, state.camera_tx.clone())
+//                     .await
+//                     .map(Mutex::new)
+//                     .map(Arc::new)
+//                     .map_err(|error| eprintln!("{error}"))
+//                     .ok();
+//             }
+//         }
+//         None => {
+//             state.camera_feed = None;
+//         }
+//     }
+
+//     state.start_recording_options.camera_label = name;
+
+//     RecordingOptionsChanged.emit(&app).ok();
+
+//     Ok(())
+// }
+
+// #[tauri::command]
+// #[specta::specta]
+// async fn set_mic_input(
+//     app: AppHandle,
+//     state: MutableState<'_, App>,
+//     name: Option<String>,
+// ) -> Result<(), String> {
+//     let mut state = state.write().await;
+
+//     match &name {
+//         Some(audio_input_name) => {
+//             if let Some(audio_input_feed) = state.audio_input_feed.as_mut() {
+//                 audio_input_feed
+//                     .switch_input(audio_input_name)
+//                     .await
+//                     .map_err(|error| eprintln!("{error}"))
+//                     .ok();
+//             } else {
+//                 state.audio_input_feed = if let Ok(feed) = AudioInputFeed::init(audio_input_name)
+//                     .await
+//                     .map_err(|error| eprintln!("{error}"))
+//                 {
+//                     feed.add_sender(state.audio_input_tx.clone()).await.unwrap();
+//                     Some(feed)
+//                 } else {
+//                     None
+//                 };
+//             }
+//         }
+//         None => {
+//             state.audio_input_feed = None;
+//         }
+//     }
+
+//     state.start_recording_options.audio_input_name = name;
+
+//     RecordingOptionsChanged.emit(&app).ok();
+
+//     Ok(())
+// }
 
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
 pub struct RecordingOptionsChanged;
@@ -297,12 +400,12 @@ async fn get_recording_options(state: MutableState<'_, App>) -> Result<Recording
 async fn set_recording_options(
     state: MutableState<'_, App>,
     options: RecordingOptions,
-) -> Result<(), ()> {
+) -> Result<(), String> {
     state
         .write()
         .await
         .set_start_recording_options(options)
-        .await;
+        .await?;
 
     Ok(())
 }

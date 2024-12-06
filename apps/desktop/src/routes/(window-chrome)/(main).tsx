@@ -96,7 +96,7 @@ export default function () {
 
       if (!cameraWindowActive) {
         console.log("cameraWindow not found");
-        setOptions({
+        setOptions.mutate({
           ...options.data,
         });
       }
@@ -381,17 +381,12 @@ function CameraSelect(props: {
     }
     if (!props.options) return;
 
-    if (!item || !item.isCamera) {
-      props.setOptions({
-        ...props.options,
-        cameraLabel: null,
-      });
-    } else {
-      props.setOptions({
-        ...props.options,
-        cameraLabel: item.name,
-      });
-    }
+    let cameraLabel = !item || !item.isCamera ? null : item.name;
+
+    props.setOptions.mutate({
+      ...props.options,
+      cameraLabel,
+    });
   };
 
   const selectOptions = createMemo(() => [
@@ -430,7 +425,10 @@ function CameraSelect(props: {
           setOpen(isOpen);
         }}
       >
-        <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+        <KSelect.Trigger
+          disabled={props.setOptions.isPending}
+          class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
+        >
           <IconCapCamera class="text-gray-400 size-[1.25rem]" />
           <KSelect.Value<Option | null> class="flex-1 text-left truncate">
             {(state) => <span>{state.selectedOption()?.name}</span>}
@@ -441,7 +439,7 @@ function CameraSelect(props: {
             requestPermission={() => requestPermission("camera")}
             onClear={() => {
               if (!props.options) return;
-              props.setOptions({
+              props.setOptions.mutate({
                 ...props.options,
                 cameraLabel: null,
               });
@@ -454,7 +452,7 @@ function CameraSelect(props: {
             class={topLeftAnimateClasses}
           >
             <MenuItemList<typeof KSelect.Listbox>
-              class="max-h-36 overflow-y-auto"
+              class="max-h-32 overflow-y-auto"
               as={KSelect.Listbox}
             />
           </PopperContent>
@@ -497,7 +495,7 @@ function MicrophoneSelect(props: {
   const handleMicrophoneChange = async (item: Option | null) => {
     if (!item || !props.options) return;
 
-    props.setOptions({
+    props.setOptions.mutate({
       ...props.options,
       audioInputName: item.deviceId !== "" ? item.name : null,
     });
@@ -566,7 +564,10 @@ function MicrophoneSelect(props: {
           setOpen(isOpen);
         }}
       >
-        <KSelect.Trigger class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10">
+        <KSelect.Trigger
+          disabled={props.setOptions.isPending}
+          class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+        >
           <Show when={dbs()}>
             {(s) => (
               <div
@@ -596,7 +597,7 @@ function MicrophoneSelect(props: {
             requestPermission={() => requestPermission("microphone")}
             onClear={() => {
               if (!props.options) return;
-              props.setOptions({
+              props.setOptions.mutate({
                 ...props.options,
                 audioInputName: null,
               });
