@@ -12,12 +12,7 @@ export async function POST(request: NextRequest) {
   if (!user) {
     console.error("User not found");
 
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
 
   await db
@@ -62,16 +57,8 @@ export async function POST(request: NextRequest) {
   }
 
   // After updating user and creating space
-  return new Response(
-    JSON.stringify({
-      success: true,
-      message: "Onboarding completed successfully",
-    }),
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    }
+  return Response.json(
+    { success: true, message: "Onboarding completed successfully" },
+    { status: 200 }
   );
 }

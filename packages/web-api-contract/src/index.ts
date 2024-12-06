@@ -1,136 +1,35 @@
-import { initContract } from "@ts-rest/core";
 import { z } from "zod";
-
-const c = initContract();
-
-const CHANGELOG = z.object({
-  metadata: z.object({
-    title: z.string(),
-    app: z.string(),
-    publishedAt: z.string(),
-    version: z.string(),
-    image: z.string().optional(),
-  }),
-  content: z.string(),
-  slug: z.number(),
-});
-
-const publicContract = c.router({
-  getChangelogPosts: {
-    method: "GET",
-    path: "/changelog",
-    query: z.object({
-      origin: z.string(),
-    }),
-    responses: {
-      200: z.array(
-        z.object({ content: z.string() }).and(CHANGELOG.shape.metadata)
-      ),
-    },
-  },
-  getChangelogStatus: {
-    method: "GET",
-    path: "/changelog/status",
-    query: z.object({
-      version: z.string(),
-    }),
-    responses: {
-      200: z.object({ hasUpdate: z.boolean() }),
-    },
-  },
-});
-
-const protectedContract = c.router(
-  {
-    submitDesktopFeedback: {
-      method: "POST",
-      path: "/desktop/feedback",
-      contentType: "application/x-www-form-urlencoded",
-      body: z.object({ feedback: z.string() }),
-      responses: {
-        200: z.object({ success: z.boolean() }),
-      },
-    },
-    getUserPlan: {
-      method: "GET",
-      path: "/desktop/plan",
-      responses: {
-        200: z.object({ upgraded: z.boolean() }),
-      },
-    },
-    getS3Config: {
-      method: "GET",
-      path: "/desktop/s3/config/get",
-      responses: {
-        200: z.object({
-          config: z.custom<{
-            provider: string;
-            accessKeyId: string | null;
-            secretAccessKey: string | null;
-            endpoint: string | null;
-            bucketName: string | null;
-            region: string | null;
-          }>(),
-        }),
-      },
-    },
-    setS3Config: {
-      method: "POST",
-      path: "/desktop/s3/config",
-      responses: {
-        200: z.object({ success: z.literal(true) }),
-      },
-      body: z.object({
-        provider: z.string(),
-        accessKeyId: z.string(),
-        secretAccessKey: z.string(),
-        endpoint: z.string(),
-        bucketName: z.string(),
-        region: z.string(),
-      }),
-    },
-    deleteS3Config: {
-      method: "DELETE",
-      path: "/dekstop/s3/config/delete",
-      responses: { 200: z.object({ success: z.literal(true) }) },
-    },
-    testS3Config: {
-      method: "POST",
-      path: "/desktop/s3/config/test",
-      body: z.object({
-        provider: z.string(),
-        accessKeyId: z.string(),
-        secretAccessKey: z.string(),
-        endpoint: z.string(),
-        bucketName: z.string(),
-        region: z.string(),
-      }),
-      responses: { 200: z.object({ success: z.literal(true) }) },
-    },
-    getProSubscribeURL: {
-      method: "POST",
-      path: "/desktop/subscribe",
-      body: z.object({ priceId: z.string() }),
-      responses: {
-        200: z.object({ url: z.string() }),
-        400: z.object({
-          error: z.literal(true),
-          subscription: z.literal(true).optional(),
-        }),
-        401: z.object({
-          error: z.literal(true),
-          auth: z.literal(false),
-        }),
-      },
-    },
-  },
-  {
-    baseHeaders: z.object({ authorization: z.string() }),
-    commonResponses: { 401: z.object({ error: z.string().or(z.boolean()) }) },
-  }
-);
+import desktop from "./desktop";
+import { c } from "./util";
 
 export const contract = c.router({
-  ...publicContract,
-  ...protectedContract,
+  desktop,
+  video: c.router({
+    getTranscribeStatus: {
+      method: "GET",
+      path: "/video/transcribe/status",
+      query: z.object({ videoId: z.string() }),
+      responses: {
+        200: z.object({
+          transcriptionStatus: z
+            .custom<"PROCESSING" | "COMPLETE" | "ERROR">()
+            .nullable(),
+        }),
+      },
+    },
+    delete: {
+      method: "DELETE",
+      path: "/video/delete",
+      query: z.object({ videoId: z.string() }),
+      responses: { 200: z.unknown() },
+    },
+    getAnalytics: {
+      method: "GET",
+      path: "/video/analytics",
+      query: z.object({ videoId: z.string() }),
+      responses: {
+        200: z.object({ count: z.number() }),
+      },
+    },
+  }),
 });

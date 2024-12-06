@@ -5,7 +5,7 @@ import { action, useAction, useSubmission } from "@solidjs/router";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 const sendFeedbackAction = action(async (feedback: string) => {
-  const response = await apiClient.submitDesktopFeedback({
+  const response = await apiClient.desktop.submitFeedback({
     body: { feedback },
     headers: await protectedHeaders(),
   });

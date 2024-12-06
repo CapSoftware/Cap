@@ -1,4 +1,8 @@
-import { createQuery, queryOptions } from "@tanstack/solid-query";
+import {
+  createMutation,
+  createQuery,
+  queryOptions,
+} from "@tanstack/solid-query";
 
 import { commands, RecordingOptions } from "./tauri";
 import { createQueryInvalidate } from "./events";
@@ -76,16 +80,19 @@ export function createOptionsQuery() {
     { name: "recordingOptionsQuery" }
   );
 
-  const setOptions = (newOptions: RecordingOptions) => {
-    commands.setRecordingOptions(newOptions);
-    const { captureTarget: _, ...partialOptions } = newOptions;
-    setState(partialOptions);
-  };
+  const setOptions = createMutation(() => ({
+    mutationFn: async (newOptions: RecordingOptions) => {
+      await commands.setRecordingOptions(newOptions);
+      const { captureTarget: _, ...partialOptions } = newOptions;
+      setState(partialOptions);
+    },
+  }));
 
   const options = createQuery(() => ({
     ...getOptions,
     select: (data) => {
-      return { ...data, ...state };
+      setState(data);
+      return { ...state, ...data };
     },
   }));
 

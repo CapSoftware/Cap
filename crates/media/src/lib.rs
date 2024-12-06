@@ -4,6 +4,7 @@
 //! as well as implementations of pipeline stages for individual tasks (encoding/decoding,
 //! editing frames, composition, muxing, etc).
 
+use data::AudioInfoError;
 use thiserror::Error;
 
 pub mod data;
@@ -51,4 +52,7 @@ pub enum MediaError {
 
     #[error("Could not find a suitable {0} stream in this file")]
     MissingMedia(&'static str),
+
+    #[error("AudioInfo: {0}")]
+    AudioInfoError(#[from] AudioInfoError),
 }

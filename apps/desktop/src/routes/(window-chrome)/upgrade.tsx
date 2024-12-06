@@ -40,7 +40,7 @@ export default function Page() {
         return;
       }
 
-      const response = await apiClient.getProSubscribeURL({
+      const response = await apiClient.desktop.getProSubscribeURL({
         body: { priceId: planId },
         headers: await protectedHeaders(),
       });
