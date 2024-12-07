@@ -5,7 +5,8 @@
     "dev": "dotenv -e ../../.env -- tauri dev",
     "localdev": "dotenv -e ../../.env -- vinxi dev --port 3001",
     "build": "vinxi build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:desktop": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@cap/database": "workspace:*",
