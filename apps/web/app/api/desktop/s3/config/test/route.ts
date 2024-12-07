@@ -34,10 +34,11 @@ export async function POST(request: NextRequest) {
 
     const data = await request.json();
 
-    // Create an AbortController with timeout
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, TIMEOUT_MS);
+
     const s3Client = new S3Client({
       endpoint: data.endpoint,
       region: data.region,
@@ -45,14 +46,12 @@ export async function POST(request: NextRequest) {
         accessKeyId: data.accessKeyId,
         secretAccessKey: data.secretAccessKey,
       },
-      forcePathStyle: true,
       requestHandler: {
         abortSignal: controller.signal
       }
     });
 
     try {
-      // Test the connection by trying to access the bucket
       await s3Client.send(
         new HeadBucketCommand({
           Bucket: data.bucketName,
@@ -77,13 +76,16 @@ export async function POST(request: NextRequest) {
           errorMessage = "Invalid Secret Access Key";
         } else if (error.name === "AccessDenied") {
           errorMessage = "Access denied. Please check your credentials and bucket permissions.";
+        } else if ((error as any).$metadata?.httpStatusCode === 301) {
+          errorMessage = "Received 301 redirect. This usually means the endpoint URL is incorrect or the bucket is in a different region.";
         }
       }
-
+      
       return new Response(
         JSON.stringify({ 
           error: errorMessage,
-          details: error instanceof Error ? error.message : String(error)
+          details: error instanceof Error ? error.message : String(error),
+          metadata: (error as any)?.$metadata
         }),
         {
           status: 500,
@@ -102,11 +104,11 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("Error testing S3 config:", error);
     return new Response(
       JSON.stringify({ 
         error: "Failed to connect to S3",
-        details: error instanceof Error ? error.message : String(error)
+        details: error instanceof Error ? error.message : String(error),
+        metadata: (error as any)?.$metadata
       }),
       {
         status: 500,
@@ -129,4 +131,4 @@ export async function OPTIONS(request: NextRequest) {
       "Access-Control-Allow-Credentials": "true",
     },
   });
-} 
+}
