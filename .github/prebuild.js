@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { exec as execCb } from "node:child_process";
 import { env } from "node:process";
 import { promisify } from "node:util";
+import { getWIXCompatibleAppVersion } from "../apps/desktop/scripts/prepareSidecarsAndConfigs";
 
 const exec = promisify(execCb);
 const signId = env.APPLE_SIGNING_IDENTITY || "-";
@@ -90,6 +91,11 @@ rustflags = [
               (f) =>
                 f.endsWith(".dll") && (f.startsWith("av") || f.startsWith("sw"))
             ),
+            windows: {
+              wix: {
+                version: await getWIXCompatibleAppVersion(path.join(srcTauri, "Cargo.toml"))
+              }
+            }
           },
         },
         null,
