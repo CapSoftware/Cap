@@ -14,7 +14,6 @@ const __dirname = path.dirname(__filename);
 const targetDir = path.join(__dirname, "../../../target");
 
 async function main() {
-  if (process.platform === "win32") return;
   const dirs = [];
   let releaseDir = path.join(targetDir, "release");
   const releaseFiles = await fs.readdir(releaseDir);
