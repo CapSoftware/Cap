@@ -149,14 +149,17 @@ async sendFeedbackRequest(feedback: string) : Promise<null> {
 async positionTrafficLights(controlsInset: [number, number] | null) : Promise<void> {
     await TAURI_INVOKE("position_traffic_lights", { controlsInset });
 },
+async setTheme(theme: AppTheme) : Promise<void> {
+    await TAURI_INVOKE("set_theme", { theme });
+},
 async globalMessageDialog(message: string) : Promise<void> {
     await TAURI_INVOKE("global_message_dialog", { message });
 },
 async showWindow(window: ShowCapWindow) : Promise<void> {
     await TAURI_INVOKE("show_window", { window });
 },
-async setWindowTheme(dark: boolean) : Promise<void> {
-    await TAURI_INVOKE("set_window_theme", { dark });
+async writeClipboardString(text: string) : Promise<null> {
+    return await TAURI_INVOKE("write_clipboard_string", { text });
 }
 }
 
@@ -209,6 +212,7 @@ uploadProgress: "upload-progress"
 
 /** user-defined types **/
 
+export type AppTheme = "system" | "light" | "dark"
 export type AspectRatio = "wide" | "vertical" | "square" | "classic" | "tall"
 export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
@@ -234,7 +238,7 @@ export type CursorType = "pointer" | "circle"
 export type Display = { path: string }
 export type EditorStateChanged = { playhead_position: number }
 export type Flags = { recordMouse: boolean; split: boolean; pauseResume: boolean; zoom: boolean; customS3: boolean }
-export type GeneralSettingsStore = { uploadIndividualFiles?: boolean; openEditorAfterRecording?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; darkMode?: boolean }
+export type GeneralSettingsStore = { uploadIndividualFiles?: boolean; openEditorAfterRecording?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
 export type HotkeyAction = "startRecording" | "stopRecording" | "restartRecording" | "takeScreenshot"
 export type HotkeysConfiguration = { show: boolean }

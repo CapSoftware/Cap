@@ -122,7 +122,7 @@ export default function Page() {
     <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100">
       <div class="space-y-[0.375rem] flex-1">
         <IconCapLogo class="size-[3rem]" />
-        <h1 class="text-[1rem] font-[700]">Sign in to Cap</h1>
+        <h1 class="text-[1rem] font-[700] text-black-transparent-80">Sign in to Cap</h1>
         <p class="text-gray-400">Beautiful screen recordings, owned by you.</p>
       </div>
       {submission.pending ? (

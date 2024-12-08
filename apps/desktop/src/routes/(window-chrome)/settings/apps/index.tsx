@@ -1,13 +1,14 @@
 import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import { For, createResource } from "solid-js";
-import "@total-typescript/ts-reset/filter-boolean";
+import { checkIsUpgradedAndUpdate } from "~/utils/plans";
 
+import "@total-typescript/ts-reset/filter-boolean";
 import { commands } from "~/utils/tauri";
 
 export default function AppsTab() {
   const navigate = useNavigate();
-  const [isUpgraded] = createResource(() => commands.checkUpgradedAndUpdate());
+  const [isUpgraded] = createResource(checkIsUpgradedAndUpdate);
 
   const apps = [
     window.FLAGS.customS3 && {

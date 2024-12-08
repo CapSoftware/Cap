@@ -257,7 +257,7 @@ fn create_screen_capture(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        ScreenCaptureSource::<AVFrameCapture>::init(
+        ScreenCaptureSource::<cap_media::sources::AVFrameCapture>::init(
             dbg!(&recording_options.capture_target),
             None,
             None,

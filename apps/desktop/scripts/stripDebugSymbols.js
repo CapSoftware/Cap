@@ -34,10 +34,16 @@ async function main() {
 
   const binaryPath = path.join(releaseDir, releaseFile);
 
-  await exec(
-    `dsymutil "${binaryPath}" -o "${path.join(targetDir, releaseFile)}.dSYM"`
-  );
-  await exec(`strip "${binaryPath}"`);
+  if (process.platform === "darwin") {
+    await exec(
+      `dsymutil "${binaryPath}" -o "${path.join(targetDir, releaseFile)}.dSYM"`
+    );
+    await exec(`strip "${binaryPath}"`);
+  } else if (process.platform === "win32") {
+    // TODO
+  } else {
+    throw new Error("Unsupported platform!");
+  }
 }
 
 main();

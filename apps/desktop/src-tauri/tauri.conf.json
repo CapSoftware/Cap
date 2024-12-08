@@ -1,12 +1,12 @@
 {
-  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "Cap - Development",
   "identifier": "so.cap.desktop.dev",
   "mainBinaryName": "Cap - Development",
   "build": {
-    "beforeDevCommand": "node scripts/prepareSidecars.js && pnpm localdev",
+    "beforeDevCommand": "pnpm localdev",
     "devUrl": "http://localhost:3001",
-    "beforeBuildCommand": "node scripts/prepareSidecars.js && pnpm turbo build --filter @cap/desktop",
+    "beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
     "beforeBundleCommand": "node scripts/stripDebugSymbols.js",
     "frontendDist": "../.output/public"
   },
@@ -38,7 +38,7 @@
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.icns",
+      "icons/macos/icon.icns",
       "icons/icon.ico"
     ],
     "externalBin": ["../../../target/binaries/ffmpeg"],
@@ -62,7 +62,9 @@
         "installerIcon": "icons/icon.ico"
       },
       "wix": {
-        "bannerPath": "assets/wix-banner.bmp"
+        "upgradeCode": "79f4309d-ca23-54df-b6f9-826a1d783676",
+        "bannerPath": "assets/wix-banner.bmp",
+        "dialogImagePath": "assets/wix-dialog.bmp"
       }
     }
   }

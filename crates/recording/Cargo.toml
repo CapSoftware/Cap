@@ -24,3 +24,10 @@ either = "1.13.0"
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26.0"
 objc = "0.2.7"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_WindowsAndMessaging",
+] }
