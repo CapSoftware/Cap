@@ -1,12 +1,12 @@
 {
-  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "Cap - Development",
   "identifier": "so.cap.desktop.dev",
   "mainBinaryName": "Cap - Development",
   "build": {
-    "beforeDevCommand": "node scripts/prepareSidecars.js && pnpm localdev",
+    "beforeDevCommand": "pnpm localdev",
     "devUrl": "http://localhost:3001",
-    "beforeBuildCommand": "node scripts/prepareSidecars.js && pnpm turbo build --filter @cap/desktop",
+    "beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
     "beforeBundleCommand": "node scripts/stripDebugSymbols.js",
     "frontendDist": "../.output/public"
   },
@@ -62,6 +62,7 @@
         "installerIcon": "icons/icon.ico"
       },
       "wix": {
+        "upgradeCode": "so.cap.desktop.dev",
         "bannerPath": "assets/wix-banner.bmp"
       }
     }
