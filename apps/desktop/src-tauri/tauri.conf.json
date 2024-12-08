@@ -62,8 +62,9 @@
         "installerIcon": "icons/icon.ico"
       },
       "wix": {
-        "upgradeCode": "so.cap.desktop.dev",
-        "bannerPath": "assets/wix-banner.bmp"
+        "upgradeCode": "79f4309d-ca23-54df-b6f9-826a1d783676",
+        "bannerPath": "assets/wix-banner.bmp",
+        "dialogImagePath": "assets/wix-dialog.bmp"
       }
     }
   }

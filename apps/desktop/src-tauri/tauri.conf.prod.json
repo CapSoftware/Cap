@@ -17,7 +17,7 @@
     },
     "windows": {
       "wix": {
-        "upgradeCode": "so.cap.desktop"
+        "upgradeCode": "79f4309d-ca23-54df-b6f9-826a1d783676"
       }
     }
   }

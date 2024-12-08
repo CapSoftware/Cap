@@ -150,7 +150,7 @@ async function prepareFfmpegSidecar() {
  * @param {string} cargoFilePath 
  * @returns {Promise<string>}
  */
-export async function getWIXCompatibleAppVersion(cargoFilePath) {
+async function semverToWIXCompatibleVersion(cargoFilePath) {
   const config = await fs.readFile(cargoFilePath, "utf-8");
   const match = /version\s*=\s*"([\w.-]+)"/.exec(config);
   if (!match) throw new Error(
@@ -207,7 +207,7 @@ export async function createTauriPlatformConfigs(platform, configOptions = undef
         },
         windows: {
           wix: {
-            version: await getWIXCompatibleAppVersion(path.join(srcTauri, "Cargo.toml"))
+            version: await semverToWIXCompatibleVersion(path.join(srcTauri, "Cargo.toml"))
           }
         },
       },
@@ -228,7 +228,7 @@ export async function createTauriPlatformConfigs(platform, configOptions = undef
 }
 
 async function main() {
-  console.log("Preparing sidecars and configs...");
+  console.log("--- Preparing sidecars and configs...");
   const targetTripleEnv = process.env.TARGET_TRIPLE || rsTargetTriple;
   const binaries = FFMPEG_BINARIES[targetTripleEnv];
   if (!binaries) {
@@ -239,6 +239,7 @@ async function main() {
 
   await prepareFfmpegSidecar();
   await createTauriPlatformConfigs(process.platform);
+  console.log("--- Preparation finished");
 }
 
 main().catch((err) => {
