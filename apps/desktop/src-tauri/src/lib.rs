@@ -1654,7 +1654,8 @@ async fn seek_to(app: AppHandle, video_id: String, frame_number: u32) {
         .await;
 }
 
-#[tauri::command]
+// keep this async otherwise opening windows may hang on windows
+#[tauri::command(async)]
 #[specta::specta]
 fn show_window(app: AppHandle, window: ShowCapWindow) {
     window.show(&app).ok();
