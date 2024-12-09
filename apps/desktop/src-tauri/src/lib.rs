@@ -31,6 +31,7 @@ use cap_project::{Content, ProjectConfiguration, RecordingMeta, SharingMeta};
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
+use cap_export::is_valid_mp4;
 use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
 use notifications::NotificationType;
@@ -633,39 +634,118 @@ async fn get_rendered_video_path(app: AppHandle, video_id: String) -> Result<Pat
 async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(), String> {
     println!("Attempting to copy file from {} to {}", src, dst);
 
-    // Determine if this is a screenshot based on the path
     let is_screenshot = src.contains("screenshots/");
 
-    match tokio::fs::copy(&src, &dst).await {
-        Ok(bytes) => {
-            println!(
-                "Successfully copied {} bytes from {} to {}",
-                bytes, src, dst
-            );
-            // Send appropriate success notification
-            notifications::send_notification(
-                &app,
-                if is_screenshot {
-                    notifications::NotificationType::ScreenshotSaved
-                } else {
-                    notifications::NotificationType::VideoSaved
-                },
-            );
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Failed to copy file from {} to {}: {}", src, dst, e);
-            notifications::send_notification(
-                &app,
-                if is_screenshot {
-                    notifications::NotificationType::ScreenshotSaveFailed
-                } else {
-                    notifications::NotificationType::VideoSaveFailed
-                },
-            );
-            Err(e.to_string())
+    let src_path = std::path::Path::new(&src);
+    if !src_path.exists() {
+        return Err(format!("Source file {} does not exist", src));
+    }
+
+    if !is_screenshot {
+        if !is_valid_mp4(src_path) {
+            // Wait for up to 10 seconds for the file to become valid
+            let mut attempts = 0;
+            while attempts < 10 {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if is_valid_mp4(src_path) {
+                    break;
+                }
+                attempts += 1;
+            }
+            if attempts == 10 {
+                return Err("Source video file is not a valid MP4".to_string());
+            }
         }
     }
+
+    if let Some(parent) = std::path::Path::new(&dst).parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("Failed to create target directory: {}", e))?;
+    }
+
+    let mut attempts = 0;
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut last_error = None;
+
+    while attempts < MAX_ATTEMPTS {
+        match tokio::fs::copy(&src, &dst).await {
+            Ok(bytes) => {
+                let src_size = match tokio::fs::metadata(&src).await {
+                    Ok(metadata) => metadata.len(),
+                    Err(e) => {
+                        last_error = Some(format!("Failed to get source file metadata: {}", e));
+                        attempts += 1;
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                };
+
+                if bytes != src_size {
+                    last_error = Some(format!(
+                        "File copy verification failed: copied {} bytes but source is {} bytes",
+                        bytes, src_size
+                    ));
+                    let _ = tokio::fs::remove_file(&dst).await;
+                    attempts += 1;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+
+                if !is_screenshot && !is_valid_mp4(std::path::Path::new(&dst)) {
+                    last_error = Some("Destination file is not a valid MP4".to_string());
+                    // Delete the invalid file
+                    let _ = tokio::fs::remove_file(&dst).await;
+                    attempts += 1;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+
+                println!(
+                    "Successfully copied {} bytes from {} to {}",
+                    bytes, src, dst
+                );
+
+                notifications::send_notification(
+                    &app,
+                    if is_screenshot {
+                        notifications::NotificationType::ScreenshotSaved
+                    } else {
+                        notifications::NotificationType::VideoSaved
+                    },
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                last_error = Some(e.to_string());
+                attempts += 1;
+                if attempts < MAX_ATTEMPTS {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    continue;
+                }
+            }
+        }
+    }
+
+    // If we get here, all attempts failed
+    eprintln!(
+        "Failed to copy file from {} to {} after {} attempts. Last error: {}",
+        src,
+        dst,
+        MAX_ATTEMPTS,
+        last_error.as_ref().unwrap()
+    );
+
+    notifications::send_notification(
+        &app,
+        if is_screenshot {
+            notifications::NotificationType::ScreenshotSaveFailed
+        } else {
+            notifications::NotificationType::VideoSaveFailed
+        },
+    );
+
+    Err(last_error.unwrap_or_else(|| "Maximum retry attempts exceeded".to_string()))
 }
 
 #[tauri::command]
