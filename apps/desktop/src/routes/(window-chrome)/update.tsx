@@ -17,7 +17,13 @@ export default function () {
 
   return (
     <div class="flex flex-col justify-center flex-1 items-center gap-[3rem] p-[1rem] text-[0.875rem] font-[400] h-full">
-      <Show when={update()} fallback="No update available" keyed>
+      <Show
+        when={update()}
+        fallback={
+          <span class="text-[--text-tertiary]">No update available</span>
+        }
+        keyed
+      >
         {(update) => {
           type UpdateStatus =
             | { type: "downloading"; progress: number; contentLength?: number }
@@ -59,10 +65,14 @@ export default function () {
 
           return (
             <div>
-              <Switch fallback={<IconCapLogo class="animate-spin size-4" />}>
+              <Switch
+                fallback={
+                  <IconCapLogo class="animate-spin size-4 text-[--text-primary]" />
+                }
+              >
                 <Match when={updateStatus()?.type === "done"}>
                   <div class="flex flex-col gap-4">
-                    <p>
+                    <p class="text-[--text-tertiary]">
                       Update has been installed. Restart Cap to finish updating.
                     </p>
                     <div class="flex flex-row">
@@ -83,7 +93,9 @@ export default function () {
                 >
                   {(status) => (
                     <>
-                      <h1>Installing Update</h1>
+                      <h1 class="text-[--text-primary] mb-4">
+                        Installing Update
+                      </h1>
 
                       <div class="w-full bg-gray-200 rounded-full h-2.5">
                         <div
