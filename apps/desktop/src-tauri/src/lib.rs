@@ -1944,28 +1944,31 @@ pub async fn run() {
                 });
             }
 
-            app.manage(Arc::new(RwLock::new(App {
-                handle: app.clone(),
-                camera_tx,
-                camera_ws_port,
-                camera_feed: None,
-                audio_input_tx,
-                audio_input_feed: None,
-                start_recording_options: RecordingOptions {
-                    capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
-                        id: 1,
-                        name: "Default".to_string(),
-                    }),
-                    camera_label: None,
-                    audio_input_name: None,
-                },
-                current_recording: None,
-                pre_created_video: None,
-            })));
+            // These MUST be called before anything else!
+            {
+                app.manage(Arc::new(RwLock::new(App {
+                    handle: app.clone(),
+                    camera_tx,
+                    camera_ws_port,
+                    camera_feed: None,
+                    audio_input_tx,
+                    audio_input_feed: None,
+                    start_recording_options: RecordingOptions {
+                        capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
+                            id: 1,
+                            name: "Default".to_string(),
+                        }),
+                        camera_label: None,
+                        audio_input_name: None,
+                    },
+                    current_recording: None,
+                    pre_created_video: None,
+                })));
 
-            app.manage(Arc::new(RwLock::new(
-                ClipboardContext::new().expect("Failed to create clipboard context"),
-            )));
+                app.manage(Arc::new(RwLock::new(
+                    ClipboardContext::new().expect("Failed to create clipboard context"),
+                )));
+            }
 
             // Add this line to check notification permissions on startup
             tokio::spawn(check_notification_permissions(app.clone()));
