@@ -91,7 +91,6 @@ async function prepareFfmpegSidecar() {
       const progress = ((downloadedBytes / totalBytes) * 100).toFixed(2);
       process.stdout.write(`\rDownloading: ${progress}%`);
     }
-
     console.log("\nDownload complete.");
     const archive = Buffer.concat(archiveBuffer);
     await fs.writeFile(ffmpegDownloadPath, archive);
