@@ -144,7 +144,6 @@ impl ShowCapWindow {
                 .resizable(false)
                 .maximized(false)
                 .maximizable(false)
-                .maximized(false)
                 .build()?,
             Self::Settings { page } => self
                 .window_builder(

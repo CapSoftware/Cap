@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { exec as execCb, execSync } from "node:child_process";
 import { promisify } from "node:util";
-import { platform } from "node:os";
 
 const exec = promisify(execCb);
 
@@ -67,8 +66,8 @@ async function prepareFfmpegSidecar() {
   // Skip downloading if the archive already exists
   if (!(await exists(ffmpegDownloadPath))) {
     if (await exists(ffmpegUnzippedPath)) return;
-    console.log("Downloading ffmpeg archive...");
-    console.log(`ffmpeg from: ${binaries.url}`);
+    console.log(`Couldn't locate "ffmpeg-download.zip" in "${ffmpegDownloadPath}"`);
+    console.log(`Downloading from: ${binaries.url}`);
     await fs.mkdir(binariesDir, { recursive: true });
 
     const response = await fetch(binaries.url);
@@ -243,6 +242,8 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("Error during sidecar preparation:", err);
+  console.error("--- Preparation Failed");
+  console.error(err);
+  console.error("---");
   process.exit(1);
 });
