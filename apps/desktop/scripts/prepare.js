@@ -17,7 +17,8 @@ const ffmpegUnzippedPath = path.join(binariesDir, "ffmpeg-unzipped");
 const isWindows = process.platform === "win32";
 const fileExtension = isWindows ? ".exe" : "";
 const rustInfo = execSync("rustc -vV");
-const rsTargetTriple = /host: (\S+)/.exec(rustInfo.toString())?.[1];
+const rsTargetTriple =
+  process.env.TARGET_TRIPLE || /host: (\S+)/.exec(rustInfo.toString())?.[1];
 
 const FFMPEG_BINARIES = {
   "aarch64-apple-darwin": {
@@ -36,7 +37,7 @@ const FFMPEG_BINARIES = {
 };
 
 /**
- * @param {string} filePath 
+ * @param {string} filePath
  * @returns {Promise<boolean>}
  */
 async function exists(filePath) {
@@ -47,8 +48,8 @@ async function exists(filePath) {
 }
 
 /**
- * @param {string} targetPath 
- * @param {string} outputPath 
+ * @param {string} targetPath
+ * @param {string} outputPath
  */
 async function unzip(targetPath, outputPath) {
   console.log(`unzipping \"${targetPath}\" --> \"${outputPath}\"`);
@@ -66,15 +67,19 @@ async function prepareFfmpegSidecar() {
   // Skip downloading if the archive already exists
   if (!(await exists(ffmpegDownloadPath))) {
     if (await exists(ffmpegUnzippedPath)) return;
-    console.log(`Couldn't locate "ffmpeg-download.zip" in "${ffmpegDownloadPath}"`);
+    console.log(
+      `Couldn't locate "ffmpeg-download.zip" in "${ffmpegDownloadPath}"`
+    );
     console.log(`Downloading from: ${binaries.url}`);
     await fs.mkdir(binariesDir, { recursive: true });
 
     const response = await fetch(binaries.url);
-    if (!response.ok || !response.body) throw new Error(`Failed to download: ${response.statusText}`);
+    if (!response.ok || !response.body)
+      throw new Error(`Failed to download: ${response.statusText}`);
 
     const contentLength = response.headers.get("content-length");
-    if (!contentLength) throw new Error("Unable to determine file size for progress reporting.");
+    if (!contentLength)
+      throw new Error("Unable to determine file size for progress reporting.");
 
     const totalBytes = parseInt(contentLength, 10);
     let downloadedBytes = 0;
@@ -110,7 +115,9 @@ async function prepareFfmpegSidecar() {
     const stat = await fs.stat(nestedPath);
 
     if (stat.isDirectory()) {
-      console.log(`Detected nested folder '${unzippedContents[0]}'. Moving contents to root.`);
+      console.log(
+        `Detected nested folder '${unzippedContents[0]}'. Moving contents to root.`
+      );
       const nestedContents = await fs.readdir(nestedPath);
 
       for (const entry of nestedContents) {
@@ -130,7 +137,7 @@ async function prepareFfmpegSidecar() {
   if (await exists(finalDestinationPath)) {
     console.log(`Using ffmpeg sidecar: ${ffmpegSidecarName}`);
     return;
-  };
+  }
 
   console.log(`Copying ffmpeg binary to '${ffmpegSidecarName}'...`);
 
@@ -143,40 +150,50 @@ async function prepareFfmpegSidecar() {
 /**
  * Creates a Microsoft Windows Installer (TM) compatible version from the provided crate's semver version.
  * `major.minor.patch.build`
- * 
+ *
  * @see {@link https://tauri.app/reference/config/#version-1}
- * @param {string} cargoFilePath 
+ * @param {string} cargoFilePath
  * @returns {Promise<string>}
  */
 async function semverToWIXCompatibleVersion(cargoFilePath) {
   const config = await fs.readFile(cargoFilePath, "utf-8");
   const match = /version\s*=\s*"([\w.-]+)"/.exec(config);
-  if (!match) throw new Error(
-    "Failed to extract version from \"Cargo.toml\". Have you removed the main crate version by accident?"
-  );
+  if (!match)
+    throw new Error(
+      'Failed to extract version from "Cargo.toml". Have you removed the main crate version by accident?'
+    );
 
   const ver = match[1];
-  const [core, buildOrPrerelease] = ver.includes('+') ? ver.split('+') : ver.split('-');
+  const [core, buildOrPrerelease] = ver.includes("+")
+    ? ver.split("+")
+    : ver.split("-");
   const [major, minor, patch] = core.split(".");
   let build = 0;
   if (buildOrPrerelease) {
     const numMatch = buildOrPrerelease.match(/\d+$/);
     build = numMatch ? parseInt(numMatch[0]) : 0;
   }
-  const wixVersion = `${major}.${minor}.${patch}${build === 0 ? "" : `.${build}`}`;
-  if (wixVersion !== ver) console.log(`Using wix-compatible version ${ver} --> ${wixVersion}`);
+  const wixVersion = `${major}.${minor}.${patch}${
+    build === 0 ? "" : `.${build}`
+  }`;
+  if (wixVersion !== ver)
+    console.log(`Using wix-compatible version ${ver} --> ${wixVersion}`);
   return wixVersion;
 }
 /**
  * Deeply merges two objects
- * 
+ *
  * @param {Object} target
  * @param {Object} source
  * @returns {Object}
  */
 function deepMerge(target, source) {
   for (const key of Object.keys(source)) {
-    if (source[key] instanceof Object && key in target && target[key] instanceof Object) {
+    if (
+      source[key] instanceof Object &&
+      key in target &&
+      target[key] instanceof Object
+    ) {
       Object.assign(source[key], deepMerge(target[key], source[key]));
     }
   }
@@ -185,11 +202,14 @@ function deepMerge(target, source) {
 
 /**
  * Writes platform-specific tauri configs
- * 
- * @param {NodeJS.Platform} platform 
+ *
+ * @param {NodeJS.Platform} platform
  * @param {{} | undefined} configOptions
  */
-export async function createTauriPlatformConfigs(platform, configOptions = undefined) {
+export async function createTauriPlatformConfigs(
+  platform,
+  configOptions = undefined
+) {
   const srcTauri = path.join(__dirname, "../src-tauri/");
   let baseConfig = {};
   let configFileName = "";
@@ -201,12 +221,14 @@ export async function createTauriPlatformConfigs(platform, configOptions = undef
       ...baseConfig,
       bundle: {
         resources: {
-          "../../../target/binaries/ffmpeg-unzipped/bin/*.dll": ""
+          "../../../target/binaries/ffmpeg-unzipped/bin/*.dll": "",
         },
         windows: {
           wix: {
-            version: await semverToWIXCompatibleVersion(path.join(srcTauri, "Cargo.toml"))
-          }
+            version: await semverToWIXCompatibleVersion(
+              path.join(srcTauri, "Cargo.toml")
+            ),
+          },
         },
       },
     };
@@ -221,8 +243,13 @@ export async function createTauriPlatformConfigs(platform, configOptions = undef
   } else {
     throw new Error("Unsupported platform!");
   }
-  const mergedConfig = configOptions ? deepMerge(baseConfig, configOptions) : baseConfig;
-  await fs.writeFile(`${srcTauri}/${configFileName}`, JSON.stringify(mergedConfig, null, 2));
+  const mergedConfig = configOptions
+    ? deepMerge(baseConfig, configOptions)
+    : baseConfig;
+  await fs.writeFile(
+    `${srcTauri}/${configFileName}`,
+    JSON.stringify(mergedConfig, null, 2)
+  );
 }
 
 async function main() {
