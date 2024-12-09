@@ -3,6 +3,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { createResource, Match, Show, Switch } from "solid-js";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { Button } from "@cap/ui-solid";
+import { getCurrentWindow, UserAttentionType } from "@tauri-apps/api/window";
 
 export default function () {
   const navigate = useNavigate();
@@ -50,6 +51,7 @@ export default function () {
                     })
                     .then(async () => {
                       updateStatusActions.mutate({ type: "done" });
+                      getCurrentWindow().requestUserAttention(UserAttentionType.Informational);
                     })
                     .catch(() => navigate("/"));
                 })

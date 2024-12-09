@@ -84,7 +84,7 @@ export default function () {
     },
   }));
 
-  const [isUpgraded] = createResource(() => commands.checkUpgradedAndUpdate());
+  const [isUpgraded] = createResource(checkIsUpgradedAndUpdate);
 
   createAsync(() => getAuth());
 
@@ -127,8 +127,10 @@ export default function () {
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">
-          <IconCapLogoFullDark class="w-[90px] h-auto text-[--text-primary] dark:block hidden" />
-          <IconCapLogoFull class="w-[90px] h-auto text-[--text-primary] dark:hidden block" />
+          <div class="*:w-[92px] *:h-auto text-[--text-primary] ">
+            <IconCapLogoFullDark class="dark:block hidden" />
+            <IconCapLogoFull class="dark:hidden block" />
+          </div>
           <span
             onClick={async () => {
               if (!isUpgraded()) {
@@ -264,6 +266,7 @@ import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
 import titlebarState, { setTitlebar } from "~/utils/titlebar-state";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import { checkIsUpgradedAndUpdate } from "~/utils/plans";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 let hasChecked = false;

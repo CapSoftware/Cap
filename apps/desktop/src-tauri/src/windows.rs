@@ -1,6 +1,6 @@
 #![allow(unused_mut)]
 
-use crate::fake_window;
+use crate::{fake_window, general_settings::AppTheme};
 use cap_flags::FLAGS;
 use serde::Deserialize;
 use specta::Type;
@@ -136,7 +136,6 @@ impl ShowCapWindow {
                 .center()
                 .focused(true)
                 .maximizable(false)
-                // .theme(Some(tauri::Theme::Light))
                 .shadow(true)
                 .build()?,
             Self::Main => self
@@ -145,8 +144,6 @@ impl ShowCapWindow {
                 .resizable(false)
                 .maximized(false)
                 .maximizable(false)
-                .maximized(false)
-                // .theme(Some(tauri::Theme::Light))
                 .build()?,
             Self::Settings { page } => self
                 .window_builder(
@@ -156,13 +153,11 @@ impl ShowCapWindow {
                 .min_inner_size(600.0, 450.0)
                 .resizable(true)
                 .maximized(false)
-                // .theme(Some(tauri::Theme::Light))
                 .build()?,
             Self::Editor { project_id } => self
                 .window_builder(app, format!("/editor?id={project_id}"))
                 .inner_size(1150.0, 800.0)
                 .maximizable(true)
-                // .theme(Some(tauri::Theme::Dark))
                 .build()?,
             Self::Upgrade => self
                 .window_builder(app, "/upgrade")
@@ -259,7 +254,6 @@ impl ShowCapWindow {
                         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
-                    // .theme(Some(tauri::Theme::Dark))
                     .skip_taskbar(true)
                     .build()?
             }
@@ -339,8 +333,7 @@ impl ShowCapWindow {
             .title(id.title())
             .visible(false)
             .accept_first_mouse(true)
-            .shadow(true)
-            .theme(Some(tauri::Theme::Light));
+            .shadow(true);
 
         #[cfg(target_os = "macos")]
         {
@@ -406,9 +399,33 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
 
 #[tauri::command]
 #[specta::specta]
+pub fn set_theme(window: tauri::Window, theme: AppTheme) {
+    let _ = window.set_theme(match theme {
+        AppTheme::System => None,
+        AppTheme::Light => Some(tauri::Theme::Light),
+        AppTheme::Dark => Some(tauri::Theme::Dark),
+    });
+
+    #[cfg(target_os = "macos")]
+    match CapWindowId::from_str(window.label()) {
+        Ok(win) if win.traffic_lights_position().is_some() => position_traffic_lights(window, None),
+        Ok(_) | Err(_) => {}
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn position_traffic_lights(window: tauri::Window, controls_inset: Option<(f64, f64)>) {
     #[cfg(target_os = "macos")]
-    position_traffic_lights_impl(&window, controls_inset.map(LogicalPosition::from));
+    position_traffic_lights_impl(
+        &window,
+        controls_inset.map(LogicalPosition::from).or_else(|| {
+            // Attempt to get the default inset from the window's traffic lights position
+            CapWindowId::from_str(window.label())
+                .ok()
+                .and_then(|id| id.traffic_lights_position().flatten())
+        }),
+    );
 }
 
 #[cfg(target_os = "macos")]

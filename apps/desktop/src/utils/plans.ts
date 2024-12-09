@@ -1,3 +1,5 @@
+import { commands } from "./tauri";
+
 const planIds = {
   development: {
     yearly: "price_1Q3esrFJxA1XpeSsFwp486RN",
@@ -33,3 +35,10 @@ export const isUserOnProPlan = ({
 
   return false;
 };
+
+export const checkIsUpgradedAndUpdate = () => commands
+    .checkUpgradedAndUpdate()
+    .catch((e) => {
+      console.error("Failed to check plan: ", e);
+      return false;
+    });

@@ -57,9 +57,14 @@ pub fn spawn_fake_window_listener(app: AppHandle, window: WebviewWindow) {
                 continue;
             };
 
-            let window_position = window.outer_position().unwrap();
-            let mouse_position = window.cursor_position().unwrap();
-            let scale_factor = window.scale_factor().unwrap();
+            let (Ok(window_position), Ok(mouse_position), Ok(scale_factor)) = (
+                window.outer_position(),
+                window.cursor_position(),
+                window.scale_factor(),
+            ) else {
+                let _ = window.set_ignore_cursor_events(true);
+                continue;
+            };
 
             let mut ignore = true;
 

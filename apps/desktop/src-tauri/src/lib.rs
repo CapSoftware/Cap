@@ -30,6 +30,8 @@ use cap_media::{
 use cap_project::{Content, ProjectConfiguration, RecordingMeta, SharingMeta};
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
+use clipboard_rs::common::RustImage;
+use clipboard_rs::{Clipboard, ClipboardContext};
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use cap_export::is_valid_mp4;
 use general_settings::GeneralSettingsStore;
@@ -750,73 +752,15 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
 
 #[tauri::command]
 #[specta::specta]
-async fn copy_screenshot_to_clipboard(app: AppHandle, path: PathBuf) -> Result<(), String> {
+async fn copy_screenshot_to_clipboard(
+    clipboard: MutableState<'_, ClipboardContext>,
+    path: String,
+) -> Result<(), String> {
     println!("Copying screenshot to clipboard: {:?}", path);
 
-    let image_data = match tokio::fs::read(&path).await {
-        Ok(data) => data,
-        Err(e) => {
-            println!("Failed to read screenshot file: {}", e);
-            notifications::send_notification(
-                &app,
-                notifications::NotificationType::ScreenshotCopyFailed,
-            );
-            return Err(format!("Failed to read screenshot file: {}", e));
-        }
-    };
-
-    #[cfg(target_os = "macos")]
-    {
-        use cocoa::appkit::{NSImage, NSPasteboard};
-        use cocoa::base::{id, nil};
-        use cocoa::foundation::{NSArray, NSData};
-        use objc::rc::autoreleasepool;
-
-        let result = unsafe {
-            autoreleasepool(|| {
-                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
-                NSPasteboard::clearContents(pasteboard);
-
-                let ns_data = NSData::dataWithBytes_length_(
-                    nil,
-                    image_data.as_ptr() as *const std::os::raw::c_void,
-                    image_data.len() as u64,
-                );
-
-                let image = NSImage::initWithData_(NSImage::alloc(nil), ns_data);
-                if image != nil {
-                    NSPasteboard::writeObjects(pasteboard, NSArray::arrayWithObject(nil, image));
-                    Ok(())
-                } else {
-                    Err("Failed to create NSImage from data".to_string())
-                }
-            })
-        };
-
-        if let Err(e) = result {
-            notifications::send_notification(
-                &app,
-                notifications::NotificationType::ScreenshotCopyFailed,
-            );
-            return Err(e);
-        }
-
-        notifications::send_notification(
-            &app,
-            notifications::NotificationType::ScreenshotCopiedToClipboard,
-        );
-    }
-
-    // TODO(Ilya) (Windows) Add support
-    #[cfg(not(target_os = "macos"))]
-    {
-        notifications::send_notification(
-            &app,
-            notifications::NotificationType::ScreenshotCopyFailed,
-        );
-        return Err("Clipboard operations are only supported on macOS".to_string());
-    }
-
+    let img_data = clipboard_rs::RustImageData::from_path(&path)
+        .map_err(|e| format!("Failed to copy screenshot to clipboard: {}", e))?;
+    clipboard.write().await.set_image(img_data);
     Ok(())
 }
 
@@ -937,68 +881,18 @@ async fn create_editor_instance(
 
 #[tauri::command]
 #[specta::specta]
-async fn copy_video_to_clipboard(app: AppHandle, path: String) -> Result<(), String> {
+async fn copy_video_to_clipboard(
+    app: AppHandle,
+    clipboard: MutableState<'_, ClipboardContext>,
+    path: String,
+) -> Result<(), String> {
     println!("copying");
-
-    #[cfg(target_os = "macos")]
-    {
-        use cocoa::appkit::NSPasteboard;
-        use cocoa::base::{id, nil};
-        use cocoa::foundation::{NSArray, NSString, NSURL};
-        use objc::rc::autoreleasepool;
-
-        let result: Result<(), String> = unsafe {
-            autoreleasepool(|| {
-                let pasteboard: id = NSPasteboard::generalPasteboard(nil);
-                NSPasteboard::clearContents(pasteboard);
-
-                let url_str = NSString::alloc(nil).init_str(&path);
-                let url = NSURL::fileURLWithPath_(nil, url_str);
-
-                if url == nil {
-                    return Err("Failed to create NSURL".to_string());
-                }
-
-                let objects = NSArray::arrayWithObject(nil, url);
-                if objects == nil {
-                    return Err("Failed to create NSArray".to_string());
-                }
-
-                #[cfg(target_arch = "x86_64")]
-                {
-                    let write_result: i8 = NSPasteboard::writeObjects(pasteboard, objects);
-                    if write_result == 0 {
-                        return Err("Failed to write to pasteboard".to_string());
-                    }
-                }
-
-                #[cfg(target_arch = "aarch64")]
-                {
-                    let write_result: bool = NSPasteboard::writeObjects(pasteboard, objects);
-                    if !write_result {
-                        return Err("Failed to write to pasteboard".to_string());
-                    }
-                }
-
-                Ok(())
-            })
-        };
-
-        if let Err(e) = result {
-            println!("Failed to copy to clipboard: {}", e);
-            notifications::send_notification(
-                &app,
-                notifications::NotificationType::VideoCopyFailed,
-            );
-            return Err(e);
-        }
-    }
+    let _ = clipboard.write().await.set_files(vec![path]);
 
     notifications::send_notification(
         &app,
         notifications::NotificationType::VideoCopiedToClipboard,
     );
-
     Ok(())
 }
 
@@ -1294,12 +1188,13 @@ async fn upload_exported_video(
             meta.save_for_project().ok();
             RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
-            // Copy link to clipboard
-            #[cfg(target_os = "macos")]
-            platform::macos::write_string_to_pasteboard(&uploaded_video.link);
+            let _ = app
+                .state::<MutableState<'_, ClipboardContext>>()
+                .write()
+                .await
+                .set_text(uploaded_video.link.clone());
 
             NotificationType::ShareableLinkCopied.send(&app);
-
             Ok(UploadResult::Success(uploaded_video.link))
         }
         Err(e) => {
@@ -1313,6 +1208,7 @@ async fn upload_exported_video(
 #[specta::specta]
 async fn upload_screenshot(
     app: AppHandle,
+    clipboard: MutableState<'_, ClipboardContext>,
     screenshot_path: PathBuf,
 ) -> Result<UploadResult, String> {
     let Ok(Some(mut auth)) = AuthStore::get(&app) else {
@@ -1384,8 +1280,7 @@ async fn upload_screenshot(
     println!("Copying to clipboard: {:?}", share_link);
 
     // Copy link to clipboard
-    #[cfg(target_os = "macos")]
-    platform::write_string_to_pasteboard(&share_link);
+    let _ = clipboard.write().await.set_text(share_link.clone());
 
     // Send notification after successful upload and clipboard copy
     notifications::send_notification(&app, notifications::NotificationType::ShareableLinkCopied);
@@ -1839,7 +1734,8 @@ async fn seek_to(app: AppHandle, video_id: String, frame_number: u32) {
         .await;
 }
 
-#[tauri::command]
+// keep this async otherwise opening windows may hang on windows
+#[tauri::command(async)]
 #[specta::specta]
 fn show_window(app: AppHandle, window: ShowCapWindow) {
     window.show(&app).ok();
@@ -1877,18 +1773,6 @@ async fn check_notification_permissions(app: AppHandle) {
             eprintln!("Error checking notification permission state: {}", e);
         }
     }
-}
-
-#[tauri::command]
-#[specta::specta]
-fn set_window_theme(window: tauri::Window, dark: bool) {
-    window
-        .set_theme(Some(if dark {
-            tauri::Theme::Dark
-        } else {
-            tauri::Theme::Light
-        }))
-        .ok();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1943,9 +1827,10 @@ pub async fn run() {
             seek_to,
             send_feedback_request,
             windows::position_traffic_lights,
+            windows::set_theme,
             global_message_dialog,
             show_window,
-            set_window_theme,
+            write_clipboard_string,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2010,7 +1895,6 @@ pub async fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({
@@ -2104,6 +1988,10 @@ pub async fn run() {
                 current_recording: None,
                 pre_created_video: None,
             })));
+
+            app.manage(Arc::new(RwLock::new(
+                ClipboardContext::new().expect("Failed to create clipboard context"),
+            )));
 
             tray::create_tray(&app).unwrap();
 
@@ -2388,6 +2276,20 @@ async fn send_feedback_request(app: AppHandle, feedback: String) -> Result<(), S
 #[specta::specta]
 fn global_message_dialog(app: AppHandle, message: String) {
     app.dialog().message(message).show(|_| {});
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn write_clipboard_string(
+    clipboard: MutableState<'_, ClipboardContext>,
+    text: String,
+) -> Result<(), String> {
+    let writer = clipboard
+        .try_write()
+        .map_err(|e| format!("Failed to acquire lock on clipboard state: {e}"))?;
+    writer
+        .set_text(text)
+        .map_err(|e| format!("Failed to write text to clipboard: {e}"))
 }
 
 trait EventExt: tauri_specta::Event {

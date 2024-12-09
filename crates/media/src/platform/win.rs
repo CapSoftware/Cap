@@ -6,12 +6,10 @@ use std::path::PathBuf;
 use super::{Bounds, CursorShape, Window};
 
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Devices::Display::{
-    DisplayConfigGetDeviceInfo, DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
-    DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
-};
 use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+use windows::Win32::Graphics::Dwm::{
+    DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
+};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW, HDC, HMONITOR,
     MONITORINFOEXW,
@@ -21,11 +19,10 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetCursorInfo, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO,
-    IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON,
-    IDC_PIN, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW,
-    IDC_WAIT,
+    EnumWindows, GetCursorInfo, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+    IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO, IDC_APPSTARTING, IDC_ARROW,
+    IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL,
+    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT,
 };
 
 #[inline]
@@ -194,11 +191,20 @@ pub fn get_on_screen_windows() -> Vec<Window> {
         } as i32;
 
         let scale_factor = dpi as f64 / BASE_DPI as f64;
-        let mut rect = RECT::default();
-        GetWindowRect(hwnd, &mut rect).ok();
 
-        let lpos_x = rect.left as f64 / scale_factor;
-        let lpos_y = rect.top as f64 / scale_factor;
+        let mut rect = RECT::default();
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut rect as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<RECT>() as u32,
+        )
+        .ok();
+
+        let rect_left = rect.left as f64 / scale_factor;
+        let rect_top = rect.top as f64 / scale_factor;
+        let rect_right = rect.right as f64 / scale_factor;
+        let rect_bottom = rect.bottom as f64 / scale_factor;
 
         let window = Window {
             window_id: hwnd.0 as u32,
@@ -206,16 +212,10 @@ pub fn get_on_screen_windows() -> Vec<Window> {
             owner_name,
             process_id,
             bounds: Bounds {
-                x: match lpos_x {
-                    x if x.is_sign_negative() => 0.0,
-                    _ => lpos_x,
-                },
-                y: match lpos_y {
-                    y if y.is_sign_negative() => 0.0,
-                    _ => lpos_y,
-                },
-                width: (rect.right - rect.left) as f64 / scale_factor,
-                height: (rect.bottom - rect.top) as f64 / scale_factor,
+                x: rect_left.max(0.0),
+                y: rect_top.max(0.0),
+                width: rect_right - rect_left,
+                height: rect_bottom - rect_top,
             },
         };
 
