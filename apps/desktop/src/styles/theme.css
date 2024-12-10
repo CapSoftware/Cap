@@ -1,3 +1,5 @@
+@tailwind utilities;
+
 :root {
   /* Light theme variables */
   --gray-50: #ffffff;
@@ -101,4 +103,10 @@
 .dark [data-transparent-window],
 .dark [data-transparent-window] body {
   background: transparent !important;
+}
+
+@layer utilities {
+  .platform-windows .overflow-y-auto {
+    @apply scrollbar-thin scrollbar-track-transparent scrollbar-thumb-black-transparent-40;
+  }
 }

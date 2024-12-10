@@ -33,7 +33,6 @@ export async function getS3Config(config?: S3Config) {
   }
 
   return {
-    forcePathStyle: true,
     endpoint: config.endpoint ? await tryDecrypt(config.endpoint) : process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
     region: (await tryDecrypt(config.region)) ?? process.env.NEXT_PUBLIC_CAP_AWS_REGION,
     credentials: {

@@ -313,8 +313,8 @@ function Dialogs() {
                   };
                 });
 
-                let cropAreaRef: HTMLDivElement;
-                let cropTargetRef: HTMLDivElement;
+                let cropAreaRef!: HTMLDivElement;
+                let cropTargetRef!: HTMLDivElement;
 
                 return (
                   <>
@@ -364,11 +364,7 @@ function Dialogs() {
                     </Dialog.Header>
                     <Dialog.Content>
                       <div class="flex flex-row justify-center">
-                        <div
-                          class="relative bg-blue-200"
-                          // biome-ignore lint/style/noNonNullAssertion: ref
-                          ref={cropAreaRef!}
-                        >
+                        <div class="relative bg-blue-200" ref={cropAreaRef}>
                           <div class="divide-black-transparent-10 overflow-hidden rounded-lg">
                             <img
                               class="shadow pointer-events-none max-h-[70vh]"
@@ -380,8 +376,7 @@ function Dialogs() {
                           </div>
                           <div
                             class="bg-white-transparent-20 absolute cursor-move"
-                            // biome-ignore lint/style/noNonNullAssertion: ref
-                            ref={cropTargetRef!}
+                            ref={cropTargetRef}
                             style={styles()}
                             onMouseDown={(downEvent) => {
                               const original = {

@@ -135,6 +135,8 @@ export const spaces = mysqlTable(
     allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    workosOrganizationId: varchar("workosOrganizationId", { length: 255 }),
+    workosConnectionId: varchar("workosConnectionId", { length: 255 }),
   },
   (table) => ({
     ownerIdIndex: index("owner_id_idx").on(table.ownerId),

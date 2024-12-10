@@ -164,7 +164,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
             } else if (transcriptionStatus === "COMPLETE") {
               fetchTranscript();
               clearInterval(intervalId);
-            } else if (transcriptionStatus === "FAILED") {
+            } else if (transcriptionStatus === "ERROR") {
               clearInterval(intervalId);
               setIsLoading(false);
             }
@@ -236,8 +236,10 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
     return (
       <div className="flex items-center justify-center h-full text-gray-500">
         <div className="text-center">
-          <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-400" />
-          <p>No transcript available</p>
+          <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+          <p className="text-sm text-gray-500 font-medium">
+            No transcript available
+          </p>
         </div>
       </div>
     );

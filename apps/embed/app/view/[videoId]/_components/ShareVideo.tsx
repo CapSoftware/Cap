@@ -330,7 +330,7 @@ export const ShareVideo = ({
             } else if (transcriptionStatus === "COMPLETE") {
               fetchSubtitles();
               clearInterval(intervalId);
-            } else if (transcriptionStatus === "FAILED") {
+            } else if (transcriptionStatus === "ERROR") {
               clearInterval(intervalId);
             }
           });

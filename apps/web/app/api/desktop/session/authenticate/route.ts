@@ -6,14 +6,9 @@ export async function GET(req: NextRequest) {
   const redirect = searchParams.get("redirect");
 
   if (!token) {
-    return new Response(
-      JSON.stringify({ error: true, message: "Token not supplied" }),
-      {
-        status: 401,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+    return Response.json(
+      { error: true, message: "Token not supplied" },
+      { status: 401 }
     );
   }
 

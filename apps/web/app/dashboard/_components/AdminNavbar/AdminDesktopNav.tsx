@@ -12,7 +12,7 @@ export const AdminDesktopNav = () => {
             <div className="flex flex-col justify-top items-start flex-shrink-0 px-4 h-full">
               <div className="flex justify-start w-full">
                 <Link href="/dashboard">
-                  <Logo showBeta={true} className="h-9 w-auto" />
+                  <Logo className="h-9 w-auto" />
                 </Link>
               </div>
               <AdminNavItems />

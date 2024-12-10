@@ -34,7 +34,7 @@ const DialogContent = React.forwardRef<
       <DialogPrimitive.Content
         ref={ref}
         className={classNames(
-          "relative bg-white shadow-lg sm:rounded-lg",
+          "relative bg-white p-6 shadow-lg sm:rounded-lg w-full max-w-lg",
           className
         )}
         {...props}
@@ -56,7 +56,7 @@ const DialogHeader = ({
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={classNames(
-      "flex flex-col space-y-1.5 text-center sm:text-left pb-4 border-b border-subtle",
+      "flex flex-col space-y-1.5 text-center sm:text-left pb-4 mb-4 border-b border-subtle",
       className
     )}
     {...props}
@@ -70,7 +70,7 @@ const DialogFooter = ({
 }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={classNames(
-      "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2",
+      "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 mt-6 pt-4 border-t border-subtle",
       className
     )}
     {...props}

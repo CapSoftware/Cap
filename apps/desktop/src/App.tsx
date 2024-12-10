@@ -1,22 +1,25 @@
 import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
 import {
-  createEffect,
   createResource,
   ErrorBoundary,
+  onCleanup,
   onMount,
   Suspense,
 } from "solid-js";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { message } from "@tauri-apps/plugin-dialog";
 
 import "@cap/ui-solid/main.css";
 import "unfonts.css";
 import "./styles/theme.css";
 import { generalSettingsStore } from "./store";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { commands } from "./utils/tauri";
+import { commands, type AppTheme } from "./utils/tauri";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import {
+  getCurrentWebviewWindow,
+  WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -37,7 +40,8 @@ export default function App() {
 }
 
 function Inner() {
-  createThemeListener();
+  const currentWindow = getCurrentWebviewWindow();
+  createThemeListener(currentWindow);
 
   return (
     <ErrorBoundary
@@ -61,7 +65,7 @@ function Inner() {
                 if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
               }
 
-              getCurrentWindow().show();
+              currentWindow.show();
             });
 
             return <Suspense>{props.children}</Suspense>;
@@ -74,30 +78,39 @@ function Inner() {
   );
 }
 
-function createThemeListener() {
-  const [theme, themeActions] = createResource(() =>
-    generalSettingsStore.get().then((s) => s?.darkMode ?? null)
+function createThemeListener(currentWindow: WebviewWindow) {
+  const [theme, themeActions] = createResource<AppTheme | null>(() =>
+    generalSettingsStore.get().then((s) => {
+      const t = s?.theme ?? null;
+      update(t);
+      return t;
+    })
   );
-
   generalSettingsStore.listen((s) => {
-    themeActions.mutate(s?.darkMode);
+    themeActions.mutate(s?.theme ?? null);
+    update(theme());
   });
 
-  createEffect(() => {
-    let t = theme();
+  let unlisten: UnlistenFn | undefined;
+  onMount(async () => {
+    unlisten = await currentWindow.onThemeChanged((_) => update(theme()));
+  });
+  onCleanup(() => unlisten?.());
+
+  function update(appTheme: AppTheme | null | undefined) {
+    if (appTheme === undefined || appTheme === null) return;
     if (
       location.pathname === "/camera" ||
       location.pathname === "/prev-recordings"
     )
-      t = false;
-    if (t === undefined) return;
+      return;
 
-    commands.setWindowTheme(!!t);
-
-    if (t) {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-  });
+    commands.setTheme(appTheme).then(() => {
+      document.documentElement.classList.toggle(
+        "dark",
+        appTheme === "dark" ||
+          window.matchMedia("(prefers-color-scheme: dark)").matches
+      );
+    });
+  }
 }

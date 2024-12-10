@@ -62,7 +62,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
   autoFocus = false,
 }) => {
   const [content, setContent] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (autoFocus && inputRef.current) {
@@ -78,7 +78,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -89,9 +89,8 @@ const CommentInput: React.FC<CommentInputProps> = ({
     <div className="flex items-start space-x-3">
       <div className="flex-1">
         <div className="bg-gray-100 rounded-lg p-4">
-          <input
+          <textarea
             ref={inputRef}
-            type="text"
             value={content}
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -297,10 +296,10 @@ const EmptyState = () => (
     animate={{ opacity: 1 }}
     className="flex flex-col items-center justify-center h-full p-8 text-center"
   >
-    <div className="text-gray-300 mb-2">
+    <div className="text-gray-300 space-y-2">
       <svg
         xmlns="http://www.w3.org/2000/svg"
-        className="h-12 w-12 mx-auto mb-4"
+        className="h-8 w-8 mx-auto"
         fill="none"
         viewBox="0 0 24 24"
         stroke="currentColor"
@@ -312,10 +311,10 @@ const EmptyState = () => (
           d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
         />
       </svg>
-      <h3 className="text-lg font-medium text-gray-500 mb-1">
-        No comments yet
-      </h3>
-      <p className="text-gray-400">Be the first to share your thoughts!</p>
+      <h3 className="text-sm font-medium text-gray-500">No comments yet</h3>
+      <p className="text-gray-400 text-sm">
+        Be the first to share your thoughts!
+      </p>
     </div>
   </motion.div>
 );
@@ -389,7 +388,7 @@ export const Activity: React.FC<ActivityProps> = ({
       authorName: user?.name || "Anonymous",
       content,
       createdAt: new Date(),
-      videoId: comments[0]?.videoId || "",
+      videoId,
       parentCommentId: "",
       type: "text",
       timestamp: null,
@@ -407,7 +406,7 @@ export const Activity: React.FC<ActivityProps> = ({
         body: JSON.stringify({
           type: "text",
           content,
-          videoId: comments[0]?.videoId,
+          videoId,
           parentCommentId: "",
         }),
       });
@@ -416,18 +415,13 @@ export const Activity: React.FC<ActivityProps> = ({
         throw new Error("Failed to post comment");
       }
 
-      const newComment = await response.json();
+      const data = await response.json();
 
       setOptimisticComments((prev) =>
         prev.filter((c) => c.id !== optimisticComment.id)
       );
 
-      setTimeout(() => {
-        setComments((prev) => [
-          ...prev,
-          { ...optimisticComment, ...newComment },
-        ]);
-      }, 100);
+      setComments((prev) => [...prev, data]);
     } catch (error) {
       console.error("Error posting comment:", error);
       setOptimisticComments((prev) =>
@@ -477,31 +471,21 @@ export const Activity: React.FC<ActivityProps> = ({
         throw new Error("Failed to post reply");
       }
 
-      const newReply = await response.json();
+      const data = await response.json();
 
-      // Remove optimistic reply first
       setOptimisticComments((prev) =>
         prev.filter((c) => c.id !== optimisticReply.id)
       );
 
-      // Add the real reply with a delay and scroll to it
-      setTimeout(() => {
-        const newReplyWithId = { ...optimisticReply, ...newReply };
-        setComments((prev) => [...prev, newReplyWithId]);
+      setComments((prev) => [...prev, data]);
 
-        // Wait a bit for the DOM to update, then scroll to the new reply
-        setTimeout(() => {
-          const newReplyElement = document.getElementById(
-            `comment-${newReplyWithId.id}`
-          );
-          if (newReplyElement) {
-            newReplyElement.scrollIntoView({
-              behavior: "smooth",
-              block: "center",
-            });
-          }
-        }, 100);
-      }, 100);
+      const newReplyElement = document.getElementById(`comment-${data.id}`);
+      if (newReplyElement) {
+        newReplyElement.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }
 
       setReplyingTo(null);
     } catch (error) {
@@ -582,7 +566,11 @@ export const Activity: React.FC<ActivityProps> = ({
                   <Comment
                     key={comment.id}
                     comment={comment}
-                    replies={allComments}
+                    replies={allComments.sort(
+                      (a, b) =>
+                        new Date(a.createdAt).getTime() -
+                        new Date(b.createdAt).getTime()
+                    )}
                     onReply={(id) => {
                       if (!user) {
                         setShowAuthOverlay(true);

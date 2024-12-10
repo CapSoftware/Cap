@@ -57,35 +57,39 @@ export async function POST(request: NextRequest) {
   const originalOrigin = request.nextUrl.origin;
 
   if (!priceId) {
-    return new Response(JSON.stringify({ error: true }), {
-      status: 400,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin":
-          origin && allowedOrigins.includes(origin)
-            ? origin
-            : allowedOrigins.includes(originalOrigin)
-            ? originalOrigin
-            : "null",
-        "Access-Control-Allow-Credentials": "true",
-      },
-    });
+    return Response.json(
+      { error: true },
+      {
+        status: 400,
+        headers: {
+          "Access-Control-Allow-Origin":
+            origin && allowedOrigins.includes(origin)
+              ? origin
+              : allowedOrigins.includes(originalOrigin)
+              ? originalOrigin
+              : "null",
+          "Access-Control-Allow-Credentials": "true",
+        },
+      }
+    );
   }
 
   if (!user) {
-    return new Response(JSON.stringify({ error: true, auth: false }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin":
-          origin && allowedOrigins.includes(origin)
-            ? origin
-            : allowedOrigins.includes(originalOrigin)
-            ? originalOrigin
-            : "null",
-        "Access-Control-Allow-Credentials": "true",
-      },
-    });
+    return Response.json(
+      { error: true, auth: false },
+      {
+        status: 401,
+        headers: {
+          "Access-Control-Allow-Origin":
+            origin && allowedOrigins.includes(origin)
+              ? origin
+              : allowedOrigins.includes(originalOrigin)
+              ? originalOrigin
+              : "null",
+          "Access-Control-Allow-Credentials": "true",
+        },
+      }
+    );
   }
 
   if (
@@ -93,19 +97,21 @@ export async function POST(request: NextRequest) {
       subscriptionStatus: user.stripeSubscriptionStatus as string,
     })
   ) {
-    return new Response(JSON.stringify({ error: true, subscription: true }), {
-      status: 400,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin":
-          origin && allowedOrigins.includes(origin)
-            ? origin
-            : allowedOrigins.includes(originalOrigin)
-            ? originalOrigin
-            : "null",
-        "Access-Control-Allow-Credentials": "true",
-      },
-    });
+    return Response.json(
+      { error: true, subscription: true },
+      {
+        status: 400,
+        headers: {
+          "Access-Control-Allow-Origin":
+            origin && allowedOrigins.includes(origin)
+              ? origin
+              : allowedOrigins.includes(originalOrigin)
+              ? originalOrigin
+              : "null",
+          "Access-Control-Allow-Credentials": "true",
+        },
+      }
+    );
   }
 
   if (!user.stripeCustomerId) {
@@ -141,10 +147,28 @@ export async function POST(request: NextRequest) {
   });
 
   if (checkoutSession.url) {
-    return new Response(JSON.stringify({ url: checkoutSession.url }), {
-      status: 200,
+    return Response.json(
+      { url: checkoutSession.url },
+      {
+        status: 200,
+        headers: {
+          "Access-Control-Allow-Origin":
+            origin && allowedOrigins.includes(origin)
+              ? origin
+              : allowedOrigins.includes(originalOrigin)
+              ? originalOrigin
+              : "null",
+          "Access-Control-Allow-Credentials": "true",
+        },
+      }
+    );
+  }
+
+  return Response.json(
+    { error: true },
+    {
+      status: 400,
       headers: {
-        "Content-Type": "application/json",
         "Access-Control-Allow-Origin":
           origin && allowedOrigins.includes(origin)
             ? origin
@@ -153,20 +177,6 @@ export async function POST(request: NextRequest) {
             : "null",
         "Access-Control-Allow-Credentials": "true",
       },
-    });
-  }
-
-  return new Response(JSON.stringify({ error: true }), {
-    status: 400,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin":
-        origin && allowedOrigins.includes(origin)
-          ? origin
-          : allowedOrigins.includes(originalOrigin)
-          ? originalOrigin
-          : "null",
-      "Access-Control-Allow-Credentials": "true",
-    },
-  });
+    }
+  );
 }

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { exec as execCb } from "node:child_process";
 import { env } from "node:process";
 import { promisify } from "node:util";
+import { createTauriPlatformConfigs } from "../apps/desktop/scripts/prepare.js";
 
 const exec = promisify(execCb);
 const signId = env.APPLE_SIGNING_IDENTITY || "-";
@@ -63,40 +64,30 @@ rustflags = [
       throw e;
     });
 
-    await fs.writeFile(
-      `${srcTauri}/tauri.macos.conf.json`,
-      JSON.stringify(
-        {
-          bundle: {
-            macOS: {
-              frameworks: [path.join(nativeDeps, "Spacedrive.framework")],
-            },
-          },
+    createTauriPlatformConfigs("darwin", {
+      bundle: {
+        macOS: {
+          frameworks: [path.join(nativeDeps, "Spacedrive.framework")],
         },
-        null,
-        4
-      )
-    );
+      },
+    });
   } else if (os === "windows") {
-    const binFiles = await fs.readdir(path.join(nativeDeps, "bin"));
-
-    await fs.writeFile(
-      `${srcTauri}/tauri.windows.conf.json`,
-      JSON.stringify(
-        {
-          bundle: {
-            resources: binFiles.filter(
-              (f) =>
-                f.endsWith(".dll") && (f.startsWith("av") || f.startsWith("sw"))
-            ),
-          },
-        },
-        null,
-        4
-      )
-    );
-
-    console.log();
+    // const binFiles = await fs.readdir(path.join(nativeDeps, "bin"));
+    // await fs.writeFile(
+    //   `${srcTauri}/tauri.windows.conf.json`,
+    //   JSON.stringify(
+    //     {
+    //       bundle: {
+    //         resources: binFiles.filter(
+    //           (f) =>
+    //             f.endsWith(".dll") && (f.startsWith("av") || f.startsWith("sw"))
+    //         ),
+    //       },
+    //     },
+    //     null,
+    //     4
+    //   )
+    // );
   }
 }
 

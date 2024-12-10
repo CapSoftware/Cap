@@ -63,7 +63,7 @@ impl AudioInputFeed {
             })
             .unwrap();
 
-        let audio_info = AudioInfo::from_stream_config(&config);
+        let audio_info = AudioInfo::from_stream_config(&config)?;
         let (control_tx, control_rx) = flume::bounded(1);
 
         std::thread::spawn(|| start_capturing(device, config, control_rx));
@@ -94,6 +94,9 @@ impl AudioInputFeed {
                     });
                     configs
                         .into_iter()
+                        .filter(|c| {
+                            c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 <= 48000
+                        })
                         .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
                 })
                 .and_then(|config| {
@@ -143,7 +146,7 @@ impl AudioInputFeed {
 
         dbg!(&config);
 
-        self.audio_info = AudioInfo::from_stream_config(&config);
+        self.audio_info = AudioInfo::from_stream_config(&config)?;
 
         Ok(())
     }

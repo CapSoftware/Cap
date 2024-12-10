@@ -24,7 +24,16 @@ pub struct GeneralSettingsStore {
     #[serde(default = "true_b")]
     pub has_completed_startup: bool,
     #[serde(default)]
-    pub dark_mode: bool,
+    pub theme: AppTheme,
+}
+
+#[derive(Default, Debug, Copy, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AppTheme {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 
 fn true_b() -> bool {

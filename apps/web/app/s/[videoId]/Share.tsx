@@ -98,7 +98,7 @@ export const Share: React.FC<ShareProps> = ({
         <div className="mt-4">
           <div className="flex flex-col lg:flex-row gap-4">
             <div className="flex-1">
-              <div className="relative aspect-video new-card-style p-3">
+              <div className="relative aspect-video new-card-style p-3 overflow-hidden">
                 <ShareVideo
                   data={data}
                   user={user}

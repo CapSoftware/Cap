@@ -11,49 +11,27 @@ export async function GET(request: NextRequest) {
   const videoId = url.searchParams.get("videoId");
 
   if (!user) {
-    return new Response(JSON.stringify({ auth: false }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ auth: false }, { status: 401 });
   }
 
   if (!videoId) {
-    return new Response(
-      JSON.stringify({ error: true, message: "videoId not supplied" }),
-      {
-        status: 400,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+    return Response.json(
+      { error: true, message: "videoId not supplied" },
+      { status: 400 }
     );
   }
 
   const video = await db.select().from(videos).where(eq(videos.id, videoId));
 
   if (video.length === 0 || !video[0]) {
-    return new Response(
-      JSON.stringify({ error: true, message: "Video does not exist" }),
-      {
-        status: 404,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+    return Response.json(
+      { error: true, message: "Video does not exist" },
+      { status: 404 }
     );
   }
 
-  return new Response(
-    JSON.stringify({
-      transcriptionStatus: video[0].transcriptionStatus,
-    }),
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    }
+  return Response.json(
+    { transcriptionStatus: video[0].transcriptionStatus },
+    { status: 200 }
   );
 }

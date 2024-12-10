@@ -1,0 +1,13 @@
+---
+title: Audio input + visual fixes
+app: Cap Desktop
+publishedAt: "2024-12-05"
+version: 0.3.2
+image:
+---
+
+- Audio inputs with high sample rates (>48khz) are now opened with the highest available sample rate supported by the encoder.
+  This should fix issues that have been reported with Macbook Pro mics and some high-end audio interfaces.
+- Sample rate selection now orders the options from highest to lowest, as opposed to randomly
+- Editing the cursor size was accidentally enabled, it's now disabled but will be coming back soon
+- Color inputs now look good in dark mode

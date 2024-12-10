@@ -50,11 +50,17 @@ import {
 const getAuth = cache(async () => {
   const value = await authStore.get();
   const local = import.meta.env.VITE_LOCAL_MODE === "true";
-  if (!value && !local) return redirect("/signin");
-  const res = await fetch(`${clientEnv.VITE_SERVER_URL}/api/desktop/plan`, {
-    headers: { authorization: `Bearer ${value?.token}` },
+
+  if (!value) {
+    if (local) return;
+    return redirect("/signin");
+  }
+
+  const res = await apiClient.desktop.getUserPlan({
+    headers: await protectedHeaders(),
   });
   if (res.status !== 200 && !local) return redirect("/signin");
+
   return value;
 }, "getAuth");
 
@@ -78,7 +84,7 @@ export default function () {
     },
   }));
 
-  const [isUpgraded] = createResource(() => commands.checkUpgradedAndUpdate());
+  const [isUpgraded] = createResource(checkIsUpgradedAndUpdate);
 
   createAsync(() => getAuth());
 
@@ -90,7 +96,7 @@ export default function () {
 
       if (!cameraWindowActive) {
         console.log("cameraWindow not found");
-        setOptions({
+        setOptions.mutate({
           ...options.data,
         });
       }
@@ -121,8 +127,10 @@ export default function () {
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
       <div class="flex items-center justify-between pb-[0.25rem]">
         <div class="flex items-center space-x-1">
-          <IconCapLogoFullDark class="w-[90px] h-auto text-[--text-primary] dark:block hidden" />
-          <IconCapLogoFull class="w-[90px] h-auto text-[--text-primary] dark:hidden block" />
+          <div class="*:w-[92px] *:h-auto text-[--text-primary] ">
+            <IconCapLogoFullDark class="dark:block hidden" />
+            <IconCapLogoFull class="dark:hidden block" />
+          </div>
           <span
             onClick={async () => {
               if (!isUpgraded()) {
@@ -258,6 +266,8 @@ import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
 import titlebarState, { setTitlebar } from "~/utils/titlebar-state";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import { checkIsUpgradedAndUpdate } from "~/utils/plans";
+import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -368,23 +378,19 @@ function CameraSelect(props: {
 
   type Option = { isCamera: boolean; name: string };
 
+  const [loading, setLoading] = createSignal(false);
   const onChange = async (item: Option | null) => {
     if (!item && permissions?.data?.camera !== "granted") {
       return requestPermission("camera");
     }
     if (!props.options) return;
 
-    if (!item || !item.isCamera) {
-      props.setOptions({
-        ...props.options,
-        cameraLabel: null,
-      });
-    } else {
-      props.setOptions({
-        ...props.options,
-        cameraLabel: item.name,
-      });
-    }
+    let cameraLabel = !item || !item.isCamera ? null : item.name;
+
+    setLoading(true);
+    props.setOptions
+      .mutateAsync({ ...props.options, cameraLabel })
+      .finally(() => setLoading(false));
   };
 
   const selectOptions = createMemo(() => [
@@ -423,7 +429,10 @@ function CameraSelect(props: {
           setOpen(isOpen);
         }}
       >
-        <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+        <KSelect.Trigger
+          disabled={loading()}
+          class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
+        >
           <IconCapCamera class="text-gray-400 size-[1.25rem]" />
           <KSelect.Value<Option | null> class="flex-1 text-left truncate">
             {(state) => <span>{state.selectedOption()?.name}</span>}
@@ -434,7 +443,7 @@ function CameraSelect(props: {
             requestPermission={() => requestPermission("camera")}
             onClear={() => {
               if (!props.options) return;
-              props.setOptions({
+              props.setOptions.mutate({
                 ...props.options,
                 cameraLabel: null,
               });
@@ -447,7 +456,7 @@ function CameraSelect(props: {
             class={topLeftAnimateClasses}
           >
             <MenuItemList<typeof KSelect.Listbox>
-              class="max-h-36 overflow-y-auto"
+              class="max-h-32 overflow-y-auto"
               as={KSelect.Listbox}
             />
           </PopperContent>
@@ -487,13 +496,17 @@ function MicrophoneSelect(props: {
 
   type Option = { name: string; deviceId: string };
 
+  const [loading, setLoading] = createSignal(false);
   const handleMicrophoneChange = async (item: Option | null) => {
     if (!item || !props.options) return;
 
-    props.setOptions({
-      ...props.options,
-      audioInputName: item.deviceId !== "" ? item.name : null,
-    });
+    setLoading(true);
+    props.setOptions
+      .mutateAsync({
+        ...props.options,
+        audioInputName: item.deviceId !== "" ? item.name : null,
+      })
+      .finally(() => setLoading(false));
     if (!item.deviceId) setDbs();
   };
 
@@ -559,7 +572,10 @@ function MicrophoneSelect(props: {
           setOpen(isOpen);
         }}
       >
-        <KSelect.Trigger class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10">
+        <KSelect.Trigger
+          disabled={loading()}
+          class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+        >
           <Show when={dbs()}>
             {(s) => (
               <div
@@ -589,7 +605,7 @@ function MicrophoneSelect(props: {
             requestPermission={() => requestPermission("microphone")}
             onClear={() => {
               if (!props.options) return;
-              props.setOptions({
+              props.setOptions.mutate({
                 ...props.options,
                 audioInputName: null,
               });
@@ -767,10 +783,11 @@ function ChangelogButton() {
       if (!version) {
         return { hasUpdate: false };
       }
-      const response = await fetch(
-        `${clientEnv.VITE_SERVER_URL}/api/changelog/status?version=${version}`
-      );
-      return await response.json();
+      const response = await apiClient.desktop.getChangelogStatus({
+        query: { version },
+      });
+      if (response.status === 200) return response.body;
+      return null;
     }
   );
 

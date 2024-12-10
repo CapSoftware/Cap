@@ -55,12 +55,7 @@ export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
 
   if (!user) {
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
 
   let isSubscribed = isUserOnProPlan({

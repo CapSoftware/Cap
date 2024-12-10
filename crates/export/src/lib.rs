@@ -1,6 +1,7 @@
 use cap_editor::Segment;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
+use std::path::Path;
 use std::{path::PathBuf, sync::Arc};
 
 use cap_media::feeds::AudioFrameBuffer;
@@ -307,4 +308,18 @@ pub async fn export_video_to_file(
     }
 
     Ok(output_path)
+}
+
+/// Validates if a file at the given path is a valid MP4 file
+pub fn is_valid_mp4(path: &Path) -> bool {
+    if let Ok(file) = std::fs::File::open(path) {
+        let file_size = match file.metadata() {
+            Ok(metadata) => metadata.len(),
+            Err(_) => return false,
+        };
+        let reader = std::io::BufReader::new(file);
+        Mp4Reader::read_header(reader, file_size).is_ok()
+    } else {
+        false
+    }
 }
