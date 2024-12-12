@@ -1,8 +1,12 @@
 use cap_editor::Segment;
+use cap_media::data::{AudioInfo, RawVideoFormat, VideoInfo};
+use cap_media::encoders::MP4Input;
+use cap_media::MediaError;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use std::path::Path;
 use std::{path::PathBuf, sync::Arc};
+use tokio::sync::oneshot;
 
 use cap_media::feeds::AudioFrameBuffer;
 use cap_project::{ProjectConfiguration, RecordingMeta};
@@ -13,7 +17,6 @@ use cap_rendering::{
 
 struct AudioRender {
     buffer: AudioFrameBuffer,
-    pipe_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
 }
 
 const FPS: u32 = 30;
@@ -31,6 +34,9 @@ pub enum ExportError {
 
     #[error("Rendering: {0}")]
     Rendering(#[from] cap_rendering::RenderingError),
+
+    #[error("Media/{0}")]
+    Media(#[from] cap_media::MediaError),
 }
 
 pub async fn export_video_to_file(
@@ -78,30 +84,55 @@ pub async fn export_video_to_file(
         })
         .unzip();
 
-    let ffmpeg_handle = tokio::spawn({
+    let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
+    let (done_tx, done_rx) = oneshot::channel();
+
+    let audio_info = if audio_segments
+        .get(0)
+        .and_then(|d| d.as_ref().as_ref())
+        .is_some()
+    {
+        Some(
+            AudioInfo::new(
+                cap_media::data::Sample::F32(cap_media::data::Type::Packed),
+                48000,
+                1,
+            )
+            .map_err(Into::<MediaError>::into)?,
+        )
+    } else {
+        None
+    };
+
+    std::thread::spawn(move || {
+        let mut encoder = cap_media::encoders::MP4Encoder::init(
+            "output",
+            VideoInfo::from_raw(RawVideoFormat::YUYV420, output_size.0, output_size.1, 30),
+            audio_info,
+            cap_media::encoders::Output::File(output_path.clone()),
+        )
+        .unwrap();
+
+        while let Ok(frame) = frame_rx.recv() {
+            println!("queueing frame");
+            encoder.queue_video_frame(frame.video);
+            if let Some(audio) = frame.audio {
+                encoder.queue_audio_frame(audio);
+            }
+        }
+
+        encoder.finish();
+
+        done_tx.send(output_path).ok();
+    });
+
+    tokio::spawn({
         let project = project.clone();
         let project_path = project_path.clone();
         async move {
             println!("Starting FFmpeg output process...");
-            let mut ffmpeg = cap_ffmpeg_cli::FFmpeg::new();
-
-            let audio_dir = tempfile::tempdir().unwrap();
-            let video_dir = tempfile::tempdir().unwrap();
-            let mut audio = if let Some(audio_data) =
-                audio_segments.get(0).and_then(|d| d.as_ref().as_ref())
+            let mut audio = if let Some(_) = audio_segments.get(0).and_then(|d| d.as_ref().as_ref())
             {
-                let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
-
-                let pipe_path =
-                    cap_utils::create_channel_named_pipe(rx, audio_dir.path().join("audio.pipe"));
-
-                ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
-                    input: pipe_path,
-                    sample_format: "f64le".to_string(),
-                    sample_rate: audio_data.info.sample_rate,
-                    channels: audio_data.info.channels as u16,
-                });
-
                 Some(AudioRender {
                     buffer: AudioFrameBuffer::new(
                         audio_segments
@@ -109,103 +140,72 @@ pub async fn export_video_to_file(
                             .map(|s| s.as_ref().as_ref().unwrap().clone())
                             .collect(),
                     ),
-                    pipe_tx: tx,
                 })
             } else {
                 None
             };
 
-            let video_tx = {
-                let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
-
-                let pipe_path =
-                    cap_utils::create_channel_named_pipe(rx, video_dir.path().join("video.pipe"));
-
-                ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawVideoInput {
-                    width: output_size.0,
-                    height: output_size.1,
-                    fps: 30,
-                    pix_fmt: "rgba",
-                    input: pipe_path,
-                });
-
-                tx
-            };
-
-            ffmpeg
-                .command
-                .args(["-f", "mp4"])
-                .args(["-codec:v", "libx264", "-codec:a", "aac"])
-                .args(["-preset", "ultrafast"])
-                .args(["-pix_fmt", "yuv420p", "-tune", "zerolatency"])
-                .arg("-y")
-                .arg(&output_path);
-
-            let mut ffmpeg_process = ffmpeg.start();
-
             let mut frame_count = 0;
             let mut first_frame = None;
 
-            loop {
-                tokio::select! {
-                    result = ffmpeg_process.wait() => {
-                        match result {
-                            Err(e) => Err(ExportError::FFmpeg(e.to_string())),
-                            Ok(status) => {
-                                if status.success() {
-                                    Ok(())
-                                } else {
-                                    Err(ExportError::FFmpeg(
-                                        ffmpeg_process
-                                            .read_stderr()
-                                            .await
-                                            .unwrap_or_else(|_| "Failed to read FFmpegg error".to_string())
-                                    ))
-                                }
-                            }
-                        }?;
-                    }
-                    frame = rx_image_data.recv()  => {
-                        match frame {
-                            Some(frame) => {
-                                on_progress(frame_count);
+            while let Some(frame) = rx_image_data.recv().await {
+                on_progress(frame_count);
 
-                                if frame_count == 0 {
-                                    first_frame = Some(frame.clone());
-                                }
-
-                                if let Some(audio) = &mut audio {
-                                    if frame_count == 0 {
-                                        audio.buffer.set_playhead(0., project.timeline());
-                                    }
-
-                                    let audio_info = audio.buffer.info();
-                                    let estimated_samples_per_frame =
-                                        f64::from(audio_info.sample_rate) / f64::from(FPS);
-                                    let samples = estimated_samples_per_frame.ceil() as usize;
-
-                                    if let Some((_, frame_data)) =
-                                        audio.buffer.next_frame_data(samples, project.timeline())
-                                    {
-                                        let frame_samples = frame_data.to_vec();
-                                        audio.pipe_tx.send(frame_samples).await.unwrap();
-                                    }
-                                }
-
-                                video_tx.send(frame).await.unwrap();
-
-                                frame_count += 1;
-                            }
-                            None => {
-                                println!("All frames sent to FFmpeg");
-                                break;
-                            }
-                        }
-                    }
+                if frame_count == 0 {
+                    first_frame = Some(frame.clone());
                 }
-            }
 
-            ffmpeg_process.stop().await;
+                let audio_frame = if let Some(audio) = &mut audio {
+                    if frame_count == 0 {
+                        audio.buffer.set_playhead(0., project.timeline());
+                    }
+
+                    let audio_info = audio.buffer.info();
+                    // dbg!(&audio_info);
+                    let estimated_samples_per_frame =
+                        f64::from(audio_info.sample_rate) / f64::from(FPS);
+                    let samples = estimated_samples_per_frame.ceil() as usize;
+
+                    if let Some((_, frame_data)) =
+                        audio.buffer.next_frame_data(samples, project.timeline())
+                    {
+                        // dbg!(&audio_info);
+                        let mut frame = audio_info.wrap_frame(
+                            &frame_data
+                                .to_vec()
+                                .chunks(8)
+                                .flat_map(|v| {
+                                    (f64::from_le_bytes([
+                                        v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7],
+                                    ]) as f32)
+                                        .to_le_bytes()
+                                })
+                                .collect::<Vec<_>>(),
+                            0,
+                        );
+                        frame.set_pts(Some(1_000_000 / 30 * (frame_count as i64)));
+                        Some(frame)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let mut video_frame =
+                    VideoInfo::from_raw(RawVideoFormat::Rgba, output_size.0, output_size.1, 30)
+                        .wrap_frame(&frame, 0);
+                video_frame.set_pts(Some(frame_count as i64));
+
+                frame_tx
+                    .send(MP4Input {
+                        audio: audio_frame,
+                        video: video_frame,
+                    })
+                    .ok();
+
+                frame_count += 1;
+            }
 
             // Save the first frame as a screenshot and thumbnail
             if let Some(frame_data) = first_frame {
@@ -248,7 +248,7 @@ pub async fn export_video_to_file(
                 eprintln!("No frames were processed, cannot save screenshot or thumbnail");
             }
 
-            Ok::<_, ExportError>(output_path)
+            Ok::<_, ExportError>(())
         }
     });
 
@@ -263,49 +263,7 @@ pub async fn export_video_to_file(
     )
     .await?;
 
-    let output_path = ffmpeg_handle.await??;
-
-    println!("Copying file to {:?}", project_path);
-    let result_path = project_path.join("output").join("result.mp4");
-    // Function to check if the file is a valid MP4
-    fn is_valid_mp4(path: &std::path::Path) -> bool {
-        if let Ok(file) = std::fs::File::open(path) {
-            let file_size = match file.metadata() {
-                Ok(metadata) => metadata.len(),
-                Err(_) => return false,
-            };
-            let reader = std::io::BufReader::new(file);
-            Mp4Reader::read_header(reader, file_size).is_ok()
-        } else {
-            false
-        }
-    }
-
-    if output_path != result_path {
-        println!("Waiting for valid MP4 file at {:?}", output_path);
-        // Wait for the file to become a valid MP4
-        let mut attempts = 0;
-        while attempts < 10 {
-            // Wait for up to 60 seconds
-            if is_valid_mp4(&output_path) {
-                println!("Valid MP4 file detected after {} seconds", attempts);
-                match std::fs::copy(&output_path, &result_path) {
-                    Ok(bytes) => {
-                        println!("Successfully copied {} bytes to {:?}", bytes, result_path)
-                    }
-                    Err(e) => eprintln!("Failed to copy file: {:?}", e),
-                }
-                break;
-            }
-            println!("Attempt {}: File not yet valid, waiting...", attempts + 1);
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            attempts += 1;
-        }
-
-        if attempts == 10 {
-            eprintln!("Timeout: Failed to detect a valid MP4 file after 60 seconds");
-        }
-    }
+    let output_path = done_rx.await.unwrap();
 
     Ok(output_path)
 }

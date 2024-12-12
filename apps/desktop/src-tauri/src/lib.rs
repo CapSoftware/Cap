@@ -499,7 +499,7 @@ async fn create_screenshot(
             decoder.format(),
             decoder.width(),
             decoder.height(),
-            ffmpeg::format::Pixel::RGB24,
+            ffmpeg::format::Pixel::YUV420P,
             size.map_or(decoder.width(), |s| s.0),
             size.map_or(decoder.height(), |s| s.1),
             ffmpeg::software::scaling::flag::Flags::BILINEAR,
