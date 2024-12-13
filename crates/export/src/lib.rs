@@ -149,7 +149,6 @@ pub async fn export_video_to_file(
             loop {
                 tokio::select! {
                     result = ffmpeg_process.wait() => {
-                        dbg!(frame_count, &result);
                         match result {
                             Err(e) => Err(ExportError::FFmpeg(e.to_string())),
                             Ok(status) => {
@@ -167,7 +166,6 @@ pub async fn export_video_to_file(
                         }?;
                     }
                     frame = rx_image_data.recv()  => {
-                        dbg!(frame_count, frame.is_some());
                         match frame {
                             Some(frame) => {
                                 on_progress(frame_count);
@@ -194,11 +192,7 @@ pub async fn export_video_to_file(
                                     }
                                 }
 
-                                println!("sending frame {frame_count} to ffmpeg tx");
-
                                 video_tx.send(frame).await.unwrap();
-
-                                println!("sent frame {frame_count} to ffmpeg tx");
 
                                 frame_count += 1;
                             }
