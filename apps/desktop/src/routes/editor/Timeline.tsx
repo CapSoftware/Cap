@@ -6,6 +6,7 @@ import {
   For,
   Show,
   createContext,
+  batch,
   createRoot,
   createSignal,
   onMount,
@@ -404,18 +405,28 @@ export function Timeline() {
                     if (time === undefined) return;
 
                     e.stopPropagation();
-                    setProject(
-                      "timeline",
-                      "zoomSegments",
-                      produce((zoomSegments) => {
-                        zoomSegments ??= [];
-                        zoomSegments.push({
-                          start: time,
-                          end: time + 1,
-                          amount: 1.5,
-                        });
-                      })
-                    );
+                    batch(() => {
+                      setProject("timeline", "zoomSegments", (v) => v ?? []);
+                      setProject(
+                        "timeline",
+                        "zoomSegments",
+                        produce((zoomSegments) => {
+                          zoomSegments ??= [];
+                          zoomSegments.push({
+                            start: time,
+                            end: time + 1,
+                            amount: 1.5,
+                            mode: {
+                              manual: {
+                                x: 0.5,
+                                y: 0.5,
+                              },
+                            },
+                          });
+                          console.log(zoomSegments);
+                        })
+                      );
+                    });
                   }}
                 >
                   <Show

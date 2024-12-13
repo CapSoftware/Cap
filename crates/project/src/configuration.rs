@@ -283,13 +283,20 @@ impl TimelineSegment {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ZoomSegment {
     pub start: f64,
     pub end: f64,
     pub amount: f64,
-    // pub mode: Z
+    pub mode: ZoomMode,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum ZoomMode {
+    Auto,
+    Manual { x: f32, y: f32 },
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]

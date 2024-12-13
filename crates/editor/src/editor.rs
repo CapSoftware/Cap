@@ -165,8 +165,8 @@ impl Renderer {
                         let frame_tx = self.frame_tx.clone();
 
                         frame_task = Some(tokio::spawn(async move {
-                            let time_instant = Instant::now();
-                            let frame = produce_frame(
+                            let now = Instant::now();
+                            let (frame, stride) = produce_frame(
                                 &render_constants,
                                 &screen_frame,
                                 &camera_frame,
@@ -176,13 +176,13 @@ impl Renderer {
                             )
                             .await
                             .unwrap();
-                            // println!("produced frame in {:?}", time_instant.elapsed());
 
                             frame_tx
                                 .try_send(SocketMessage::Frame {
                                     data: frame,
                                     width: uniforms.output_size.0,
                                     height: uniforms.output_size.1,
+                                    stride,
                                 })
                                 .ok();
                             finished.send(()).ok();

@@ -311,35 +311,35 @@ fn generate_zoom_segments_from_clicks(
     const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
 
     // single-segment only
-    for click in &recording.cursor_data.clicks {
-        let time = click.process_time_ms / 1000.0;
+    // for click in &recording.cursor_data.clicks {
+    //     let time = click.process_time_ms / 1000.0;
 
-        if segments.last().is_none() {
-            segments.push(ZoomSegment {
-                start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
-                end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-                amount: 2.0,
-            });
-        } else {
-            let last_segment = segments.last_mut().unwrap();
+    //     if segments.last().is_none() {
+    //         segments.push(ZoomSegment {
+    //             start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
+    //             end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
+    //             amount: 2.0,
+    //         });
+    //     } else {
+    //         let last_segment = segments.last_mut().unwrap();
 
-            if click.down {
-                if last_segment.end > time {
-                    last_segment.end =
-                        (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-                } else if time < max_duration - ZOOM_DURATION {
-                    segments.push(ZoomSegment {
-                        start: (time - ZOOM_DURATION).max(0.0),
-                        end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-                        amount: 2.0,
-                    });
-                }
-            } else {
-                last_segment.end =
-                    (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-            }
-        }
-    }
+    //         if click.down {
+    //             if last_segment.end > time {
+    //                 last_segment.end =
+    //                     (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
+    //             } else if time < max_duration - ZOOM_DURATION {
+    //                 segments.push(ZoomSegment {
+    //                     start: (time - ZOOM_DURATION).max(0.0),
+    //                     end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
+    //                     amount: 2.0,
+    //                 });
+    //             }
+    //         } else {
+    //             last_segment.end =
+    //                 (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
+    //         }
+    //     }
+    // }
 
     segments
 }
