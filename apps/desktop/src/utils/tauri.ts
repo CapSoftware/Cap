@@ -286,7 +286,8 @@ export type Video = { duration: number; width: number; height: number }
 export type VideoRecordingMetadata = { duration: number; size: number }
 export type VideoType = "screen" | "output"
 export type XY<T> = { x: T; y: T }
-export type ZoomSegment = { start: number; end: number; amount: number }
+export type ZoomMode = "auto" | { manual: { x: number; y: number } }
+export type ZoomSegment = { start: number; end: number; amount: number; mode: ZoomMode }
 
 /** tauri-specta globals **/
 

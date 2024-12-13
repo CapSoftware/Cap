@@ -22,3 +22,6 @@ thiserror.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"

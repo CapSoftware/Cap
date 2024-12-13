@@ -14,7 +14,10 @@ export type FrameData = { width: number; height: number; data: ImageData };
 
 export const [EditorInstanceContextProvider, useEditorInstanceContext] =
   createContextProvider((props: { videoId: string }) => {
-    const [latestFrame, setLatestFrame] = createLazySignal<ImageData>();
+    const [latestFrame, setLatestFrame] = createLazySignal<{
+      width: number;
+      data: ImageData;
+    }>();
 
     const [editorInstance] = createResource(async () => {
       const instance = await commands.createEditorInstance(props.videoId);
