@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.4"
+version = "0.3.4-alpha.1"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2021"
