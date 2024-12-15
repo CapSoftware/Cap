@@ -1,26 +1,37 @@
 use crate::{
-    data::{AudioInfo, FFAudio, FFPacket, FFRational, FFVideo, PlanarData, VideoInfo},
+    data::{
+        AudioInfo, FFAudio, FFPacket, FFRational, FFVideo, PlanarData, RawVideoFormat, VideoInfo,
+    },
     pipeline::{audio_buffer::AudioBuffer, task::PipelineSinkTask},
     MediaError,
 };
 use ffmpeg::{
     codec::{codec::Codec, context, encoder},
     format::{self},
+    software,
     threading::Config,
     Dictionary,
 };
 
 use super::Output;
 
+struct Audio {
+    encoder: encoder::Audio,
+    buffer: AudioBuffer,
+    input_config: AudioInfo,
+    resampler: software::resampling::Context,
+}
+
+struct Video {
+    encoder: ffmpeg::encoder::Video,
+    config: VideoInfo,
+}
+
 pub struct MP4Encoder {
     tag: &'static str,
-    video_encoder: encoder::Video,
-    audio_encoder: Option<encoder::Audio>,
     output_ctx: format::context::Output,
-    audio_buffer: Option<AudioBuffer>,
-    last_video_pts: Option<i64>,
-    video_config: VideoInfo,
-    audio_config: Option<AudioInfo>,
+    video: Video,
+    audio: Option<Audio>,
 }
 
 impl MP4Encoder {
@@ -49,8 +60,6 @@ impl MP4Encoder {
         video_enc.set_time_base(video_config.frame_rate.invert());
         video_enc.set_frame_rate(Some(video_config.frame_rate));
 
-        dbg!(video_enc.time_base());
-
         if video_codec.name() == "h264_videotoolbox" {
             video_enc.set_bit_rate(1_200_000);
             video_enc.set_max_bit_rate(120_000);
@@ -60,6 +69,11 @@ impl MP4Encoder {
         }
 
         let video_encoder = video_enc.open_with(video_options)?;
+
+        let video = Video {
+            encoder: video_encoder,
+            config: video_config,
+        };
 
         let audio = if let Some(audio_config) = audio_config {
             // Setup audio encoder
@@ -83,13 +97,28 @@ impl MP4Encoder {
                 )));
             }
 
+            let output_format = ffmpeg::format::Sample::F32(format::sample::Type::Packed);
+
             audio_enc.set_bit_rate(Self::AUDIO_BITRATE);
             audio_enc.set_rate(audio_config.rate());
-            audio_enc.set_format(audio_config.sample_format);
+            audio_enc.set_format(output_format);
             audio_enc.set_channel_layout(audio_config.channel_layout());
             audio_enc.set_time_base(audio_config.time_base);
 
-            Some((audio_enc.open()?, audio_codec, audio_config))
+            let resampler = software::resampler(
+                (
+                    audio_config.sample_format,
+                    audio_config.channel_layout(),
+                    audio_config.sample_rate,
+                ),
+                (
+                    output_format,
+                    audio_config.channel_layout(),
+                    audio_config.sample_rate,
+                ),
+            )?;
+
+            Some((audio_enc.open()?, audio_codec, audio_config, resampler))
         } else {
             None
         };
@@ -97,43 +126,44 @@ impl MP4Encoder {
         // Setup output streams
         let mut video_stream = output_ctx.add_stream(video_codec)?;
         video_stream.set_time_base(video_config.frame_rate.invert());
-        video_stream.set_parameters(&video_encoder);
+        video_stream.set_parameters(&video.encoder);
 
-        dbg!(video_stream.time_base());
+        let audio = if let Some((encoder, codec, input_config, resampler)) = audio {
+            let mut stream = output_ctx.add_stream(codec)?;
+            stream.set_time_base(FFRational(1, input_config.rate()));
+            stream.set_parameters(&encoder);
 
-        let (audio_encoder, audio_buffer) =
-            if let Some((audio_encoder, audio_codec, audio_config)) = audio {
-                let mut audio_stream = output_ctx.add_stream(audio_codec)?;
-                audio_stream.set_time_base(FFRational(1, audio_config.rate()));
-                audio_stream.set_parameters(&audio_encoder);
+            let buffer = AudioBuffer::new(input_config, &encoder);
 
-                let audio_buffer = AudioBuffer::new(audio_config, &audio_encoder);
-
-                Some((audio_encoder, audio_buffer))
-            } else {
-                None
-            }
-            .unzip();
+            Some(Audio {
+                encoder,
+                buffer,
+                input_config,
+                resampler,
+            })
+        } else {
+            None
+        };
 
         output_ctx.write_header()?;
 
         Ok(Self {
             tag,
-            video_encoder,
-            audio_encoder,
             output_ctx,
-            audio_buffer,
-            last_video_pts: None,
-            video_config,
-            audio_config,
+            video,
+            audio,
         })
+    }
+
+    pub fn video_format() -> RawVideoFormat {
+        RawVideoFormat::YUYV420
     }
 
     pub fn queue_video_frame(&mut self, frame: FFVideo) {
         let mut scaler = ffmpeg::software::converter(
             (frame.width(), frame.height()),
             frame.format(),
-            self.video_config.pixel_format,
+            self.video.config.pixel_format,
         )
         .unwrap();
 
@@ -143,22 +173,23 @@ impl MP4Encoder {
 
         output.set_pts(frame.pts());
 
-        self.video_encoder.send_frame(&output).unwrap();
+        self.video.encoder.send_frame(&output).unwrap();
         self.process_video_packets();
     }
 
     pub fn queue_audio_frame(&mut self, frame: FFAudio) {
-        if self.audio_buffer.is_none() || self.audio_encoder.is_none() {
-            return;
+        if let Some(buffer) = self.audio.as_mut().map(|a| &mut a.buffer) {
+            buffer.consume(frame);
         }
 
-        self.audio_buffer.as_mut().unwrap().consume(frame);
-        while let Some(buffered_frame) = self.audio_buffer.as_mut().unwrap().next_frame() {
-            self.audio_encoder
-                .as_mut()
-                .unwrap()
-                .send_frame(&buffered_frame)
-                .unwrap();
+        while let Some((buffered_frame, audio)) = self
+            .audio
+            .as_mut()
+            .and_then(|a| Some((a.buffer.next_frame()?, a)))
+        {
+            let mut output = ffmpeg::util::frame::Audio::empty();
+            audio.resampler.run(&buffered_frame, &mut output).unwrap();
+            audio.encoder.send_frame(&output).unwrap();
             self.process_audio_packets();
         }
     }
@@ -167,13 +198,14 @@ impl MP4Encoder {
         let mut encoded_packet = FFPacket::empty();
 
         while self
-            .video_encoder
+            .video
+            .encoder
             .receive_packet(&mut encoded_packet)
             .is_ok()
         {
             encoded_packet.set_stream(0); // Video is stream 0
             encoded_packet.rescale_ts(
-                self.video_encoder.time_base(),
+                self.video.encoder.time_base(),
                 self.output_ctx.stream(0).unwrap().time_base(),
             );
             encoded_packet
@@ -183,29 +215,27 @@ impl MP4Encoder {
     }
 
     fn process_audio_packets(&mut self) {
-        let mut encoded_packet = FFPacket::empty();
+        let mut packet = FFPacket::empty();
 
-        if let Some(audio_encoder) = self.audio_encoder.as_mut() {
-            while audio_encoder.receive_packet(&mut encoded_packet).is_ok() {
-                encoded_packet.set_stream(1); // Audio is stream 1
-                encoded_packet.set_time_base(self.output_ctx.stream(1).unwrap().time_base());
-                encoded_packet.rescale_ts(
-                    encoded_packet.time_base(),
+        if let Some(audio) = self.audio.as_mut() {
+            while audio.encoder.receive_packet(&mut packet).is_ok() {
+                packet.set_stream(1); // Audio is stream 1
+                packet.set_time_base(self.output_ctx.stream(1).unwrap().time_base());
+                packet.rescale_ts(
+                    packet.time_base(),
                     self.output_ctx.stream(1).unwrap().time_base(),
                 );
-                encoded_packet
-                    .write_interleaved(&mut self.output_ctx)
-                    .unwrap();
+                packet.write_interleaved(&mut self.output_ctx).unwrap();
             }
         }
     }
 
     pub fn finish(&mut self) {
-        self.video_encoder.send_eof().unwrap();
+        self.video.encoder.send_eof().unwrap();
         self.process_video_packets();
 
-        if let Some(audio_encoder) = self.audio_encoder.as_mut() {
-            audio_encoder.send_eof().unwrap();
+        if let Some(audio) = self.audio.as_mut() {
+            audio.encoder.send_eof().unwrap();
             self.process_audio_packets();
         }
 
@@ -213,11 +243,6 @@ impl MP4Encoder {
     }
 }
 
-// Implementation of AudioBuffer and get_video_codec_and_options remains the same
-// ... [Previous AudioBuffer implementation]
-// ... [Previous get_video_codec_and_options implementation]
-
-// You'll need to implement a new task trait for handling both audio and video inputs
 pub struct MP4Input {
     pub video: FFVideo,
     pub audio: Option<FFAudio>,
@@ -267,7 +292,6 @@ fn get_video_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary)
         } else {
             let keyframe_interval_secs = 2;
             let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
-            let keyframe_interval_str = keyframe_interval.to_string();
 
             options.set("preset", "ultrafast");
             options.set("tune", "zerolatency");

@@ -1,7 +1,8 @@
 use cap_editor::Segment;
 use cap_media::data::{AudioInfo, RawVideoFormat, VideoInfo};
-use cap_media::encoders::MP4Input;
+use cap_media::encoders::{MP4Encoder, MP4Input};
 use cap_media::MediaError;
+use futures::FutureExt;
 use image::{ImageBuffer, Rgba};
 use mp4::Mp4Reader;
 use std::path::Path;
@@ -29,14 +30,14 @@ pub enum ExportError {
     #[error("IO: {0}")]
     IO(#[from] std::io::Error),
 
-    #[error("FFmpeg Task: {0}")]
-    FFmpegTask(#[from] tokio::task::JoinError),
-
     #[error("Rendering: {0}")]
     Rendering(#[from] cap_rendering::RenderingError),
 
     #[error("Media/{0}")]
     Media(#[from] cap_media::MediaError),
+
+    #[error("Join: {0}")]
+    Join(#[from] tokio::task::JoinError),
 }
 
 pub async fn export_video_to_file(
@@ -85,36 +86,28 @@ pub async fn export_video_to_file(
         .unzip();
 
     let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
-    let (done_tx, done_rx) = oneshot::channel();
 
-    let audio_info = if audio_segments
-        .get(0)
-        .and_then(|d| d.as_ref().as_ref())
-        .is_some()
-    {
-        Some(
+    let audio_info = match audio_segments.get(0).and_then(|d| d.as_ref().as_ref()) {
+        Some(audio_data) => Some(
             AudioInfo::new(
-                cap_media::data::Sample::F32(cap_media::data::Type::Packed),
-                48000,
-                1,
+                audio_data.info.sample_format,
+                audio_data.info.sample_rate,
+                audio_data.info.channels as u16,
             )
             .map_err(Into::<MediaError>::into)?,
-        )
-    } else {
-        None
+        ),
+        _ => None,
     };
 
-    std::thread::spawn(move || {
+    let encoder_thread = tokio::task::spawn_blocking(move || {
         let mut encoder = cap_media::encoders::MP4Encoder::init(
             "output",
-            VideoInfo::from_raw(RawVideoFormat::YUYV420, output_size.0, output_size.1, 30),
+            VideoInfo::from_raw(MP4Encoder::video_format(), output_size.0, output_size.1, 30),
             audio_info,
             cap_media::encoders::Output::File(output_path.clone()),
-        )
-        .unwrap();
+        )?;
 
         while let Ok(frame) = frame_rx.recv() {
-            println!("queueing frame");
             encoder.queue_video_frame(frame.video);
             if let Some(audio) = frame.audio {
                 encoder.queue_audio_frame(audio);
@@ -123,10 +116,11 @@ pub async fn export_video_to_file(
 
         encoder.finish();
 
-        done_tx.send(output_path).ok();
-    });
+        Ok::<_, ExportError>(output_path)
+    })
+    .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
 
-    tokio::spawn({
+    let render_task = tokio::spawn({
         let project = project.clone();
         let project_path = project_path.clone();
         async move {
@@ -250,20 +244,21 @@ pub async fn export_video_to_file(
 
             Ok::<_, ExportError>(())
         }
-    });
+    })
+    .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
 
     println!("Rendering video to channel");
 
-    cap_rendering::render_video_to_channel(
+    let render_video_task = cap_rendering::render_video_to_channel(
         render_constants.options,
         project,
         tx_image_data,
         &meta,
         render_segments,
     )
-    .await?;
+    .then(|f| async { f.map_err(Into::into) });
 
-    let output_path = done_rx.await.unwrap();
+    let (output_path, _, _) = tokio::try_join!(encoder_thread, render_video_task, render_task)?;
 
     Ok(output_path)
 }

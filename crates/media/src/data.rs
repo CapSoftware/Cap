@@ -177,13 +177,6 @@ impl AudioInfo {
         frame.set_pts(Some(timestamp));
         frame.set_rate(self.sample_rate);
 
-        // dbg!(
-        //     samples,
-        //     sample_size,
-        //     frame.plane::<f64>(0).len(),
-        //     data.len()
-        // );
-
         match self.channels {
             0 => unreachable!(),
             1 => frame.plane_data_mut(0)[0..data.len()].copy_from_slice(data),
