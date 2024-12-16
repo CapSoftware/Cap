@@ -373,6 +373,7 @@ pub struct NewNotification {
     is_error: bool,
 }
 
+type ArcLock<T> = Arc<RwLock<T>>;
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
 #[tauri::command]
@@ -1189,7 +1190,7 @@ async fn upload_exported_video(
             RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
             let _ = app
-                .state::<MutableState<'_, ClipboardContext>>()
+                .state::<ArcLock<ClipboardContext>>()
                 .write()
                 .await
                 .set_text(uploaded_video.link.clone());
@@ -1970,7 +1971,6 @@ pub async fn run() {
                 )));
             }
 
-            // Add this line to check notification permissions on startup
             tokio::spawn(check_notification_permissions(app.clone()));
 
             println!("Checking startup completion and permissions...");
