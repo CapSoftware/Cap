@@ -239,7 +239,7 @@ function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
 
   const exportVideo = createMutation(() => ({
-    mutationFn: async () => {
+    mutationFn: async (useCustomMuxer: boolean) => {
       const path = await save({
         filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
         defaultPath: `~/Desktop/${prettyName()}.mp4`,
@@ -285,7 +285,7 @@ function ExportButton() {
         project,
         progress,
         true,
-        false
+        useCustomMuxer
       );
       await commands.copyFileToPath(videoPath, path);
 
@@ -303,7 +303,13 @@ function ExportButton() {
   }));
 
   return (
-    <Button variant="primary" size="md" onClick={() => exportVideo.mutate()}>
+    <Button
+      variant="primary"
+      size="md"
+      onClick={(e) =>
+        exportVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
+      }
+    >
       Export
     </Button>
   );
@@ -316,7 +322,7 @@ function ShareButton() {
   );
 
   const uploadVideo = createMutation(() => ({
-    mutationFn: async () => {
+    mutationFn: async (useCustomMuxer: boolean) => {
       console.log("Starting upload process...");
       if (!recordingMeta()) {
         console.error("No recording metadata available");
@@ -478,7 +484,9 @@ function ShareButton() {
       fallback={
         <Button
           disabled={uploadVideo.isPending}
-          onClick={() => uploadVideo.mutate()}
+          onClick={(e) =>
+            uploadVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
+          }
           variant="primary"
           class="flex items-center space-x-1"
         >
@@ -502,7 +510,9 @@ function ShareButton() {
               <Tooltip.Trigger>
                 <Button
                   disabled={uploadVideo.isPending}
-                  onClick={() => uploadVideo.mutate()}
+                  onClick={(e) =>
+                    uploadVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
+                  }
                   variant="secondary"
                   class="flex items-center space-x-1"
                 >

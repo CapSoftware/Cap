@@ -187,8 +187,6 @@ pub async fn render_video_to_channel(
         if let Some((screen_frame, camera_frame)) =
             segment.decoders.get_frames((time * 30.0) as u32).await
         {
-            println!("frame {frame_number} decoded");
-
             let frame = produce_frame(
                 &constants,
                 &screen_frame,
@@ -199,11 +197,7 @@ pub async fn render_video_to_channel(
             )
             .await?;
 
-            println!("frame {frame_number} produced");
-
             sender.send(frame.0).await?;
-
-            println!("frame {frame_number} sent");
         } else {
             println!("no decoder frames: {:?}", (time, segment_i));
         };
