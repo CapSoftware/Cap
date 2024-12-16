@@ -76,7 +76,7 @@ rustflags = [
     );
 
     for (const lib of unnecessaryLibraries) {
-      await fs.rm(path.join(librariesDir, lib));
+      await fs.rm(path.join(librariesDir, lib), { recursive: true });
     }
 
     const headers = await fs.readdir(headersDir);
@@ -91,7 +91,7 @@ rustflags = [
     );
 
     for (const header of unnecessaryHeaders) {
-      await fs.rm(path.join(headersDir, header));
+      await fs.rm(path.join(headersDir, header), { recursive: true });
     }
 
     await fs.rm(path.join(frameworkDir, "Resources", "Models"), {
