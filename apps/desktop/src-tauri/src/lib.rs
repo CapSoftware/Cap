@@ -32,10 +32,9 @@ use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
-// use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
-use cap_export::is_valid_mp4;
 use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
+// use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
 use scap::capturer::Capturer;
@@ -748,6 +747,20 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
     );
 
     Err(last_error.unwrap_or_else(|| "Maximum retry attempts exceeded".to_string()))
+}
+
+/// Validates if a file at the given path is a valid MP4 file
+pub fn is_valid_mp4(path: &std::path::Path) -> bool {
+    if let Ok(file) = std::fs::File::open(path) {
+        let file_size = match file.metadata() {
+            Ok(metadata) => metadata.len(),
+            Err(_) => return false,
+        };
+        let reader = std::io::BufReader::new(file);
+        Mp4Reader::read_header(reader, file_size).is_ok()
+    } else {
+        false
+    }
 }
 
 #[tauri::command]
