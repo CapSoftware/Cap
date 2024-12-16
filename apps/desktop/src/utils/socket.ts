@@ -3,7 +3,7 @@ import { createResource, createSignal } from "solid-js";
 
 export function createImageDataWS(
   url: string,
-  onmessage: (data: ImageData) => void
+  onmessage: (data: { width: number; data: ImageData }) => void
 ): [Omit<WebSocket, "onmessage">, () => boolean] {
   const [isConnected, setIsConnected] = createSignal(false);
   const ws = createWS(url);
@@ -23,13 +23,19 @@ export function createImageDataWS(
     setIsConnected(false);
   });
 
+  // let lastTime = Date.now();
   ws.binaryType = "arraybuffer";
   ws.onmessage = (event) => {
+    // console.log(Date.now() - lastTime);
+
+    // onmessage(new ImageData(new Uint8ClampedArray([0, 0, 0, 0]), 1, 1));
+
     const buffer = event.data as ArrayBuffer;
     const clamped = new Uint8ClampedArray(buffer);
 
     const widthArr = clamped.slice(clamped.length - 4);
     const heightArr = clamped.slice(clamped.length - 8, clamped.length - 4);
+    const strideArr = clamped.slice(clamped.length - 12, clamped.length - 8);
 
     const width =
       widthArr[0] +
@@ -41,14 +47,24 @@ export function createImageDataWS(
       (heightArr[1] << 8) +
       (heightArr[2] << 16) +
       (heightArr[3] << 24);
+    const stride =
+      (strideArr[0] +
+        (strideArr[1] << 8) +
+        (strideArr[2] << 16) +
+        (strideArr[3] << 24)) /
+      4;
+
+    console.log({ stride, width, height });
 
     const imageData = new ImageData(
-      clamped.slice(0, clamped.length - 8),
-      width,
+      clamped.slice(0, clamped.length - 12),
+      stride,
       height
     );
 
-    onmessage(imageData);
+    // lastTime = Date.now();
+
+    onmessage({ width, data: imageData });
   };
 
   return [ws, isConnected];

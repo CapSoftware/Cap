@@ -372,6 +372,7 @@ pub struct NewNotification {
     is_error: bool,
 }
 
+type ArcLock<T> = Arc<RwLock<T>>;
 type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
 #[tauri::command]
@@ -1018,7 +1019,7 @@ fn close_previous_recordings_window(app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
-        if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
+        if let Ok(panel) = app.get_webview_panel(&CapWindowId::RecordingsOverlay.label()) {
             panel.released_when_closed(true);
             panel.close();
         }
@@ -1031,7 +1032,7 @@ fn focus_captures_panel(app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
-        if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
+        if let Ok(panel) = app.get_webview_panel(&CapWindowId::RecordingsOverlay.label()) {
             panel.make_key_window();
         }
     }
@@ -1202,7 +1203,7 @@ async fn upload_exported_video(
             RecordingMetaChanged { id: video_id }.emit(&app).ok();
 
             let _ = app
-                .state::<MutableState<'_, ClipboardContext>>()
+                .state::<ArcLock<ClipboardContext>>()
                 .write()
                 .await
                 .set_text(uploaded_video.link.clone());
@@ -1920,7 +1921,7 @@ pub async fn run() {
                     CapWindowId::Setup.label().as_str(),
                     CapWindowId::WindowCaptureOccluder.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
-                    CapWindowId::PrevRecordings.label().as_str(),
+                    CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::InProgressRecording.label().as_str(),
                 ])
                 .map_label(|label| match label {
@@ -1983,7 +1984,6 @@ pub async fn run() {
                 )));
             }
 
-            // Add this line to check notification permissions on startup
             tokio::spawn(check_notification_permissions(app.clone()));
 
             println!("Checking startup completion and permissions...");

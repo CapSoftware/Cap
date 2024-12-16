@@ -36,15 +36,18 @@ export async function GET(request: NextRequest) {
     const origin = request.headers.get("origin") as string;
 
     if (!user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: {
-          "Access-Control-Allow-Origin": origin,
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
-          "Access-Control-Allow-Credentials": "true",
-        },
-      });
+      return Response.json(
+        { error: "Unauthorized" },
+        {
+          status: 401,
+          headers: {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Credentials": "true",
+          },
+        }
+      );
     }
 
     const [bucket] = await db
@@ -53,8 +56,8 @@ export async function GET(request: NextRequest) {
       .where(eq(s3Buckets.ownerId, user.id));
 
     if (!bucket) {
-      return new Response(
-        JSON.stringify({
+      return Response.json(
+        {
           config: {
             provider: "aws",
             accessKeyId: "",
@@ -63,7 +66,7 @@ export async function GET(request: NextRequest) {
             bucketName: "",
             region: "us-east-1",
           },
-        }),
+        },
         {
           headers: {
             "Access-Control-Allow-Origin": origin,
@@ -80,30 +83,37 @@ export async function GET(request: NextRequest) {
       provider: bucket.provider,
       accessKeyId: await decrypt(bucket.accessKeyId),
       secretAccessKey: await decrypt(bucket.secretAccessKey),
-      endpoint: bucket.endpoint ? await decrypt(bucket.endpoint) : "https://s3.amazonaws.com",
+      endpoint: bucket.endpoint
+        ? await decrypt(bucket.endpoint)
+        : "https://s3.amazonaws.com",
       bucketName: await decrypt(bucket.bucketName),
       region: await decrypt(bucket.region),
     };
 
-    return new Response(JSON.stringify({ config: decryptedConfig }), {
-      headers: {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Allow-Credentials": "true",
-      },
-    });
+    return Response.json(
+      { config: decryptedConfig },
+      {
+        headers: {
+          "Access-Control-Allow-Origin": origin,
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Allow-Credentials": "true",
+        },
+      }
+    );
   } catch (error) {
     console.error("Error in S3 config get route:", error);
-    return new Response(
-      JSON.stringify({ 
+    return Response.json(
+      {
         error: "Failed to fetch S3 configuration",
-        details: error instanceof Error ? error.message : String(error)
-      }),
+        details: error instanceof Error ? error.message : String(error),
+      },
       {
         status: 500,
         headers: {
-          "Access-Control-Allow-Origin": request.headers.get("origin") as string,
+          "Access-Control-Allow-Origin": request.headers.get(
+            "origin"
+          ) as string,
           "Access-Control-Allow-Methods": "GET, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type, Authorization",
           "Access-Control-Allow-Credentials": "true",
@@ -111,4 +121,4 @@ export async function GET(request: NextRequest) {
       }
     );
   }
-} 
+}

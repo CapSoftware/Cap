@@ -44,7 +44,7 @@ export function Player() {
     const frame = latestFrame();
     if (!frame) return;
     const ctx = canvasRef.getContext("2d");
-    ctx?.putImageData(frame, 0, 0);
+    ctx?.putImageData(frame.data, 0, 0);
   });
 
   const [canvasContainerRef, setCanvasContainerRef] =
@@ -172,7 +172,7 @@ export function Player() {
             };
 
             const frameAspect = () =>
-              currentFrame().width / currentFrame().height;
+              currentFrame().width / currentFrame().data.height;
 
             const size = () => {
               if (frameAspect() < containerAspect()) {
@@ -210,7 +210,7 @@ export function Player() {
                 ref={canvasRef}
                 id="canvas"
                 width={currentFrame().width}
-                height={currentFrame().height}
+                height={currentFrame().data.height}
               />
             );
           }}

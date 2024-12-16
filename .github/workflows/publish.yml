@@ -68,11 +68,18 @@ jobs:
 
             main();
 
-      - name: create draft release
+      - name: Create draft CN release
         uses: crabnebula-dev/cloud-release@v0
         with:
           command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
           api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Create draft GH release
+        # TODO: Change to stable version when available
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
 
   build:
     needs: draft

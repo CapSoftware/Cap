@@ -279,7 +279,7 @@ impl Default for FFmpeg {
 impl FFmpeg {
     pub fn new() -> Self {
         let mut command = Command::new(relative_command_path("ffmpeg").unwrap());
-        command.arg("-hide_banner");
+        // command.arg("-hide_banner");
 
         Self {
             command,

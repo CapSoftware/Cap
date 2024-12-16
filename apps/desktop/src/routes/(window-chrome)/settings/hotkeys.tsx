@@ -43,8 +43,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
   }>(props.initialStore?.hotkeys ?? {});
 
   createEffect(() => {
-    // biome-ignore lint/suspicious/noExplicitAny: specta#283
-    hotkeysStore.set({ hotkeys: hotkeys as any });
+    hotkeysStore.set({ hotkeys: { ...hotkeys } as any });
   });
 
   const [listening, setListening] = createSignal<{

@@ -8,6 +8,7 @@ use cap_rendering::{
 };
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
+use std::time::Instant;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
 
@@ -277,6 +278,8 @@ impl EditorInstance {
 
                 let project = self.project_config.1.borrow().clone();
 
+                let now = Instant::now();
+
                 let Some((time, segment)) = project
                     .timeline
                     .as_ref()
@@ -287,6 +290,8 @@ impl EditorInstance {
                 };
 
                 let segment = &self.segments[segment.unwrap_or(0) as usize];
+
+                let now = Instant::now();
 
                 let Some((screen_frame, camera_frame)) = segment
                     .decoders
@@ -355,8 +360,9 @@ async fn create_frames_ws(frame_rx: mpsc::Receiver<SocketMessage>) -> (u16, mpsc
                     };
 
                     match chunk {
-                        SocketMessage::Frame { width, height, mut data } => {
-                                data.extend_from_slice(&height.to_le_bytes());
+                        SocketMessage::Frame { width, height, mut data, stride } => {
+                              data.extend_from_slice(&stride.to_le_bytes());
+                              data.extend_from_slice(&height.to_le_bytes());
                               data.extend_from_slice(&width.to_le_bytes());
 
                             socket.send(Message::Binary(data)).await.unwrap();
@@ -406,6 +412,7 @@ pub enum SocketMessage {
         data: Vec<u8>,
         width: u32,
         height: u32,
+        stride: u32,
     },
 }
 

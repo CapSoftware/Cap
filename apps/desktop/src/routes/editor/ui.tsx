@@ -16,7 +16,9 @@ import {
 } from "solid-js";
 import { useEditorContext } from "./context";
 
-export function Field(props: ParentProps<{ name: string; icon: JSX.Element }>) {
+export function Field(
+  props: ParentProps<{ name: string; icon?: JSX.Element }>
+) {
   return (
     <div class="flex flex-col gap-[0.75rem]">
       <span class="flex flex-row items-center gap-[0.375rem] text-gray-500 text-[0.875rem]">

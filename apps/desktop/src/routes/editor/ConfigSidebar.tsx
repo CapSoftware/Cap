@@ -626,7 +626,7 @@ export function ConfigSidebar() {
           return (
             <div
               data-visible={state.timelineSelection?.type === "zoom"}
-              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-50 z-50 animate-in slide-in-from-bottom-2 fade-in"
+              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-6 bg-gray-50 z-50 animate-in slide-in-from-bottom-2 fade-in"
             >
               <div class="flex flex-row justify-between items-center">
                 <div class="flex items-center gap-2">
@@ -638,6 +638,7 @@ export function ConfigSidebar() {
                   </EditorButton>
                 </div>
                 <EditorButton
+                  variant="danger"
                   onClick={() => {
                     const index = value().selection.index;
 
@@ -677,6 +678,87 @@ export function ConfigSidebar() {
                   maxValue={2.5}
                   step={0.001}
                 />
+              </Field>
+              <Field name="Zoom Mode" icon={<IconCapSettings />}>
+                <KTabs class="space-y-6">
+                  <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
+                    <KTabs.Trigger
+                      value="auto"
+                      class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
+                      // onClick={() => setSelectedTab(item.id)}
+                      disabled
+                    >
+                      Auto
+                    </KTabs.Trigger>
+                    <KTabs.Trigger
+                      value="manual"
+                      class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
+                      // onClick={() => setSelectedTab(item.id)}
+                    >
+                      Manual
+                    </KTabs.Trigger>
+                    <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden">
+                      <div class="bg-gray-100 flex-1" />
+                    </KTabs.Indicator>
+                  </KTabs.List>
+                  <KTabs.Content value="manual">
+                    <Show
+                      when={(() => {
+                        const m = value().segment.mode;
+                        if (m === "auto") return;
+                        return m.manual;
+                      })()}
+                    >
+                      {(mode) => (
+                        <div class="w-full h-52 bg-gray-100 rounded-xl p-1">
+                          <div
+                            class="w-full h-full bg-blue-400 rounded-lg relative"
+                            onMouseMove={(e) => {
+                              if (e.buttons === 1) {
+                                const bounds =
+                                  e.currentTarget.getBoundingClientRect();
+
+                                setProject(
+                                  "timeline",
+                                  "zoomSegments",
+                                  value().selection.index,
+                                  "mode",
+                                  "manual",
+                                  {
+                                    x: Math.max(
+                                      Math.min(
+                                        (e.clientX - bounds.left) /
+                                          bounds.width,
+                                        1
+                                      ),
+                                      0
+                                    ),
+                                    y: Math.max(
+                                      Math.min(
+                                        (e.clientY - bounds.top) /
+                                          bounds.height,
+                                        1
+                                      ),
+                                      0
+                                    ),
+                                  }
+                                );
+                              }
+                            }}
+                          >
+                            <div
+                              class="absolute w-6 h-6 rounded-full bg-gray-50 border border-gray-400 -translate-x-1/2 -translate-y-1/2"
+                              style={{
+                                left: `${mode().x * 100}%`,
+                                top: `${mode().y * 100}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </Show>
+                  </KTabs.Content>
+                </KTabs>
               </Field>
             </div>
           );

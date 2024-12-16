@@ -15,9 +15,9 @@ use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 use cap_project::{
     AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop,
     CursorAnimationStyle, CursorClickEvent, CursorData, CursorEvents, CursorMoveEvent,
-    ProjectConfiguration, RecordingMeta, FAST_SMOOTHING_SAMPLES, FAST_VELOCITY_THRESHOLD,
-    REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD, SLOW_SMOOTHING_SAMPLES,
-    SLOW_VELOCITY_THRESHOLD, XY,
+    ProjectConfiguration, RecordingMeta, ZoomSegment, FAST_SMOOTHING_SAMPLES,
+    FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
+    SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
 };
 
 use image::GenericImageView;
@@ -147,8 +147,6 @@ pub async fn render_video_to_channel(
     let constants = RenderVideoConstants::new(options, meta).await?;
     let recordings = ProjectRecordings::new(meta);
 
-    println!("Setting up FFmpeg input for screen recording...");
-
     ffmpeg::init().unwrap();
 
     let start_time = Instant::now();
@@ -157,6 +155,9 @@ pub async fn render_video_to_channel(
         .timeline()
         .map(|t| t.duration())
         .unwrap_or(recordings.duration());
+
+    println!("export duration: {duration}");
+    println!("export duration: {duration}");
 
     let mut frame_number = 0;
 
@@ -186,6 +187,8 @@ pub async fn render_video_to_channel(
         if let Some((screen_frame, camera_frame)) =
             segment.decoders.get_frames((time * 30.0) as u32).await
         {
+            println!("frame {frame_number} decoded");
+
             let frame = produce_frame(
                 &constants,
                 &screen_frame,
@@ -196,7 +199,11 @@ pub async fn render_video_to_channel(
             )
             .await?;
 
-            sender.send(frame).await?;
+            println!("frame {frame_number} produced");
+
+            sender.send(frame.0).await?;
+
+            println!("frame {frame_number} sent");
         } else {
             println!("no decoder frames: {:?}", (time, segment_i));
         };
@@ -247,7 +254,13 @@ impl RenderVideoConstants {
             .await
             .ok_or(RenderingError::NoAdapter)?;
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default(), None)
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    required_features: wgpu::Features::MAPPABLE_PRIMARY_BUFFERS,
+                    ..Default::default()
+                },
+                None,
+            )
             .await?;
 
         // Pass project_path to load_cursor_textures
@@ -499,11 +512,11 @@ impl ProjectUniforms {
         );
 
         let zoom_keyframes = ZoomKeyframes::new(project);
-        let current_zoom = zoom_keyframes.get_amount(time as f64);
-        let prev_zoom = zoom_keyframes.get_amount((time - 1.0 / 30.0) as f64);
+        let current_zoom = zoom_keyframes.interpolate(time as f64);
+        let prev_zoom = zoom_keyframes.interpolate((time - 1.0 / 30.0) as f64);
 
         let velocity = if current_zoom != prev_zoom {
-            let scale_change = (current_zoom - prev_zoom) as f32;
+            let scale_change = (current_zoom.0 - prev_zoom.0) as f32;
             // Reduce the velocity scale from 0.05 to 0.02
             [
                 (scale_change * output_size.0 as f32) * 0.02, // Reduced from 0.05
@@ -519,24 +532,35 @@ impl ProjectUniforms {
             0.0
         };
 
-        let zoom_origin_uv = if let Some(cursor_position) = cursor_position {
-            (zoom_keyframes.get_amount(time as f64), cursor_position)
-        } else {
-            (1.0, Coord::new(XY { x: 0.0, y: 0.0 }))
-        };
-
         let crop = Self::get_crop(options, project);
 
-        let zoom_origin = if let Some(cursor_position) = cursor_position {
-            cursor_position
+        let (zoom_amount, zoom_origin) = {
+            let (amount, position) = zoom_keyframes.interpolate(time as f64);
+
+            let origin = match position {
+                ZoomPosition::Manual { x, y } => Coord::<RawDisplayUVSpace>::new(XY {
+                    x: x as f64,
+                    y: y as f64,
+                })
                 .to_raw_display_space(options)
-                .to_cropped_display_space(options, project)
-        } else {
-            let center = XY::new(
-                options.screen_size.x as f64 / 2.0,
-                options.screen_size.y as f64 / 2.0,
-            );
-            Coord::<RawDisplaySpace>::new(center).to_cropped_display_space(options, project)
+                .to_cropped_display_space(options, project),
+                ZoomPosition::Cursor => {
+                    if let Some(cursor_position) = cursor_position {
+                        cursor_position
+                            .to_raw_display_space(options)
+                            .to_cropped_display_space(options, project)
+                    } else {
+                        let center = XY::new(
+                            options.screen_size.x as f64 / 2.0,
+                            options.screen_size.y as f64 / 2.0,
+                        );
+                        Coord::<RawDisplaySpace>::new(center)
+                            .to_cropped_display_space(options, project)
+                    }
+                }
+            };
+
+            (amount, origin)
         };
 
         let (display, zoom) = {
@@ -561,7 +585,7 @@ impl ProjectUniforms {
                 .clamp(display_offset.coord, end.coord);
 
             let zoom = Zoom {
-                amount: zoom_keyframes.get_amount(time as f64),
+                amount: zoom_amount,
                 zoom_origin: screen_scale_origin,
                 // padding: screen_scale_origin,
             };
@@ -606,7 +630,7 @@ impl ProjectUniforms {
 
                 // Calculate camera size based on zoom
                 let base_size = project.camera.size / 100.0;
-                let zoom_amount = zoom_keyframes.get_amount(time as f64) as f32;
+                let zoom_amount = zoom_amount as f32;
                 let zoomed_size = if zoom_amount > 1.0 {
                     // Get the zoom size as a percentage (0-1 range)
                     let zoom_size = project.camera.zoom_size.unwrap_or(20.0) / 100.0;
@@ -650,7 +674,7 @@ impl ProjectUniforms {
                 // Calculate camera motion blur based on zoom transition
                 let camera_motion_blur = {
                     let base_blur = project.motion_blur.unwrap_or(0.2);
-                    let zoom_delta = (current_zoom - prev_zoom).abs() as f32;
+                    let zoom_delta = (current_zoom.0 - prev_zoom.0).abs() as f32;
 
                     // Calculate a smooth transition factor
                     let transition_speed = 30.0f32; // Frames per second
@@ -694,15 +718,122 @@ impl ProjectUniforms {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ZoomKeyframe {
     time: f64,
-    amount: f64,
+    scale: f64,
+    position: ZoomPosition,
 }
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum ZoomPosition {
+    Cursor,
+    Manual { x: f32, y: f32 },
+}
+#[derive(Debug, PartialEq)]
 pub struct ZoomKeyframes(Vec<ZoomKeyframe>);
 
 pub const ZOOM_DURATION: f64 = 0.6;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn zoom_keyframes() {
+        let segments = [ZoomSegment {
+            start: 0.5,
+            end: 1.5,
+            amount: 1.5,
+            mode: cap_project::ZoomMode::Manual { x: 0.2, y: 0.2 },
+        }];
+
+        let keyframes = ZoomKeyframes::from_zoom_segments(&segments);
+
+        pretty_assertions::assert_eq!(
+            keyframes,
+            ZoomKeyframes(vec![
+                ZoomKeyframe {
+                    time: 0.0,
+                    scale: 1.0,
+                    position: ZoomPosition::Manual { x: 0.0, y: 0.0 }
+                },
+                ZoomKeyframe {
+                    time: 0.5,
+                    scale: 1.0,
+                    position: ZoomPosition::Manual { x: 0.2, y: 0.2 }
+                },
+                ZoomKeyframe {
+                    time: 0.5 + ZOOM_DURATION,
+                    scale: 1.5,
+                    position: ZoomPosition::Manual { x: 0.2, y: 0.2 }
+                },
+                ZoomKeyframe {
+                    time: 1.5,
+                    scale: 1.5,
+                    position: ZoomPosition::Manual { x: 0.2, y: 0.2 }
+                },
+                ZoomKeyframe {
+                    time: 1.5 + ZOOM_DURATION,
+                    scale: 1.0,
+                    position: ZoomPosition::Manual { x: 0.2, y: 0.2 }
+                }
+            ])
+        );
+
+        let segments = [
+            ZoomSegment {
+                start: 0.5,
+                end: 1.5,
+                amount: 1.5,
+                mode: cap_project::ZoomMode::Manual { x: 0.2, y: 0.2 },
+            },
+            ZoomSegment {
+                start: 1.5,
+                end: 2.5,
+                amount: 1.5,
+                mode: cap_project::ZoomMode::Manual { x: 0.8, y: 0.8 },
+            },
+        ];
+
+        let keyframes = ZoomKeyframes::from_zoom_segments(&segments);
+
+        pretty_assertions::assert_eq!(
+            keyframes,
+            ZoomKeyframes(vec![
+                ZoomKeyframe {
+                    time: 0.0,
+                    scale: 1.0,
+                    position: ZoomPosition::Manual { x: 0.0, y: 0.0 }
+                },
+                ZoomKeyframe {
+                    time: 0.5,
+                    scale: 1.0,
+                    position: ZoomPosition::Manual { x: 0.2, y: 0.2 }
+                },
+                ZoomKeyframe {
+                    time: 0.5 + ZOOM_DURATION,
+                    scale: 1.5,
+                    position: ZoomPosition::Manual { x: 0.2, y: 0.2 }
+                },
+                ZoomKeyframe {
+                    time: 1.5,
+                    scale: 1.5,
+                    position: ZoomPosition::Manual { x: 0.2, y: 0.2 }
+                },
+                ZoomKeyframe {
+                    time: 1.5 + ZOOM_DURATION,
+                    scale: 1.5,
+                    position: ZoomPosition::Manual { x: 0.8, y: 0.8 }
+                },
+                ZoomKeyframe {
+                    time: 2.5,
+                    scale: 1.5,
+                    position: ZoomPosition::Manual { x: 0.8, y: 0.8 }
+                }
+            ])
+        );
+    }
+}
 
 impl ZoomKeyframes {
     pub fn new(config: &ProjectConfiguration) -> Self {
@@ -710,37 +841,60 @@ impl ZoomKeyframes {
             return Self(vec![]);
         };
 
-        if zoom_segments.is_empty() {
+        Self::from_zoom_segments(zoom_segments)
+    }
+
+    fn from_zoom_segments(segments: &[ZoomSegment]) -> Self {
+        if segments.is_empty() {
             return Self(vec![]);
         }
 
         let mut keyframes = vec![];
 
-        for segment in zoom_segments {
+        if segments[0].start != 0.0 {
+            keyframes.push(ZoomKeyframe {
+                time: 0.0,
+                scale: 1.0,
+                position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
+            });
+        }
+
+        for segment in segments {
+            let position = match segment.mode {
+                cap_project::ZoomMode::Auto => ZoomPosition::Cursor,
+                cap_project::ZoomMode::Manual { x, y } => ZoomPosition::Manual { x, y },
+            };
+
             keyframes.push(ZoomKeyframe {
                 time: segment.start,
-                amount: 1.0,
+                scale: 1.0,
+                position,
             });
             keyframes.push(ZoomKeyframe {
                 time: segment.start + ZOOM_DURATION,
-                amount: segment.amount,
+                scale: segment.amount,
+                position,
             });
             keyframes.push(ZoomKeyframe {
                 time: segment.end,
-                amount: segment.amount,
+                scale: segment.amount,
+                position,
             });
             keyframes.push(ZoomKeyframe {
                 time: segment.end + ZOOM_DURATION,
-                amount: 1.0,
+                scale: 1.0,
+                position,
             });
         }
 
         Self(keyframes)
     }
 
-    pub fn get_amount(&self, time: f64) -> f64 {
+    pub fn interpolate(&self, time: f64) -> (f64, ZoomPosition) {
+        let default = (1.0, ZoomPosition::Manual { x: 0.0, y: 0.0 });
+
         if !FLAGS.zoom {
-            return 1.0;
+            return default;
         }
 
         let prev_index = self
@@ -751,13 +905,13 @@ impl ZoomKeyframes {
             .map(|p| self.0.len() - 1 - p);
 
         let Some(prev_index) = prev_index else {
-            return 1.0;
+            return default;
         };
 
         let next_index = prev_index + 1;
 
         let Some((prev, next)) = self.0.get(prev_index).zip(self.0.get(next_index)) else {
-            return 1.0;
+            return default;
         };
 
         let keyframe_length = next.time - prev.time;
@@ -766,7 +920,17 @@ impl ZoomKeyframes {
         let t = delta_time / keyframe_length;
         let t = t.powf(0.5);
 
-        prev.amount + (next.amount - prev.amount) * t
+        let position = match (&prev.position, &next.position) {
+            (ZoomPosition::Manual { x: x1, y: y1 }, ZoomPosition::Manual { x: x2, y: y2 }) => {
+                ZoomPosition::Manual {
+                    x: x1 + (x2 - x1) * t as f32,
+                    y: y1 + (y2 - y1) * t as f32,
+                }
+            }
+            _ => ZoomPosition::Manual { x: 0.0, y: 0.0 },
+        };
+
+        (prev.scale + (next.scale - prev.scale) * t, position)
     }
 }
 
@@ -777,7 +941,7 @@ pub async fn produce_frame(
     background: Background,
     uniforms: &ProjectUniforms,
     time: f32,
-) -> Result<Vec<u8>, RenderingError> {
+) -> Result<(Vec<u8>, u32), RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
@@ -900,16 +1064,16 @@ pub async fn produce_frame(
         output_is_left = !output_is_left;
     }
 
-    // if FLAGS.zoom {
-    // Then render the cursor
-    draw_cursor(
-        constants,
-        uniforms,
-        time,
-        &mut encoder,
-        get_either(texture_views, !output_is_left),
-    );
-    // }
+    if FLAGS.zoom {
+        // Then render the cursor
+        draw_cursor(
+            constants,
+            uniforms,
+            time,
+            &mut encoder,
+            get_either(texture_views, !output_is_left),
+        );
+    }
 
     // camera
     if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (
@@ -1041,18 +1205,14 @@ pub async fn produce_frame(
         .ok_or(RenderingError::BufferMapWaitingFailed)??;
 
     let data = buffer_slice.get_mapped_range();
-    let padded_data: Vec<u8> = data.to_vec(); // Ensure the type is Vec<u8>
-    let mut image_data =
-        Vec::with_capacity((uniforms.output_size.0 * uniforms.output_size.1 * 4) as usize);
-    for chunk in padded_data.chunks(padded_bytes_per_row as usize) {
-        image_data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
-    }
+
+    let image_data = data.to_vec();
 
     // Unmap the buffer
     drop(data);
     output_buffer.unmap();
 
-    Ok(image_data)
+    Ok((image_data, padded_bytes_per_row))
 }
 
 fn draw_cursor(
