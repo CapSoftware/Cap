@@ -59,27 +59,44 @@ rustflags = [
   await exec(`tar xf ${__root}/native-deps.tar.xz -C ${nativeDeps}`);
 
   if (os === "darwin") {
-    // const frameworkDir = path.join(nativeDeps, "Spacedrive.framework");
-    // const librariesDir = path.join(frameworkDir, "Libraries");
+    const frameworkDir = path.join(nativeDeps, "Spacedrive.framework");
 
-    // const libraries = await fs.readdir(librariesDir);
+    const headersDir = path.join(frameworkDir, "Headers");
+    const librariesDir = path.join(frameworkDir, "Libraries");
 
-    // const unnecessaryLibraries = libraries.filter(
-    //   (v) =>
-    //     !(
-    //       v.startsWith("libav") ||
-    //       v.startsWith("libsw") ||
-    //       v.startsWith("libpostproc")
-    //     )
-    // );
+    const libraries = await fs.readdir(librariesDir);
 
-    // for (const lib of unnecessaryLibraries) {
-    //   await fs.rm(path.join(librariesDir, lib));
-    // }
+    const unnecessaryLibraries = libraries.filter(
+      (v) =>
+        !(
+          v.startsWith("libav") ||
+          v.startsWith("libsw") ||
+          v.startsWith("libpostproc")
+        )
+    );
 
-    // await fs.rm(path.join(frameworkDir, "Resources", "Models"), {
-    //   recursive: true,
-    // });
+    for (const lib of unnecessaryLibraries) {
+      await fs.rm(path.join(librariesDir, lib));
+    }
+
+    const headers = await fs.readdir(headersDir);
+
+    const unnecessaryHeaders = headers.filter(
+      (v) =>
+        !(
+          v.startsWith("libav") ||
+          v.startsWith("libsw") ||
+          v.startsWith("libpostproc")
+        )
+    );
+
+    for (const header of unnecessaryHeaders) {
+      await fs.rm(path.join(headersDir, header));
+    }
+
+    await fs.rm(path.join(frameworkDir, "Resources", "Models"), {
+      recursive: true,
+    });
 
     await symlinkSharedLibsMacOS(nativeDeps).catch((e) => {
       console.error(`Failed to symlink shared libs.`);
