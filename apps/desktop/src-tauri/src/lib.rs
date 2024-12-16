@@ -22,11 +22,9 @@ use auth::{AuthStore, AuthenticationInvalid};
 use cap_editor::EditorState;
 use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
+use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
-use cap_media::{
-    feeds::{CameraFeed, CameraFrameSender},
-    sources::ScreenCaptureTarget,
-};
+use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::{Content, ProjectConfiguration, RecordingMeta, SharingMeta};
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
@@ -68,7 +66,7 @@ use windows::{CapWindowId, ShowCapWindow};
 pub struct App {
     start_recording_options: RecordingOptions,
     #[serde(skip)]
-    camera_tx: CameraFrameSender,
+    camera_tx: flume::Sender<WSFrame>,
     camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
@@ -1882,7 +1880,8 @@ pub async fn run() {
         .expect("Failed to export typescript bindings");
 
     let (camera_tx, camera_rx) = CameraFeed::create_channel();
-    let camera_ws_port = camera::create_camera_ws(camera_rx.clone()).await;
+    // _shutdown needs to be kept alive to keep the camera ws running
+    let (camera_ws_port, _shutdown) = cap_media::frame_ws::create_frame_ws(camera_rx.clone()).await;
 
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 

@@ -1,101 +1,12 @@
 use std::{sync::Arc, time::Instant};
 
+use cap_media::frame_ws::WSFrame;
 use cap_project::{BackgroundSource, ProjectConfiguration};
 use cap_rendering::{decoder::DecodedFrame, produce_frame, ProjectUniforms, RenderVideoConstants};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
-
-use crate::editor_instance::SocketMessage;
-
-struct EditorState {
-    config: ProjectConfiguration,
-    playback_position: u32,
-    playing: bool,
-}
-
-pub enum EditorMessage {
-    SetPlaybackPosition(u32),
-    TogglePlayback(bool),
-    PreviewFrame(u32),
-}
-
-pub enum EditorEvent {
-    PlaybackChanged(bool),
-}
-
-struct Editor {
-    config: ProjectConfiguration,
-    playback_position: u32,
-    playing: bool,
-    rx: mpsc::Receiver<EditorMessage>,
-    // event_tx: mpsc::Sender<EditorEvent>,
-}
-
-struct EditorHandle {
-    tx: mpsc::Sender<EditorMessage>,
-}
-
-impl Editor {
-    fn new(config: ProjectConfiguration) -> EditorHandle {
-        let (tx, rx) = mpsc::channel(4);
-
-        let mut this = Self {
-            config,
-            playback_position: 0,
-            playing: false,
-            rx,
-        };
-
-        tokio::spawn(async move {
-            while let Some(msg) = this.rx.recv().await {
-                this.tick(msg).await;
-            }
-        });
-
-        EditorHandle { tx }
-    }
-
-    async fn tick(&mut self, msg: EditorMessage) {
-        match msg {
-            EditorMessage::SetPlaybackPosition(position) => {
-                if self.playing {
-                    return;
-                }
-
-                self.playback_position = position;
-            }
-            EditorMessage::TogglePlayback(play) => {
-                if self.playing == play {
-                    return;
-                }
-
-                self.playing = play;
-            }
-            EditorMessage::PreviewFrame(frame_number) => if self.playing {},
-        }
-    }
-}
-
-impl EditorHandle {
-    async fn send(&mut self, msg: EditorMessage) {
-        self.tx.send(msg).await.unwrap();
-    }
-
-    pub async fn set_playback_position(&mut self, position: u32) {
-        self.send(EditorMessage::SetPlaybackPosition(position))
-            .await;
-    }
-
-    pub async fn start_playback(&mut self) {
-        self.send(EditorMessage::TogglePlayback(true)).await;
-    }
-
-    pub async fn stop_playback(&mut self) {
-        self.send(EditorMessage::TogglePlayback(false)).await;
-    }
-}
 
 pub enum RendererMessage {
     RenderFrame {
@@ -113,7 +24,7 @@ pub enum RendererMessage {
 
 pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
-    frame_tx: mpsc::Sender<SocketMessage>,
+    frame_tx: flume::Sender<WSFrame>,
     render_constants: Arc<RenderVideoConstants>,
 }
 
@@ -124,7 +35,7 @@ pub struct RendererHandle {
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
-        frame_tx: mpsc::Sender<SocketMessage>,
+        frame_tx: flume::Sender<WSFrame>,
     ) -> RendererHandle {
         let (tx, rx) = mpsc::channel(4);
 
@@ -178,7 +89,7 @@ impl Renderer {
                             .unwrap();
 
                             frame_tx
-                                .try_send(SocketMessage::Frame {
+                                .try_send(WSFrame {
                                     data: frame,
                                     width: uniforms.output_size.0,
                                     height: uniforms.output_size.1,

@@ -49,6 +49,8 @@ export function createImageDataWS(
         (strideArr[3] << 24)) /
       4;
 
+    console.log({ width, height, stride });
+
     const imageData = new ImageData(
       clamped.slice(0, clamped.length - 12),
       stride,
