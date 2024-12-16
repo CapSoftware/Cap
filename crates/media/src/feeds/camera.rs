@@ -423,6 +423,7 @@ impl FrameConverter {
             }
         };
 
+        data.extend_from_slice(&(resolution.width() * 4).to_le_bytes());
         data.extend_from_slice(&resolution.height().to_le_bytes());
         data.extend_from_slice(&resolution.width().to_le_bytes());
 

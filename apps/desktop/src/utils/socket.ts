@@ -23,13 +23,8 @@ export function createImageDataWS(
     setIsConnected(false);
   });
 
-  // let lastTime = Date.now();
   ws.binaryType = "arraybuffer";
   ws.onmessage = (event) => {
-    // console.log(Date.now() - lastTime);
-
-    // onmessage(new ImageData(new Uint8ClampedArray([0, 0, 0, 0]), 1, 1));
-
     const buffer = event.data as ArrayBuffer;
     const clamped = new Uint8ClampedArray(buffer);
 
@@ -54,15 +49,11 @@ export function createImageDataWS(
         (strideArr[3] << 24)) /
       4;
 
-    console.log({ stride, width, height });
-
     const imageData = new ImageData(
       clamped.slice(0, clamped.length - 12),
       stride,
       height
     );
-
-    // lastTime = Date.now();
 
     onmessage({ width, data: imageData });
   };
