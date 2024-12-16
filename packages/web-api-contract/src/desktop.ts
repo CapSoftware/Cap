@@ -90,7 +90,7 @@ const protectedContract = c.router(
     },
     deleteS3Config: {
       method: "DELETE",
-      path: "/dekstop/s3/config/delete",
+      path: "/desktop/s3/config/delete",
       responses: { 200: z.object({ success: z.literal(true) }) },
     },
     testS3Config: {
