@@ -406,8 +406,6 @@ pub struct EditorState {
     pub preview_task: Option<tokio::task::JoinHandle<()>>,
 }
 
-pub const FRAMES_WS_PATH: &str = "/frames-ws";
-
 pub struct Segment {
     pub audio: Arc<Option<AudioData>>,
     pub cursor: Arc<CursorEvents>,

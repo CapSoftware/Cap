@@ -19,8 +19,8 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid};
+use cap_editor::EditorInstance;
 use cap_editor::EditorState;
-use cap_editor::{EditorInstance, FRAMES_WS_PATH};
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
@@ -879,7 +879,7 @@ async fn create_editor_instance(
     println!("Pretty name: {}", meta.pretty_name);
 
     Ok(SerializedEditorInstance {
-        frames_socket_url: format!("ws://localhost:{}{FRAMES_WS_PATH}", editor_instance.ws_port),
+        frames_socket_url: format!("ws://localhost:{}", editor_instance.ws_port),
         recording_duration: editor_instance.recordings.duration(),
         saved_project_config: {
             let project_config = editor_instance.project_config.1.borrow();

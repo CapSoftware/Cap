@@ -2,4 +2,4 @@ mod editor;
 mod editor_instance;
 mod playback;
 
-pub use editor_instance::{EditorInstance, EditorState, Segment, FRAMES_WS_PATH};
+pub use editor_instance::{EditorInstance, EditorState, Segment};
