@@ -1005,7 +1005,7 @@ fn close_previous_recordings_window(app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
-        if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
+        if let Ok(panel) = app.get_webview_panel(&CapWindowId::RecordingsOverlay.label()) {
             panel.released_when_closed(true);
             panel.close();
         }
@@ -1018,7 +1018,7 @@ fn focus_captures_panel(app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
-        if let Ok(panel) = app.get_webview_panel(&CapWindowId::PrevRecordings.label()) {
+        if let Ok(panel) = app.get_webview_panel(&CapWindowId::RecordingsOverlay.label()) {
             panel.make_key_window();
         }
     }
@@ -1907,7 +1907,7 @@ pub async fn run() {
                     CapWindowId::Setup.label().as_str(),
                     CapWindowId::WindowCaptureOccluder.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
-                    CapWindowId::PrevRecordings.label().as_str(),
+                    CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::InProgressRecording.label().as_str(),
                 ])
                 .map_label(|label| match label {
