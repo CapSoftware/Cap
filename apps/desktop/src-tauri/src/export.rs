@@ -14,6 +14,7 @@ pub async fn export_video(
     project: ProjectConfiguration,
     progress: tauri::ipc::Channel<RenderProgress>,
     force: bool,
+    use_custom_muxer: bool,
 ) -> Result<PathBuf, String> {
     let VideoRecordingMetadata { duration, .. } =
         get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
@@ -36,7 +37,7 @@ pub async fn export_video(
         .send(RenderProgress::EstimatedTotalFrames { total_frames })
         .ok();
 
-    cap_export::export_video_to_file(
+    let exporter = cap_export::Exporter::new(
         project,
         output_path.clone(),
         move |frame_index| {
@@ -46,12 +47,21 @@ pub async fn export_video(
                 })
                 .ok();
         },
-        &editor_instance.project_path,
+        editor_instance.project_path.clone(),
         editor_instance.meta(),
         editor_instance.render_constants.clone(),
         &editor_instance.segments,
     )
-    .await
+    .map_err(|e| {
+        sentry::capture_message(&e.to_string(), sentry::Level::Error);
+        e.to_string()
+    })?;
+
+    if use_custom_muxer {
+        exporter.export_with_custom_muxer().await
+    } else {
+        exporter.export_with_ffmpeg_cli().await
+    }
     .map_err(|e| {
         sentry::capture_message(&e.to_string(), sentry::Level::Error);
         e.to_string()

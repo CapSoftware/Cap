@@ -772,6 +772,7 @@ dependencies = [
  "cap-project",
  "cap-rendering",
  "cap-utils",
+ "futures",
  "image 0.25.5",
  "mp4",
  "tempfile",

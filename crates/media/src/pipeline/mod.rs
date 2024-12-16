@@ -1,6 +1,7 @@
 use indexmap::IndexMap;
 use std::thread::JoinHandle;
 
+pub mod audio_buffer;
 pub mod builder;
 pub mod clock;
 pub mod control;

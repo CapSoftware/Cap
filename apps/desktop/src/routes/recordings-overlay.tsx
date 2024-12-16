@@ -749,6 +749,7 @@ function createRecordingMutations(
             mediaId,
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
+            false,
             false
           );
 
@@ -873,7 +874,8 @@ function createRecordingMutations(
             mediaId,
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
-            true // Force re-render
+            true, // Force re-render
+            false
           );
 
           await commands.copyFileToPath(outputPath, savePath);
@@ -1002,6 +1004,7 @@ function createRecordingMutations(
             mediaId,
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
+            false,
             false
           );
           console.log("Using existing rendered video");
