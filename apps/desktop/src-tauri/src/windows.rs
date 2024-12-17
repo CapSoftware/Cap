@@ -168,6 +168,7 @@ impl ShowCapWindow {
                 .build()?,
             Self::Editor { project_id } => self
                 .window_builder(app, format!("/editor?id={project_id}"))
+                .inner_size(1150.0, 800.0)
                 .maximizable(true)
                 .center()
                 .build()?,

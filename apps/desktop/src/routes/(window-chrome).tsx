@@ -3,7 +3,7 @@ import { onCleanup, onMount, ParentProps, Suspense } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { UnlistenFn } from "@tauri-apps/api/event";
 import { AbsoluteInsetLoader } from "~/components/Loader";
-import { initializeTitlebar } from "~/utils/titlebar-state";
+import titlebarState, { initializeTitlebar } from "~/utils/titlebar-state";
 import Titlebar from "~/components/titlebar/Titlebar";
 
 export const route = {
@@ -52,7 +52,7 @@ function Inner(props: ParentProps) {
   });
 
   return (
-    <div class="animate-in fade-in flex-1 flex flex-col overflow-y-hidden">
+    <div class={`animate-in fade-in flex-1 flex flex-col overflow-y-hidden`}>
       {props.children}
     </div>
   );
