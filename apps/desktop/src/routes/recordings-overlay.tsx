@@ -470,7 +470,11 @@ export default function () {
                                 : "Copy to Clipboard"
                             }
                             tooltipPlacement="left"
-                            onClick={() => copy.mutate()}
+                            onClick={(e) =>
+                              copy.mutate(
+                                (e.ctrlKey || e.metaKey) && e.shiftKey
+                              )
+                            }
                             disabled={save.isPending || upload.isPending}
                           >
                             <Switch
@@ -504,8 +508,10 @@ export default function () {
                                 : "Create Shareable Link"
                             }
                             tooltipPlacement="left"
-                            onClick={() => {
-                              upload.mutate();
+                            onClick={(e) => {
+                              upload.mutate(
+                                (e.ctrlKey || e.metaKey) && e.shiftKey
+                              );
                             }}
                             disabled={
                               copy.isPending ||
@@ -537,7 +543,11 @@ export default function () {
                             <Button
                               variant="white"
                               size="sm"
-                              onClick={() => save.mutate()}
+                              onClick={(e) =>
+                                save.mutate(
+                                  (e.ctrlKey || e.metaKey) && e.shiftKey
+                                )
+                              }
                               disabled={copy.isPending || upload.isPending}
                             >
                               <Switch fallback="Export">
@@ -700,7 +710,7 @@ function createRecordingMutations(
   }));
 
   const copy = createMutation(() => ({
-    mutationFn: async () => {
+    mutationFn: async (useCustomMuxer: boolean) => {
       setProgressState({
         type: "copying",
         progress: 0,
@@ -749,7 +759,8 @@ function createRecordingMutations(
             mediaId,
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
-            false
+            false,
+            useCustomMuxer
           );
 
           // Show quick progress animation for existing video
@@ -800,7 +811,7 @@ function createRecordingMutations(
   }));
 
   const save = createMutation(() => ({
-    mutationFn: async () => {
+    mutationFn: async (useCustomMuxer: boolean) => {
       setProgressState({
         type: "saving",
         progress: 0,
@@ -873,7 +884,8 @@ function createRecordingMutations(
             mediaId,
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
-            true // Force re-render
+            true, // Force re-render
+            false
           );
 
           await commands.copyFileToPath(outputPath, savePath);
@@ -915,7 +927,7 @@ function createRecordingMutations(
   }));
 
   const upload = createMutation(() => ({
-    mutationFn: async () => {
+    mutationFn: async (useCustomMuxer: boolean) => {
       if (recordingMeta.data?.sharing) {
         setProgressState({
           type: "copying",
@@ -1002,7 +1014,8 @@ function createRecordingMutations(
             mediaId,
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
-            false
+            false,
+            useCustomMuxer
           );
           console.log("Using existing rendered video");
 

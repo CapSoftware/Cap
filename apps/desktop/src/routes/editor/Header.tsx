@@ -46,16 +46,17 @@ export function Header() {
 
     let percentage: number | undefined;
     if (state.type === "saving") {
-      percentage = state.stage === "rendering" ? Math.min(
-        ((state.renderProgress || 0) /
-          (state.totalFrames || 1)) *
-        100,
-        100
-      ) : Math.min(state.progress || 0, 100);
+      percentage =
+        state.stage === "rendering"
+          ? Math.min(
+              ((state.renderProgress || 0) / (state.totalFrames || 1)) * 100,
+              100
+            )
+          : Math.min(state.progress || 0, 100);
     }
 
-
-    if (percentage) currentWindow.setProgressBar({ progress: Math.round(percentage) });
+    if (percentage)
+      currentWindow.setProgressBar({ progress: Math.round(percentage) });
   });
 
   setTitlebar("border", false);
@@ -80,14 +81,14 @@ export function Header() {
   return (
     <>
       <Titlebar />
-      <Dialog.Root open={progressState.type !== "idle"} onOpenChange={() => { }}>
+      <Dialog.Root open={progressState.type !== "idle"} onOpenChange={() => {}}>
         <DialogContent
           title={
             progressState.type === "copying"
               ? "Link Copied"
               : progressState.type === "uploading"
-                ? "Creating Shareable Link"
-                : "Exporting Recording"
+              ? "Creating Shareable Link"
+              : "Exporting Recording"
           }
           confirm={<></>}
           class="bg-gray-600 text-gray-500 dark:text-gray-500"
@@ -112,23 +113,24 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${state.stage === "rendering"
+                            width: `${
+                              state.stage === "rendering"
                                 ? Math.min(
-                                  ((state.renderProgress || 0) /
-                                    (state.totalFrames || 1)) *
-                                  100,
-                                  100
-                                )
+                                    ((state.renderProgress || 0) /
+                                      (state.totalFrames || 1)) *
+                                      100,
+                                    100
+                                  )
                                 : Math.min(state.progress || 0, 100)
-                              }%`,
+                            }%`,
                           }}
                         />
                       </div>
 
                       <p class="text-xs mt-3 relative z-10">
                         {state.stage === "rendering" &&
-                          state.renderProgress &&
-                          state.totalFrames
+                        state.renderProgress &&
+                        state.totalFrames
                           ? `${state.message} (${state.renderProgress}/${state.totalFrames} frames)`
                           : state.message}
                       </p>
@@ -154,23 +156,24 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${state.stage === "rendering"
+                            width: `${
+                              state.stage === "rendering"
                                 ? Math.min(
-                                  ((state.renderProgress || 0) /
-                                    (state.totalFrames || 1)) *
-                                  100,
-                                  100
-                                )
+                                    ((state.renderProgress || 0) /
+                                      (state.totalFrames || 1)) *
+                                      100,
+                                    100
+                                  )
                                 : Math.min(state.progress || 0, 100)
-                              }%`,
+                            }%`,
                           }}
                         />
                       </div>
 
                       <p class="text-xs mt-3 relative z-10">
                         {state.stage === "rendering" &&
-                          state.renderProgress &&
-                          state.totalFrames
+                        state.renderProgress &&
+                        state.totalFrames
                           ? `${state.message} (${state.renderProgress}/${state.totalFrames} frames)`
                           : state.message}
                       </p>
@@ -196,13 +199,14 @@ export function Header() {
                         <div
                           class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
                           style={{
-                            width: `${state.stage === "rendering"
+                            width: `${
+                              state.stage === "rendering"
                                 ? Math.min(state.renderProgress || 0, 100)
                                 : Math.min(
-                                  (state.uploadProgress || 0) * 100,
-                                  100
-                                )
-                              }%`,
+                                    (state.uploadProgress || 0) * 100,
+                                    100
+                                  )
+                            }%`,
                           }}
                         />
                       </div>
@@ -210,8 +214,8 @@ export function Header() {
                       <p class="text-xs text-white mt-3 relative z-10">
                         {state.stage === "rendering"
                           ? `Rendering - ${Math.round(
-                            state.renderProgress || 0
-                          )}%`
+                              state.renderProgress || 0
+                            )}%`
                           : state.message}
                       </p>
                     </div>
@@ -235,7 +239,7 @@ function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
 
   const exportVideo = createMutation(() => ({
-    mutationFn: async () => {
+    mutationFn: async (useCustomMuxer: boolean) => {
       const path = await save({
         filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
         defaultPath: `~/Desktop/${prettyName()}.mp4`,
@@ -280,7 +284,8 @@ function ExportButton() {
         videoId,
         project,
         progress,
-        true
+        true,
+        useCustomMuxer
       );
       await commands.copyFileToPath(videoPath, path);
 
@@ -298,7 +303,13 @@ function ExportButton() {
   }));
 
   return (
-    <Button variant="primary" size="md" onClick={() => exportVideo.mutate()}>
+    <Button
+      variant="primary"
+      size="md"
+      onClick={(e) =>
+        exportVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
+      }
+    >
       Export
     </Button>
   );
@@ -311,7 +322,7 @@ function ShareButton() {
   );
 
   const uploadVideo = createMutation(() => ({
-    mutationFn: async () => {
+    mutationFn: async (useCustomMuxer: boolean) => {
       console.log("Starting upload process...");
       if (!recordingMeta()) {
         console.error("No recording metadata available");
@@ -399,14 +410,20 @@ function ShareButton() {
           }
         };
 
-        await commands.exportVideo(videoId, projectConfig, progress, true);
+        await commands.exportVideo(
+          videoId,
+          projectConfig,
+          progress,
+          true,
+          false
+        );
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
           ? await commands.uploadExportedVideo(videoId, "Reupload")
           : await commands.uploadExportedVideo(videoId, {
-            Initial: { pre_created_video: null },
-          });
+              Initial: { pre_created_video: null },
+            });
 
         console.log("Upload result:", result);
 
@@ -467,7 +484,9 @@ function ShareButton() {
       fallback={
         <Button
           disabled={uploadVideo.isPending}
-          onClick={() => uploadVideo.mutate()}
+          onClick={(e) =>
+            uploadVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
+          }
           variant="primary"
           class="flex items-center space-x-1"
         >
@@ -491,7 +510,9 @@ function ShareButton() {
               <Tooltip.Trigger>
                 <Button
                   disabled={uploadVideo.isPending}
-                  onClick={() => uploadVideo.mutate()}
+                  onClick={(e) =>
+                    uploadVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
+                  }
                   variant="secondary"
                   class="flex items-center space-x-1"
                 >

@@ -13,7 +13,7 @@ use tokio::{
 
 pub struct FFmpegProcess {
     pub ffmpeg_stdin: ChildStdin,
-    pub ffmpeg_stderr: ChildStderr,
+    // pub ffmpeg_stderr: ChildStderr,
     cmd: Child,
 }
 
@@ -28,7 +28,7 @@ impl FFmpegProcess {
 
         let mut cmd = command
             .stdin(Stdio::piped())
-            .stderr(Stdio::piped())
+            // .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|e| {
                 println!("Failed to start FFmpeg: {}", e);
@@ -41,14 +41,14 @@ impl FFmpegProcess {
             panic!("Failed to capture FFmpeg stdin");
         });
 
-        let ffmpeg_stderr = cmd.stderr.take().unwrap_or_else(|| {
-            println!("Failed to capture FFmpeg stderr");
-            panic!("Failed to capture FFmpeg stderr");
-        });
+        // let ffmpeg_stderr = cmd.stderr.take().unwrap_or_else(|| {
+        //     println!("Failed to capture FFmpeg stderr");
+        //     panic!("Failed to capture FFmpeg stderr");
+        // });
 
         Self {
             ffmpeg_stdin,
-            ffmpeg_stderr,
+            // ffmpeg_stderr,
             cmd,
         }
     }
@@ -69,7 +69,7 @@ impl FFmpegProcess {
 
     pub async fn read_stderr(&mut self) -> std::io::Result<String> {
         let mut err = String::new();
-        self.ffmpeg_stderr.read_to_string(&mut err).await?;
+        // self.ffmpeg_stderr.read_to_string(&mut err).await?;
         Ok(err)
     }
 
@@ -279,7 +279,7 @@ impl Default for FFmpeg {
 impl FFmpeg {
     pub fn new() -> Self {
         let mut command = Command::new(relative_command_path("ffmpeg").unwrap());
-        command.arg("-hide_banner");
+        // command.arg("-hide_banner");
 
         Self {
             command,

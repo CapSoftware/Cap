@@ -4,6 +4,7 @@ import {
   ComponentProps,
   For,
   Show,
+  batch,
   createRoot,
   createSignal,
   onMount,
@@ -407,18 +408,28 @@ export function Timeline() {
                     if (time === undefined) return;
 
                     e.stopPropagation();
-                    setProject(
-                      "timeline",
-                      "zoomSegments",
-                      produce((zoomSegments) => {
-                        zoomSegments ??= [];
-                        zoomSegments.push({
-                          start: time,
-                          end: time + 1,
-                          amount: 1.5,
-                        });
-                      })
-                    );
+                    batch(() => {
+                      setProject("timeline", "zoomSegments", (v) => v ?? []);
+                      setProject(
+                        "timeline",
+                        "zoomSegments",
+                        produce((zoomSegments) => {
+                          zoomSegments ??= [];
+                          zoomSegments.push({
+                            start: time,
+                            end: time + 1,
+                            amount: 1.5,
+                            mode: {
+                              manual: {
+                                x: 0.5,
+                                y: 0.5,
+                              },
+                            },
+                          });
+                          console.log(zoomSegments);
+                        })
+                      );
+                    });
                   }}
                 >
                   <Show
@@ -451,6 +462,9 @@ export function Timeline() {
                         return `${amount.toFixed(1)}x`;
                       };
 
+                      const zoomSegments = () =>
+                        project.timeline!.zoomSegments!;
+
                       return (
                         <SegmentRoot
                           class="border-red-300 group"
@@ -468,17 +482,21 @@ export function Timeline() {
                             onMouseDown={(downEvent) => {
                               const start = segment.start;
 
-                              const maxDuration =
-                                editorInstance.recordingDuration -
-                                segments().reduce(
-                                  (acc, segment, segmentI) =>
-                                    segmentI === i()
-                                      ? acc
-                                      : acc +
-                                        (segment.end - segment.start) /
-                                          segment.timescale,
-                                  0
-                                );
+                              let minValue = 0;
+
+                              for (
+                                let i = zoomSegments().length - 1;
+                                i >= 0;
+                                i--
+                              ) {
+                                const segment = zoomSegments()[i]!;
+                                if (segment.end <= start) {
+                                  minValue = segment.end;
+                                  break;
+                                }
+                              }
+
+                              let maxValue = segment.end - 1;
 
                               function update(event: MouseEvent) {
                                 const { width } = timelineBounds;
@@ -495,12 +513,8 @@ export function Timeline() {
                                   i(),
                                   "start",
                                   Math.min(
-                                    Math.max(
-                                      newStart,
-                                      // Math.max(newStart, 0),
-                                      segment.end - maxDuration
-                                    ),
-                                    segment.end - 1
+                                    maxValue,
+                                    Math.max(minValue, newStart)
                                   )
                                 );
                               }
@@ -546,6 +560,18 @@ export function Timeline() {
                             onMouseDown={(downEvent) => {
                               const end = segment.end;
 
+                              const minValue = segment.start + 1;
+
+                              let maxValue = duration();
+
+                              for (let i = 0; i > zoomSegments().length; i++) {
+                                const segment = zoomSegments()[i]!;
+                                if (segment.start > end) {
+                                  maxValue = segment.end;
+                                  break;
+                                }
+                              }
+
                               const maxDuration =
                                 editorInstance.recordingDuration -
                                 segments().reduce(
@@ -572,13 +598,7 @@ export function Timeline() {
                                   "zoomSegments",
                                   i(),
                                   "end",
-                                  Math.max(
-                                    Math.min(
-                                      newEnd,
-                                      segment.start + maxDuration
-                                    ),
-                                    segment.start + 1
-                                  )
+                                  Math.min(maxValue, Math.max(minValue, newEnd))
                                 );
                               }
 

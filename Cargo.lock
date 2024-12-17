@@ -413,9 +413,9 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.7.7"
+version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "504e3947307ac8326a5437504c517c4b56716c9d98fac0028c2acc7ca47d70ae"
+checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
  "axum-core",
@@ -755,10 +755,13 @@ dependencies = [
  "cap-rendering",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
+ "flume 0.11.0",
+ "futures",
  "sentry",
  "serde",
  "specta",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -772,6 +775,7 @@ dependencies = [
  "cap-project",
  "cap-rendering",
  "cap-utils",
+ "futures",
  "image 0.25.5",
  "mp4",
  "tempfile",
@@ -808,6 +812,7 @@ dependencies = [
 name = "cap-media"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "cap-flags",
  "cap-gpu-converters",
  "cap-project",
@@ -833,6 +838,7 @@ dependencies = [
  "specta",
  "tempfile",
  "thiserror 1.0.63",
+ "tokio",
  "tracing",
  "windows 0.58.0",
  "windows-capture",
@@ -886,6 +892,7 @@ dependencies = [
  "futures-intrusive",
  "image 0.25.5",
  "nix 0.29.0",
+ "pretty_assertions",
  "serde",
  "specta",
  "thiserror 1.0.63",
@@ -897,6 +904,7 @@ dependencies = [
 name = "cap-utils"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "nix 0.29.0",
  "tokio",
  "uuid",
@@ -1725,7 +1733,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.3.4"
+version = "0.3.9"
 dependencies = [
  "anyhow",
  "axum",
@@ -1748,6 +1756,7 @@ dependencies = [
  "device_query",
  "dotenvy_macro",
  "ffmpeg-next",
+ "flume 0.11.0",
  "futures",
  "futures-intrusive",
  "global-hotkey",
@@ -1807,6 +1816,12 @@ dependencies = [
  "windows 0.48.0",
  "x11",
 ]
+
+[[package]]
+name = "diff"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
 
 [[package]]
 name = "digest"
@@ -4988,6 +5003,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
+name = "pretty_assertions"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
+dependencies = [
+ "diff",
+ "yansi",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7425,9 +7450,9 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tracing"
-version = "0.1.40"
+version = "0.1.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3523ab5a71916ccf420eebdf5521fcef02141234bbc0b8a49f2fdc4544364ef"
+checksum = "784e0ac535deb450455cbfa28a6f0df145ea1bb7ae51b821cf5e7927fdcfbdd0"
 dependencies = [
  "log",
  "pin-project-lite",
@@ -7437,9 +7462,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-attributes"
-version = "0.1.27"
+version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34704c8d6ebcbc939824180af020566b01a7c01f80641264eba0999f6c2b6be7"
+checksum = "395ae124c09f9e6918a2310af6038fba074bcf474ac352496d5910dd59a2226d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7448,9 +7473,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-core"
-version = "0.1.32"
+version = "0.1.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c06d3da6113f116aaee68e4d601191614c9053067f9ab7f6edbcb161237daa54"
+checksum = "e672c95779cf947c5311f83787af4fa8fffd12fb27e4993211a84bdfd9610f9c"
 dependencies = [
  "once_cell",
  "valuable",
@@ -8782,6 +8807,12 @@ name = "xml-rs"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "539a77ee7c0de333dcc6da69b177380a0b81e0dacfa4f7344c465a36871ee601"
+
+[[package]]
+name = "yansi"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yansi-term"

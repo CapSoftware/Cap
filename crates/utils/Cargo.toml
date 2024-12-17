@@ -19,5 +19,6 @@ windows = { version = "0.58.0", features = [
 ] }
 
 [dependencies]
+futures = "0.3.31"
 tokio = { workspace = true, features = ["net"] }
 uuid = "1.11.0"

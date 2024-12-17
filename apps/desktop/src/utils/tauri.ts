@@ -53,8 +53,8 @@ async focusCapturesPanel() : Promise<void> {
 async getCurrentRecording() : Promise<JsonValue<RecordingInfo | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
-async exportVideo(videoId: string, project: ProjectConfiguration, progress: TAURI_CHANNEL<RenderProgress>, force: boolean) : Promise<string> {
-    return await TAURI_INVOKE("export_video", { videoId, project, progress, force });
+async exportVideo(videoId: string, project: ProjectConfiguration, progress: TAURI_CHANNEL<RenderProgress>, force: boolean, useCustomMuxer: boolean) : Promise<string> {
+    return await TAURI_INVOKE("export_video", { videoId, project, progress, force, useCustomMuxer });
 },
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
@@ -286,7 +286,8 @@ export type Video = { duration: number; width: number; height: number }
 export type VideoRecordingMetadata = { duration: number; size: number }
 export type VideoType = "screen" | "output"
 export type XY<T> = { x: T; y: T }
-export type ZoomSegment = { start: number; end: number; amount: number }
+export type ZoomMode = "auto" | { manual: { x: number; y: number } }
+export type ZoomSegment = { start: number; end: number; amount: number; mode: ZoomMode }
 
 /** tauri-specta globals **/
 

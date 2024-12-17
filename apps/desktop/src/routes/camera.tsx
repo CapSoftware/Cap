@@ -47,7 +47,10 @@ export default function () {
     { name: "cameraWindowState" }
   );
 
-  const [latestFrame, setLatestFrame] = createLazySignal<ImageData | null>();
+  const [latestFrame, setLatestFrame] = createLazySignal<{
+    width: number;
+    data: ImageData;
+  } | null>();
   const [isLoading, setIsLoading] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
 
@@ -56,7 +59,7 @@ export default function () {
     (imageData) => {
       setLatestFrame(imageData);
       const ctx = cameraCanvasRef?.getContext("2d");
-      ctx?.putImageData(imageData, 0, 0);
+      ctx?.putImageData(imageData.data, 0, 0);
       setIsLoading(false);
     }
   );
@@ -81,7 +84,7 @@ export default function () {
         (imageData) => {
           setLatestFrame(imageData);
           const ctx = cameraCanvasRef?.getContext("2d");
-          ctx?.putImageData(imageData, 0, 0);
+          ctx?.putImageData(imageData.data, 0, 0);
           setIsLoading(false);
         }
       );
@@ -196,7 +199,7 @@ export default function () {
                   {(latestFrame) => {
                     const style = () => {
                       const aspectRatio =
-                        latestFrame().width / latestFrame().height;
+                        latestFrame().data.width / latestFrame().data.height;
 
                       const windowWidth = windowSize.latest?.size ?? 0;
 
@@ -232,8 +235,8 @@ export default function () {
                         data-tauri-drag-region
                         class={cx("absolute")}
                         style={style()}
-                        width={latestFrame().width}
-                        height={latestFrame().height}
+                        width={latestFrame().data.width}
+                        height={latestFrame().data.height}
                         ref={cameraCanvasRef!}
                       />
                     );

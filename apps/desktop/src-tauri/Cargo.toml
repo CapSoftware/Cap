@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.3.4"
+version = "0.3.9"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2021"
@@ -78,6 +78,7 @@ cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
+flume.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

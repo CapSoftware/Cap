@@ -1,4 +1,6 @@
-use std::{ffi::OsString, fs::OpenOptions, path::PathBuf};
+use futures::FutureExt;
+use std::{ffi::OsString, fs::OpenOptions, io::Write, path::PathBuf};
+// use tokio::{fs::OpenOptions, io::AsyncWriteExt};
 
 #[cfg(windows)]
 pub fn get_last_win32_error_formatted() -> String {
@@ -46,26 +48,38 @@ pub fn create_channel_named_pipe(
 ) -> OsString {
     #[cfg(unix)]
     {
-        use std::io::Write;
-
         create_named_pipe(&unix_path).unwrap();
 
         let path = unix_path.clone();
-        tokio::spawn(async move {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(false)
-                .truncate(true)
-                .open(&path)?;
-            println!("video pipe opened");
+        tokio::spawn(
+            async move {
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create(false)
+                    .truncate(true)
+                    .open(&path)
+                    // .await
+                    .unwrap();
+                println!("video pipe opened");
 
-            while let Some(bytes) = rx.recv().await {
-                file.write_all(&bytes)?;
+                println!("receiving frame for channel");
+                while let Some(bytes) = rx.recv().await {
+                    println!("received frame, writing bytes");
+                    file.write_all(&bytes)
+                        // .await
+                        .unwrap();
+                    println!("bytes written");
+                }
+
+                println!("done writing to video pipe");
+                Ok::<(), std::io::Error>(())
             }
-
-            println!("done writing to video pipe");
-            Ok::<(), std::io::Error>(())
-        });
+            .then(|result| async {
+                if let Err(e) = result {
+                    eprintln!("error writing to video pipe: {}", e);
+                }
+            }),
+        );
 
         unix_path.into_os_string()
     }

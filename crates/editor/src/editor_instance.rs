@@ -1,6 +1,7 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use cap_media::feeds::AudioData;
+use cap_media::frame_ws::create_frame_ws;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
@@ -8,6 +9,7 @@ use cap_rendering::{
 };
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
+use std::time::Instant;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
 
@@ -125,9 +127,9 @@ impl EditorInstance {
                 }
             };
 
-        let (frame_tx, frame_rx) = tokio::sync::mpsc::channel(4);
+        let (frame_tx, frame_rx) = flume::bounded(4);
 
-        let (ws_port, ws_shutdown) = create_frames_ws(frame_rx).await;
+        let (ws_port, ws_shutdown) = create_frame_ws(frame_rx).await;
 
         let render_constants = Arc::new(
             RenderVideoConstants::new(render_options, &meta)
@@ -277,6 +279,8 @@ impl EditorInstance {
 
                 let project = self.project_config.1.borrow().clone();
 
+                let now = Instant::now();
+
                 let Some((time, segment)) = project
                     .timeline
                     .as_ref()
@@ -287,6 +291,8 @@ impl EditorInstance {
                 };
 
                 let segment = &self.segments[segment.unwrap_or(0) as usize];
+
+                let now = Instant::now();
 
                 let Some((screen_frame, camera_frame)) = segment
                     .decoders
@@ -318,78 +324,79 @@ impl Drop for EditorInstance {
     }
 }
 
-async fn create_frames_ws(frame_rx: mpsc::Receiver<SocketMessage>) -> (u16, mpsc::Sender<()>) {
-    use axum::{
-        extract::{
-            ws::{Message, WebSocket, WebSocketUpgrade},
-            State,
-        },
-        response::IntoResponse,
-        routing::get,
-    };
-    use tokio::sync::{mpsc::Receiver, Mutex};
+// async fn create_frames_ws(frame_rx: mpsc::Receiver<SocketMessage>) -> (u16, mpsc::Sender<()>) {
+//     use axum::{
+//         extract::{
+//             ws::{Message, WebSocket, WebSocketUpgrade},
+//             State,
+//         },
+//         response::IntoResponse,
+//         routing::get,
+//     };
+//     use tokio::sync::{mpsc::Receiver, Mutex};
 
-    type RouterState = Arc<Mutex<Receiver<SocketMessage>>>;
+//     type RouterState = Arc<Mutex<Receiver<SocketMessage>>>;
 
-    async fn ws_handler(
-        ws: WebSocketUpgrade,
-        State(state): State<RouterState>,
-    ) -> impl IntoResponse {
-        // let rx = rx.lock().await.take().unwrap();
-        ws.on_upgrade(move |socket| handle_socket(socket, state))
-    }
+//     async fn ws_handler(
+//         ws: WebSocketUpgrade,
+//         State(state): State<RouterState>,
+//     ) -> impl IntoResponse {
+//         // let rx = rx.lock().await.take().unwrap();
+//         ws.on_upgrade(move |socket| handle_socket(socket, state))
+//     }
 
-    async fn handle_socket(mut socket: WebSocket, state: RouterState) {
-        let mut rx = state.lock().await;
-        println!("socket connection established");
-        let now = std::time::Instant::now();
+//     async fn handle_socket(mut socket: WebSocket, state: RouterState) {
+//         let mut rx = state.lock().await;
+//         println!("socket connection established");
+//         let now = std::time::Instant::now();
 
-        loop {
-            tokio::select! {
-                _ = socket.recv() => {
-                    break;
-                }
-                msg = rx.recv() => {
-                    let Some(chunk) = msg else {
-                        continue;
-                    };
+//         loop {
+//             tokio::select! {
+//                 _ = socket.recv() => {
+//                     break;
+//                 }
+//                 msg = rx.recv() => {
+//                     let Some(chunk) = msg else {
+//                         continue;
+//                     };
 
-                    match chunk {
-                        SocketMessage::Frame { width, height, mut data } => {
-                                data.extend_from_slice(&height.to_le_bytes());
-                              data.extend_from_slice(&width.to_le_bytes());
+//                     match chunk {
+//                         SocketMessage::Frame { width, height, mut data, stride } => {
+//                             data.extend_from_slice(&stride.to_le_bytes());
+//                             data.extend_from_slice(&height.to_le_bytes());
+//                             data.extend_from_slice(&width.to_le_bytes());
 
-                            socket.send(Message::Binary(data)).await.unwrap();
-                        }
-                    }
-                }
-            }
-        }
-        let elapsed = now.elapsed();
-        println!("Websocket closing after {elapsed:.2?}");
-    }
+//                             socket.send(Message::Binary(data)).await.unwrap();
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//         let elapsed = now.elapsed();
+//         println!("Websocket closing after {elapsed:.2?}");
+//     }
 
-    let router = axum::Router::new()
-        .route(FRAMES_WS_PATH, get(ws_handler))
-        .with_state(Arc::new(Mutex::new(frame_rx)));
+//     let router = axum::Router::new()
+//         .route(FRAMES_WS_PATH, get(ws_handler))
+//         .with_state(Arc::new(Mutex::new(frame_rx)));
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
+//     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+//     let port = listener.local_addr().unwrap().port();
 
-    let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+//     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
-    tokio::spawn(async move {
-        let server = axum::serve(listener, router.into_make_service());
-        tokio::select! {
-            _ = server => {},
-            _ = shutdown_rx.recv() => {
-                println!("WebSocket server shutting down");
-            }
-        }
-    });
+//     tokio::spawn(async move {
+//         let server = axum::serve(listener, router.into_make_service());
+//         tokio::select! {
+//             _ = server => {},
+//             _ = shutdown_rx.recv() => {
+//                 println!("WebSocket server shutting down");
+//             }
+//         }
+//     });
 
-    (port, shutdown_tx)
-}
+//     (port, shutdown_tx)
+// }
 
 type PreviewFrameInstruction = u32;
 
@@ -397,16 +404,6 @@ pub struct EditorState {
     pub playhead_position: u32,
     pub playback_task: Option<PlaybackHandle>,
     pub preview_task: Option<tokio::task::JoinHandle<()>>,
-}
-
-pub const FRAMES_WS_PATH: &str = "/frames-ws";
-
-pub enum SocketMessage {
-    Frame {
-        data: Vec<u8>,
-        width: u32,
-        height: u32,
-    },
 }
 
 pub struct Segment {

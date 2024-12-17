@@ -20,7 +20,7 @@ use cap_project::{
     Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment,
 };
 use cap_recording::CompletedRecording;
-use cap_rendering::{ProjectRecordings, ZOOM_DURATION};
+use cap_rendering::ProjectRecordings;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
@@ -245,6 +245,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                         completed_recording.id.clone(),
                         config,
                         tauri::ipc::Channel::new(|_| Ok(())),
+                        true,
                         true,
                     )
                     .await

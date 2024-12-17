@@ -10,6 +10,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
+    frame_ws::WSFrame,
     MediaError,
 };
 
@@ -20,9 +21,6 @@ enum CameraControl {
     AttachRawConsumer(Sender<RawCameraFrame>),
     Shutdown,
 }
-
-pub type CameraFrameSender = Sender<Vec<u8>>;
-pub type CameraFrameReceiver = Receiver<Vec<u8>>;
 
 pub struct RawCameraFrame {
     pub(crate) frame: FFVideo,
@@ -53,13 +51,13 @@ pub struct CameraFeed {
 }
 
 impl CameraFeed {
-    pub fn create_channel() -> (CameraFrameSender, CameraFrameReceiver) {
+    pub fn create_channel() -> (flume::Sender<WSFrame>, flume::Receiver<WSFrame>) {
         flume::bounded(60)
     }
 
     pub async fn init(
         selected_camera: &str,
-        rgba_data: Sender<Vec<u8>>,
+        rgba_data: Sender<WSFrame>,
     ) -> Result<CameraFeed, MediaError> {
         println!("Selected camera: {:?}", selected_camera);
 
@@ -180,7 +178,7 @@ fn find_and_create_camera(selected_camera: &String) -> Result<(CameraInfo, Camer
 async fn start_capturing(
     camera_info: CameraInfo,
     control: Receiver<CameraControl>,
-    rgba_data: Sender<Vec<u8>>,
+    rgba_data: Sender<WSFrame>,
 ) -> Result<(VideoInfo, JoinHandle<()>), MediaError> {
     let (ready_tx, ready_rx) = flume::bounded::<Result<VideoInfo, MediaError>>(1);
 
@@ -200,7 +198,7 @@ async fn start_capturing(
 fn run_camera_feed(
     camera_info: CameraInfo,
     control: Receiver<CameraControl>,
-    rgba_data: Sender<Vec<u8>>,
+    rgba_data: Sender<WSFrame>,
     ready_signal: Sender<Result<VideoInfo, MediaError>>,
 ) {
     let mut maybe_raw_data: Option<Sender<RawCameraFrame>> = None;
@@ -316,7 +314,17 @@ fn run_camera_feed(
 
                 let rgba_frame = converter.rgba(&raw_buffer);
 
-                if dropping_send(&rgba_data, rgba_frame).is_err() {
+                if dropping_send(
+                    &rgba_data,
+                    WSFrame {
+                        data: rgba_frame,
+                        width: raw_buffer.resolution().width(),
+                        height: raw_buffer.resolution().height(),
+                        stride: raw_buffer.resolution().width() * 4,
+                    },
+                )
+                .is_err()
+                {
                     // TODO: Also allow changing the connection?
                     eprintln!("Camera preview has been disconnected. Shutting down feed");
                     break;
@@ -404,7 +412,7 @@ impl FrameConverter {
     fn rgba(&mut self, buffer: &nokhwa::Buffer) -> Vec<u8> {
         let resolution = buffer.resolution();
 
-        let mut data = match &self.hw_converter {
+        let data = match &self.hw_converter {
             Some(HwConverter::NV12(converter)) => converter.convert(
                 NV12Input::from_buffer(buffer.buffer(), resolution.width(), resolution.height()),
                 resolution.width(),
@@ -423,10 +431,11 @@ impl FrameConverter {
             }
         };
 
-        data.extend_from_slice(&resolution.height().to_le_bytes());
-        data.extend_from_slice(&resolution.width().to_le_bytes());
-
         data
+
+        // data.extend_from_slice(&(resolution.width() * 4).to_le_bytes());
+        // data.extend_from_slice(&resolution.height().to_le_bytes());
+        // data.extend_from_slice(&resolution.width().to_le_bytes());
     }
 
     fn raw(&mut self, buffer: &nokhwa::Buffer) -> FFVideo {
