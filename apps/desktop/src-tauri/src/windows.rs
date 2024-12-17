@@ -9,6 +9,7 @@ use tauri::{
     AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
 
+#[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
 #[derive(Clone)]
@@ -90,6 +91,7 @@ impl CapWindowId {
         app.get_webview_window(&label)
     }
 
+    #[cfg(target_os = "macos")]
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
             Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.0))),
@@ -99,10 +101,12 @@ impl CapWindowId {
             _ => Some(None),
         }
     }
+
     pub fn min_size(&self) -> Option<(f64, f64)> {
         Some(match self {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
+            Self::Editor { .. } => (1150.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
             _ => return None,
@@ -164,7 +168,6 @@ impl ShowCapWindow {
                 .build()?,
             Self::Editor { project_id } => self
                 .window_builder(app, format!("/editor?id={project_id}"))
-                .inner_size(1150.0, 800.0)
                 .maximizable(true)
                 .center()
                 .build()?,
@@ -322,6 +325,16 @@ impl ShowCapWindow {
 
         window.hide().ok();
 
+        // TODO(Ilya): Remove once Tao is updated to `0.31.0`
+        #[cfg(target_os = "windows")]
+        if matches!(
+            self,
+            Self::Setup | Self::Main | Self::Editor { .. } | Self::Settings { .. } | Self::Upgrade
+        ) {
+            use tauri_plugin_positioner::{Position, WindowExt};
+            let _ = window.move_window(Position::Center);
+        }
+
         #[cfg(target_os = "macos")]
         if let Some(position) = id.traffic_lights_position() {
             add_traffic_lights(&window, position);
@@ -344,9 +357,28 @@ impl ShowCapWindow {
             .shadow(true);
 
         if let Some(min) = id.min_size() {
+            // TODO(Ilya): Remove once Tao is updated to `0.31.0`
+            // currently, undecorated windows with shadows get the invisible bounds of the titlebar and window frame added to the inner size
+            #[cfg(target_os = "windows")]
+            let size = if matches!(
+                self,
+                Self::Setup
+                    | Self::Main
+                    | Self::Editor { .. }
+                    | Self::Settings { .. }
+                    | Self::Upgrade
+            ) {
+                (min.0 - 12.0, min.1 - 35.0)
+            } else {
+                min
+            };
+
+            #[cfg(not(target_os = "windows"))]
+            let size = min;
+
             builder = builder
-                .inner_size(min.0, min.1)
-                .min_inner_size(min.0, min.1);
+                .inner_size(size.0, size.1)
+                .min_inner_size(size.0, size.1);
         }
 
         #[cfg(target_os = "macos")]
