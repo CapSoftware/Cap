@@ -70,6 +70,11 @@ const nextConfig = {
         destination: "/blog/:slug",
         permanent: true,
       },
+      {
+        source: "/docs/s3-config",
+        destination: "/docs",
+        permanent: true,
+      },
     ];
   },
   env: {
