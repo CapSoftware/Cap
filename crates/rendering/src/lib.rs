@@ -604,7 +604,7 @@ impl ProjectUniforms {
                     target_size: [target_size.x as f32, target_size.y as f32],
                     rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis)
                         as f32,
-                    mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
+                    mirror_x: 0.0,
                     velocity_uv: velocity,
                     motion_blur_amount,
                     camera_motion_blur_amount: 0.0,
