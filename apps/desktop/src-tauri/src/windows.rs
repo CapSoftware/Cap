@@ -106,7 +106,7 @@ impl CapWindowId {
         Some(match self {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
-            Self::Editor { .. } => (1150.0, 800.0),
+            Self::Editor { .. } => (900.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
             _ => return None,
@@ -249,7 +249,12 @@ impl ShowCapWindow {
                 if FLAGS.pause_resume {
                     width += 32.0;
                 }
-                let height = 40.0;
+                let mut height = 40.0;
+                #[cfg(target_os = "windows")]
+                {
+                    width -= 12.0;
+                    height -= 35.0
+                }
 
                 self.window_builder(app, "/in-progress-recording")
                     .maximized(false)
@@ -327,12 +332,24 @@ impl ShowCapWindow {
 
         // TODO(Ilya): Remove once Tao is updated to `0.31.0`
         #[cfg(target_os = "windows")]
-        if matches!(
-            self,
             Self::Setup | Self::Main | Self::Editor { .. } | Self::Settings { .. } | Self::Upgrade
-        ) {
+        {
             use tauri_plugin_positioner::{Position, WindowExt};
-            let _ = window.move_window(Position::Center);
+
+            if matches!(
+                self,
+                Self::Setup
+                    | Self::Main
+                    | Self::Editor { .. }
+                    | Self::Settings { .. }
+                    | Self::Upgrade
+            ) {
+                let _ = window.move_window(Position::Center);
+            }
+
+            if matches!(self, Self::InProgressRecording { .. }) {
+                let _ = window.move_window(Position::BottomCenter);
+            }
         }
 
         #[cfg(target_os = "macos")]
@@ -366,6 +383,7 @@ impl ShowCapWindow {
                     | Self::Main
                     | Self::Editor { .. }
                     | Self::Settings { .. }
+                    | Self::InProgressRecording { .. }
                     | Self::Upgrade
             ) {
                 (min.0 - 12.0, min.1 - 35.0)
