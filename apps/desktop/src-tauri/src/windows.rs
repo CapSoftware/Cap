@@ -332,7 +332,6 @@ impl ShowCapWindow {
 
         // TODO(Ilya): Remove once Tao is updated to `0.31.0`
         #[cfg(target_os = "windows")]
-            Self::Setup | Self::Main | Self::Editor { .. } | Self::Settings { .. } | Self::Upgrade
         {
             use tauri_plugin_positioner::{Position, WindowExt};
 
