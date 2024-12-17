@@ -37,46 +37,46 @@ fn main_image(frag_color: vec4<f32>, frag_coord: vec2<f32>) -> vec4<f32> {
 		base_color = apply_rounded_corners(base_color, target_uv);
 
 		let blur_amount = select(u.motion_blur_amount, u.camera_motion_blur_amount, u.camera_motion_blur_amount > 0.0);
-		
+
 		if blur_amount < 0.01 {
 				return mix(textureSample(prev_tex, sampler0, uv), base_color, base_color.a);
 		}
 
 		let center = vec2<f32>(0.5, 0.5);
 		let dir = normalize(target_uv - center);
-		
+
 		let base_samples = 16.0;
 		let num_samples = i32(base_samples * smoothstep(0.0, 1.0, blur_amount));
-		
+
 		var accum = base_color;
 		var weight_sum = 1.0;
-		
+
 		for (var i = 1; i < num_samples; i++) {
 				let t = f32(i) / f32(num_samples);
 				let dist_from_center = length(target_uv - center);
-				
+
 				let random_offset = (rand(target_uv + vec2<f32>(t)) - 0.5) * 0.1 * smoothstep(0.0, 0.2, blur_amount);
-				
+
 				let base_scale = select(
 					0.08,  // Regular content scale
 					0.16,  // Camera scale (reduced from 0.24 to 0.16)
 					u.camera_motion_blur_amount > 0.0
 				);
 				let scale = dist_from_center * blur_amount * (base_scale + random_offset) * smoothstep(0.0, 0.1, blur_amount);
-				
+
 				let angle_variation = (rand(target_uv + vec2<f32>(t * 2.0)) - 0.5) * 0.1 * smoothstep(0.0, 0.2, blur_amount);
 				let rotated_dir = vec2<f32>(
 						dir.x * cos(angle_variation) - dir.y * sin(angle_variation),
 						dir.x * sin(angle_variation) + dir.y * cos(angle_variation)
 				);
-				
+
 				let offset = rotated_dir * scale * t;
-				
+
 				let sample_uv = target_uv - offset;
 				if sample_uv.x >= 0.0 && sample_uv.x <= 1.0 && sample_uv.y >= 0.0 && sample_uv.y <= 1.0 {
 						var sample_color = sample_texture(sample_uv, crop_bounds_uv);
 						sample_color = apply_rounded_corners(sample_color, sample_uv);
-						
+
 						let weight = (1.0 - t) * (1.0 + random_offset * 0.2);
 						accum += sample_color * weight;
 						weight_sum += weight;
@@ -84,19 +84,21 @@ fn main_image(frag_color: vec4<f32>, frag_coord: vec2<f32>) -> vec4<f32> {
 		}
 
 		let final_color = accum / weight_sum;
-		
+
 		let blurred = vec4(final_color.rgb, base_color.a);
-		
+
 		return mix(textureSample(prev_tex, sampler0, uv), blurred, blurred.a);
 }
 
-fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
-		if uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 {
-				var cropped_uv = uv * (crop_bounds_uv.zw - crop_bounds_uv.xy) + crop_bounds_uv.xy;
+fn sample_texture(_uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
+		var uv = _uv;
 
+		if uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 {
 				if u.mirror_x != 0.0 {
-						cropped_uv.x = (1.0 - uv.x + crop_bounds_uv.x) * (crop_bounds_uv.z - crop_bounds_uv.x);
+						uv.x = 1.0 - uv.x;
 				}
+
+				var cropped_uv = uv * (crop_bounds_uv.zw - crop_bounds_uv.xy) + crop_bounds_uv.xy;
 
 				return textureSample(frame_tex, sampler0, cropped_uv);
 		}

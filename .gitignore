@@ -16,6 +16,7 @@ dist-ssr
 .env.development
 .env.test
 target
+.cursorrules
 
 # Editor directories and files
 .vscode/*
