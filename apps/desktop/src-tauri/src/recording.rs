@@ -20,7 +20,7 @@ use cap_project::{
     Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment,
 };
 use cap_recording::CompletedRecording;
-use cap_rendering::{ProjectRecordings, ZOOM_DURATION};
+use cap_rendering::ProjectRecordings;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;

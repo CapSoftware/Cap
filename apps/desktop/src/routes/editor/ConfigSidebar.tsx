@@ -447,7 +447,11 @@ export function ConfigSidebar() {
               </div>
             </div>
           </Field>
-          <Field name="Size" icon={<IconCapEnlarge />}>
+          <Field
+            name="Size"
+            icon={<IconCapEnlarge />}
+            value={`${project.camera.size ?? 30}%`}
+          >
             <Slider
               value={[project.camera.size ?? 30]}
               onChange={(v) => setProject("camera", "size", v[0])}
@@ -457,7 +461,11 @@ export function ConfigSidebar() {
             />
           </Field>
           {window.FLAGS.zoom && (
-            <Field name="Size During Zoom" icon={<IconCapEnlarge />}>
+            <Field
+              name="Size During Zoom"
+              icon={<IconCapEnlarge />}
+              value={`${project.camera.zoom_size ?? 20}%`}
+            >
               <Slider
                 value={[project.camera.zoom_size ?? 20]}
                 onChange={(v) => setProject("camera", "zoom_size", v[0])}
