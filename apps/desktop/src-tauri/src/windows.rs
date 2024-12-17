@@ -151,6 +151,7 @@ impl ShowCapWindow {
                 .resizable(false)
                 .maximized(false)
                 .maximizable(false)
+                .center()
                 .build()?,
             Self::Settings { page } => self
                 .window_builder(
@@ -159,11 +160,13 @@ impl ShowCapWindow {
                 )
                 .resizable(true)
                 .maximized(false)
+                .center()
                 .build()?,
             Self::Editor { project_id } => self
                 .window_builder(app, format!("/editor?id={project_id}"))
                 .inner_size(1150.0, 800.0)
                 .maximizable(true)
+                .center()
                 .build()?,
             Self::Upgrade => self
                 .window_builder(app, "/upgrade")
@@ -173,6 +176,7 @@ impl ShowCapWindow {
                 .always_on_top(true)
                 .maximized(false)
                 .transparent(true)
+                .center()
                 .build()?,
             Self::Camera { ws_port } => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
