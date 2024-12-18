@@ -130,7 +130,7 @@ pub enum RenderingError {
     #[error(transparent)]
     BufferMapFailed(#[from] wgpu::BufferAsyncError),
     #[error("Sending frame to channel failed")]
-    ChannelSendFrameFailed(#[from] mpsc::error::SendError<Vec<u8>>),
+    ChannelSendFrameFailed(#[from] mpsc::error::SendError<RenderedFrame>),
 }
 
 pub struct RenderSegment {
@@ -141,7 +141,7 @@ pub struct RenderSegment {
 pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
-    sender: tokio::sync::mpsc::Sender<Vec<u8>>,
+    sender: mpsc::Sender<RenderedFrame>,
     meta: &RecordingMeta,
     segments: Vec<RenderSegment>,
 ) -> Result<(), RenderingError> {
@@ -198,7 +198,7 @@ pub async fn render_video_to_channel(
             )
             .await?;
 
-            sender.send(frame.0).await?;
+            sender.send(frame).await?;
         } else {
             println!("no decoder frames: {:?}", (time, segment_i));
         };
@@ -1252,6 +1252,14 @@ fn do_easing(t: f64) -> f64 {
     1.0 - (1.0 - t) * (1.0 - t)
 }
 
+#[derive(Clone)]
+pub struct RenderedFrame {
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub padded_bytes_per_row: u32,
+}
+
 pub async fn produce_frame(
     constants: &RenderVideoConstants,
     screen_frame: &Vec<u8>,
@@ -1259,7 +1267,7 @@ pub async fn produce_frame(
     background: Background,
     uniforms: &ProjectUniforms,
     time: f32,
-) -> Result<(Vec<u8>, u32), RenderingError> {
+) -> Result<RenderedFrame, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
@@ -1530,7 +1538,12 @@ pub async fn produce_frame(
     drop(data);
     output_buffer.unmap();
 
-    Ok((image_data, padded_bytes_per_row))
+    Ok(RenderedFrame {
+        data: image_data,
+        padded_bytes_per_row,
+        width: uniforms.output_size.0,
+        height: uniforms.output_size.1,
+    })
 }
 
 fn draw_cursor(

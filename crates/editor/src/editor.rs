@@ -76,24 +76,23 @@ impl Renderer {
                         let frame_tx = self.frame_tx.clone();
 
                         frame_task = Some(tokio::spawn(async move {
-                            let now = Instant::now();
-                            let (frame, stride) = produce_frame(
+                            let frame = produce_frame(
                                 &render_constants,
                                 &screen_frame,
                                 &camera_frame,
                                 cap_rendering::Background::from(background),
                                 &uniforms,
-                                time, // Pass the actual time value
+                                time,
                             )
                             .await
                             .unwrap();
 
                             frame_tx
                                 .try_send(WSFrame {
-                                    data: frame,
+                                    data: frame.data,
                                     width: uniforms.output_size.0,
                                     height: uniforms.output_size.1,
-                                    stride,
+                                    stride: frame.padded_bytes_per_row,
                                 })
                                 .ok();
                             finished.send(()).ok();

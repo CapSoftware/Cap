@@ -7,7 +7,7 @@ use cap_media::{
 };
 use cap_project::{ProjectConfiguration, RecordingMeta};
 use cap_rendering::{
-    ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants,
+    ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants, RenderedFrame,
     SegmentVideoPaths,
 };
 use futures::FutureExt;
@@ -111,7 +111,7 @@ where
             buffer: AudioFrameBuffer,
         }
 
-        let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
+        let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<RenderedFrame>(4);
 
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
 
@@ -225,7 +225,11 @@ where
                         self.output_size.1,
                         30,
                     )
-                    .wrap_frame(&frame, 0);
+                    .wrap_frame(
+                        &frame.data,
+                        0,
+                        frame.padded_bytes_per_row as usize,
+                    );
                     video_frame.set_pts(Some(frame_count as i64));
 
                     frame_tx
@@ -239,16 +243,14 @@ where
                 }
 
                 // Save the first frame as a screenshot and thumbnail
-                if let Some(frame_data) = first_frame {
-                    let width = self.output_size.0;
-                    let height = self.output_size.1;
+                if let Some(frame) = first_frame {
                     let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-                        ImageBuffer::from_raw(width, height, frame_data)
+                        ImageBuffer::from_raw(frame.width, frame.height, frame.data)
                             .expect("Failed to create image from frame data");
 
                     // Convert RGBA to RGB
                     let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
-                        ImageBuffer::from_fn(width, height, |x, y| {
+                        ImageBuffer::from_fn(frame.width, frame.height, |x, y| {
                             let rgba = rgba_img.get_pixel(x, y);
                             image::Rgb([rgba[0], rgba[1], rgba[2]])
                         });
@@ -306,7 +308,7 @@ where
             pipe_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
         }
 
-        let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
+        let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<RenderedFrame>(4);
 
         let ffmpeg_handle = tokio::spawn({
             let project = self.project.clone();
@@ -325,6 +327,17 @@ where
                     let pipe_path = cap_utils::create_channel_named_pipe(
                         rx,
                         audio_dir.path().join("audio.pipe"),
+                        {
+                            let mut done = false;
+                            move |value| {
+                                if done {
+                                    None
+                                } else {
+                                    done = true;
+                                    Some(&value)
+                                }
+                            }
+                        },
                     );
 
                     ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawAudioInput {
@@ -348,11 +361,26 @@ where
                 };
 
                 let video_tx = {
-                    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(30);
+                    let (tx, rx) = tokio::sync::mpsc::channel::<RenderedFrame>(30);
 
                     let pipe_path = cap_utils::create_channel_named_pipe(
                         rx,
                         video_dir.path().join("video.pipe"),
+                        {
+                            let mut i = 0;
+
+                            move |frame| {
+                                if i < frame.data.len() as u32 {
+                                    let value =
+                                        &frame.data[i as usize..(i + frame.width * 4) as usize];
+
+                                    i += frame.padded_bytes_per_row;
+                                    Some(value)
+                                } else {
+                                    None
+                                }
+                            }
+                        },
                     );
 
                     ffmpeg.add_input(cap_ffmpeg_cli::FFmpegRawVideoInput {
@@ -442,16 +470,14 @@ where
                 ffmpeg_process.stop().await;
 
                 // Save the first frame as a screenshot and thumbnail
-                if let Some(frame_data) = first_frame {
-                    let width = self.output_size.0;
-                    let height = self.output_size.1;
+                if let Some(frame) = first_frame {
                     let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-                        ImageBuffer::from_raw(width, height, frame_data)
+                        ImageBuffer::from_raw(frame.width, frame.height, frame.data)
                             .expect("Failed to create image from frame data");
 
                     // Convert RGBA to RGB
                     let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
-                        ImageBuffer::from_fn(width, height, |x, y| {
+                        ImageBuffer::from_fn(frame.width, frame.height, |x, y| {
                             let rgba = rgba_img.get_pixel(x, y);
                             image::Rgb([rgba[0], rgba[1], rgba[2]])
                         });
