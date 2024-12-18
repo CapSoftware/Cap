@@ -13,6 +13,9 @@ use tauri::{
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
+#[cfg(target_os = "windows")]
+const WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE: tauri::LogicalSize<f64> = tauri::LogicalSize::new(12.0, 35.0);
+
 #[derive(Clone)]
 pub enum CapWindowId {
     // Contains onboarding + permissions
@@ -254,8 +257,8 @@ impl ShowCapWindow {
                 let mut height = 40.0;
                 #[cfg(target_os = "windows")]
                 {
-                    width -= 12.0;
-                    height -= 35.0
+                    width -= WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.width;
+                    height -= WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.height;
                 }
 
                 self.window_builder(app, "/in-progress-recording")
@@ -404,7 +407,10 @@ impl ShowCapWindow {
                     | Self::InProgressRecording { .. }
                     | Self::Upgrade
             ) {
-                (min.0 - 12.0, min.1 - 35.0)
+                (
+                    min.0 - WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.width,
+                    min.1 - WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.height,
+                )
             } else {
                 min
             };

@@ -169,7 +169,7 @@ export default function () {
         </div>
       </div>
       <div
-        class="bg-transparent non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200 hover:cursor-move"
+        class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200 hover:cursor-move"
         data-tauri-drag-region
       >
         <IconCapMoreVertical class="pointer-events-none text-gray-400 dark:text-gray-400" />
