@@ -42,9 +42,10 @@ fn create_named_pipe(path: &std::path::Path) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-pub fn create_channel_named_pipe(
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
+pub fn create_channel_named_pipe<T: Send + 'static>(
+    mut rx: tokio::sync::mpsc::Receiver<T>,
     unix_path: PathBuf,
+    get_bytes: impl FnMut(&T) -> Option<&[u8]> + Clone + Send + 'static,
 ) -> OsString {
     #[cfg(unix)]
     {
@@ -62,13 +63,12 @@ pub fn create_channel_named_pipe(
                     .unwrap();
                 println!("video pipe opened");
 
-                println!("receiving frame for channel");
                 while let Some(bytes) = rx.recv().await {
-                    println!("received frame, writing bytes");
-                    file.write_all(&bytes)
-                        // .await
-                        .unwrap();
-                    println!("bytes written");
+                    let mut get_bytes = get_bytes.clone();
+
+                    while let Some(bytes) = get_bytes(&bytes) {
+                        file.write_all(&bytes).unwrap();
+                    }
                 }
 
                 println!("done writing to video pipe");

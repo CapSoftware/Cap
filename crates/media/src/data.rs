@@ -262,11 +262,20 @@ impl VideoInfo {
         av_pix_fmt as i32
     }
 
-    pub fn wrap_frame(&self, data: &[u8], timestamp: i64) -> FFVideo {
+    pub fn wrap_frame(&self, data: &[u8], timestamp: i64, stride: usize) -> FFVideo {
         let mut frame = FFVideo::new(self.pixel_format, self.width, self.height);
 
         frame.set_pts(Some(timestamp));
-        frame.data_mut(0)[0..data.len()].copy_from_slice(data);
+
+        if frame.stride(0) == self.width as usize {
+            frame.data_mut(0)[0..data.len()].copy_from_slice(data);
+        } else {
+            let ffmpeg_stride = frame.stride(0) as usize;
+            for (line, chunk) in data.chunks(stride).enumerate() {
+                frame.data_mut(0)[line * ffmpeg_stride..(line + 1) * ffmpeg_stride]
+                    .copy_from_slice(&chunk[0..ffmpeg_stride]);
+            }
+        }
 
         frame
     }

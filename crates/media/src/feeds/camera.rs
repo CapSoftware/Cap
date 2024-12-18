@@ -422,7 +422,11 @@ impl FrameConverter {
                 converter.convert(buffer.buffer(), resolution.width(), resolution.height())
             }
             None => {
-                let input_frame = self.video_info.wrap_frame(buffer.buffer(), 0);
+                let input_frame = self.video_info.wrap_frame(
+                    buffer.buffer(),
+                    0,
+                    buffer.buffer().len() / buffer.resolution().height() as usize,
+                );
                 let mut rgba_frame = FFVideo::empty();
 
                 self.context.run(&input_frame, &mut rgba_frame).unwrap();
@@ -432,14 +436,14 @@ impl FrameConverter {
         };
 
         data
-
-        // data.extend_from_slice(&(resolution.width() * 4).to_le_bytes());
-        // data.extend_from_slice(&resolution.height().to_le_bytes());
-        // data.extend_from_slice(&resolution.width().to_le_bytes());
     }
 
     fn raw(&mut self, buffer: &nokhwa::Buffer) -> FFVideo {
-        self.video_info.wrap_frame(buffer.buffer(), 0)
+        self.video_info.wrap_frame(
+            buffer.buffer(),
+            0,
+            buffer.buffer_bytes().len() / buffer.resolution().height() as usize,
+        )
     }
 }
 

@@ -156,6 +156,7 @@ impl AudioFrameBuffer {
 
         let buffer = &self.data[self.cursor.0].buffer;
         if self.cursor.1 >= buffer.len() {
+            self.elapsed_samples += samples;
             return None;
         }
 
