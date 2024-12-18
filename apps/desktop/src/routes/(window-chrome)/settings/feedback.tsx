@@ -29,7 +29,13 @@ export default function FeedbackTab() {
         Help us improve Cap by submitting feedback or reporting bugs. We'll get
         right on it.
       </p>
-      <form class="space-y-4" onSubmit={() => sendFeedback(feedback())}>
+      <form
+        class="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          sendFeedback(feedback());
+        }}
+      >
         <fieldset disabled={submission.pending}>
           <div>
             <textarea
