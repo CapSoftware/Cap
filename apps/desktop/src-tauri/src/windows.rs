@@ -1,4 +1,5 @@
 #![allow(unused_mut)]
+#![allow(unused_imports)]
 
 use crate::{fake_window, general_settings::AppTheme};
 use cap_flags::FLAGS;
@@ -349,6 +350,23 @@ impl ShowCapWindow {
 
             if matches!(self, Self::InProgressRecording { .. }) {
                 let _ = window.move_window(Position::BottomCenter);
+
+                if let Ok(outer_size) = window.outer_size() {
+                    let screen_position = monitor.position();
+                    let window_size = tauri::PhysicalSize::<i32> {
+                        width: outer_size.width as i32,
+                        height: outer_size.height as i32,
+                    };
+                    let screen_size = tauri::PhysicalSize::<i32> {
+                        width: monitor.size().width as i32,
+                        height: monitor.size().height as i32,
+                    };
+
+                    let _ = window.set_position(tauri::PhysicalPosition {
+                        x: screen_position.x + ((screen_size.width / 2) - (window_size.width / 2)),
+                        y: screen_size.height - (window_size.height - screen_position.y) - 120,
+                    });
+                }
             }
         }
 
