@@ -63,6 +63,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
     if (
       !(
         (data.code >= "KeyA" && data.code <= "KeyZ") ||
+        (data.code >= "Key0" && data.code <= "Key9") ||
         data.code.startsWith("F")
       )
     )
