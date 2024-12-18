@@ -176,7 +176,6 @@ export function Timeline() {
                     "timeline",
                     "segments",
                     produce((segments) => {
-                      console.log({ splitTime });
                       segments.splice(i() + 1, 0, {
                         start: splitTime,
                         end: segment.end,
@@ -283,12 +282,6 @@ export function Timeline() {
                       editorInstance.recordings.segments[
                         segment.recordingSegment ?? 0
                       ].display.duration;
-
-                    console.log(
-                      editorInstance.recordings.segments[
-                        segment.recordingSegment ?? 0
-                      ]
-                    );
 
                     const availableTimelineDuration =
                       editorInstance.recordingDuration -
@@ -426,7 +419,6 @@ export function Timeline() {
                               },
                             },
                           });
-                          console.log(zoomSegments);
                         })
                       );
                     });
