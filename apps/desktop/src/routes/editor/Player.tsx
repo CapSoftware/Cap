@@ -1,6 +1,7 @@
 import { DropdownMenu as KDropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Select as KSelect } from "@kobalte/core/select";
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
+import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { cx } from "cva";
 import { For, Show, Suspense, createEffect, createSignal } from "solid-js";
@@ -20,7 +21,6 @@ import {
   topLeftAnimateClasses,
 } from "./ui";
 import { formatTime } from "./utils";
-import { createEventListener } from "@solid-primitives/event-listener";
 
 export function Player() {
   const {

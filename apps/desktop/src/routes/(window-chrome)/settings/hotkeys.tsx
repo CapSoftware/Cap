@@ -37,6 +37,7 @@ export default function () {
   );
 }
 
+const MODIFIER_KEYS = new Set(["Meta", "Shift", "Control", "Alt"]);
 function Inner(props: { initialStore: HotkeysStore | null }) {
   const [hotkeys, setHotkeys] = createStore<{
     [K in HotkeyAction]?: Hotkey;
@@ -52,6 +53,8 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
   }>();
 
   createEventListener(window, "keydown", (e) => {
+    if (MODIFIER_KEYS.has(e.key)) return;
+
     const data = {
       code: e.code,
       ctrl: e.ctrlKey,
@@ -59,15 +62,6 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
       alt: e.altKey,
       meta: e.metaKey,
     };
-
-    if (
-      !(
-        (data.code >= "KeyA" && data.code <= "KeyZ") ||
-        (data.code >= "Key0" && data.code <= "Key9") ||
-        data.code.startsWith("F")
-      )
-    )
-      return;
 
     const l = listening();
     if (l) {
@@ -94,7 +88,6 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
             createEventListener(window, "click", () => {
               if (listening()?.action !== item()) return;
 
-              console.log(listening());
               batch(() => {
                 setHotkeys(item(), listening()?.prev);
                 setListening();
@@ -115,6 +108,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                           <Show when={hotkeys[item()]}>
                             <button
                               type="button"
+                              onBlur={(e) => console.log(e)}
                               onClick={(e) => {
                                 e.stopPropagation();
 
@@ -149,12 +143,14 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                       <button
                         type="button"
                         class="border border-[--gray-200] rounded-lg text-[--text-tertiary] w-full h-full"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setListening({
-                            action: item(),
-                            prev: hotkeys[item()],
-                          });
+                        onClick={() => {
+                          // ensures that previously selected hotkey is cleared by letting the event propagate before listening to the new hotkey
+                          setTimeout(() => {
+                            setListening({
+                              action: item(),
+                              prev: hotkeys[item()],
+                            });
+                          }, 1);
                         }}
                       >
                         <Show when={hotkeys[item()]} fallback="None">

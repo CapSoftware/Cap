@@ -33,7 +33,14 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const editorInstanceContext = useEditorInstanceContext();
     const [project, setProject] = createStore<ProjectConfiguration>(
       props.editorInstance.savedProjectConfig ??
-        props.presets.presets[props.presets.default ?? 0]?.config ??
+        (() => {
+          const config =
+            props.presets.presets[props.presets.default ?? 0]?.config;
+          if (!config) return;
+          // @ts-ignore
+          config.timeline = undefined;
+          return config;
+        })() ??
         DEFAULT_PROJECT_CONFIG
     );
 
