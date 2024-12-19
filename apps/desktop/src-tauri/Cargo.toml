@@ -79,6 +79,7 @@ cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
 flume.workspace = true
+tauri-plugin-deep-link = "2.2.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
