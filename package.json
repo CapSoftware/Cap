@@ -8,6 +8,7 @@
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",
     "db:generate": "dotenv -e .env -- pnpm --dir packages/database db:generate",
+    "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
     "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
     "typecheck": "pnpm tsc -b"
   },

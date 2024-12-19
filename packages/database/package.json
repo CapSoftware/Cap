@@ -8,7 +8,8 @@
     "db:push": "drizzle-kit push:mysql --config=drizzle.config.ts",
     "db:check": "drizzle-kit check:mysql --config=drizzle.config.ts",
     "db:up": "drizzle-kit up:mysql --config=drizzle.config.ts",
-    "db:drop": "drizzle-kit drop --config=drizzle.config.ts"
+    "db:drop": "drizzle-kit drop --config=drizzle.config.ts",
+    "db:studio": "drizzle-kit studio --config=drizzle.config.ts"
   },
   "dependencies": {
     "@mattrax/mysql-planetscale": "^0.0.3",
