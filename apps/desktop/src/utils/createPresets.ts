@@ -5,7 +5,7 @@ import { presetsStore, type PresetsStore } from "~/store";
 
 export type CreatePreset = {
   name: string;
-  config: ProjectConfiguration;
+  config: Omit<ProjectConfiguration, "timeline">;
   default: boolean;
 };
 
@@ -32,14 +32,16 @@ export function createPresets() {
 
   return {
     query,
-    createPreset: (preset: CreatePreset) =>
-      updatePresets((prev) => ({
-        presets: [
-          ...prev.presets,
-          { name: preset.name, config: preset.config },
-        ],
+    createPreset: async (preset: CreatePreset) => {
+      let config = { ...preset.config };
+      // @ts-ignore we reeeally don't want the timeline in the preset
+      config.timeline = undefined;
+
+      await updatePresets((prev) => ({
+        presets: [...prev.presets, { name: preset.name, config }],
         default: preset.default ? prev.presets.length : prev.default,
-      })),
+      }));
+    },
     deletePreset: (index: number) =>
       updatePresets((prev) => {
         prev.presets.splice(index, 1);
@@ -56,7 +58,10 @@ export function createPresets() {
       const p = query();
       if (!p) return;
 
-      return p.presets[p.default ?? 0]?.config;
+      const config = p.presets[p.default ?? 0]?.config;
+      // @ts-ignore we reeeally don't want the timeline in the preset
+      config.timeline = undefined;
+      return config;
     },
     setDefault: (index: number) =>
       updatePresets((prev) => ({

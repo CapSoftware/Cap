@@ -376,7 +376,7 @@ function PresetsDropdown() {
                         </Show>
                         <button
                           type="button"
-                          class="text-gray-400 hover:text-black"
+                          class="text-gray-400 hover:text-[currentColor]"
                           onClick={(e) => {
                             e.stopPropagation();
                             setShowSettings((s) => !s);
