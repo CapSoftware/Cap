@@ -22,9 +22,6 @@ export default function (props: ComponentProps<"div">) {
         local.class,
         focused() ? "*:text-black-transparent-80" : "*:text-black-transparent-40"
       )}
-      style={{
-        "font-family": "Segoe Fluent Icons', 'Segoe MDL2 Assets"
-      }}
       {...otherProps}
     >
       <ControlButton
