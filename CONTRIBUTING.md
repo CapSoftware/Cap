@@ -28,6 +28,7 @@ There are many ways to contribute to Cap. You can:
 - Cargo 1.77.0+ (previous versions may work)
 - pnpm 8.10.5+
 - Docker ([OrbStack](https://orbstack.dev/) recommended)
+- pkg-config
 
 ### How do I get started with development on my local machine?
 
@@ -39,6 +40,9 @@ This is a very top level guide right now, but if you want to develop for both th
 4. At the root of the directory, run the app with `pnpm dev`. This will create a local database simulator, run the necessary DB migrations, and start both the web app and desktop app concurrently.
 5. Make sure both the the desktop app, and web app can be built without any errors. For the desktop app, use `pnpm tauri:build`. For the web app, use `pnpm build`
 6. Submit a PR with your changes
+
+> [!NOTE]
+> When running the app locally on a MacOS machine, you will need to give permissions to Cap - this will show up as your **Terminal app** in the Security & Privacy settings page.
 
 ### How do I run the desktop app locally without needing to use auth?
 
