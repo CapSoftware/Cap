@@ -19,7 +19,7 @@ const store = () => {
 export type PresetsStore = {
   presets: Array<{
     name: string;
-    config: ProjectConfiguration;
+    config: Omit<ProjectConfiguration, "timeline">;
   }>;
   default?: number;
 };

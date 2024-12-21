@@ -72,15 +72,8 @@ export function Editor() {
 }
 
 function Inner() {
-  const {
-    project,
-    videoId,
-    playbackTime,
-    setPlaybackTime,
-    playing,
-    setPlaying,
-    previewTime,
-  } = useEditorContext();
+  const { project, playbackTime, setPlaybackTime, playing, previewTime } =
+    useEditorContext();
 
   onMount(() => {
     events.editorStateChanged.listen((e) => {
@@ -170,8 +163,9 @@ function Dialogs() {
                 });
 
                 const createPreset = createMutation(() => ({
-                  mutationFn: async () =>
-                    presets.createPreset({ ...form, config: project }),
+                  mutationFn: async () => {
+                    await presets.createPreset({ ...form, config: project });
+                  },
                   onSuccess: () => {
                     setDialog((d) => ({ ...d, open: false }));
                   },

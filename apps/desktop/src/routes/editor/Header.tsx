@@ -238,6 +238,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { createMutation } from "@tanstack/solid-query";
+import { getRequestEvent } from "solid-js/web";
 
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
@@ -413,6 +414,8 @@ function ShareButton() {
             });
           }
         };
+
+        getRequestEvent()?.nativeEvent;
 
         await commands.exportVideo(
           videoId,

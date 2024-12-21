@@ -2,7 +2,7 @@
   "name": "@cap/desktop",
   "type": "module",
   "scripts": {
-    "dev": "dotenv -e ../../.env -- pnpm run preparescript && tauri dev",
+    "dev": "RUST_BACKTRACE=1 dotenv -e ../../.env -- pnpm run preparescript && tauri dev",
     "build:tauri": "dotenv -e ../../.env -- pnpm run preparescript && tauri build",
     "preparescript": "node scripts/prepare.js",
     "localdev": "dotenv -e ../../.env -- vinxi dev --port 3001",

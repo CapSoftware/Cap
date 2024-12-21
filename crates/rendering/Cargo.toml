@@ -19,6 +19,7 @@ ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
 futures = "0.3.30"
 thiserror.workspace = true
+bezier_easing = "0.1.1"
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }

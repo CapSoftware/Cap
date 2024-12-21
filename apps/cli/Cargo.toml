@@ -1,0 +1,20 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.23", features = ["derive"] }
+cap-utils = { path = "../../crates/utils" }
+cap-project = { path = "../../crates/project" }
+cap-rendering = { path = "../../crates/rendering" }
+cap-ffmpeg-cli = { path = "../../crates/ffmpeg-cli" }
+cap-editor = { path = "../../crates/editor" }
+cap-media = { path = "../../crates/media" }
+cap-flags = { path = "../../crates/flags" }
+cap-recording = { path = "../../crates/recording" }
+cap-export = { path = "../../crates/export" }
+serde = "1.0.216"
+serde_json = "1.0.133"
+tokio.workspace = true
+editor = "0.1.1"
