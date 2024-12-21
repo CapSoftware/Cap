@@ -74,58 +74,7 @@ impl EditorInstance {
                 .map(|c| XY::new(c.width, c.height)),
         };
 
-        let segments =
-            match &meta.content {
-                cap_project::Content::SingleSegment { segment: s } => {
-                    let audio =
-                        Arc::new(s.audio.as_ref().map(|meta| {
-                            AudioData::from_file(project_path.join(&meta.path)).unwrap()
-                        }));
-
-                    let cursor = Arc::new(s.cursor_data(&meta).into());
-
-                    let decoders = RecordingSegmentDecoders::new(
-                        &meta,
-                        SegmentVideoPaths {
-                            display: s.display.path.as_path(),
-                            camera: s.camera.as_ref().map(|c| c.path.as_path()),
-                        },
-                    );
-
-                    vec![Segment {
-                        audio,
-                        cursor,
-                        decoders,
-                    }]
-                }
-                cap_project::Content::MultipleSegments { inner } => {
-                    let mut segments = vec![];
-
-                    for s in &inner.segments {
-                        let audio = Arc::new(s.audio.as_ref().map(|meta| {
-                            AudioData::from_file(project_path.join(&meta.path)).unwrap()
-                        }));
-
-                        let cursor = Arc::new(s.cursor_events(&meta));
-
-                        let decoders = RecordingSegmentDecoders::new(
-                            &meta,
-                            SegmentVideoPaths {
-                                display: s.display.path.as_path(),
-                                camera: s.camera.as_ref().map(|c| c.path.as_path()),
-                            },
-                        );
-
-                        segments.push(Segment {
-                            audio,
-                            cursor,
-                            decoders,
-                        });
-                    }
-
-                    segments
-                }
-            };
+        let segments = create_segments(&meta);
 
         let (frame_tx, frame_rx) = flume::bounded(4);
 
@@ -324,80 +273,6 @@ impl Drop for EditorInstance {
     }
 }
 
-// async fn create_frames_ws(frame_rx: mpsc::Receiver<SocketMessage>) -> (u16, mpsc::Sender<()>) {
-//     use axum::{
-//         extract::{
-//             ws::{Message, WebSocket, WebSocketUpgrade},
-//             State,
-//         },
-//         response::IntoResponse,
-//         routing::get,
-//     };
-//     use tokio::sync::{mpsc::Receiver, Mutex};
-
-//     type RouterState = Arc<Mutex<Receiver<SocketMessage>>>;
-
-//     async fn ws_handler(
-//         ws: WebSocketUpgrade,
-//         State(state): State<RouterState>,
-//     ) -> impl IntoResponse {
-//         // let rx = rx.lock().await.take().unwrap();
-//         ws.on_upgrade(move |socket| handle_socket(socket, state))
-//     }
-
-//     async fn handle_socket(mut socket: WebSocket, state: RouterState) {
-//         let mut rx = state.lock().await;
-//         println!("socket connection established");
-//         let now = std::time::Instant::now();
-
-//         loop {
-//             tokio::select! {
-//                 _ = socket.recv() => {
-//                     break;
-//                 }
-//                 msg = rx.recv() => {
-//                     let Some(chunk) = msg else {
-//                         continue;
-//                     };
-
-//                     match chunk {
-//                         SocketMessage::Frame { width, height, mut data, stride } => {
-//                             data.extend_from_slice(&stride.to_le_bytes());
-//                             data.extend_from_slice(&height.to_le_bytes());
-//                             data.extend_from_slice(&width.to_le_bytes());
-
-//                             socket.send(Message::Binary(data)).await.unwrap();
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//         let elapsed = now.elapsed();
-//         println!("Websocket closing after {elapsed:.2?}");
-//     }
-
-//     let router = axum::Router::new()
-//         .route(FRAMES_WS_PATH, get(ws_handler))
-//         .with_state(Arc::new(Mutex::new(frame_rx)));
-
-//     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-//     let port = listener.local_addr().unwrap().port();
-
-//     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
-
-//     tokio::spawn(async move {
-//         let server = axum::serve(listener, router.into_make_service());
-//         tokio::select! {
-//             _ = server => {},
-//             _ = shutdown_rx.recv() => {
-//                 println!("WebSocket server shutting down");
-//             }
-//         }
-//     });
-
-//     (port, shutdown_tx)
-// }
-
 type PreviewFrameInstruction = u32;
 
 pub struct EditorState {
@@ -410,4 +285,57 @@ pub struct Segment {
     pub audio: Arc<Option<AudioData>>,
     pub cursor: Arc<CursorEvents>,
     pub decoders: RecordingSegmentDecoders,
+}
+
+pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
+    match &meta.content {
+        cap_project::Content::SingleSegment { segment: s } => {
+            let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
+                AudioData::from_file(meta.project_path.join(&audio_meta.path)).unwrap()
+            }));
+
+            let cursor = Arc::new(s.cursor_data(&meta).into());
+
+            let decoders = RecordingSegmentDecoders::new(
+                &meta,
+                SegmentVideoPaths {
+                    display: s.display.path.as_path(),
+                    camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                },
+            );
+
+            vec![Segment {
+                audio,
+                cursor,
+                decoders,
+            }]
+        }
+        cap_project::Content::MultipleSegments { inner } => {
+            let mut segments = vec![];
+
+            for s in &inner.segments {
+                let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
+                    AudioData::from_file(meta.project_path.join(&audio_meta.path)).unwrap()
+                }));
+
+                let cursor = Arc::new(s.cursor_events(&meta));
+
+                let decoders = RecordingSegmentDecoders::new(
+                    &meta,
+                    SegmentVideoPaths {
+                        display: s.display.path.as_path(),
+                        camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                    },
+                );
+
+                segments.push(Segment {
+                    audio,
+                    cursor,
+                    decoders,
+                });
+            }
+
+            segments
+        }
+    }
 }
