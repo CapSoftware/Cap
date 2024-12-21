@@ -497,6 +497,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bezier_easing"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fa4734ba28c4eb6dcd44213f969e007bd2a17f966151656d1c7676f8526bedd"
+
+[[package]]
 name = "bindgen"
 version = "0.56.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -882,6 +888,7 @@ name = "cap-rendering"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bezier_easing",
  "bytemuck",
  "cap-flags",
  "cap-project",

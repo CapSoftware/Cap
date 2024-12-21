@@ -718,7 +718,7 @@ pub enum ZoomPosition {
 #[derive(Debug, PartialEq)]
 pub struct ZoomKeyframes(Vec<ZoomKeyframe>);
 
-pub const ZOOM_DURATION: f64 = 0.8;
+pub const ZOOM_DURATION: f64 = 0.6;
 
 #[cfg(test)]
 mod test {
@@ -976,6 +976,7 @@ mod test {
                 ZoomKeyframe {
                     time: 2.5 + ZOOM_DURATION,
                     scale: 1.0,
+                    has_segment: false,
                     ..base
                 }
             ])
@@ -1181,26 +1182,23 @@ impl ZoomKeyframes {
         let keyframe_length = next.time - prev.time;
         let delta_time = time - prev.time;
 
-        let t = do_easing(delta_time / keyframe_length);
-
-        let position = match (&prev.position, &next.position) {
-            (ZoomPosition::Manual { x: x1, y: y1 }, ZoomPosition::Manual { x: x2, y: y2 }) => {
-                ZoomPosition::Manual {
-                    x: x1 + (x2 - x1) * t as f32,
-                    y: y1 + (y2 - y1) * t as f32,
-                }
-            }
-            _ => ZoomPosition::Manual { x: 0.0, y: 0.0 },
+        let ease = if next.scale >= prev.scale {
+            bezier_easing::bezier_easing(0.1, 0.0, 0.3, 1.0).unwrap()
+        } else {
+            bezier_easing::bezier_easing(0.5, 0.0, 0.5, 1.0).unwrap()
         };
+
+        let time_t = delta_time / keyframe_length;
 
         let keyframe_diff = next.scale - prev.scale;
 
-        let amount = prev.scale + (keyframe_diff) * t;
+        let amount = prev.scale + (keyframe_diff) * time_t;
 
-        InterpolatedZoom {
-            amount: prev.scale + (next.scale - prev.scale) * t,
-            position,
-            t: do_easing(if prev.scale > 1.0 && next.scale > 1.0 {
+        let time_t = ease(time_t as f32) as f64;
+
+        // the process we use to get to this is way too convoluted lol
+        let t = ease(
+            (if prev.scale > 1.0 && next.scale > 1.0 {
                 if !next.has_segment {
                     (amount - 1.0) / (prev.scale - 1.0)
                 } else if !prev.has_segment {
@@ -1214,42 +1212,29 @@ impl ZoomKeyframes {
                 (amount - 1.0) / (prev.scale - 1.0)
             } else {
                 0.0
-            }),
+            }) as f32,
+        ) as f64;
+
+        let position = match (&prev.position, &next.position) {
+            (ZoomPosition::Manual { x: x1, y: y1 }, ZoomPosition::Manual { x: x2, y: y2 }) => {
+                ZoomPosition::Manual {
+                    x: x1 + (x2 - x1) * time_t as f32,
+                    y: y1 + (y2 - y1) * time_t as f32,
+                }
+            }
+            _ => ZoomPosition::Manual { x: 0.0, y: 0.0 },
+        };
+
+        InterpolatedZoom {
+            amount: if next.scale > prev.scale {
+                prev.scale + (next.scale - prev.scale) * t
+            } else {
+                prev.scale + (next.scale - prev.scale) * (1.0 - t)
+            },
+            position,
+            t,
         }
     }
-}
-
-// fn do_easing(t: f64) -> f64 {
-//     if t < 0.5 {
-//         4.0 * t * t * t
-//     } else {
-//         1.0 - f64::powf(-2.0 * t + 2.0, 3.0) / 2.0
-//     }
-// }
-
-// fn do_easing(t: f64) -> f64 {
-//     if t < 0.5 {
-//         2.0 * t * t
-//     } else {
-//         -1.0 + (4.0 - 2.0 * t) * t
-//     }
-// }
-
-// fn do_easing(t: f64) -> f64 {
-//     0.5 * (1.0 - f64::cos(f64::consts::PI * t))
-// }
-
-// fn do_easing(t: f64) -> f64 {
-//     let t = t - 1.0;
-//     t * t * t + 1.0
-// }
-
-// fn do_easing(t: f64) -> f64 {
-//     f64::sin((t * f64::consts::PI) / 2.0)
-// }
-
-fn do_easing(t: f64) -> f64 {
-    1.0 - (1.0 - t) * (1.0 - t)
 }
 
 #[derive(Clone)]

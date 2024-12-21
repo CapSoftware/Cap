@@ -5,7 +5,7 @@ export type RGBColor = [number, number, number];
 export const DEFAULT_GRADIENT_FROM = [71, 133, 255] satisfies RGBColor;
 export const DEFAULT_GRADIENT_TO = [255, 71, 102] satisfies RGBColor;
 
-export const DEFAULT_PROJECT_CONFIG: ProjectConfiguration = {
+export const DEFAULT_PROJECT_CONFIG = {
   aspectRatio: null,
   background: {
     source: {
@@ -26,18 +26,18 @@ export const DEFAULT_PROJECT_CONFIG: ProjectConfiguration = {
     rounding: 100,
     shadow: 50,
     size: 30,
-    zoom_size: 20,
+    zoom_size: 60,
   },
   audio: { mute: false, improve: false },
-  cursor: { 
-    hideWhenIdle: false, 
-    size: 0, 
+  cursor: {
+    hideWhenIdle: false,
+    size: 0,
     type: "pointer",
-    animationStyle: "regular" as const
+    animationStyle: "regular" as const,
   },
   hotkeys: { show: false },
   motionBlur: 0.2,
-};
+} satisfies ProjectConfiguration;
 
 export const ASPECT_RATIOS = {
   wide: { name: "Wide", ratio: [16, 9] },

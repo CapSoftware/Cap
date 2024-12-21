@@ -24,7 +24,11 @@ import {
   Toggle,
   Slider,
 } from "./ui";
-import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
+import {
+  DEFAULT_GRADIENT_FROM,
+  DEFAULT_GRADIENT_TO,
+  DEFAULT_PROJECT_CONFIG,
+} from "./projectConfig";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -450,10 +454,10 @@ export function ConfigSidebar() {
           <Field
             name="Size"
             icon={<IconCapEnlarge />}
-            value={`${project.camera.size ?? 30}%`}
+            value={`${project.camera.size}%`}
           >
             <Slider
-              value={[project.camera.size ?? 30]}
+              value={[project.camera.size]}
               onChange={(v) => setProject("camera", "size", v[0])}
               minValue={20}
               maxValue={80}
@@ -464,10 +468,16 @@ export function ConfigSidebar() {
             <Field
               name="Size During Zoom"
               icon={<IconCapEnlarge />}
-              value={`${project.camera.zoom_size ?? 20}%`}
+              value={`${
+                project.camera.zoom_size ??
+                DEFAULT_PROJECT_CONFIG.camera.zoom_size
+              }%`}
             >
               <Slider
-                value={[project.camera.zoom_size ?? 20]}
+                value={[
+                  project.camera.zoom_size ??
+                    DEFAULT_PROJECT_CONFIG.camera.zoom_size,
+                ]}
                 onChange={(v) => setProject("camera", "zoom_size", v[0])}
                 minValue={10}
                 maxValue={60}
@@ -477,7 +487,10 @@ export function ConfigSidebar() {
           )}
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
-              value={[project.camera.rounding ?? 100.0]}
+              value={[
+                project.camera.rounding ??
+                  DEFAULT_PROJECT_CONFIG.camera.rounding,
+              ]}
               onChange={(v) => setProject("camera", "rounding", v[0])}
               minValue={0}
               maxValue={100}
@@ -721,37 +734,42 @@ export function ConfigSidebar() {
                         <div class="w-full h-52 bg-gray-100 rounded-xl p-1">
                           <div
                             class="w-full h-full bg-blue-400 rounded-lg relative"
-                            onMouseMove={(e) => {
-                              if (e.buttons === 1) {
-                                const bounds =
-                                  e.currentTarget.getBoundingClientRect();
+                            onMouseDown={(downEvent) => {
+                              const bounds =
+                                downEvent.currentTarget.getBoundingClientRect();
 
-                                setProject(
-                                  "timeline",
-                                  "zoomSegments",
-                                  value().selection.index,
-                                  "mode",
-                                  "manual",
-                                  {
-                                    x: Math.max(
-                                      Math.min(
-                                        (e.clientX - bounds.left) /
-                                          bounds.width,
-                                        1
-                                      ),
-                                      0
-                                    ),
-                                    y: Math.max(
-                                      Math.min(
-                                        (e.clientY - bounds.top) /
-                                          bounds.height,
-                                        1
-                                      ),
-                                      0
-                                    ),
-                                  }
-                                );
-                              }
+                              createRoot((dispose) => {
+                                createEventListenerMap(window, {
+                                  mouseup: () => dispose(),
+                                  mousemove: (moveEvent) => {
+                                    setProject(
+                                      "timeline",
+                                      "zoomSegments",
+                                      value().selection.index,
+                                      "mode",
+                                      "manual",
+                                      {
+                                        x: Math.max(
+                                          Math.min(
+                                            (moveEvent.clientX - bounds.left) /
+                                              bounds.width,
+                                            1
+                                          ),
+                                          0
+                                        ),
+                                        y: Math.max(
+                                          Math.min(
+                                            (moveEvent.clientY - bounds.top) /
+                                              bounds.height,
+                                            1
+                                          ),
+                                          0
+                                        ),
+                                      }
+                                    );
+                                  },
+                                });
+                              });
                             }}
                           >
                             <div
