@@ -41,15 +41,6 @@ impl ZoomKeyframes {
 
         let mut keyframes = vec![];
 
-        if segments[0].start != 0.0 {
-            keyframes.push(ZoomKeyframe {
-                time: 0.0,
-                scale: 1.0,
-                position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
-                has_segment: false,
-            });
-        }
-
         for (i, segment) in segments.iter().enumerate() {
             let position = match segment.mode {
                 cap_project::ZoomMode::Auto => ZoomPosition::Cursor,
@@ -67,23 +58,45 @@ impl ZoomKeyframes {
                     //     position,
                     // });
                 }
+
+                keyframes.push(ZoomKeyframe {
+                    time: segment.start + ZOOM_DURATION,
+                    scale: segment.amount,
+                    position,
+                    has_segment: true,
+                });
             } else {
-                if keyframes.len() != 0 {
+                if segment.start != 0.0 {
+                    keyframes.extend([
+                        ZoomKeyframe {
+                            time: 0.0,
+                            scale: 1.0,
+                            position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
+                            has_segment: false,
+                        },
+                        ZoomKeyframe {
+                            time: segment.start,
+                            scale: 1.0,
+                            position,
+                            has_segment: true,
+                        },
+                        ZoomKeyframe {
+                            time: segment.start + ZOOM_DURATION,
+                            scale: segment.amount,
+                            position,
+                            has_segment: true,
+                        },
+                    ]);
+                } else {
                     keyframes.push(ZoomKeyframe {
                         time: segment.start,
-                        scale: 1.0,
+                        scale: segment.amount,
                         position,
                         has_segment: true,
                     });
                 }
             }
 
-            keyframes.push(ZoomKeyframe {
-                time: segment.start + ZOOM_DURATION,
-                scale: segment.amount,
-                position,
-                has_segment: true,
-            });
             keyframes.push(ZoomKeyframe {
                 time: segment.end,
                 scale: segment.amount,
@@ -113,7 +126,7 @@ impl ZoomKeyframes {
             }
         }
 
-        Self(dbg!(keyframes))
+        Self(keyframes)
     }
 
     pub fn interpolate(&self, time: f64) -> InterpolatedZoom {
