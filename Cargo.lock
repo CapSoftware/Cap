@@ -960,11 +960,15 @@ dependencies = [
 name = "cap-utils"
 version = "0.1.0"
 dependencies = [
+ "flume 0.11.0",
  "futures",
  "nix 0.29.0",
+ "serde",
+ "serde_json",
  "tokio",
  "uuid",
  "windows 0.58.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
