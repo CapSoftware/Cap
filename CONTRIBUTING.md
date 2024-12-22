@@ -60,7 +60,4 @@ The video segments are stored in your app data directory, under the folder `so.c
 
 ### Notes for development on Windows:
 
-<!-- TODO: Update instructions once setupSidecar handles this -->
-
-Required dlls: `avutil`, `avformat`, `avcodec`, `avdevice`.
-Put the full version of ffmpeg for the target arch into `target/binaries`.
+Requirements: llvm, clang and VCPKG are required for compiling ffmpeg-sys.

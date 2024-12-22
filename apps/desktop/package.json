@@ -2,7 +2,7 @@
   "name": "@cap/desktop",
   "type": "module",
   "scripts": {
-    "dev": "RUST_BACKTRACE=1 dotenv -e ../../.env -- pnpm run preparescript && tauri dev",
+    "dev": "cross-env RUST_BACKTRACE=1 dotenv -e ../../.env -- pnpm run preparescript && tauri dev",
     "build:tauri": "dotenv -e ../../.env -- pnpm run preparescript && tauri build",
     "preparescript": "node scripts/prepare.js",
     "localdev": "dotenv -e ../../.env -- vinxi dev --port 3001",
@@ -64,6 +64,7 @@
     "@tauri-apps/cli": ">=2.1.0",
     "@total-typescript/ts-reset": "^0.6.1",
     "@types/dom-webcodecs": "^0.1.11",
+    "cross-env": "^7.0.3",
     "typescript": "^5.7.2",
     "vite": "^5.4.3",
     "vite-tsconfig-paths": "^5.0.1"

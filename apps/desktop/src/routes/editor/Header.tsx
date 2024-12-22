@@ -4,6 +4,7 @@ import {
   Match,
   Show,
   Switch,
+  batch,
   createEffect,
   createResource,
   onCleanup,
@@ -59,24 +60,27 @@ export function Header() {
       currentWindow.setProgressBar({ progress: Math.round(percentage) });
   });
 
-  setTitlebar("border", false);
-  setTitlebar("height", "4rem");
-  setTitlebar(
-    "items",
-    <div
-      data-tauri-drag-region
-      class={cx(
-        "flex flex-row justify-between items-center w-full cursor-default pr-5",
-        ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem]"
-      )}
-    >
-      <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]"></div>
-      <div class="flex flex-row gap-2 font-medium items-center">
-        <ShareButton />
-        <ExportButton />
+  batch(() => {
+    setTitlebar("border", false);
+    setTitlebar("height", "4rem");
+    setTitlebar("transparent", true);
+    setTitlebar(
+      "items",
+      <div
+        data-tauri-drag-region
+        class={cx(
+          "flex flex-row justify-between items-center w-full cursor-default pr-5",
+          ostype() === "windows" ? "pl-[4.3rem]" : "pl-[1.25rem]"
+        )}
+      >
+        <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]"></div>
+        <div class="flex flex-row gap-2 font-medium items-center">
+          <ShareButton />
+          <ExportButton />
+        </div>
       </div>
-    </div>
-  );
+    );
+  });
 
   return (
     <>
