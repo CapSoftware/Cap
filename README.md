@@ -21,6 +21,7 @@
 <br/>
 
 [![Open Bounties](https://img.shields.io/endpoint?url=https%3A%2F%2Fconsole.algora.io%2Fapi%2Fshields%2FCapSoftware%2Fbounties%3Fstatus%3Dopen)](https://console.algora.io/org/CapSoftware/bounties?status=open)
+[![License](https://img.shields.io/github/license/CapSoftware/Cap)](https://github.com/CapSoftware/Cap/blob/main/LICENSE)
 
 > NOTE: Cap is under active development, and is currently in public beta. This repository is updated regularly with changes and new releases.
 
