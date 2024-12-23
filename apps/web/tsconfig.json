@@ -24,11 +24,9 @@
     ],
     "baseUrl": ".",
     "paths": {
-      "@/app/*": ["app/*"],
-      "@/components/*": ["components/*"],
-      "@/pages/*": ["components/pages/*"],
+      "@/*": ["./*"],
       "@/utils/*": ["utils/*"],
-      "@/lib/*": ["lib/*"]
+      "@/components/*": ["components/*"]
     }
   },
 

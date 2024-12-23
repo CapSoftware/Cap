@@ -1,0 +1,104 @@
+.careers-page {
+  @apply min-h-screen text-black relative;
+  background: linear-gradient(180deg, 
+    #ffffff 0%,
+    #f5f5ff 15%,
+    #faf8ff 35%,
+    #ffffff 65%,
+    #f8f8fc 85%,
+    #ffffff 100%
+  );
+}
+
+.careers-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.03;
+  pointer-events: none;
+  mix-blend-mode: soft-light;
+}
+
+.careers-page::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(
+    100% 100% at 50% 0%, 
+    rgba(45, 40, 70, 0.1) 0%, 
+    rgba(15, 8, 23, 0.1) 100%
+  );
+  pointer-events: none;
+}
+
+.careers-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.careers-hero::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: radial-gradient(
+    circle at center,
+    rgba(59, 130, 246, 0.1) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+}
+
+.wrapper {
+  @apply container mx-auto px-4 max-w-7xl;
+}
+
+.wrapper-sm {
+  @apply max-w-4xl;
+}
+
+.value-card {
+  @apply p-6 rounded-xl border border-gray-200 bg-white/50 backdrop-blur-sm hover:border-gray-300 transition-all duration-200;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+}
+
+.benefit-card {
+  @apply p-6 rounded-xl border border-gray-200 bg-white/50 backdrop-blur-sm transition-all duration-200;
+  background: linear-gradient(
+    135deg,
+    rgba(var(--card-rgb), 0.03) 0%,
+    rgba(var(--card-rgb), 0.01) 100%
+  );
+}
+
+.benefit-card.salary {
+  --card-rgb: 46, 213, 115;
+}
+
+.benefit-card.stock {
+  --card-rgb: 155, 89, 182;
+}
+
+.benefit-card.pto {
+  --card-rgb: 83, 82, 237;
+}
+
+.benefit-card.remote {
+  --card-rgb: 255, 159, 67;
+}
+
+.benefit-card.setup {
+  --card-rgb: 45, 152, 218;
+}
+
+.benefit-card.health {
+  --card-rgb: 234, 84, 85;
+}
+
+.position-card {
+  @apply p-6 rounded-xl border border-gray-200 bg-white/50 backdrop-blur-sm hover:border-gray-300 transition-all duration-200;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+}

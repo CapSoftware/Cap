@@ -3,28 +3,28 @@ import { compileMDX } from "next-mdx-remote/rsc";
 import { getMDXContent } from "@/app/_actions/mdx";
 import { ReactElement, JSXElementConstructor } from "react";
 
-export type PostMetadata = {
+type Metadata = {
   title: string;
-  description: string;
+  location: string;
+  type: string;
+  salary: string;
+  status: "Open" | "Closed";
   publishedAt: string;
-  category: string;
-  image?: string;
-  author: string;
-  tags: string;
+  description: string;
 };
 
-export type BlogPost = {
-  metadata: PostMetadata;
+export type CareerPost = {
+  metadata: Metadata;
   slug: string;
   content: ReactElement<any, string | JSXElementConstructor<any>>;
 };
 
-export const getBlogPosts = cache(async (): Promise<BlogPost[]> => {
-  const posts = await getMDXContent("content/blog");
+export const getCareerPosts = cache(async (): Promise<CareerPost[]> => {
+  const posts = await getMDXContent("content/careers");
 
   const parsedPosts = await Promise.all(
     posts.map(async ({ slug, content }) => {
-      const { frontmatter, content: mdxContent } = await compileMDX<PostMetadata>({
+      const { frontmatter, content: mdxContent } = await compileMDX<Metadata>({
         source: content,
         options: { parseFrontmatter: true },
       });
@@ -40,4 +40,4 @@ export const getBlogPosts = cache(async (): Promise<BlogPost[]> => {
   return parsedPosts.sort((a, b) =>
     new Date(b.metadata.publishedAt) > new Date(a.metadata.publishedAt) ? 1 : -1
   );
-});
+}); 

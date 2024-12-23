@@ -1,5 +1,7 @@
-import fs from "fs";
-import path from "path";
+import { cache } from "react";
+import { compileMDX } from "next-mdx-remote/rsc";
+import { getMDXContent } from "@/app/_actions/mdx";
+import { ReactElement, JSXElementConstructor } from "react";
 
 export type ChangelogMetadata = {
   title: string;
@@ -9,48 +11,36 @@ export type ChangelogMetadata = {
   image?: string;
 };
 
-function parseFrontmatter(fileContent: string) {
-  let frontmatterRegex = /---\s*([\s\S]*?)\s*---/;
-  let match = frontmatterRegex.exec(fileContent);
-  let frontMatterBlock = match![1];
-  let content = fileContent.replace(frontmatterRegex, "").trim();
-  let frontMatterLines = frontMatterBlock.trim().split("\n");
-  let metadata: Partial<ChangelogMetadata> = {};
+export type ChangelogPost = {
+  metadata: ChangelogMetadata;
+  slug: string;
+  content: ReactElement<any, string | JSXElementConstructor<any>>;
+};
 
-  frontMatterLines.forEach((line) => {
-    let [key, ...valueArr] = line.split(": ");
-    let value = valueArr.join(": ").trim();
-    value = value.replace(/^['"](.*)['"]$/, "$1"); // Remove quotes
-    metadata[key.trim() as keyof ChangelogMetadata] = value;
-  });
+export const getChangelogPosts = cache(async (): Promise<ChangelogPost[]> => {
+  try {
+    const posts = await getMDXContent("content/changelog");
 
-  return { metadata: metadata as ChangelogMetadata, content };
-}
+    const parsedPosts = await Promise.all(
+      posts.map(async ({ slug, content }) => {
+        const { frontmatter, content: mdxContent } = await compileMDX<ChangelogMetadata>({
+          source: content,
+          options: { parseFrontmatter: true },
+        });
 
-const dir = path.join(process.cwd(), "content/changelog");
+        return {
+          metadata: frontmatter,
+          slug,
+          content: mdxContent,
+        };
+      })
+    );
 
-function getMDXFiles() {
-  return fs.readdirSync(dir).filter((file) => path.extname(file) === ".mdx");
-}
-
-function readMDXFile(filePath: string) {
-  let rawContent = fs.readFileSync(filePath, "utf-8");
-  return parseFrontmatter(rawContent);
-}
-
-function getMDXData() {
-  let mdxFiles = getMDXFiles();
-  return mdxFiles.map((file) => {
-    let { metadata, content } = readMDXFile(path.join(dir, file));
-    let slug = path.basename(file, path.extname(file));
-    return {
-      metadata,
-      slug,
-      content,
-    };
-  });
-}
-
-export function getChangelogPosts() {
-  return getMDXData();
-}
+    return parsedPosts.sort((a, b) =>
+      new Date(b.metadata.publishedAt) > new Date(a.metadata.publishedAt) ? 1 : -1
+    );
+  } catch (error) {
+    console.error("Error reading changelog posts:", error);
+    return [];
+  }
+});
