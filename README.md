@@ -4,7 +4,7 @@
   </p>
 	<h1 align="center"><b>Cap</b></h1>
 	<p align="center">
-		The open source Loom alternative.
+		The open source Loom alternative for screen recording and video sharing.
     <br />
     <a href="https://cap.so"><strong>Cap.so »</strong></a>
     <br />
