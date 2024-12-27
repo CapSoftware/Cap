@@ -31,6 +31,7 @@ import IconLucideHardDrive from "~icons/lucide/hard-drive";
 import IconLucideCheck from "~icons/lucide/check";
 import IconLucideLoaderCircle from "~icons/lucide/loader-circle";
 import IconLucideRotateCcw from "~icons/lucide/rotate-ccw";
+import IconLucideClock from "~icons/lucide/clock";
 
 export function Header() {
   const currentWindow = getCurrentWindow();
@@ -250,8 +251,9 @@ function ExportButton() {
     if (!result) return;
 
     const { duration, size } = result;
-    console.log(`Metadata for video: duration=${duration}, size=${size}`);
-    return { duration, size };
+    const estimatedExportTime = Math.ceil(duration * 1.5);
+    console.log(`Metadata for video: duration=${duration}, size=${size}, estimatedExport=${estimatedExportTime}`);
+    return { duration, size, estimatedExportTime };
   });
 
   const exportVideo = createMutation(() => ({
@@ -342,6 +344,13 @@ function ExportButton() {
             <span class="flex items-center">
               <IconLucideHardDrive class="w-3.5 h-3.5 mr-1 opacity-70" />
               {meta().size.toFixed(2)} MB
+            </span>
+            <div class="w-[1px] h-3 bg-gray-300 dark:bg-gray-500/50"></div>
+            <span class="flex items-center">
+              <IconLucideClock class="w-3.5 h-3.5 mr-1 opacity-70" />
+              ~{Math.floor(meta().estimatedExportTime / 60)}:{Math.floor(meta().estimatedExportTime % 60)
+                .toString()
+                .padStart(2, "0")}
             </span>
           </div>
         )}

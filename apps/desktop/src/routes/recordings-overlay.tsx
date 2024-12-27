@@ -24,6 +24,7 @@ import { TransitionGroup } from "solid-transition-group";
 import { makePersisted } from "@solid-primitives/storage";
 import { Channel } from "@tauri-apps/api/core";
 import { createStore, produce } from "solid-js/store";
+import IconLucideClock from "~icons/lucide/clock";
 
 import {
   commands,
@@ -177,11 +178,13 @@ export default function () {
                   if (!result) return;
 
                   const { duration, size } = result;
+                  // Calculate estimated export time (rough estimation: 1.5x real-time for 1080p)
+                  const estimatedExportTime = Math.ceil(duration * 1.5);
                   console.log(
-                    `Metadata for ${media.path}: duration=${duration}, size=${size}`
+                    `Metadata for ${media.path}: duration=${duration}, size=${size}, estimatedExport=${estimatedExportTime}`
                   );
 
-                  return { duration, size };
+                  return { duration, size, estimatedExportTime };
                 });
 
                 const [imageExists, setImageExists] = createSignal(true);
@@ -585,14 +588,26 @@ export default function () {
                                   : "group-hover:opacity-0"
                               )}
                             >
-                              <p class="flex items-center">
-                                <IconCapCamera class="w-[20px] h-[20px] mr-1" />
-                                {Math.floor(metadata().duration / 60)}:
-                                {Math.floor(metadata().duration % 60)
-                                  .toString()
-                                  .padStart(2, "0")}
+                              <p class="flex items-center gap-3">
+                                <span class="flex items-center">
+                                  <IconCapCamera class="w-[20px] h-[20px] mr-1" />
+                                  {Math.floor(metadata().duration / 60)}:
+                                  {Math.floor(metadata().duration % 60)
+                                    .toString()
+                                    .padStart(2, "0")}
+                                </span>
+                                <span class="flex items-center">
+                                  <IconLucideHardDrive class="w-[20px] h-[20px] mr-1" />
+                                  {metadata().size.toFixed(2)} MB
+                                </span>
+                                <span class="flex items-center">
+                                  <IconLucideClock class="w-[20px] h-[20px] mr-1" />
+                                  ~{Math.floor(metadata().estimatedExportTime / 60)}:
+                                  {Math.floor(metadata().estimatedExportTime % 60)
+                                    .toString()
+                                    .padStart(2, "0")}
+                                </span>
                               </p>
-                              <p>{metadata().size.toFixed(2)} MB</p>
                             </div>
                           )}
                         </Show>
