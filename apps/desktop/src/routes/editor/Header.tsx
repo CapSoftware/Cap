@@ -27,6 +27,10 @@ import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
+import IconLucideHardDrive from "~icons/lucide/hard-drive";
+import IconLucideCheck from "~icons/lucide/check";
+import IconLucideLoaderCircle from "~icons/lucide/loader-circle";
+import IconLucideRotateCcw from "~icons/lucide/rotate-ccw";
 
 export function Header() {
   const currentWindow = getCurrentWindow();
@@ -239,6 +243,17 @@ import { getRequestEvent } from "solid-js/web";
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
 
+  const [metadata] = createResource(async () => {
+    const result = await commands.getVideoMetadata(videoId, null).catch((e) => {
+      console.error(`Failed to get metadata: ${e}`);
+    });
+    if (!result) return;
+
+    const { duration, size } = result;
+    console.log(`Metadata for video: duration=${duration}, size=${size}`);
+    return { duration, size };
+  });
+
   const exportVideo = createMutation(() => ({
     mutationFn: async (useCustomMuxer: boolean) => {
       const path = await save({
@@ -304,6 +319,7 @@ function ExportButton() {
   }));
 
   return (
+    <div class="flex flex-col items-end gap-1">
     <Button
       variant="primary"
       size="md"
@@ -313,6 +329,24 @@ function ExportButton() {
     >
       Export
     </Button>
+      <Show when={metadata()}>
+        {(meta) => (
+          <div class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-3 px-2 py-1 rounded-md">
+            <span class="flex items-center">
+              <IconCapCamera class="w-3.5 h-3.5 mr-1 opacity-70" />
+              {Math.floor(meta().duration / 60)}:{Math.floor(meta().duration % 60)
+                .toString()
+                .padStart(2, "0")}
+            </span>
+            <div class="w-[1px] h-3 bg-gray-300 dark:bg-gray-500/50"></div>
+            <span class="flex items-center">
+              <IconLucideHardDrive class="w-3.5 h-3.5 mr-1 opacity-70" />
+              {meta().size.toFixed(2)} MB
+            </span>
+          </div>
+        )}
+      </Show>
+    </div>
   );
 }
 
