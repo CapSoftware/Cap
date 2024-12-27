@@ -319,16 +319,16 @@ function ExportButton() {
   }));
 
   return (
-    <div class="flex flex-col items-end gap-1">
-    <Button
-      variant="primary"
-      size="md"
-      onClick={(e) =>
-        exportVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
-      }
-    >
-      Export
-    </Button>
+    <div class="flex flex-row items-center gap-2">
+      <Button
+        variant="primary"
+        size="md"
+        onClick={(e) =>
+          exportVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
+        }
+      >
+        Export
+      </Button>
       <Show when={metadata()}>
         {(meta) => (
           <div class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-3 px-2 py-1 rounded-md">
