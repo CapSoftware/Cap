@@ -21,8 +21,8 @@ pub async fn export_video(
             .await
             .unwrap();
 
-    // 30 FPS (calculated for output video)
-    let total_frames = (duration * 30.0).round() as u32;
+    // Calculate total frames with ceiling to ensure we don't exceed 100%
+    let total_frames = ((duration * 30.0).ceil() as u32).max(1);
 
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
 
@@ -41,9 +41,11 @@ pub async fn export_video(
         project,
         output_path.clone(),
         move |frame_index| {
+            // Ensure progress never exceeds total frames
+            let current_frame = (frame_index + 1).min(total_frames);
             progress
                 .send(RenderProgress::FrameRendered {
-                    current_frame: frame_index + 1,
+                    current_frame,
                 })
                 .ok();
         },

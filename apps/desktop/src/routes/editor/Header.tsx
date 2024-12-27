@@ -260,14 +260,26 @@ function ExportButton() {
       const progress = new Channel<RenderProgress>();
       progress.onmessage = (p) => {
         if (p.type === "FrameRendered" && progressState.type === "saving") {
-          const percentComplete = Math.round(
-            (p.current_frame / (progressState.totalFrames || 1)) * 100
+          const percentComplete = Math.min(
+            Math.round(
+              (p.current_frame / (progressState.totalFrames || 1)) * 100
+            ),
+            100
           );
+          
           setProgressState({
             ...progressState,
             renderProgress: p.current_frame,
             message: `Rendering video - ${percentComplete}%`,
           });
+
+          // If rendering is complete, update the message
+          if (percentComplete === 100) {
+            setProgressState({
+              ...progressState,
+              message: "Finalizing export...",
+            });
+          }
         }
         if (
           p.type === "EstimatedTotalFrames" &&
