@@ -7,6 +7,8 @@ import {
   useQueryClient,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
   JSX,
@@ -17,6 +19,7 @@ import {
   createResource,
   createSignal,
   onMount,
+  onCleanup,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { fetch } from "@tauri-apps/plugin-http";
@@ -102,6 +105,25 @@ export default function () {
       }
     }
 
+    // Enforce window size with multiple safeguards
+    const currentWindow = await getCurrentWindow();
+    const MAIN_WINDOW_SIZE = { width: 300, height: 360 };
+    
+    // Set initial size
+    currentWindow.setSize(new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height));
+    
+    // Check size when app regains focus
+    const unlistenFocus = await currentWindow.onFocusChanged(({ payload: focused }) => {
+        if (focused) {
+            currentWindow.setSize(new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height));
+        }
+    });
+    
+    // Listen for resize events
+    const unlistenResize = await currentWindow.onResized(() => {
+        currentWindow.setSize(new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height));
+    });
+
     setTitlebar("hideMaximize", true);
     setTitlebar(
       "items",
@@ -121,6 +143,11 @@ export default function () {
         <ChangelogButton />
       </div>
     );
+
+    onCleanup(() => {
+        unlistenFocus();
+        unlistenResize();
+    });
   });
 
   return (
