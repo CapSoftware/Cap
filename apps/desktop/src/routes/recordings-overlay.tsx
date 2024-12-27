@@ -577,31 +577,31 @@ export default function () {
                             <div
                               style={{
                                 color: "white",
-                                "font-size": "14px",
+                                "font-size": "12px",
                                 "border-end-end-radius": "7.4px",
                                 "border-end-start-radius": "7.4px",
                               }}
                               class={cx(
-                                "absolute bottom-0 left-0 right-0 font-medium bg-gray-500 dark:bg-gray-50 bg-opacity-40 backdrop-blur p-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
+                                "absolute bottom-0 left-0 right-0 font-medium bg-gray-500/60 dark:bg-gray-50/60 backdrop-blur-md p-2.5 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
                                 isLoading() || showUpgradeTooltip()
                                   ? "opacity-0"
                                   : "group-hover:opacity-0"
                               )}
                             >
-                              <p class="flex items-center gap-3">
+                              <p class="flex items-center gap-4">
                                 <span class="flex items-center">
-                                  <IconCapCamera class="w-[20px] h-[20px] mr-1" />
+                                  <IconCapCamera class="w-[16px] h-[16px] mr-1.5" />
                                   {Math.floor(metadata().duration / 60)}:
                                   {Math.floor(metadata().duration % 60)
                                     .toString()
                                     .padStart(2, "0")}
                                 </span>
                                 <span class="flex items-center">
-                                  <IconLucideHardDrive class="w-[20px] h-[20px] mr-1" />
+                                  <IconLucideHardDrive class="w-[16px] h-[16px] mr-1.5" />
                                   {metadata().size.toFixed(2)} MB
                                 </span>
                                 <span class="flex items-center">
-                                  <IconLucideClock class="w-[20px] h-[20px] mr-1" />
+                                  <IconLucideClock class="w-[16px] h-[16px] mr-1.5" />
                                   ~{Math.floor(metadata().estimatedExportTime / 60)}:
                                   {Math.floor(metadata().estimatedExportTime % 60)
                                     .toString()
