@@ -235,6 +235,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import { createMutation } from "@tanstack/solid-query";
 import { getRequestEvent } from "solid-js/web";
+import { checkIsUpgradedAndUpdate } from "~/utils/plans";
 
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
@@ -261,9 +262,7 @@ function ExportButton() {
       progress.onmessage = (p) => {
         if (p.type === "FrameRendered" && progressState.type === "saving") {
           const percentComplete = Math.min(
-            Math.round(
-              (p.current_frame / (progressState.totalFrames || 1)) * 100
-            ),
+            Math.round((p.current_frame / (progressState.totalFrames || 1)) * 100),
             100
           );
           
@@ -273,7 +272,7 @@ function ExportButton() {
             message: `Rendering video - ${percentComplete}%`,
           });
 
-          // If rendering is complete, update the message
+          // If rendering is complete, update to finalizing state
           if (percentComplete === 100) {
             setProgressState({
               ...progressState,
@@ -281,10 +280,7 @@ function ExportButton() {
             });
           }
         }
-        if (
-          p.type === "EstimatedTotalFrames" &&
-          progressState.type === "saving"
-        ) {
+        if (p.type === "EstimatedTotalFrames" && progressState.type === "saving") {
           setProgressState({
             ...progressState,
             totalFrames: p.total_frames,
@@ -293,25 +289,30 @@ function ExportButton() {
         }
       };
 
-      const videoPath = await commands.exportVideo(
-        videoId,
-        project,
-        progress,
-        true,
-        useCustomMuxer
-      );
-      await commands.copyFileToPath(videoPath, path);
+      try {
+        const videoPath = await commands.exportVideo(
+          videoId,
+          project,
+          progress,
+          true,
+          useCustomMuxer
+        );
+        await commands.copyFileToPath(videoPath, path);
 
-      setProgressState({
-        type: "saving",
-        progress: 100,
-        message: "Saved successfully!",
-        mediaPath: path,
-      });
+        setProgressState({
+          type: "saving",
+          progress: 100,
+          message: "Saved successfully!",
+          mediaPath: path,
+        });
 
-      setTimeout(() => {
+        setTimeout(() => {
+          setProgressState({ type: "idle" });
+        }, 1500);
+      } catch (error) {
         setProgressState({ type: "idle" });
-      }, 1500);
+        throw error;
+      }
     },
   }));
 
@@ -340,6 +341,13 @@ function ShareButton() {
       if (!recordingMeta()) {
         console.error("No recording metadata available");
         throw new Error("Recording metadata not available");
+      }
+
+      // Check for pro access first before starting the export
+      const isUpgraded = await checkIsUpgradedAndUpdate();
+      if (!isUpgraded) {
+        await commands.showWindow("Upgrade");
+        throw new Error("Upgrade required to share recordings");
       }
 
       let unlisten: (() => void) | undefined;

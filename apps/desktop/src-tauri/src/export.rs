@@ -16,10 +16,15 @@ pub async fn export_video(
     force: bool,
     use_custom_muxer: bool,
 ) -> Result<PathBuf, String> {
-    let VideoRecordingMetadata { duration, .. } =
-        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
-            .await
-            .unwrap();
+    let metadata = match get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await {
+        Ok(meta) => meta,
+        Err(e) => {
+            sentry::capture_message(&format!("Failed to get video metadata: {}", e), sentry::Level::Error);
+            return Err("Failed to read video metadata. The recording may be from an incompatible version.".to_string());
+        }
+    };
+
+    let VideoRecordingMetadata { duration, .. } = metadata;
 
     // Calculate total frames with ceiling to ensure we don't exceed 100%
     let total_frames = ((duration * 30.0).ceil() as u32).max(1);
@@ -28,7 +33,7 @@ pub async fn export_video(
 
     let output_path = editor_instance.meta().output_path();
 
-    // If the file exists, return it immediately
+    // If the file exists and we're not forcing a re-render, return it
     if output_path.exists() && !force {
         return Ok(output_path);
     }
@@ -59,17 +64,20 @@ pub async fn export_video(
         e.to_string()
     })?;
 
-    if use_custom_muxer {
+    let result = if use_custom_muxer {
         exporter.export_with_custom_muxer().await
     } else {
         exporter.export_with_ffmpeg_cli().await
+    };
+
+    match result {
+        Ok(_) => {
+            ShowCapWindow::PrevRecordings.show(&app).ok();
+            Ok(output_path)
+        }
+        Err(e) => {
+            sentry::capture_message(&e.to_string(), sentry::Level::Error);
+            Err(e.to_string())
+        }
     }
-    .map_err(|e| {
-        sentry::capture_message(&e.to_string(), sentry::Level::Error);
-        e.to_string()
-    })?;
-
-    ShowCapWindow::PrevRecordings.show(&app).ok();
-
-    Ok(output_path)
 }
