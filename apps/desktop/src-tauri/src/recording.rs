@@ -48,6 +48,14 @@ pub fn list_cameras() -> Vec<String> {
 pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
+    // Get the recording config
+    let config = GeneralSettingsStore::get(&app)?
+        .and_then(|s| s.recording_config)
+        .unwrap_or_default();
+
+    // Update the recording options with the configured FPS
+    state.start_recording_options.fps = config.fps;
+
     let id = uuid::Uuid::new_v4().to_string();
 
     let recording_dir = app

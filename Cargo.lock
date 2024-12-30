@@ -830,9 +830,11 @@ dependencies = [
  "cap-project",
  "cap-rendering",
  "cap-utils",
+ "ffmpeg-next",
  "futures",
  "image 0.25.5",
  "mp4",
+ "tauri",
  "tempfile",
  "thiserror 1.0.63",
  "tokio",
@@ -907,6 +909,8 @@ dependencies = [
  "serde",
  "serde_json",
  "specta",
+ "tauri",
+ "tauri-plugin-store",
 ]
 
 [[package]]

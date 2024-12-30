@@ -151,7 +151,7 @@ fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
             },
             frame_rate: 30,
         },
-        &[FrameFormat::NV12],
+        &[FrameFormat::NV12, FrameFormat::MJPEG, FrameFormat::YUYV],
     );
 
     let index = info.index().clone();

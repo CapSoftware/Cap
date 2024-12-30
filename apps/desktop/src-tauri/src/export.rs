@@ -1,6 +1,6 @@
 use crate::{
-    get_video_metadata, upsert_editor_instance, windows::ShowCapWindow, RenderProgress,
-    VideoRecordingMetadata, VideoType,
+    general_settings::GeneralSettingsStore, get_video_metadata, upsert_editor_instance,
+    windows::ShowCapWindow, RenderProgress, VideoRecordingMetadata, VideoType,
 };
 use cap_project::ProjectConfiguration;
 use std::path::PathBuf;
@@ -21,8 +21,14 @@ pub async fn export_video(
             .await
             .unwrap();
 
-    // 30 FPS (calculated for output video)
-    let total_frames = (duration * 30.0).round() as u32;
+    // Get FPS from general settings
+    let fps = GeneralSettingsStore::get(&app)?
+        .and_then(|s| s.recording_config)
+        .unwrap_or_default()
+        .fps;
+
+    // Use configured FPS for output video
+    let total_frames = (duration * fps as f64).round() as u32;
 
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
 
@@ -38,6 +44,7 @@ pub async fn export_video(
         .ok();
 
     let exporter = cap_export::Exporter::new(
+        &app,
         project,
         output_path.clone(),
         move |frame_index| {

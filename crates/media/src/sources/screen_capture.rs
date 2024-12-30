@@ -1,7 +1,9 @@
 use cap_flags::FLAGS;
 use flume::Sender;
 use scap::{
-    capturer::{get_output_frame_size, Area, Capturer, Options, Point, Resolution, Size},
+    capturer::{
+        get_output_frame_size, Area, Capturer, Options, Point, Resolution as ScapResolution, Size,
+    },
     frame::{Frame, FrameType},
     Target,
 };
@@ -13,6 +15,7 @@ use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
     pipeline::{clock::*, control::Control, task::PipelineSourceTask},
     platform::{self, Bounds, Window},
+    MediaError,
 };
 
 static EXCLUDED_WINDOWS: [&str; 4] = [
@@ -58,52 +61,62 @@ impl PartialEq<Target> for ScreenCaptureTarget {
     }
 }
 
-pub struct ScreenCaptureSource<T> {
+#[derive(Debug)]
+pub struct ScreenCaptureSource<TCaptureFormat> {
     target: ScreenCaptureTarget,
+    output_resolution: Option<ScapResolution>,
+    output_type: Option<FrameType>,
     fps: u32,
-    resolution: Resolution,
     video_info: VideoInfo,
-    phantom: std::marker::PhantomData<T>,
+    _phantom: std::marker::PhantomData<TCaptureFormat>,
 }
 
-impl<T> Clone for ScreenCaptureSource<T> {
+impl<TCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
     fn clone(&self) -> Self {
         Self {
             target: self.target.clone(),
+            output_resolution: self.output_resolution,
+            output_type: self.output_type,
             fps: self.fps,
-            resolution: self.resolution,
-            video_info: self.video_info,
-            phantom: Default::default(),
+            video_info: self.video_info.clone(),
+            _phantom: std::marker::PhantomData,
         }
     }
 }
 
-unsafe impl<T> Send for ScreenCaptureSource<T> {}
-unsafe impl<T> Sync for ScreenCaptureSource<T> {}
-
-impl<T> ScreenCaptureSource<T> {
-    pub const DEFAULT_FPS: u32 = 30;
-
+impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     pub fn init(
-        capture_target: &ScreenCaptureTarget,
-        fps: Option<u32>,
-        resolution: Option<Resolution>,
+        target: &ScreenCaptureTarget,
+        output_resolution: Option<cap_project::Resolution>,
+        output_type: Option<FrameType>,
+        fps: u32,
     ) -> Self {
-        let output_resolution = resolution.unwrap_or(Resolution::Captured);
-        let fps = fps.unwrap_or(Self::DEFAULT_FPS);
-
         let mut this = Self {
-            target: capture_target.clone(),
+            target: target.clone(),
+            output_resolution: output_resolution.map(|r| {
+                // Choose the closest resolution based on height
+                if r.height <= 480 {
+                    ScapResolution::_480p
+                } else if r.height <= 720 {
+                    ScapResolution::_720p
+                } else if r.height <= 1080 {
+                    ScapResolution::_1080p
+                } else if r.height <= 1440 {
+                    ScapResolution::_1440p
+                } else if r.height <= 2160 {
+                    ScapResolution::_2160p
+                } else {
+                    ScapResolution::_4320p
+                }
+            }),
+            output_type,
             fps,
-            resolution: output_resolution,
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, fps),
-            phantom: Default::default(),
+            _phantom: std::marker::PhantomData,
         };
 
         let options = this.create_options();
-
         let [frame_width, frame_height] = get_output_frame_size(&options);
-
         this.video_info = VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps);
 
         this
@@ -145,7 +158,7 @@ impl<T> ScreenCaptureSource<T> {
         };
 
         let target = match &self.target {
-            ScreenCaptureTarget::Window(w) => None,
+            ScreenCaptureTarget::Window(_) => None,
             ScreenCaptureTarget::Screen(capture_screen) => targets
                 .iter()
                 .find(|t| match t {
@@ -157,18 +170,13 @@ impl<T> ScreenCaptureSource<T> {
 
         Options {
             fps: self.fps,
-            show_cursor: !FLAGS.record_mouse,
+            show_cursor: FLAGS.record_mouse,
             show_highlight: true,
-            excluded_targets: Some(excluded_targets),
-            output_type: if cfg!(windows) {
-                FrameType::BGRAFrame
-            } else {
-                FrameType::YUVFrame
-            },
-            output_resolution: self.resolution,
-            crop_area,
             target,
-            ..Default::default()
+            crop_area,
+            output_type: self.output_type.unwrap_or(FrameType::YUVFrame),
+            output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
+            excluded_targets: Some(excluded_targets),
         }
     }
 
@@ -256,7 +264,17 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
             ScreenCaptureTarget::Window(window) => Some(window.id),
             _ => None,
         };
-        let mut capturer = Capturer::new(dbg!(options));
+        let mut capturer = match Capturer::build(dbg!(options)) {
+            Ok(capturer) => capturer,
+            Err(e) => {
+                let error = format!("Failed to build capturer: {e}");
+                eprintln!("{}", error);
+                ready_signal
+                    .send(Err(MediaError::Any("Failed to build capturer")))
+                    .unwrap();
+                return;
+            }
+        };
         let mut capturing = false;
         ready_signal.send(Ok(())).unwrap();
 
@@ -389,7 +407,17 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             ScreenCaptureTarget::Window(window) => Some(window.id),
             _ => None,
         };
-        let mut capturer = Capturer::new(dbg!(self.create_options()));
+        let mut capturer = match Capturer::build(dbg!(self.create_options())) {
+            Ok(capturer) => capturer,
+            Err(e) => {
+                let error = format!("Failed to build capturer: {e}");
+                eprintln!("{}", error);
+                ready_signal
+                    .send(Err(MediaError::Any("Failed to build capturer")))
+                    .unwrap();
+                return;
+            }
+        };
         let mut capturing = false;
         ready_signal.send(Ok(())).ok();
 

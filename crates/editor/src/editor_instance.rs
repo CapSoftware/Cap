@@ -1,12 +1,16 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
+use cap_media::data::RawVideoFormat;
+use cap_media::data::VideoInfo;
 use cap_media::feeds::AudioData;
 use cap_media::frame_ws::create_frame_ws;
+use cap_project::RecordingConfig;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
     RenderVideoConstants, SegmentVideoPaths,
 };
+use ffmpeg::Rational;
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
 use std::time::Instant;
@@ -338,4 +342,17 @@ pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
             segments
         }
     }
+}
+
+fn create_preview_config(recording_config: &RecordingConfig, meta: &RecordingMeta) -> VideoInfo {
+    let (width, height) = if recording_config.resolution.width > 1280 {
+        (1280, 720)
+    } else {
+        (
+            recording_config.resolution.width,
+            recording_config.resolution.height,
+        )
+    };
+
+    VideoInfo::from_raw(RawVideoFormat::Rgba, width, height, 30)
 }
