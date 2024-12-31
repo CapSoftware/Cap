@@ -1,6 +1,6 @@
-use futures::FutureExt;
-use std::{ffi::OsString, fs::OpenOptions, io::Write, path::PathBuf};
-// use tokio::{fs::OpenOptions, io::AsyncWriteExt};
+use std::{ffi::OsString, path::PathBuf};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc::Receiver;
 
 #[cfg(windows)]
 pub fn get_last_win32_error_formatted() -> String {
@@ -42,75 +42,78 @@ fn create_named_pipe(path: &std::path::Path) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-pub fn create_channel_named_pipe<T: Send + 'static>(
-    mut rx: tokio::sync::mpsc::Receiver<T>,
-    unix_path: PathBuf,
-    get_bytes: impl FnMut(&T) -> Option<&[u8]> + Clone + Send + 'static,
-) -> OsString {
-    #[cfg(unix)]
-    {
-        create_named_pipe(&unix_path).unwrap();
-
-        let path = unix_path.clone();
-        tokio::spawn(
-            async move {
-                let mut file = OpenOptions::new()
-                    .write(true)
-                    .create(false)
-                    .truncate(true)
-                    .open(&path)
-                    // .await
-                    .unwrap();
-                println!("video pipe opened");
-
-                while let Some(bytes) = rx.recv().await {
-                    let mut get_bytes = get_bytes.clone();
-
-                    while let Some(bytes) = get_bytes(&bytes) {
-                        file.write_all(&bytes).unwrap();
-                    }
-                }
-
-                println!("done writing to video pipe");
-                Ok::<(), std::io::Error>(())
-            }
-            .then(|result| async {
-                if let Err(e) = result {
-                    eprintln!("error writing to video pipe: {}", e);
-                }
-            }),
-        );
-
-        unix_path.into_os_string()
-    }
-
+pub fn create_channel_named_pipe<T, F>(
+    mut rx: Receiver<T>,
+    pipe_path: PathBuf,
+    mut chunk_fn: F,
+) -> OsString
+where
+    T: Send + 'static,
+    F: FnMut(&T) -> Option<&[u8]> + Send + 'static,
+{
     #[cfg(windows)]
     {
-        use tokio::io::AsyncWriteExt;
-        use tokio::net::windows::named_pipe::ServerOptions;
+        // Build proper Windows named pipe path, e.g. \\.\pipe\my_pipe_name
+        // Use the final filename from `pipe_path` to avoid conflicts
+        let filename = pipe_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("cap-default-pipe"));
+        let pipe_name = format!(r"\\.\pipe\{}", filename.to_string_lossy());
+        let os_pipe_name = OsString::from(&pipe_name);
 
-        let uuid = uuid::Uuid::new_v4();
-        let pipe_name = format!(r#"\\.\pipe\{uuid}"#);
+        tokio::spawn(async move {
+            let mut server = tokio::net::windows::named_pipe::ServerOptions::new()
+                .first_pipe_instance(true)
+                .create(&pipe_name)
+                .expect("Failed to create named pipe");
 
-        let mut server = ServerOptions::new()
-            .first_pipe_instance(true)
-            .create(&pipe_name)
-            .unwrap();
-
-        tokio::spawn({
-            async move {
-                println!("video pipe opened");
-
-                server.connect().await.unwrap();
-
-                while let Some(bytes) = rx.recv().await {
-                    server.write_all(&bytes).await.unwrap();
+            // For each message from rx, repeatedly call chunk_fn until None is returned
+            while let Some(msg) = rx.recv().await {
+                loop {
+                    if let Some(bytes) = chunk_fn(&msg) {
+                        if let Err(e) = server.write_all(bytes).await {
+                            eprintln!("Error writing to named pipe: {e}");
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
                 }
-
-                println!("done writing to video pipe");
             }
         });
 
-        pipe_name.into()
+        return os_pipe_name;
+    }
+
+    #[cfg(unix)]
+    {
+        use nix::sys::stat;
+        let os_pipe_name = pipe_path.clone().into_os_string();
+
+        let _ = std::fs::remove_file(&pipe_path);
+        // Make FIFO if not existing
+        stat::mkfifo(&pipe_path, stat::Mode::S_IRWXU)
+            .expect("Failed to create a Unix FIFO with mkfifo()");
+
+        tokio::spawn(async move {
+            let mut file = tokio::fs::File::create(&pipe_path)
+                .await
+                .expect("Failed to open FIFO for writing");
+
+            while let Some(msg) = rx.recv().await {
+                loop {
+                    if let Some(bytes) = chunk_fn(&msg) {
+                        if let Err(e) = file.write_all(bytes).await {
+                            eprintln!("Error writing to FIFO: {e}");
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+        });
+
+        return os_pipe_name;
     }
 }
