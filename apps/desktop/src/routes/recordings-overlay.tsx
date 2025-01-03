@@ -375,14 +375,26 @@ export default function () {
                                       undefined &&
                                     progressState.totalFrames
                                   ) {
-                                    return `${Math.min(
+                                    const progress = Math.min(
                                       Math.round(
                                         (progressState.renderProgress /
                                           progressState.totalFrames) *
                                           100
                                       ),
                                       100
-                                    )}%`;
+                                    );
+                                    
+                                    // If we hit 100%, transition to the next stage
+                                    if (progress === 100 && progressState.type === "uploading") {
+                                      setProgressState({
+                                        ...progressState,
+                                        stage: "uploading",
+                                        message: "Starting upload...",
+                                        uploadProgress: 0
+                                      });
+                                    }
+                                    
+                                    return `${progress}%`;
                                   }
 
                                   return progressState.message;
