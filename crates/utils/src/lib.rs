@@ -92,7 +92,7 @@ where
 
         let _ = std::fs::remove_file(&pipe_path);
         // Make FIFO if not existing
-        stat::mkfifo(&pipe_path, stat::Mode::S_IRWXU)
+        nix::unistd::mkfifo(&pipe_path, stat::Mode::S_IRWXU)
             .expect("Failed to create a Unix FIFO with mkfifo()");
 
         tokio::spawn(async move {
