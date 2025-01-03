@@ -28,6 +28,11 @@ import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
+import IconLucideHardDrive from "~icons/lucide/hard-drive";
+import IconLucideCheck from "~icons/lucide/check";
+import IconLucideLoaderCircle from "~icons/lucide/loader-circle";
+import IconLucideRotateCcw from "~icons/lucide/rotate-ccw";
+import IconLucideClock from "~icons/lucide/clock";
 
 export function Header() {
   const currentWindow = getCurrentWindow();
@@ -243,6 +248,18 @@ import { getRequestEvent } from "solid-js/web";
 function ExportButton() {
   const { videoId, project, prettyName } = useEditorContext();
 
+  const [metadata] = createResource(async () => {
+    const result = await commands.getVideoMetadata(videoId, null).catch((e) => {
+      console.error(`Failed to get metadata: ${e}`);
+    });
+    if (!result) return;
+
+    const { duration, size } = result;
+    const estimatedExportTime = Math.ceil(duration * 1.5);
+    console.log(`Metadata for video: duration=${duration}, size=${size}, estimatedExport=${estimatedExportTime}`);
+    return { duration, size, estimatedExportTime };
+  });
+
   const exportVideo = createMutation(() => ({
     mutationFn: async (useCustomMuxer: boolean) => {
       const path = await save({
@@ -308,15 +325,41 @@ function ExportButton() {
   }));
 
   return (
-    <Button
-      variant="primary"
-      size="md"
-      onClick={(e) =>
-        exportVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
-      }
-    >
-      Export
-    </Button>
+    <div class="flex flex-row items-center gap-2">
+      <Button
+        variant="primary"
+        size="md"
+        onClick={(e) =>
+          exportVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
+        }
+      >
+        Export
+      </Button>
+      <Show when={metadata()}>
+        {(meta) => (
+          <div class="text-xs bg-gray-100 dark:bg-gray-600/30 text-gray-500 dark:text-gray-400 flex items-center gap-4 px-3 py-1.5 rounded-full">
+            <span class="flex items-center">
+              <IconCapCamera class="w-3 h-3 mr-1.5 opacity-80" />
+              {Math.floor(meta().duration / 60)}:{Math.floor(meta().duration % 60)
+                .toString()
+                .padStart(2, "0")}
+            </span>
+            <div class="w-[1px] h-2.5 bg-gray-300 dark:bg-gray-500/50"></div>
+            <span class="flex items-center">
+              <IconLucideHardDrive class="w-3 h-3 mr-1.5 opacity-80" />
+              {meta().size.toFixed(2)} MB
+            </span>
+            <div class="w-[1px] h-2.5 bg-gray-300 dark:bg-gray-500/50"></div>
+            <span class="flex items-center">
+              <IconLucideClock class="w-3 h-3 mr-1.5 opacity-80" />
+              ~{Math.floor(meta().estimatedExportTime / 60)}:{Math.floor(meta().estimatedExportTime % 60)
+                .toString()
+                .padStart(2, "0")}
+            </span>
+          </div>
+        )}
+      </Show>
+    </div>
   );
 }
 
