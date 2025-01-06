@@ -5,6 +5,10 @@ description = "A modular multimedia processing library"
 edition = "2021"
 rust-version = "1.80"
 
+[features]
+default = []
+debug-logging = []  # Feature flag to control debug logging
+
 [dependencies]
 cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
@@ -21,7 +25,7 @@ serde = { version = "1", features = ["derive"] }
 specta.workspace = true
 tempfile = "3.12.0"
 thiserror.workspace = true
-tracing = "0.1"
+tracing = { version = "0.1", features = ["release_max_level_info"] }
 futures = "0.3.31"
 axum = "0.7.9"
 tokio.workspace = true

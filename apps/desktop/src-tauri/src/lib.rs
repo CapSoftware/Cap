@@ -88,6 +88,7 @@ pub struct App {
 pub enum VideoType {
     Screen,
     Output,
+    Camera,
 }
 
 #[derive(Serialize, Deserialize, specta::Type)]
@@ -952,6 +953,17 @@ async fn get_video_metadata(
 
     let paths = match video_type {
         Some(VideoType::Screen) => content_paths(&project_path, &meta),
+        Some(VideoType::Camera) => match &meta.content {
+            Content::SingleSegment { segment } => segment
+                .camera
+                .as_ref()
+                .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
+            Content::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
+                .collect(),
+        },
         Some(VideoType::Output) | None => {
             let output_video_path = project_path.join("output").join("result.mp4");
             println!("Using output video path: {:?}", output_video_path);
@@ -1039,7 +1051,7 @@ fn focus_captures_panel(app: AppHandle) {
 
 #[derive(Serialize, Deserialize, specta::Type, Clone)]
 #[serde(tag = "type")]
-enum RenderProgress {
+pub enum RenderProgress {
     Starting { total_frames: u32 },
     EstimatedTotalFrames { total_frames: u32 },
     FrameRendered { current_frame: u32 },
@@ -1896,21 +1908,8 @@ pub async fn run() {
 
     #[cfg(target_os = "macos")]
     {
-        builder = builder.plugin(tauri_nspanel::init());
-    }
-
-    builder
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_oauth::init())
-        .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_deep_link::init())
-        .plugin(
+        builder = builder.plugin(tauri_nspanel::init()).plugin(
+            // TODO(Ilya): Also enable for Windows when Tao is updated to `0.31.0`
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({
                     use tauri_plugin_window_state::StateFlags;
@@ -1930,8 +1929,21 @@ pub async fn run() {
                     _ => label,
                 })
                 .build(),
-        )
+        );
+    }
+
+    builder
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_oauth::init())
+        .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .plugin(flags::plugin::init())
+        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler({
             let handler = specta_builder.invoke_handler();
 
@@ -2091,25 +2103,27 @@ pub async fn run() {
 
             match event {
                 WindowEvent::Destroyed => {
-                    match CapWindowId::from_str(label).unwrap() {
-                        CapWindowId::Main => {
-                            if let Some(w) = CapWindowId::Camera.get(app) {
-                                w.close().ok();
+                    if let Ok(window_id) = CapWindowId::from_str(label) {
+                        match window_id {
+                            CapWindowId::Main => {
+                                if let Some(w) = CapWindowId::Camera.get(app) {
+                                    w.close().ok();
+                                }
                             }
-                        }
-                        CapWindowId::Editor { project_id } => {
-                            let app_handle = app.clone();
-                            tokio::spawn(async move {
-                                let _ = remove_editor_instance(&app_handle, project_id).await;
-                                tokio::task::yield_now().await;
-                            });
-                        }
-                        CapWindowId::Settings | CapWindowId::Upgrade => {
-                            // Don't quit the app when settings or upgrade window is closed
-                            return;
-                        }
-                        _ => {}
-                    };
+                            CapWindowId::Editor { project_id } => {
+                                let app_handle = app.clone();
+                                tokio::spawn(async move {
+                                    let _ = remove_editor_instance(&app_handle, project_id).await;
+                                    tokio::task::yield_now().await;
+                                });
+                            }
+                            CapWindowId::Settings | CapWindowId::Upgrade => {
+                                // Don't quit the app when settings or upgrade window is closed
+                                return;
+                            }
+                            _ => {}
+                        };
+                    }
 
                     if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None) {
                         if settings.hide_dock_icon
@@ -2123,11 +2137,13 @@ pub async fn run() {
                         }
                     }
                 }
+                #[cfg(target_os = "macos")]
                 WindowEvent::Focused(focused) if *focused => {
-                    if CapWindowId::from_str(label).unwrap().activates_dock() {
-                        #[cfg(target_os = "macos")]
-                        app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                            .ok();
+                    if let Ok(window_id) = CapWindowId::from_str(label) {
+                        if window_id.activates_dock() {
+                            app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                                .ok();
+                        }
                     }
                 }
                 _ => {}

@@ -1,8 +1,10 @@
 use std::{sync::Arc, time::Instant};
 
 use cap_media::frame_ws::WSFrame;
-use cap_project::{BackgroundSource, ProjectConfiguration};
-use cap_rendering::{decoder::DecodedFrame, produce_frame, ProjectUniforms, RenderVideoConstants};
+use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta};
+use cap_rendering::{
+    decoder::DecodedFrame, produce_frame, ProjectRecordings, ProjectUniforms, RenderVideoConstants,
+};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
@@ -26,6 +28,7 @@ pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
     frame_tx: flume::Sender<WSFrame>,
     render_constants: Arc<RenderVideoConstants>,
+    total_frames: u32,
 }
 
 pub struct RendererHandle {
@@ -36,13 +39,28 @@ impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
         frame_tx: flume::Sender<WSFrame>,
+        meta: &RecordingMeta,
     ) -> RendererHandle {
+        let recordings = ProjectRecordings::new(meta);
+        let mut max_duration = recordings.duration();
+
+        // Check camera duration if it exists
+        if let Some(camera_path) = meta.content.camera_path() {
+            if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
+                max_duration = max_duration.max(camera_duration);
+            }
+        }
+
+        let total_frames = (30_f64 * max_duration).ceil() as u32;
+        println!("Editor total frames: {total_frames}");
+
         let (tx, rx) = mpsc::channel(4);
 
         let this = Self {
             rx,
             frame_tx,
             render_constants,
+            total_frames,
         };
 
         tokio::spawn(this.run());
@@ -61,7 +79,7 @@ impl Renderer {
                         camera_frame,
                         background,
                         uniforms,
-                        time, // Add this
+                        time,
                         finished,
                     } => {
                         if let Some(task) = frame_task.as_ref() {
@@ -74,6 +92,7 @@ impl Renderer {
 
                         let render_constants = self.render_constants.clone();
                         let frame_tx = self.frame_tx.clone();
+                        let total_frames = self.total_frames;
 
                         frame_task = Some(tokio::spawn(async move {
                             let frame = produce_frame(
@@ -83,6 +102,7 @@ impl Renderer {
                                 cap_rendering::Background::from(background),
                                 &uniforms,
                                 time,
+                                total_frames,
                             )
                             .await
                             .unwrap();
