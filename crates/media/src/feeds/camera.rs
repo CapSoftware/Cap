@@ -1,12 +1,12 @@
 use cap_gpu_converters::{NV12Input, NV12ToRGBA, UYVYToRGBA};
 use ffmpeg::software::scaling;
 use flume::{Receiver, Sender, TryRecvError};
-use nokhwa::{utils::*, Camera};
+use nokhwa::{pixel_format::RgbFormat, utils::*, Camera};
 use std::{
     thread::{self, JoinHandle},
     time::Instant,
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
@@ -59,7 +59,8 @@ impl CameraFeed {
         selected_camera: &str,
         rgba_data: Sender<WSFrame>,
     ) -> Result<CameraFeed, MediaError> {
-        println!("Selected camera: {:?}", selected_camera);
+        #[cfg(feature = "debug-logging")]
+        debug!("Initializing camera feed for: {}", selected_camera);
 
         let camera_info = find_camera(selected_camera)?;
         let (control, control_receiver) = flume::bounded(1);
@@ -83,10 +84,7 @@ impl CameraFeed {
                 .into_iter()
                 .map(|i| i.human_name().to_string())
                 .collect::<Vec<String>>(),
-            Err(e) => {
-                eprintln!("Failed to query cameras: {}", e);
-                Vec::new()
-            }
+            Err(_) => Vec::new()
         }
     }
 
@@ -139,38 +137,42 @@ fn find_camera(selected_camera: &str) -> Result<CameraInfo, MediaError> {
 }
 
 fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
-    dbg!(info);
+    #[cfg(feature = "debug-logging")]
+    debug!("Creating camera with info: {:?}", info);
 
-    // TODO: Make selected format more flexible
-    // let format = RequestedFormat::new::<RgbAFormat>(RequestedFormatType::AbsoluteHighestResolution);
     let format = RequestedFormat::with_formats(
-        RequestedFormatType::ClosestIgnoringFormat {
-            resolution: Resolution {
-                width_x: 1920,
-                height_y: 1080,
-            },
-            frame_rate: 30,
-        },
-        &[FrameFormat::NV12],
+        RequestedFormatType::AbsoluteHighestFrameRate,
+        &[FrameFormat::YUYV],
     );
+    
+    #[cfg(feature = "debug-logging")]
+    trace!("Requested camera format: {:?}", format);
 
     let index = info.index().clone();
 
     #[cfg(target_os = "macos")]
     {
         let device = nokhwa_bindings_macos::AVCaptureDevice::new(&index).unwrap();
-        let formats = device.supported_formats()?;
-        dbg!(formats);
+        if let Ok(formats) = device.supported_formats() {
+            #[cfg(feature = "debug-logging")]
+            trace!("Supported formats: {:?}", formats);
+        }
     }
 
-    Ok(Camera::new(index, format)?)
+    let camera = Camera::new(index, format)?;
+    
+    #[cfg(feature = "debug-logging")]
+    debug!("Created camera with format: {:?}", camera.camera_format());
+    
+    Ok(camera)
 }
 
 fn find_and_create_camera(selected_camera: &String) -> Result<(CameraInfo, Camera), MediaError> {
     let info = find_camera(selected_camera)?;
     let camera = create_camera(&info)?;
 
-    dbg!(camera.camera_format());
+    #[cfg(feature = "debug-logging")]
+    trace!("Camera format: {:?}", camera.camera_format());
 
     Ok((info, camera))
 }
@@ -218,37 +220,23 @@ fn run_camera_feed(
         return;
     }
 
-    info!("Camera stream opened successfully");
-
     let mut converter = None;
     let mut ready_signal = Some(ready_signal);
 
     loop {
         match control.try_recv() {
-            Err(TryRecvError::Disconnected) => {
-                println!("Control receiver is unreachable! Shutting down");
-                break;
-            }
-            Err(TryRecvError::Empty) => {
-                // No signal received, nothing to do
-            }
-            Ok(CameraControl::Shutdown) => {
-                println!("Shutdown request received.");
-                break;
-            }
+            Err(TryRecvError::Disconnected) => break,
+            Err(TryRecvError::Empty) => {},
+            Ok(CameraControl::Shutdown) => break,
             Ok(CameraControl::AttachRawConsumer(rgba_sender)) => {
-                eprintln!("Attaching to a new pipeline consumer. Any previously attached consumer will be dropped");
                 maybe_raw_data = Some(rgba_sender);
             }
             Ok(CameraControl::Switch(camera_name, switch_result)) => {
                 if maybe_raw_data.is_some() {
                     switch_result.send(Err(MediaError::Any("Cannot switch cameras while the feed is attached to a running pipeline"))).unwrap();
                 } else {
-                    println!("Switching camera to {camera_name}");
-
                     match find_and_create_camera(&camera_name) {
                         Err(error) => {
-                            eprintln!("{error}");
                             switch_result.send(Err(error)).unwrap();
                         }
                         Ok((new_info, mut new_camera)) => {
@@ -256,17 +244,12 @@ fn run_camera_feed(
                             let new_converter = FrameConverter::build(new_format);
 
                             if new_camera.open_stream().is_ok() {
-                                println!("Now using {camera_name}");
                                 let _ = camera.stop_stream();
                                 switch_result
                                     .send(Ok((new_info, new_converter.video_info)))
                                     .unwrap();
                                 camera = new_camera;
-                                // converter = new_converter;
                             } else {
-                                eprintln!(
-                                    "Unable to switch to {camera_name}. Still using previous camera"
-                                );
                                 switch_result
                                     .send(Err(MediaError::DeviceUnreachable(camera_name)))
                                     .unwrap();
@@ -309,9 +292,7 @@ fn run_camera_feed(
                     *converter = FrameConverter::build(format);
                 }
 
-                // TODO: Merge fix in nokhwa lib to use presentation timestamps from the system, like scap does
                 let captured_at = Instant::now();
-
                 let rgba_frame = converter.rgba(&raw_buffer);
 
                 if dropping_send(
@@ -325,8 +306,6 @@ fn run_camera_feed(
                 )
                 .is_err()
                 {
-                    // TODO: Also allow changing the connection?
-                    eprintln!("Camera preview has been disconnected. Shutting down feed");
                     break;
                 }
 
@@ -336,14 +315,12 @@ fn run_camera_feed(
                         captured_at,
                     };
                     if dropping_send(raw_data, frame).is_err() {
-                        eprintln!("Raw data consumer has been disconnected.");
                         maybe_raw_data = None;
                     }
                 }
             }
             Err(error) => {
                 warn!("Failed to capture frame: {:?}", error);
-                // Optionally, add a small delay to avoid busy-waiting
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 continue;
             }
@@ -351,7 +328,6 @@ fn run_camera_feed(
     }
 
     let _ = camera.stop_stream();
-    println!("Closed {} stream", camera.info().human_name());
 }
 
 struct FrameConverter {
@@ -369,8 +345,8 @@ pub enum HwConverter {
 impl FrameConverter {
     fn build(camera_format: CameraFormat) -> Self {
         let format = match camera_format.format() {
-            FrameFormat::MJPEG => RawVideoFormat::Rgba,
-            FrameFormat::YUYV => RawVideoFormat::Uyvy,
+            FrameFormat::MJPEG => RawVideoFormat::Mjpeg,
+            FrameFormat::YUYV => RawVideoFormat::Rgba,
             FrameFormat::NV12 => RawVideoFormat::Nv12,
             FrameFormat::GRAY => RawVideoFormat::Gray,
             FrameFormat::RAWRGB => RawVideoFormat::RawRgb,
@@ -384,66 +360,108 @@ impl FrameConverter {
             camera_format.frame_rate(),
         );
 
+        // Create FFmpeg converter
         let context = ffmpeg::software::converter(
             (video_info.width, video_info.height),
-            video_info.pixel_format,
+            if camera_format.format() == FrameFormat::YUYV {
+                ffmpeg::format::Pixel::YUYV422
+            } else {
+                video_info.pixel_format
+            },
             ffmpeg::format::Pixel::RGBA,
-        )
-        .unwrap();
-
-        let hw_converter = match camera_format.format() {
-            FrameFormat::NV12 => Some(HwConverter::NV12(futures::executor::block_on(
-                NV12ToRGBA::new(),
-            ))),
-            FrameFormat::YUYV => Some(HwConverter::UYVY(futures::executor::block_on(
-                UYVYToRGBA::new(),
-            ))),
-            _ => None,
-        };
+        ).unwrap();
 
         Self {
             video_info,
             context,
             format: camera_format.format(),
-            hw_converter,
+            hw_converter: None,  // Don't use hardware converters
         }
     }
 
     fn rgba(&mut self, buffer: &nokhwa::Buffer) -> Vec<u8> {
         let resolution = buffer.resolution();
 
-        let data = match &self.hw_converter {
-            Some(HwConverter::NV12(converter)) => converter.convert(
-                NV12Input::from_buffer(buffer.buffer(), resolution.width(), resolution.height()),
-                resolution.width(),
-                resolution.height(),
-            ),
-            Some(HwConverter::UYVY(converter)) => {
-                converter.convert(buffer.buffer(), resolution.width(), resolution.height())
+        match self.format {
+            FrameFormat::YUYV => {
+                self.convert_with_ffmpeg(buffer, resolution)
             }
-            None => {
-                let input_frame = self.video_info.wrap_frame(
-                    buffer.buffer(),
-                    0,
-                    buffer.buffer().len() / buffer.resolution().height() as usize,
-                );
-                let mut rgba_frame = FFVideo::empty();
+            _ => {
+                match &self.hw_converter {
+                    Some(HwConverter::NV12(converter)) => {
+                        converter.convert(
+                            NV12Input::from_buffer(buffer.buffer(), resolution.width(), resolution.height()),
+                            resolution.width(),
+                            resolution.height(),
+                        )
+                    }
+                    _ => {
+                        self.convert_with_ffmpeg(buffer, resolution)
+                    }
+                }
+            }
+        }
+    }
 
-                self.context.run(&input_frame, &mut rgba_frame).unwrap();
-
+    fn convert_with_ffmpeg(&mut self, buffer: &nokhwa::Buffer, resolution: Resolution) -> Vec<u8> {
+        if self.format == FrameFormat::YUYV {
+            // For YUYV, we need to handle the conversion differently
+            let stride = resolution.width() as usize * 2;  // YUYV uses 2 bytes per pixel
+            
+            // Create input frame with YUYV format
+            let mut input_frame = FFVideo::new(ffmpeg::format::Pixel::YUYV422, resolution.width(), resolution.height());
+            input_frame.data_mut(0).copy_from_slice(buffer.buffer());
+            
+            // Convert directly to RGBA
+            let mut rgba_frame = FFVideo::new(ffmpeg::format::Pixel::RGBA, resolution.width(), resolution.height());
+            
+            if self.context.run(&input_frame, &mut rgba_frame).is_ok() {
                 rgba_frame.data(0).to_vec()
+            } else {
+                vec![0; (resolution.width() * resolution.height() * 4) as usize]
             }
-        };
-
-        data
+        } else {
+            // For other formats, use the normal conversion path
+            let stride = resolution.width() as usize * 4;  // RGBA uses 4 bytes per pixel
+            let input_frame = self.video_info.wrap_frame(buffer.buffer(), 0, stride);
+            
+            let mut rgba_frame = FFVideo::empty();
+            if self.context.run(&input_frame, &mut rgba_frame).is_ok() {
+                rgba_frame.data(0).to_vec()
+            } else {
+                vec![0; (resolution.width() * resolution.height() * 4) as usize]
+            }
+        }
     }
 
     fn raw(&mut self, buffer: &nokhwa::Buffer) -> FFVideo {
-        self.video_info.wrap_frame(
-            buffer.buffer(),
-            0,
-            buffer.buffer_bytes().len() / buffer.resolution().height() as usize,
-        )
+        let resolution = buffer.resolution();
+        
+        if self.format == FrameFormat::YUYV {
+            // For YUYV, we need to handle the conversion differently
+            let stride = resolution.width() as usize * 2;  // YUYV uses 2 bytes per pixel
+            
+            // Create input frame with YUYV format
+            let mut input_frame = FFVideo::new(ffmpeg::format::Pixel::YUYV422, resolution.width(), resolution.height());
+            input_frame.data_mut(0).copy_from_slice(buffer.buffer());
+            input_frame
+        } else {
+            // For other formats, use the normal conversion path
+            let stride = match self.format {
+                FrameFormat::NV12 => resolution.width() as usize, // 1 byte per pixel for Y plane
+                FrameFormat::BGRA => resolution.width() as usize * 4, // 4 bytes per pixel
+                FrameFormat::MJPEG => resolution.width() as usize * 4, // 4 bytes per pixel
+                FrameFormat::GRAY => resolution.width() as usize, // 1 byte per pixel
+                FrameFormat::RAWRGB => resolution.width() as usize * 3, // 3 bytes per pixel
+                _ => buffer.buffer_bytes().len() / resolution.height() as usize,
+            };
+
+            self.video_info.wrap_frame(
+                buffer.buffer(),
+                0,
+                stride,
+            )
+        }
     }
 }
 

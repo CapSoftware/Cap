@@ -264,16 +264,35 @@ impl VideoInfo {
 
     pub fn wrap_frame(&self, data: &[u8], timestamp: i64, stride: usize) -> FFVideo {
         let mut frame = FFVideo::new(self.pixel_format, self.width, self.height);
-
         frame.set_pts(Some(timestamp));
 
+        let frame_stride = frame.stride(0) as usize;
+        let frame_height = self.height as usize;
+        
+        // Ensure we don't try to copy more data than we have
         if frame.stride(0) == self.width as usize {
-            frame.data_mut(0)[0..data.len()].copy_from_slice(data);
+            let copy_len = std::cmp::min(data.len(), frame.data_mut(0).len());
+            frame.data_mut(0)[0..copy_len].copy_from_slice(&data[0..copy_len]);
         } else {
-            let ffmpeg_stride = frame.stride(0) as usize;
-            for (line, chunk) in data.chunks(stride).enumerate() {
-                frame.data_mut(0)[line * ffmpeg_stride..(line + 1) * ffmpeg_stride]
-                    .copy_from_slice(&chunk[0..ffmpeg_stride]);
+            for line in 0..frame_height {
+                if line * stride >= data.len() {
+                    break; // Stop if we run out of source data
+                }
+                
+                let src_start = line * stride;
+                let src_end = std::cmp::min(src_start + frame_stride, data.len());
+                if src_end <= src_start {
+                    break; // Stop if we can't get any more source data
+                }
+                
+                let dst_start = line * frame_stride;
+                let dst_end = dst_start + (src_end - src_start);
+                
+                // Only copy if we have enough destination space
+                if dst_end <= frame.data_mut(0).len() {
+                    frame.data_mut(0)[dst_start..dst_end]
+                        .copy_from_slice(&data[src_start..src_end]);
+                }
             }
         }
 
