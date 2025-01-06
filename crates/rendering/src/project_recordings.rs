@@ -12,21 +12,25 @@ pub struct Video {
 }
 
 impl Video {
-    pub fn new(path: &PathBuf) -> Self {
-        let input = ffmpeg::format::input(path).unwrap();
-        let stream = input.streams().best(ffmpeg::media::Type::Video).unwrap();
+    pub fn new(path: &PathBuf) -> Result<Self, String> {
+        let input =
+            ffmpeg::format::input(path).map_err(|e| format!("Failed to open video: {}", e))?;
+        let stream = input
+            .streams()
+            .best(ffmpeg::media::Type::Video)
+            .ok_or_else(|| "No video stream found".to_string())?;
 
         let video_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
-            .unwrap()
+            .map_err(|e| format!("Failed to create decoder: {}", e))?
             .decoder()
             .video()
-            .unwrap();
+            .map_err(|e| format!("Failed to get video decoder: {}", e))?;
 
-        Video {
+        Ok(Video {
             width: video_decoder.width(),
             height: video_decoder.height(),
             duration: input.duration() as f64 / 1_000_000.0,
-        }
+        })
     }
 }
 
@@ -65,11 +69,12 @@ impl ProjectRecordings {
     pub fn new(meta: &RecordingMeta) -> Self {
         let segments = match &meta.content {
             crate::Content::SingleSegment { segment } => {
-                let display = Video::new(&meta.project_path.join(&segment.display.path));
-                let camera = segment
-                    .camera
-                    .as_ref()
-                    .map(|camera| Video::new(&meta.project_path.join(&camera.path)));
+                let display = Video::new(&meta.project_path.join(&segment.display.path))
+                    .expect("Failed to read display video");
+                let camera = segment.camera.as_ref().map(|camera| {
+                    Video::new(&meta.project_path.join(&camera.path))
+                        .expect("Failed to read camera video")
+                });
                 let audio = segment
                     .audio
                     .as_ref()
@@ -85,11 +90,12 @@ impl ProjectRecordings {
                 .segments
                 .iter()
                 .map(|s| {
-                    let display = Video::new(&meta.project_path.join(&s.display.path));
-                    let camera = s
-                        .camera
-                        .as_ref()
-                        .map(|camera| Video::new(&meta.project_path.join(&camera.path)));
+                    let display = Video::new(&meta.project_path.join(&s.display.path))
+                        .expect("Failed to read display video");
+                    let camera = s.camera.as_ref().map(|camera| {
+                        Video::new(&meta.project_path.join(&camera.path))
+                            .expect("Failed to read camera video")
+                    });
                     let audio = s
                         .audio
                         .as_ref()
@@ -109,6 +115,10 @@ impl ProjectRecordings {
 
     pub fn duration(&self) -> f64 {
         self.segments.iter().map(|s| s.duration()).sum()
+    }
+
+    pub fn get_source_duration(&self, path: &PathBuf) -> Result<f64, String> {
+        Video::new(path).map(|v| v.duration)
     }
 }
 

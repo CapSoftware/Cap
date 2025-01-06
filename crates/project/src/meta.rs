@@ -82,6 +82,18 @@ pub enum Content {
     },
 }
 
+impl Content {
+    pub fn camera_path(&self) -> Option<PathBuf> {
+        match self {
+            Content::SingleSegment { segment } => segment.camera.as_ref().map(|c| c.path.clone()),
+            Content::MultipleSegments { inner } => inner
+                .segments
+                .first()
+                .and_then(|s| s.camera.as_ref().map(|c| c.path.clone())),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct SingleSegment {
     pub display: Display,
