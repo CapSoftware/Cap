@@ -88,6 +88,7 @@ pub struct App {
 pub enum VideoType {
     Screen,
     Output,
+    Camera,
 }
 
 #[derive(Serialize, Deserialize, specta::Type)]
@@ -952,6 +953,17 @@ async fn get_video_metadata(
 
     let paths = match video_type {
         Some(VideoType::Screen) => content_paths(&project_path, &meta),
+        Some(VideoType::Camera) => match &meta.content {
+            Content::SingleSegment { segment } => segment
+                .camera
+                .as_ref()
+                .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
+            Content::MultipleSegments { inner } => inner
+                .segments
+                .iter()
+                .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
+                .collect(),
+        },
         Some(VideoType::Output) | None => {
             let output_video_path = project_path.join("output").join("result.mp4");
             println!("Using output video path: {:?}", output_video_path);
@@ -1039,7 +1051,7 @@ fn focus_captures_panel(app: AppHandle) {
 
 #[derive(Serialize, Deserialize, specta::Type, Clone)]
 #[serde(tag = "type")]
-enum RenderProgress {
+pub enum RenderProgress {
     Starting { total_frames: u32 },
     EstimatedTotalFrames { total_frames: u32 },
     FrameRendered { current_frame: u32 },

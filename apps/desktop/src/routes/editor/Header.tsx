@@ -262,10 +262,12 @@ function ExportButton() {
       progress.onmessage = (p) => {
         if (p.type === "FrameRendered" && progressState.type === "saving") {
           const percentComplete = Math.min(
-            Math.round((p.current_frame / (progressState.totalFrames || 1)) * 100),
+            Math.round(
+              (p.current_frame / (progressState.totalFrames || 1)) * 100
+            ),
             100
           );
-          
+
           setProgressState({
             ...progressState,
             renderProgress: p.current_frame,
@@ -280,7 +282,10 @@ function ExportButton() {
             });
           }
         }
-        if (p.type === "EstimatedTotalFrames" && progressState.type === "saving") {
+        if (
+          p.type === "EstimatedTotalFrames" &&
+          progressState.type === "saving"
+        ) {
           setProgressState({
             ...progressState,
             totalFrames: p.total_frames,
