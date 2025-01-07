@@ -912,8 +912,8 @@ async fn copy_video_to_clipboard(
 
 #[derive(Serialize, Deserialize, specta::Type)]
 pub struct VideoRecordingMetadata {
-    duration: f64,
-    size: f64,
+    pub duration: f64,
+    pub size: f64,
 }
 
 #[tauri::command]
