@@ -94,7 +94,7 @@ pub async fn export_video(
     let result = if use_custom_muxer {
         exporter.export_with_custom_muxer().await
     } else {
-        exporter.export_with_ffmpeg_cli().await
+        exporter.export_with_mp4_encoder().await
     };
 
     match result {

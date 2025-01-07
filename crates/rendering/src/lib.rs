@@ -211,16 +211,6 @@ pub async fn render_video_to_channel(
         duration, total_frames
     );
 
-    // Send initial frame to communicate total frames
-    let initial_frame = RenderedFrame {
-        data: vec![],
-        width: 0,
-        height: 0,
-        padded_bytes_per_row: 0,
-        total_frames: Some(total_frames),
-    };
-    sender.send(initial_frame).await?;
-
     let mut frame_number = 0;
     let background = Background::from(project.background.source.clone());
 
@@ -233,99 +223,27 @@ pub async fn render_video_to_channel(
         println!("Processing frame {frame_number}/{total_frames}");
 
         let (time, segment_i) = if let Some(timeline) = &project.timeline {
-            println!("Getting time from timeline for frame {}", frame_number);
             match timeline.get_recording_time(frame_number as f64 / 30_f64) {
-                Some(value) => {
-                    println!(
-                        "Timeline returned time: {}, segment: {:?}",
-                        value.0, value.1
-                    );
-                    value
-                }
-                None => {
-                    println!(
-                        "Timeline returned None for frame {} (time: {})",
-                        frame_number,
-                        frame_number as f64 / 30_f64
-                    );
-                    println!(
-                        "Timeline segments: {:?}",
-                        timeline
-                            .segments
-                            .iter()
-                            .map(|s| (s.start, s.end))
-                            .collect::<Vec<_>>()
-                    );
-                    break;
-                }
+                Some(value) => (value.0, value.1),
+                None => (frame_number as f64 / 30_f64, Some(0u32)),
             }
         } else {
-            let time = frame_number as f64 / 30_f64;
-            println!("No timeline, using direct time calculation: {}", time);
-            (time, None)
+            (frame_number as f64 / 30_f64, Some(0u32))
         };
 
-        let segment_index = segment_i.unwrap_or(0) as usize;
-        println!("Using segment {} for frame {}", segment_index, frame_number);
-        let segment = &segments[segment_index];
+        let segment = &segments[segment_i.unwrap() as usize];
+        let frame_time = frame_number;
+        let Some((screen_frame, camera_frame)) = segment.decoders.get_frames(frame_time).await
+        else {
+            println!(
+                "No frames available for time {} (frame {})",
+                time, frame_time
+            );
+            break;
+        };
+
         let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
 
-        println!("Getting frames for time: {} (frame {})", time, frame_number);
-        // Get frames or use last valid frames if past duration
-        let (screen_frame, camera_frame) =
-            match segment.decoders.get_frames((time * 30.0) as u32).await {
-                Some((screen, camera)) => {
-                    println!(
-                        "Successfully got frames for time {} (frame {})",
-                        time, frame_number
-                    );
-                    (screen, camera)
-                }
-                None => {
-                    println!(
-                        "No frames from decoder at time {} (frame {}), using last valid frames",
-                        time, frame_number
-                    );
-                    // Get the last valid frame from each decoder
-                    let screen = segment
-                        .decoders
-                        .screen
-                        .get_frame((time * 30.0) as u32)
-                        .await
-                        .unwrap_or_else(|| {
-                            println!("Using empty frame for screen");
-                            Arc::new(vec![
-                                0;
-                                (constants.options.screen_size.x
-                                    * constants.options.screen_size.y
-                                    * 4) as usize
-                            ])
-                        });
-
-                    let camera = match &segment.decoders.camera {
-                        Some(camera_decoder) => {
-                            println!("Getting camera frame at time {}", time);
-                            Some(
-                                camera_decoder
-                                    .get_frame((time * 30.0) as u32)
-                                    .await
-                                    .unwrap_or_else(|| {
-                                        println!("Using empty frame for camera");
-                                        Arc::new(match constants.options.camera_size {
-                                            Some(size) => vec![0; (size.x * size.y * 4) as usize],
-                                            None => vec![0; 0],
-                                        })
-                                    }),
-                            )
-                        }
-                        None => None,
-                    };
-
-                    (screen, camera)
-                }
-            };
-
-        println!("Producing frame {frame_number}");
         let frame = produce_frame(
             &constants,
             &screen_frame,
@@ -337,20 +255,21 @@ pub async fn render_video_to_channel(
         )
         .await?;
 
-        println!("Sending frame {frame_number}");
-        if let Err(e) = sender.send(frame).await {
-            println!("Failed to send frame: {e}");
-            break;
+        if frame.width == 0 || frame.height == 0 {
+            println!("Skipping frame with zero dimensions");
+            continue;
         }
 
+        println!(
+            "Rendering: Sending frame {} (size: {}x{}, time: {}, segment: {})",
+            frame_number,
+            frame.width,
+            frame.height,
+            time,
+            segment_i.unwrap()
+        );
+        sender.send(frame).await?;
         frame_number += 1;
-        if frame_number % 60 == 0 {
-            let elapsed = start_time.elapsed();
-            println!(
-                "Rendered {frame_number}/{total_frames} frames in {:?} seconds",
-                elapsed.as_secs_f32()
-            );
-        }
     }
 
     println!("Render loop exited at frame {frame_number}/{total_frames}");
