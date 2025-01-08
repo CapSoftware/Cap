@@ -8,6 +8,7 @@ use cap_project::{
     FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
     SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
 };
+use cap_recording::segmented_actor::RecordingSegment;
 use core::f64;
 use decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle};
 use futures::future::OptionFuture;

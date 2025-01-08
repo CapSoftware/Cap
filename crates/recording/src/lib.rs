@@ -1,5 +1,4 @@
-pub mod actor;
-mod cursor;
+pub mod cursor;
 pub mod segmented_actor;
 
 pub use segmented_actor::{spawn_recording_actor, ActorHandle, CompletedRecording, RecordingError};

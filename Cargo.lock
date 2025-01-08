@@ -945,6 +945,7 @@ dependencies = [
  "bytemuck",
  "cap-flags",
  "cap-project",
+ "cap-recording",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
