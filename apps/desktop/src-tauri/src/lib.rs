@@ -91,12 +91,18 @@ pub enum VideoType {
     Camera,
 }
 
-#[derive(Serialize, Deserialize, specta::Type)]
-enum UploadResult {
+#[derive(Serialize, Deserialize, specta::Type, Debug)]
+pub enum UploadResult {
     Success(String),
     NotAuthenticated,
     PlanCheckFailed,
     UpgradeRequired,
+}
+
+#[derive(Serialize, Deserialize, specta::Type, Debug)]
+pub struct VideoRecordingMetadata {
+    pub duration: f64,
+    pub size: f64,
 }
 
 #[derive(Clone, Serialize, Deserialize, specta::Type)]
@@ -908,12 +914,6 @@ async fn copy_video_to_clipboard(
         notifications::NotificationType::VideoCopiedToClipboard,
     );
     Ok(())
-}
-
-#[derive(Serialize, Deserialize, specta::Type)]
-pub struct VideoRecordingMetadata {
-    pub duration: f64,
-    pub size: f64,
 }
 
 #[tauri::command]

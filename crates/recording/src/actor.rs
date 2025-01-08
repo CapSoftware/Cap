@@ -234,6 +234,11 @@ async fn stop_recording(mut actor: Actor) -> Result<CompletedRecording, Recordin
     meta.save_for_project()
         .map_err(Either::either_into::<RecordingError>)?;
 
+    let project_config = cap_project::ProjectConfiguration::default();
+    project_config
+        .write(&actor.recording_dir)
+        .map_err(RecordingError::from)?;
+
     Ok(CompletedRecording {
         id: actor.id,
         meta,
