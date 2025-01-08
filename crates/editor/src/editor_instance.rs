@@ -35,6 +35,7 @@ pub struct EditorInstance {
     ),
     ws_shutdown: Arc<StdMutex<Option<mpsc::Sender<()>>>>,
     pub segments: Arc<Vec<Segment>>,
+    pub total_frames: u32,
 }
 
 impl EditorInstance {
@@ -59,13 +60,16 @@ impl EditorInstance {
 
         if !project_path.exists() {
             println!("Video path {} not found!", project_path.display());
-            // return Err(format!("Video path {} not found!", path.display()));
             panic!("Video path {} not found!", project_path.display());
         }
 
         let meta = cap_project::RecordingMeta::load_for_project(&project_path).unwrap();
-
         let recordings = ProjectRecordings::new(&meta);
+
+        // Calculate total frames based on actual video duration and fps
+        let duration = recordings.duration();
+        let fps = recordings.segments[0].display.fps();
+        let total_frames = (duration * fps as f64).round() as u32;
 
         let render_options = RenderOptions {
             screen_size: XY::new(
@@ -115,6 +119,7 @@ impl EditorInstance {
             project_config: watch::channel(meta.project_config()),
             ws_shutdown: Arc::new(StdMutex::new(Some(ws_shutdown))),
             segments: Arc::new(segments),
+            total_frames,
         });
 
         this.state.lock().await.preview_task =
@@ -270,6 +275,10 @@ impl EditorInstance {
                     .await;
             }
         })
+    }
+
+    pub fn get_total_frames(&self) -> u32 {
+        self.total_frames
     }
 }
 

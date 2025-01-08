@@ -1880,6 +1880,7 @@ pub async fn run() {
             global_message_dialog,
             show_window,
             write_clipboard_string,
+            get_editor_total_frames,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2379,3 +2380,15 @@ trait EventExt: tauri_specta::Event {
 }
 
 impl<T: tauri_specta::Event> EventExt for T {}
+
+#[tauri::command(async)]
+#[specta::specta]
+async fn get_editor_total_frames(app: AppHandle, video_id: String) -> Result<u32, String> {
+    let editor_instances = app.state::<EditorInstancesState>();
+    let instances = editor_instances.lock().await;
+
+    let instance = instances
+        .get(&video_id)
+        .ok_or_else(|| "Editor instance not found".to_string())?;
+    Ok(instance.get_total_frames())
+}

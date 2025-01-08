@@ -160,6 +160,9 @@ async showWindow(window: ShowCapWindow) : Promise<void> {
 },
 async writeClipboardString(text: string) : Promise<null> {
     return await TAURI_INVOKE("write_clipboard_string", { text });
+},
+async getEditorTotalFrames(videoId: string) : Promise<number> {
+    return await TAURI_INVOKE("get_editor_total_frames", { videoId });
 }
 }
 
@@ -284,7 +287,7 @@ export type TimelineSegment = { recordingSegment: number | null; timescale: numb
 export type UploadMode = { Initial: { pre_created_video: PreCreatedVideo | null } } | "Reupload"
 export type UploadProgress = { stage: string; progress: number; message: string }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
-export type Video = { duration: number; width: number; height: number }
+export type Video = { duration: number; width: number; height: number; fps: number }
 export type VideoRecordingMetadata = { duration: number; size: number }
 export type VideoType = "screen" | "output" | "camera"
 export type XY<T> = { x: T; y: T }

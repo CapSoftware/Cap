@@ -31,12 +31,6 @@ pub async fn export_video(
             }
         };
 
-    // Get FPS from general settings
-    let fps = GeneralSettingsStore::get(&app)?
-        .and_then(|s| s.recording_config)
-        .unwrap_or_default()
-        .fps;
-
     // Get camera metadata if it exists
     let camera_metadata =
         get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Camera))
@@ -50,10 +44,8 @@ pub async fn export_video(
             .unwrap_or(screen_metadata.duration),
     );
 
-    // Use configured FPS for output video
-    let total_frames = (duration * fps as f64).round() as u32;
-
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let total_frames = editor_instance.get_total_frames();
 
     let output_path = editor_instance.meta().output_path();
 
