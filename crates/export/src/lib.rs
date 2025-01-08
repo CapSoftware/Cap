@@ -111,6 +111,8 @@ where
             buffer: AudioFrameBuffer,
         }
 
+        println!("Exporting with custom muxer");
+
         let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<RenderedFrame>(4);
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
 
@@ -198,7 +200,6 @@ where
                             let mut frame = audio_info.wrap_frame(&frame_data, 0);
                             let pts = (frame_count as f64 * f64::from(audio_info.sample_rate) / f64::from(FPS)) as i64;
                             frame.set_pts(Some(pts));
-                            frame.set_duration(Some(samples as i64));
                             println!(
                                 "Export: Sending audio frame {} with PTS: {:?}, samples: {}, data size: {}",
                                 frame_count,
