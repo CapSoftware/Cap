@@ -1,6 +1,13 @@
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
 use cap_flags::FLAGS;
+use cap_project::{
+    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop,
+    CursorAnimationStyle, CursorClickEvent, CursorData, CursorEvents, CursorMoveEvent,
+    ProjectConfiguration, RecordingMeta, ZoomSegment, FAST_SMOOTHING_SAMPLES,
+    FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
+    SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
+};
 use core::f64;
 use decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle};
 use futures::future::OptionFuture;
@@ -12,14 +19,6 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use wgpu::util::DeviceExt;
 use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
-
-use cap_project::{
-    AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop,
-    CursorAnimationStyle, CursorClickEvent, CursorData, CursorEvents, CursorMoveEvent,
-    ProjectConfiguration, RecordingMeta, ZoomSegment, FAST_SMOOTHING_SAMPLES,
-    FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
-    SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
-};
 
 use image::GenericImageView;
 use std::path::Path;
@@ -118,7 +117,19 @@ impl RecordingSegmentDecoders {
             OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
         );
 
-        screen_frame.map(|f| (f, camera_frame.flatten()))
+        // Create black frames with the correct dimensions
+        let black_screen = vec![0; (1920 * 804 * 4) as usize];
+        let black_camera = vec![0; (1920 * 1080 * 4) as usize];
+
+        // Return frames or black frames as needed
+        Some((
+            screen_frame.unwrap_or_else(|| Arc::new(black_screen)),
+            self.camera.as_ref().map(|_| {
+                camera_frame
+                    .flatten()
+                    .unwrap_or_else(|| Arc::new(black_camera))
+            }),
+        ))
     }
 }
 
@@ -143,7 +154,7 @@ pub struct RenderSegment {
 
 pub async fn render_video_to_channel(
     options: RenderOptions,
-    project: ProjectConfiguration,
+    mut project: ProjectConfiguration,
     sender: mpsc::Sender<RenderedFrame>,
     meta: &RecordingMeta,
     segments: Vec<RenderSegment>,
@@ -155,76 +166,116 @@ pub async fn render_video_to_channel(
 
     let start_time = Instant::now();
 
-    let duration = project
-        .timeline()
-        .map(|t| t.duration())
-        .unwrap_or(recordings.duration());
+    // Get the duration from the timeline if it exists, otherwise use the longest source duration
+    let duration = {
+        let mut max_duration = recordings.duration();
+        println!("Initial screen recording duration: {}", max_duration);
 
-    println!("export duration: {duration}");
-    println!("export duration: {duration}");
+        // Check camera duration if it exists
+        if let Some(camera_path) = meta.content.camera_path() {
+            if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
+                println!("Camera recording duration: {}", camera_duration);
+                max_duration = max_duration.max(camera_duration);
+                println!("New max duration after camera check: {}", max_duration);
+            }
+        }
+
+        // If there's a timeline, ensure all segments extend to the max duration
+        if let Some(timeline) = &mut project.timeline {
+            println!("Found timeline with {} segments", timeline.segments.len());
+            for (i, segment) in timeline.segments.iter_mut().enumerate() {
+                println!(
+                    "Segment {} - current end: {}, max_duration: {}",
+                    i, segment.end, max_duration
+                );
+                if segment.end < max_duration {
+                    segment.end = max_duration;
+                    println!("Extended segment {} to new end: {}", i, segment.end);
+                }
+            }
+            let final_duration = timeline.duration();
+            println!(
+                "Final timeline duration after adjustments: {}",
+                final_duration
+            );
+            final_duration
+        } else {
+            println!("No timeline found, using max_duration: {}", max_duration);
+            max_duration
+        }
+    };
+
+    let total_frames = (30_f64 * duration).ceil() as u32;
+    println!(
+        "Final export duration: {} seconds ({} frames at 30fps)",
+        duration, total_frames
+    );
 
     let mut frame_number = 0;
-
     let background = Background::from(project.background.source.clone());
 
     loop {
-        if frame_number as f64 > 30_f64 * duration {
+        if frame_number >= total_frames {
+            println!("Reached total frames: {frame_number}/{total_frames}");
+            break;
+        }
+
+        println!("Processing frame {frame_number}/{total_frames}");
+
+        let (time, segment_i) = if let Some(timeline) = &project.timeline {
+            match timeline.get_recording_time(frame_number as f64 / 30_f64) {
+                Some(value) => (value.0, value.1),
+                None => (frame_number as f64 / 30_f64, Some(0u32)),
+            }
+        } else {
+            (frame_number as f64 / 30_f64, Some(0u32))
+        };
+
+        let segment = &segments[segment_i.unwrap() as usize];
+        let frame_time = frame_number;
+        let Some((screen_frame, camera_frame)) = segment.decoders.get_frames(frame_time).await
+        else {
+            println!(
+                "No frames available for time {} (frame {})",
+                time, frame_time
+            );
             break;
         };
 
-        let (time, segment_i) = if let Some(timeline) = project.timeline() {
-            match timeline.get_recording_time(frame_number as f64 / 30_f64) {
-                Some(value) => value,
-                None => {
-                    println!("no time");
-                    break;
-                }
-            }
-        } else {
-            (frame_number as f64 / 30_f64, None)
-        };
-
-        let segment = &segments[segment_i.unwrap_or(0) as usize];
-
         let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
 
-        if let Some((screen_frame, camera_frame)) =
-            segment.decoders.get_frames((time * 30.0) as u32).await
-        {
-            let frame = produce_frame(
-                &constants,
-                &screen_frame,
-                &camera_frame,
-                background,
-                &uniforms,
-                time as f32,
-            )
-            .await?;
+        let frame = produce_frame(
+            &constants,
+            &screen_frame,
+            &camera_frame,
+            background,
+            &uniforms,
+            time as f32,
+            total_frames,
+        )
+        .await?;
 
-            sender.send(frame).await?;
-        } else {
-            println!("no decoder frames: {:?}", (time, segment_i));
-        };
-
-        frame_number += 1;
-        if frame_number % 60 == 0 {
-            let elapsed = start_time.elapsed();
-            println!(
-                "Rendered {} frames in {:?} seconds",
-                frame_number,
-                elapsed.as_secs_f32()
-            );
+        if frame.width == 0 || frame.height == 0 {
+            println!("Skipping frame with zero dimensions");
+            continue;
         }
+
+        println!(
+            "Rendering: Sending frame {} (size: {}x{}, time: {}, segment: {})",
+            frame_number,
+            frame.width,
+            frame.height,
+            time,
+            segment_i.unwrap()
+        );
+        sender.send(frame).await?;
+        frame_number += 1;
     }
 
-    println!("Render loop exited");
-
-    let total_frames = frame_number;
-
+    println!("Render loop exited at frame {frame_number}/{total_frames}");
     let total_time = start_time.elapsed();
     println!(
-        "Render complete. Processed {} frames in {:?} seconds",
-        total_frames,
+        "Render complete. Processed {frame_number} frames in {:?} seconds",
         total_time.as_secs_f32()
     );
 
@@ -712,6 +763,7 @@ pub struct RenderedFrame {
     pub width: u32,
     pub height: u32,
     pub padded_bytes_per_row: u32,
+    pub total_frames: Option<u32>,
 }
 
 pub async fn produce_frame(
@@ -721,6 +773,7 @@ pub async fn produce_frame(
     background: Background,
     uniforms: &ProjectUniforms,
     time: f32,
+    total_frames: u32,
 ) -> Result<RenderedFrame, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
@@ -997,6 +1050,7 @@ pub async fn produce_frame(
         padded_bytes_per_row,
         width: uniforms.output_size.0,
         height: uniforms.output_size.1,
+        total_frames: Some(total_frames),
     })
 }
 

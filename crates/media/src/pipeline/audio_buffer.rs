@@ -4,6 +4,7 @@ use ffmpeg::encoder;
 pub use ffmpeg::util::frame::Audio as FFAudio;
 
 use crate::data::{AudioInfo, PlanarData};
+use cap_project::TimelineConfiguration;
 
 #[derive(Debug)]
 pub struct AudioBuffer {
@@ -35,14 +36,10 @@ impl AudioBuffer {
     }
 
     pub fn consume(&mut self, frame: FFAudio) {
-        // TODO: Set PTS from frame with ffmpeg::sys::av_rescale_q??
-        // if let Some(pts) = frame.pts() {
-        //     self.current_pts = pts;
-        // }
+        if let Some(pts) = frame.pts() {
+            self.current_pts = pts;
+        }
         for channel in 0..self.config.channels {
-            // if self.current_pts == 0 {
-            //     println!("Data in channel {channel}: {:?}", frame.data(channel));
-            // }
             self.data[channel].extend(frame.plane_data(channel));
         }
     }
@@ -67,7 +64,33 @@ impl AudioBuffer {
             }
         }
 
-        self.current_pts += i64::try_from(frame_size / self.config.sample_size()).unwrap();
+        self.current_pts += i64::try_from(self.frame_size).unwrap();
         Some(frame)
+    }
+
+    pub fn next_frame_data(
+        &mut self,
+        samples: usize,
+        timeline: Option<&TimelineConfiguration>,
+    ) -> Option<(f64, Vec<u8>)> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let frame_size = samples * self.config.sample_size();
+
+        if self.len() < frame_size {
+            return None;
+        }
+
+        let mut frame_data = Vec::with_capacity(frame_size * self.config.channels);
+        for channel in 0..self.config.channels {
+            frame_data.extend(self.data[channel].drain(0..frame_size));
+        }
+
+        let current_time = self.current_pts as f64 / f64::from(self.config.sample_rate);
+        self.current_pts += i64::try_from(samples).unwrap();
+
+        Some((current_time, frame_data))
     }
 }

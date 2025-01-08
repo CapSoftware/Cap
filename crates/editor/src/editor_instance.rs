@@ -90,7 +90,11 @@ impl EditorInstance {
                 .unwrap(),
         );
 
-        let renderer = Arc::new(editor::Renderer::spawn(render_constants.clone(), frame_tx));
+        let renderer = Arc::new(editor::Renderer::spawn(
+            render_constants.clone(),
+            frame_tx,
+            &meta,
+        ));
 
         let (preview_tx, preview_rx) = watch::channel(None);
 

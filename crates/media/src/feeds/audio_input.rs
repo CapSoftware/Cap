@@ -1,8 +1,8 @@
-use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, InputCallbackInfo, SampleFormat, StreamConfig, SupportedStreamConfig};
 use flume::{Receiver, Sender, TrySendError};
 use indexmap::IndexMap;
-use tracing::warn;
+use tracing::{warn, error, info, debug};
 
 use crate::{
     data::{ffmpeg_sample_format_for, AudioInfo},
@@ -55,37 +55,52 @@ impl AudioInputFeed {
     }
 
     pub async fn init(selected_input: &str) -> Result<Self, MediaError> {
+        info!("Initializing audio input feed with device: {}", selected_input);
+        
         let (device, config) = Self::list_devices()
             .swap_remove_entry(selected_input)
             .map(|(device_name, (device, config))| {
-                println!("Using audio device: {}", device_name);
+                info!("Using audio device: {} with config: {:?}", device_name, config);
                 (device, config)
             })
-            .unwrap();
+            .ok_or_else(|| {
+                error!("Failed to find audio device: {}", selected_input);
+                MediaError::DeviceUnreachable(selected_input.to_string())
+            })?;
 
-        let audio_info = AudioInfo::from_stream_config(&config)?;
+        let audio_info = AudioInfo::from_stream_config(&config).map_err(|e| {
+            error!("Failed to create audio info from stream config: {}", e);
+            e
+        })?;
+        
+        debug!("Created audio info: {:?}", audio_info);
         let (control_tx, control_rx) = flume::bounded(1);
 
         std::thread::spawn(|| start_capturing(device, config, control_rx));
+        info!("Started audio capture thread");
 
         Ok(Self {
             control_tx,
             audio_info,
-            // rx: samples_rx,
         })
     }
 
     pub fn list_devices() -> AudioInputDeviceMap {
+        info!("Listing available audio input devices");
         let host = cpal::default_host();
         let mut device_map = IndexMap::new();
 
         let get_usable_device = |device: Device| {
             device
                 .supported_input_configs()
-                .map_err(|error| eprintln!("Error: {error}"))
+                .map_err(|error| {
+                    error!("Error getting supported input configs for device: {}", error);
+                    error
+                })
                 .ok()
                 .and_then(|configs| {
                     let mut configs = configs.collect::<Vec<_>>();
+                    debug!("Found {} supported configs", configs.len());
                     configs.sort_by(|a, b| {
                         b.sample_format()
                             .sample_size()
@@ -100,31 +115,33 @@ impl AudioInputFeed {
                         .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
                 })
                 .and_then(|config| {
-                    device
-                        .name()
-                        .ok()
-                        .map(|name| (name, device, config.with_max_sample_rate()))
+                    device.name().ok().map(|name| {
+                        debug!("Found usable device: {} with config: {:?}", name, config);
+                        (name, device, config.with_max_sample_rate())
+                    })
                 })
         };
 
-        if let Some((name, device, config)) =
-            host.default_input_device().and_then(get_usable_device)
-        {
+        if let Some((name, device, config)) = host.default_input_device().and_then(get_usable_device) {
+            info!("Found default input device: {}", name);
             device_map.insert(name, (device, config));
+        } else {
+            warn!("No default input device found or it's not usable");
         }
 
         match host.input_devices() {
             Ok(devices) => {
                 for (name, device, config) in devices.filter_map(get_usable_device) {
+                    debug!("Found additional device: {}", name);
                     device_map.entry(name).or_insert((device, config));
                 }
             }
             Err(error) => {
-                eprintln!("Could not access audio input devices");
-                eprintln!("{error}");
+                error!("Could not access audio input devices: {}", error);
             }
         }
 
+        info!("Found {} usable audio input devices", device_map.len());
         device_map
     }
 
@@ -179,43 +196,64 @@ fn start_capturing(
     mut config: SupportedStreamConfig,
     control: Receiver<AudioInputControl>,
 ) {
+    info!("Starting audio capture with device: {:?}, config: {:?}", device.name(), config);
     let mut senders: Vec<AudioInputSamplesSender> = vec![];
 
     loop {
         let (tx, rx) = flume::bounded(4);
+        info!("Building input stream with config: {:?}", config);
 
         let stream_config: StreamConfig = config.clone().into();
-        let stream = device
+        let stream = match device
             .build_input_stream_raw(
                 &stream_config,
                 config.sample_format(),
                 move |data, info| {
-                    tx.send(AudioInputSamples {
+                    if let Err(e) = tx.send(AudioInputSamples {
                         data: data.bytes().to_vec(),
                         format: data.sample_format(),
                         info: info.clone(),
-                    })
-                    .ok();
+                    }) {
+                        error!("Failed to send audio samples: {}", e);
+                    }
                 },
-                |_e| {},
+                |e| {
+                    error!("Error in audio input stream: {}", e);
+                },
                 None,
-            )
-            .map_err(|error| {
-                eprintln!("Error while preparing audio capture: {error}");
-                MediaError::TaskLaunch("Failed to start audio capture".into())
-            });
+            ) {
+                Ok(stream) => {
+                    info!("Successfully built audio input stream");
+                    stream
+                }
+                Err(err) => {
+                    error!("Failed to build audio input stream: {}", err);
+                    // Sleep briefly to avoid tight error loop
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    continue;
+                }
+            };
+
+        // Try to play the stream
+        if let Err(e) = stream.play() {
+            error!("Failed to start audio stream playback: {}", e);
+            continue;
+        }
+        info!("Audio stream playback started");
 
         loop {
             match control.try_recv() {
                 Ok(AudioInputControl::Switch(name, response)) => {
+                    info!("Switching audio device to: {}", name);
                     // list_devices hangs if the stream isn't dropped
                     drop(stream);
                     let Some(items) = AudioInputFeed::list_devices().swap_remove_entry(&name).map(
                         |(device_name, (device, config))| {
-                            println!("Using audio device: {}", device_name);
+                            info!("Switching to audio device: {} with config: {:?}", device_name, config);
                             (device, config)
                         },
                     ) else {
+                        error!("Failed to find audio device: {}", name);
                         response
                             .send(Err(MediaError::DeviceUnreachable(name)))
                             .unwrap();
@@ -229,13 +267,15 @@ fn start_capturing(
                     break;
                 }
                 Ok(AudioInputControl::Shutdown) => {
+                    info!("Received shutdown signal for audio capture");
                     return;
                 }
                 Ok(AudioInputControl::AttachSender(sender)) => {
+                    info!("New audio sender attached");
                     senders.push(sender);
                 }
                 Err(flume::TryRecvError::Disconnected) => {
-                    println!("Control receiver is unreachable! Shutting down");
+                    warn!("Control receiver is unreachable! Shutting down audio capture");
                     return;
                 }
                 Err(flume::TryRecvError::Empty) => {
@@ -248,19 +288,22 @@ fn start_capturing(
                     let mut to_remove = vec![];
                     for (i, sender) in senders.iter().enumerate() {
                         if let Err(TrySendError::Disconnected(_)) = sender.try_send(data.clone()) {
+                            warn!("Audio sender {} disconnected, will be removed", i);
                             to_remove.push(i);
                         };
                     }
 
-                    for i in to_remove.into_iter().rev() {
-                        senders.swap_remove(i);
+                    if !to_remove.is_empty() {
+                        debug!("Removing {} disconnected audio senders", to_remove.len());
+                        for i in to_remove.into_iter().rev() {
+                            senders.swap_remove(i);
+                        }
                     }
                 }
                 Err(error) => {
-                    warn!("Failed to capture audio sampels: {:?}", error);
-                    // Optionally, add a small delay to avoid busy-waiting
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    continue;
+                    error!("Failed to capture audio samples: {:?}", error);
+                    // Break inner loop to recreate the stream
+                    break;
                 }
             }
         }

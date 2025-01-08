@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{mpsc, Arc},
+    sync::{mpsc, Arc, Mutex},
 };
 
 use ffmpeg::{
@@ -179,6 +179,7 @@ impl AsyncVideoDecoder {
 
             let mut last_decoded_frame = None::<u32>;
             let mut last_sent_frame = None::<(u32, DecodedFrame)>;
+            let mut reached_end = false;
 
             let mut peekable_requests = PeekableReceiver { rx, peeked: None };
 
@@ -187,6 +188,14 @@ impl AsyncVideoDecoder {
             while let Ok(r) = peekable_requests.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_frame, sender) => {
+                        // If we've already reached the end and have a last frame, return it
+                        if reached_end {
+                            if let Some((_, last_frame)) = &last_sent_frame {
+                                sender.send(Some(last_frame.clone())).ok();
+                                continue;
+                            }
+                        }
+
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                             let data =
                                 cached.process(&mut scaler_input_format, &mut scaler, &decoder);
@@ -201,30 +210,95 @@ impl AsyncVideoDecoder {
                         let cache_min = requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
                         let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
 
-                        if requested_frame <= 0
-                            || last_sent_frame
-                                .as_ref()
-                                .map(|last| {
-                                    requested_frame < last.0 ||
-                                    // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-                                    requested_frame - last.0 > FRAME_CACHE_SIZE as u32
+                        if cache.len() >= FRAME_CACHE_SIZE {
+                            // When cache is full, remove old frames that are far from the requested frame
+                            let frames_to_remove: Vec<_> = cache
+                                .keys()
+                                .filter(|&&k| {
+                                    // Keep frames within a window of the requested frame
+                                    let distance = if k <= requested_frame {
+                                        requested_frame - k
+                                    } else {
+                                        k - requested_frame
+                                    };
+                                    // Remove frames that are more than half the cache size away
+                                    distance > FRAME_CACHE_SIZE as u32 / 2
                                 })
-                                .unwrap_or(true)
+                                .copied()
+                                .collect();
+
+                            for frame in frames_to_remove {
+                                println!(
+                                    "Removing old frame {} from cache (requested_frame: {})",
+                                    frame, requested_frame
+                                );
+                                cache.remove(&frame);
+                            }
+
+                            // If we still need to remove frames, remove the ones furthest from the requested frame
+                            if cache.len() >= FRAME_CACHE_SIZE {
+                                let frame_to_remove = cache
+                                    .keys()
+                                    .max_by_key(|&&k| {
+                                        if k <= requested_frame {
+                                            requested_frame - k
+                                        } else {
+                                            k - requested_frame
+                                        }
+                                    })
+                                    .copied()
+                                    .unwrap();
+                                println!(
+                                    "Removing distant frame {} from cache (requested_frame: {})",
+                                    frame_to_remove, requested_frame
+                                );
+                                cache.remove(&frame_to_remove);
+                            }
+                        }
+
+                        // Only seek if we're going backwards or if we're jumping more than half the cache size
+                        // AND we don't have the frame in cache already
+                        // AND we haven't reached the end of the video
+                        if !reached_end
+                            && !cache.contains_key(&requested_frame)
+                            && (requested_frame <= 0
+                                || last_sent_frame
+                                    .as_ref()
+                                    .map(|last| {
+                                        let backwards = requested_frame < last.0;
+                                        let big_jump = requested_frame > last.0
+                                            && requested_frame.saturating_sub(last.0)
+                                                > FRAME_CACHE_SIZE as u32 / 2;
+                                        backwards || big_jump
+                                    })
+                                    .unwrap_or(true))
                         {
                             let timestamp_us =
                                 ((requested_frame as f32 / frame_rate.numerator() as f32)
                                     * 1_000_000.0) as i64;
                             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
-                            println!("seeking to {position} for frame {requested_frame}");
-
                             decoder.flush();
-                            input.seek(position, ..position).unwrap();
-                            cache.clear();
-                            last_decoded_frame = None;
-                            last_sent_frame = None;
-
+                            // Drop the old packets iterator to release the mutable borrow
+                            drop(packets);
+                            let seek_result = input.seek(position, ..position);
+                            // Create new packets iterator regardless of seek result
                             packets = input.packets();
+
+                            match seek_result {
+                                Ok(_) => {
+                                    cache.clear();
+                                    last_decoded_frame = None;
+                                }
+                                Err(_) => {
+                                    // If seek fails, we've likely reached the end
+                                    reached_end = true;
+                                    if let Some((_, last_frame)) = &last_sent_frame {
+                                        sender.take().map(|s| s.send(Some(last_frame.clone())));
+                                    }
+                                    continue;
+                                }
+                            }
                         }
 
                         // handle when requested_frame == last_decoded_frame or last_decoded_frame > requested_frame.
@@ -310,35 +384,65 @@ impl AsyncVideoDecoder {
                                                 last_sent_frame =
                                                     Some((current_frame, data.clone()));
                                                 sender.send(Some(data)).ok();
-
                                                 break;
                                             }
+                                        } else if current_frame
+                                            > last_sent_frame.as_ref().map(|f| f.0).unwrap_or(0)
+                                        {
+                                            // Keep last_sent_frame up to date even for frames we're not sending
+                                            let data = cache_frame.process(
+                                                &mut scaler_input_format,
+                                                &mut scaler,
+                                                &decoder,
+                                            );
+                                            last_sent_frame = Some((current_frame, data));
                                         }
 
                                         if cache.len() >= FRAME_CACHE_SIZE {
-                                            if let Some(last_active_frame) = &last_active_frame {
-                                                let frame = if requested_frame > *last_active_frame
-                                                {
-                                                    *cache.keys().next().unwrap()
-                                                } else if requested_frame < *last_active_frame {
-                                                    *cache.keys().next_back().unwrap()
-                                                } else {
-                                                    let min = *cache.keys().min().unwrap();
-                                                    let max = *cache.keys().max().unwrap();
-
-                                                    if current_frame > max {
-                                                        min
+                                            // When cache is full, remove old frames that are far from the requested frame
+                                            let frames_to_remove: Vec<_> = cache
+                                                .keys()
+                                                .filter(|&&k| {
+                                                    // Keep frames within a window of the requested frame
+                                                    let distance = if k <= requested_frame {
+                                                        requested_frame - k
                                                     } else {
-                                                        max
-                                                    }
-                                                };
+                                                        k - requested_frame
+                                                    };
+                                                    // Remove frames that are more than half the cache size away
+                                                    distance > FRAME_CACHE_SIZE as u32 / 2
+                                                })
+                                                .copied()
+                                                .collect();
 
+                                            for frame in frames_to_remove {
+                                                println!("Removing old frame {} from cache (requested_frame: {})", frame, requested_frame);
                                                 cache.remove(&frame);
-                                            } else {
-                                                cache.clear()
+                                            }
+
+                                            // If we still need to remove frames, remove the ones furthest from the requested frame
+                                            if cache.len() >= FRAME_CACHE_SIZE {
+                                                let frame_to_remove = cache
+                                                    .keys()
+                                                    .max_by_key(|&&k| {
+                                                        if k <= requested_frame {
+                                                            requested_frame - k
+                                                        } else {
+                                                            k - requested_frame
+                                                        }
+                                                    })
+                                                    .copied()
+                                                    .unwrap();
+                                                println!("Removing distant frame {} from cache (requested_frame: {})", frame_to_remove, requested_frame);
+                                                cache.remove(&frame_to_remove);
                                             }
                                         }
 
+                                        println!(
+                                            "Inserting frame {} into cache (size: {})",
+                                            current_frame,
+                                            cache.len()
+                                        );
                                         cache.insert(current_frame, cache_frame);
                                     }
 
@@ -359,23 +463,51 @@ impl AsyncVideoDecoder {
             }
         });
 
-        AsyncVideoDecoderHandle { sender: tx }
+        AsyncVideoDecoderHandle {
+            sender: tx,
+            last_valid_frame: Arc::new(Mutex::new(None)),
+            reached_end: Arc::new(Mutex::new(false)),
+        }
     }
 }
 
 #[derive(Clone)]
 pub struct AsyncVideoDecoderHandle {
     sender: mpsc::Sender<VideoDecoderMessage>,
+    last_valid_frame: Arc<Mutex<Option<DecodedFrame>>>,
+    reached_end: Arc<Mutex<bool>>,
 }
 
 impl AsyncVideoDecoderHandle {
-    pub async fn get_frame(&self, time: u32) -> Option<Arc<Vec<u8>>> {
+    pub async fn get_frame(&self, frame_number: u32) -> Option<DecodedFrame> {
+        // If we've already reached the end of the video, just return the last valid frame
+        if *self.reached_end.lock().unwrap() {
+            return self.last_valid_frame.lock().unwrap().clone();
+        }
+
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.sender
-            .send(VideoDecoderMessage::GetFrame(time, tx))
-            .unwrap();
-        let res = rx.await.ok().flatten();
-        res
+            .send(VideoDecoderMessage::GetFrame(frame_number, tx))
+            .ok()?;
+
+        // Wait for response with a timeout
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+            Ok(Ok(frame)) => {
+                if let Some(frame) = &frame {
+                    // Store this as the last valid frame
+                    *self.last_valid_frame.lock().unwrap() = Some(frame.clone());
+                } else {
+                    // If we got no frame, we've reached the end
+                    *self.reached_end.lock().unwrap() = true;
+                }
+                // If we got no frame but have a last valid frame, return that instead
+                frame.or_else(|| self.last_valid_frame.lock().unwrap().clone())
+            }
+            _ => {
+                // On timeout, return last valid frame if we have one
+                self.last_valid_frame.lock().unwrap().clone()
+            }
+        }
     }
 }
 

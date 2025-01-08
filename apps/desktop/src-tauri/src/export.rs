@@ -16,16 +16,39 @@ pub async fn export_video(
     force: bool,
     use_custom_muxer: bool,
 ) -> Result<PathBuf, String> {
-    let VideoRecordingMetadata { duration, .. } =
-        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen))
-            .await
-            .unwrap();
+    let screen_metadata =
+        match get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await {
+            Ok(meta) => meta,
+            Err(e) => {
+                sentry::capture_message(
+                    &format!("Failed to get video metadata: {}", e),
+                    sentry::Level::Error,
+                );
+                return Err(
+                "Failed to read video metadata. The recording may be from an incompatible version."
+                    .to_string(),
+            );
+            }
+        };
 
     // Get FPS from general settings
     let fps = GeneralSettingsStore::get(&app)?
         .and_then(|s| s.recording_config)
         .unwrap_or_default()
         .fps;
+
+    // Get camera metadata if it exists
+    let camera_metadata =
+        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Camera))
+            .await
+            .ok();
+
+    // Use the longer duration between screen and camera
+    let duration = screen_metadata.duration.max(
+        camera_metadata
+            .map(|m| m.duration)
+            .unwrap_or(screen_metadata.duration),
+    );
 
     // Use configured FPS for output video
     let total_frames = (duration * fps as f64).round() as u32;
@@ -34,7 +57,7 @@ pub async fn export_video(
 
     let output_path = editor_instance.meta().output_path();
 
-    // If the file exists, return it immediately
+    // If the file exists and we're not forcing a re-render, return it
     if output_path.exists() && !force {
         return Ok(output_path);
     }
@@ -43,15 +66,26 @@ pub async fn export_video(
         .send(RenderProgress::EstimatedTotalFrames { total_frames })
         .ok();
 
+    // Create a modified project configuration that accounts for different video lengths
+    let mut modified_project = project.clone();
+    if let Some(timeline) = &mut modified_project.timeline {
+        // Ensure timeline duration matches the longest video
+        for segment in timeline.segments.iter_mut() {
+            if segment.end > duration {
+                segment.end = duration;
+            }
+        }
+    }
+
     let exporter = cap_export::Exporter::new(
         &app,
-        project,
+        modified_project,
         output_path.clone(),
         move |frame_index| {
+            // Ensure progress never exceeds total frames
+            let current_frame = (frame_index + 1).min(total_frames);
             progress
-                .send(RenderProgress::FrameRendered {
-                    current_frame: frame_index + 1,
-                })
+                .send(RenderProgress::FrameRendered { current_frame })
                 .ok();
         },
         editor_instance.project_path.clone(),
@@ -64,17 +98,16 @@ pub async fn export_video(
         e.to_string()
     })?;
 
-    if use_custom_muxer {
-        exporter.export_with_custom_muxer().await
-    } else {
-        exporter.export_with_ffmpeg_cli().await
+    let result = exporter.export_with_custom_muxer().await;
+
+    match result {
+        Ok(_) => {
+            ShowCapWindow::PrevRecordings.show(&app).ok();
+            Ok(output_path)
+        }
+        Err(e) => {
+            sentry::capture_message(&e.to_string(), sentry::Level::Error);
+            Err(e.to_string())
+        }
     }
-    .map_err(|e| {
-        sentry::capture_message(&e.to_string(), sentry::Level::Error);
-        e.to_string()
-    })?;
-
-    ShowCapWindow::PrevRecordings.show(&app).ok();
-
-    Ok(output_path)
 }
