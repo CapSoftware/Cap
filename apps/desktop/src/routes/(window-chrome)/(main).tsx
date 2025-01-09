@@ -54,11 +54,6 @@ const getAuth = cache(async () => {
   const value = await authStore.get();
   const local = import.meta.env.VITE_LOCAL_MODE === "true";
 
-  if (!value) {
-    if (local) return;
-    return redirect("/signin");
-  }
-
   const res = await apiClient.desktop.getUserPlan({
     headers: await protectedHeaders(),
   });

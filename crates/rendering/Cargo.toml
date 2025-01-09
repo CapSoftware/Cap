@@ -6,20 +6,20 @@ edition = "2021"
 [dependencies]
 anyhow.workspace = true
 bytemuck = { version = "1.7", features = ["derive"] }
-futures-intrusive = "0.5.0"
-serde = "1.0.209"
-specta.workspace = true
-wgpu.workspace = true
-image = "0.25.2"
-cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
+cap-project = { path = "../project" }
 cap-recording = { path = "../recording" }
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio.workspace = true
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
 futures = "0.3.30"
+futures-intrusive = "0.5.0"
+image = "0.25.2"
+serde = "1.0.209"
+specta.workspace = true
 thiserror.workspace = true
+wgpu.workspace = true
 bezier_easing = "0.1.1"
 
 [target.'cfg(unix)'.dependencies]
@@ -27,3 +27,6 @@ nix = { version = "0.29.0", features = ["fs"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+
+[build-dependencies]
+build-time = "0.1"

@@ -4,9 +4,9 @@ use cap_flags::FLAGS;
 use cap_project::{
     AspectRatio, BackgroundSource, CameraXPosition, CameraYPosition, Content, Crop,
     CursorAnimationStyle, CursorClickEvent, CursorData, CursorEvents, CursorMoveEvent,
-    ProjectConfiguration, RecordingMeta, ZoomSegment, FAST_SMOOTHING_SAMPLES,
-    FAST_VELOCITY_THRESHOLD, REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD,
-    SLOW_SMOOTHING_SAMPLES, SLOW_VELOCITY_THRESHOLD, XY,
+    ProjectConfiguration, RecordingMeta, FAST_SMOOTHING_SAMPLES, FAST_VELOCITY_THRESHOLD,
+    REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD, SLOW_SMOOTHING_SAMPLES,
+    SLOW_VELOCITY_THRESHOLD, XY,
 };
 use cap_recording::segmented_actor::RecordingSegment;
 use core::f64;
@@ -293,6 +293,10 @@ pub struct RenderVideoConstants {
     gradient_or_color_pipeline: GradientOrColorPipeline,
     pub cursor_textures: HashMap<String, wgpu::Texture>,
     cursor_pipeline: CursorPipeline,
+    watermark_pipeline: WatermarkPipeline,
+    watermark_texture: wgpu::Texture,
+    watermark_bind_group: wgpu::BindGroup,
+    watermark_dimensions: (u32, u32), // Add watermark dimensions
 }
 
 impl RenderVideoConstants {
@@ -315,19 +319,113 @@ impl RenderVideoConstants {
 
         // Pass project_path to load_cursor_textures
         let cursor_textures = Self::load_cursor_textures(&device, &queue, meta);
-
         let cursor_pipeline = CursorPipeline::new(&device);
+        let watermark_pipeline = WatermarkPipeline::new(&device);
+        let composite_video_frame_pipeline = CompositeVideoFramePipeline::new(&device);
+        let gradient_or_color_pipeline = GradientOrColorPipeline::new(&device);
+
+        // Create watermark texture from embedded logo
+        let watermark_bytes = include_bytes!("../assets/watermark.png");
+        println!(
+            "Loading watermark texture from embedded bytes: {} bytes",
+            watermark_bytes.len()
+        );
+
+        let watermark_image = image::load_from_memory(watermark_bytes).unwrap();
+        let watermark_rgba = watermark_image.to_rgba8();
+        let dimensions = watermark_image.dimensions();
+        println!(
+            "Loaded watermark image dimensions: {}x{}",
+            dimensions.0, dimensions.1
+        );
+
+        let watermark_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("WatermarkTexture"),
+            size: wgpu::Extent3d {
+                width: dimensions.0,
+                height: dimensions.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &watermark_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &watermark_rgba,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * dimensions.0),
+                rows_per_image: Some(dimensions.1),
+            },
+            wgpu::Extent3d {
+                width: dimensions.0,
+                height: dimensions.1,
+                depth_or_array_layers: 1,
+            },
+        );
+        println!("Watermark texture created and written to GPU");
+
+        let watermark_view = watermark_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let watermark_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let watermark_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("WatermarkUniformBuffer"),
+            size: std::mem::size_of::<WatermarkUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let watermark_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("WatermarkBindGroup"),
+            layout: &watermark_pipeline.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&watermark_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&watermark_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: watermark_uniform_buffer.as_entire_binding(),
+                },
+            ],
+        });
 
         Ok(Self {
-            composite_video_frame_pipeline: CompositeVideoFramePipeline::new(&device),
-            gradient_or_color_pipeline: GradientOrColorPipeline::new(&device),
             _instance: instance,
             _adapter: adapter,
-            queue,
             device,
+            queue,
             options,
+            composite_video_frame_pipeline,
+            gradient_or_color_pipeline,
             cursor_textures,
             cursor_pipeline,
+            watermark_pipeline,
+            watermark_texture,
+            watermark_bind_group,
+            watermark_dimensions: dimensions,
         })
     }
 
@@ -974,6 +1072,113 @@ pub async fn produce_frame(
 
     // Now submit the encoder
     constants.queue.submit(std::iter::once(encoder.finish()));
+
+    // Add watermark if not upgraded - moved to after all other rendering
+    if uniforms.project.background.inset <= 0 {
+        // Calculate watermark width as 10% of frame width, but no larger than 200px
+        let frame_width = uniforms.output_size.0 as f32;
+        let target_width = (frame_width * 0.10).min(200.0);
+        let aspect_ratio =
+            constants.watermark_dimensions.1 as f32 / constants.watermark_dimensions.0 as f32;
+
+        // Increase padding from edges
+        let padding = frame_width * 0.02; // 2% of frame width for padding
+
+        let watermark_uniforms = WatermarkUniforms {
+            output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
+            watermark_size: [target_width, target_width * aspect_ratio],
+            position: [
+                padding,
+                uniforms.output_size.1 as f32 - (target_width * aspect_ratio) - padding,
+            ],
+            opacity: 0.5, // Reduced opacity from 0.8 to 0.5
+            is_upgraded: 0.0,
+        };
+
+        println!(
+            "Rendering watermark at position: {:?}, size: {:?}, output_size: {:?}",
+            watermark_uniforms.position,
+            watermark_uniforms.watermark_size,
+            watermark_uniforms.output_size
+        );
+
+        let watermark_buffer =
+            constants
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Watermark Uniforms Buffer"),
+                    contents: bytemuck::cast_slice(&[watermark_uniforms]),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+
+        let watermark_bind_group = constants
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("WatermarkBindGroup"),
+                layout: &constants.watermark_pipeline.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(
+                            &constants
+                                .watermark_texture
+                                .create_view(&wgpu::TextureViewDescriptor::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&constants.device.create_sampler(
+                            &wgpu::SamplerDescriptor {
+                                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                                mag_filter: wgpu::FilterMode::Linear,
+                                min_filter: wgpu::FilterMode::Linear,
+                                mipmap_filter: wgpu::FilterMode::Linear,
+                                anisotropy_clamp: 16, // Add anisotropic filtering
+                                ..Default::default()
+                            },
+                        )),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: watermark_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+
+        let mut watermark_encoder =
+            constants
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("WatermarkEncoder"),
+                });
+
+        {
+            let mut render_pass =
+                watermark_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("WatermarkRenderPass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: get_either(texture_views, !output_is_left),
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+            render_pass.set_pipeline(&constants.watermark_pipeline.render_pipeline);
+            render_pass.set_bind_group(0, &watermark_bind_group, &[]);
+            render_pass.draw(0..6, 0..1); // Using 6 vertices for two triangles
+            println!("Drew watermark with 6 vertices");
+        }
+
+        constants.queue.submit(Some(watermark_encoder.finish()));
+    }
 
     let output_texture_size = wgpu::Extent3d {
         width: uniforms.output_size.0,
@@ -1764,7 +1969,7 @@ impl CursorPipeline {
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            src_factor: wgpu::BlendFactor::One,
                             dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
                             operation: wgpu::BlendOperation::Add,
                         },
@@ -1922,4 +2127,126 @@ impl<T> Mul<f64> for Coord<T> {
             space: self.space,
         }
     }
+}
+
+struct WatermarkPipeline {
+    bind_group_layout: wgpu::BindGroupLayout,
+    render_pipeline: wgpu::RenderPipeline,
+}
+
+impl WatermarkPipeline {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("WatermarkBindGroupLayout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("WatermarkShader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/watermark.wgsl").into()),
+        });
+
+        let empty_constants: HashMap<String, f64> = HashMap::new();
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("WatermarkPipeline"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("WatermarkPipelineLayout"),
+                    bind_group_layouts: &[&bind_group_layout],
+                    push_constant_ranges: &[],
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &empty_constants,
+                    zero_initialize_workgroup_memory: false,
+                    vertex_pulling_transform: false,
+                },
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &empty_constants,
+                    zero_initialize_workgroup_memory: false,
+                    vertex_pulling_transform: false,
+                },
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        Self {
+            bind_group_layout,
+            render_pipeline,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct WatermarkUniforms {
+    output_size: [f32; 2],
+    watermark_size: [f32; 2],
+    position: [f32; 2],
+    opacity: f32,
+    is_upgraded: f32,
 }
