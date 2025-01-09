@@ -63,12 +63,20 @@ async function unzip(targetPath, outputPath) {
 async function prepareFfmpegSidecar() {
   const binaries = FFMPEG_BINARIES[rsTargetTriple];
   const ffmpegDownloadPath = path.join(binariesDir, "ffmpeg-download.zip");
+  const ffmpegBinaryPath = path.join(ffmpegUnzippedPath, binaries.path);
+  const ffmpegSidecarName = `ffmpeg-${rsTargetTriple}${fileExtension}`;
+  const finalDestinationPath = path.join(binariesDir, ffmpegSidecarName);
+
+  if (await exists(finalDestinationPath)) {
+    console.log(`Using ffmpeg sidecar: ${ffmpegSidecarName}`);
+    return;
+  }
 
   // Skip downloading if the archive already exists
-  if (!(await exists(ffmpegDownloadPath))) {
+  if (!(await exists(ffmpegBinaryPath))) {
     if (await exists(ffmpegUnzippedPath)) return;
     console.log(
-      `Couldn't locate "ffmpeg-download.zip" in "${ffmpegDownloadPath}"`
+      `Couldn't locate "${ffmpegSidecarName}" or "ffmpeg-download.zip"  in "${ffmpegDownloadPath}"`
     );
     console.log(`Downloading from: ${binaries.url}`);
     await fs.mkdir(binariesDir, { recursive: true });
@@ -131,20 +139,15 @@ async function prepareFfmpegSidecar() {
     }
   }
 
-  const ffmpegBinaryPath = path.join(ffmpegUnzippedPath, binaries.path);
-  const ffmpegSidecarName = `ffmpeg-${rsTargetTriple}${fileExtension}`;
-  const finalDestinationPath = path.join(binariesDir, ffmpegSidecarName);
-  if (await exists(finalDestinationPath)) {
-    console.log(`Using ffmpeg sidecar: ${ffmpegSidecarName}`);
-    return;
-  }
-
   console.log(`Copying ffmpeg binary to '${ffmpegSidecarName}'...`);
 
-  await fs.copyFile(
+  await fs.rename(
     ffmpegBinaryPath,
     path.join(binariesDir, ffmpegSidecarName)
   );
+
+  console.log("Removing unzipped ffmpeg folder");
+  await fs.rm(ffmpegUnzippedPath, { recursive: true, force: true });
 }
 
 /**
@@ -173,9 +176,7 @@ async function semverToWIXCompatibleVersion(cargoFilePath) {
     const numMatch = buildOrPrerelease.match(/\d+$/);
     build = numMatch ? parseInt(numMatch[0]) : 0;
   }
-  const wixVersion = `${major}.${minor}.${patch}${
-    build === 0 ? "" : `.${build}`
-  }`;
+  const wixVersion = `${major}.${minor}.${patch}${build === 0 ? "" : `.${build}`}`;
   if (wixVersion !== ver)
     console.log(`Using wix-compatible version ${ver} --> ${wixVersion}`);
   return wixVersion;
@@ -268,8 +269,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("--- Preparation Failed");
+  console.error("\n--- Preparation Failed");
   console.error(err);
   console.error("---");
-  process.exit(1);
 });
