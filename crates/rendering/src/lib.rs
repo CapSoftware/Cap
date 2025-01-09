@@ -217,11 +217,8 @@ pub async fn render_video_to_channel(
 
     loop {
         if frame_number >= total_frames {
-            println!("Reached total frames: {frame_number}/{total_frames}");
             break;
         }
-
-        println!("Processing frame {frame_number}/{total_frames}");
 
         let (time, segment_i) = if let Some(timeline) = &project.timeline {
             match timeline.get_recording_time(frame_number as f64 / 30_f64) {
@@ -236,10 +233,6 @@ pub async fn render_video_to_channel(
         let frame_time = frame_number;
         let Some((screen_frame, camera_frame)) = segment.decoders.get_frames(frame_time).await
         else {
-            println!(
-                "No frames available for time {} (frame {})",
-                time, frame_time
-            );
             break;
         };
 
@@ -257,23 +250,13 @@ pub async fn render_video_to_channel(
         .await?;
 
         if frame.width == 0 || frame.height == 0 {
-            println!("Skipping frame with zero dimensions");
             continue;
         }
 
-        println!(
-            "Rendering: Sending frame {} (size: {}x{}, time: {}, segment: {})",
-            frame_number,
-            frame.width,
-            frame.height,
-            time,
-            segment_i.unwrap()
-        );
         sender.send(frame).await?;
         frame_number += 1;
     }
 
-    println!("Render loop exited at frame {frame_number}/{total_frames}");
     let total_time = start_time.elapsed();
     println!(
         "Render complete. Processed {frame_number} frames in {:?} seconds",
