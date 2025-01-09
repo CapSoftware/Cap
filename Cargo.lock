@@ -966,6 +966,7 @@ dependencies = [
  "futures",
  "futures-intrusive",
  "image 0.25.5",
+ "log",
  "nix 0.29.0",
  "pretty_assertions",
  "serde",
