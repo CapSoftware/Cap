@@ -5,4 +5,7 @@ edition = "2021"
 
 [dependencies]
 serde = "1.0.214"
+# TODO(Ilya): remove when specta releases rc.21
 specta.workspace = true
+
+specta-util.workspace = true

@@ -1908,8 +1908,22 @@ pub async fn run() {
 
     #[cfg(target_os = "macos")]
     {
-        builder = builder.plugin(tauri_nspanel::init()).plugin(
-            // TODO(Ilya): Also enable for Windows when Tao is updated to `0.31.0`
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_oauth::init())
+        .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(flags::plugin::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({
                     use tauri_plugin_window_state::StateFlags;
@@ -1929,21 +1943,7 @@ pub async fn run() {
                     _ => label,
                 })
                 .build(),
-        );
-    }
-
-    builder
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_oauth::init())
-        .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(flags::plugin::init())
-        .plugin(tauri_plugin_deep_link::init())
+        )
         .invoke_handler({
             let handler = specta_builder.invoke_handler();
 

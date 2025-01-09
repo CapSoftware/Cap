@@ -9,6 +9,8 @@ bytemuck = { version = "1.7", features = ["derive"] }
 futures-intrusive = "0.5.0"
 serde = "1.0.209"
 specta.workspace = true
+# TODO(Ilya): remove when specta releases rc.21
+specta-util.workspace = true
 wgpu.workspace = true
 image = "0.25.2"
 cap-project = { path = "../project" }

@@ -853,6 +853,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "specta",
+ "specta-util",
 ]
 
 [[package]]
@@ -891,6 +892,7 @@ dependencies = [
  "screencapturekit",
  "serde",
  "specta",
+ "specta-util",
  "tempfile",
  "thiserror 1.0.63",
  "tokio",
@@ -907,6 +909,7 @@ dependencies = [
  "serde",
  "serde_json",
  "specta",
+ "specta-util",
 ]
 
 [[package]]
@@ -926,6 +929,7 @@ dependencies = [
  "serde",
  "serde_json",
  "specta",
+ "specta-util",
  "thiserror 1.0.63",
  "tokio",
  "tracing",
@@ -951,6 +955,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "specta",
+ "specta-util",
  "thiserror 1.0.63",
  "tokio",
  "wgpu",
@@ -1947,6 +1952,7 @@ dependencies = [
  "serde_json",
  "specta",
  "specta-typescript",
+ "specta-util",
  "swift-rs",
  "tauri",
  "tauri-build",

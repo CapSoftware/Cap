@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-specta = { workspace = true, features = ["derive"] }
+specta.workspace = true
+# TODO(Ilya): remove when specta releases rc.21
+specta-util.workspace = true
+
 serde = { version = "1.0.209", features = ["derive"] }
 serde_json = "1.0.127"
 either = "1.13.0"

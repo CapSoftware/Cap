@@ -9,6 +9,8 @@ cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
 
 specta.workspace = true
+# TODO(Ilya): remove when specta releases rc.21
+specta-util.workspace = true
 tokio.workspace = true
 flume.workspace = true
 thiserror.workspace = true
