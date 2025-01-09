@@ -398,16 +398,18 @@ fn create_screen_capture(
     {
         ScreenCaptureSource::<cap_media::sources::CMSampleBufferCapture>::init(
             dbg!(&recording_options.capture_target),
+            recording_options.output_resolution.clone(),
             None,
-            None,
+            recording_options.fps,
         )
     }
     #[cfg(not(target_os = "macos"))]
     {
         ScreenCaptureSource::<cap_media::sources::AVFrameCapture>::init(
             dbg!(&recording_options.capture_target),
+            recording_options.output_resolution.clone(),
             None,
-            None,
+            recording_options.fps,
         )
     }
 }
@@ -448,7 +450,6 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
         let mic_config = mic_source.info();
         audio_output_path = Some(dir.join("audio-input.mp3"));
 
-        // let mic_filter = AudioFilter::init("microphone", mic_config, "aresample=async=1:min_hard_comp=0.100000:first_pts=0")?;
         let mic_encoder = MP3Encoder::init(
             "microphone",
             mic_config,
@@ -457,13 +458,12 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
         pipeline_builder = pipeline_builder
             .source("microphone_capture", mic_source)
-            // .pipe("microphone_filter", mic_filter)
             .sink("microphone_encoder", mic_encoder);
     }
 
     if let Some(camera_source) = camera_feed.map(CameraSource::init) {
         let camera_config = camera_source.info();
-        let output_config = camera_config.scaled(1920, 30);
+        let output_config = camera_config.scaled(1280_u32, 30_u32);
         camera_output_path = Some(dir.join("camera.mp4"));
 
         let camera_filter = VideoFilter::init("camera", camera_config, output_config)?;
@@ -531,11 +531,9 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         output_path: impl Into<PathBuf>,
     ) -> Result<CapturePipelineBuilder, MediaError> {
         let screen_config = source.info();
-
-        let output_config = screen_config.scaled(1920, 30);
         let screen_encoder = cap_media::encoders::H264AVAssetWriterEncoder::init(
             "screen",
-            output_config,
+            screen_config,
             Output::File(output_path.into()),
         )?;
 
@@ -555,12 +553,9 @@ impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
         Self: Sized,
     {
         let screen_config = source.info();
-        // let screen_bounds = screen_source.bounds;
-
-        let output_config = screen_config.scaled(1920, 30);
-        let screen_filter = VideoFilter::init("screen", screen_config, output_config)?;
+        let screen_filter = VideoFilter::init("screen", screen_config, screen_config)?;
         let screen_encoder =
-            H264Encoder::init("screen", output_config, Output::File(output_path.into()))?;
+            H264Encoder::init("screen", screen_config, Output::File(output_path.into()))?;
         Ok(builder
             .source("screen_capture", source)
             .pipe("screen_capture_filter", screen_filter)

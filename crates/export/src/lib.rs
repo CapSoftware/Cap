@@ -5,14 +5,16 @@ use cap_media::{
     feeds::{AudioData, AudioFrameBuffer},
     MediaError,
 };
-use cap_project::{ProjectConfiguration, RecordingMeta};
+use cap_project::{GeneralSettingsStore, ProjectConfiguration, RecordingMeta};
 use cap_rendering::{
     ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants, RenderedFrame,
     SegmentVideoPaths,
 };
+use ffmpeg::Rational;
 use futures::FutureExt;
 use image::{ImageBuffer, Rgba};
 use std::{path::PathBuf, sync::Arc};
+use tauri::AppHandle;
 
 const FPS: u32 = 30;
 
@@ -51,6 +53,7 @@ where
     TOnProgress: Fn(u32) + Send + 'static,
 {
     pub fn new(
+        app: &AppHandle,
         project: ProjectConfiguration,
         output_path: PathBuf,
         on_progress: TOnProgress,
@@ -59,6 +62,24 @@ where
         render_constants: Arc<RenderVideoConstants>,
         segments: &[Segment],
     ) -> Result<Self, ExportError> {
+        let recording_config = GeneralSettingsStore::get(app)
+            .map_err(|e| ExportError::FFmpeg(e))?
+            .and_then(|s| Some(s.recording_config))
+            .flatten()
+            .unwrap_or_default();
+
+        let display_info = match &meta.content {
+            cap_project::Content::SingleSegment { segment } => &segment.display,
+            cap_project::Content::MultipleSegments { inner } => &inner.segments[0].display,
+        };
+
+        let output_config = VideoInfo::from_raw(
+            RawVideoFormat::Rgba,
+            recording_config.resolution.width,
+            recording_config.resolution.height,
+            recording_config.fps,
+        );
+
         let output_folder = output_path.parent().unwrap();
         std::fs::create_dir_all(output_folder)?;
 

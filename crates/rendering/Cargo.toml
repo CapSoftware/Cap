@@ -15,6 +15,7 @@ wgpu.workspace = true
 image = "0.25.2"
 cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
+cap-recording = { path = "../recording" }
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio.workspace = true
 ffmpeg.workspace = true

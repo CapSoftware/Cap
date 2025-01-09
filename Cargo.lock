@@ -829,9 +829,11 @@ dependencies = [
  "cap-project",
  "cap-rendering",
  "cap-utils",
+ "ffmpeg-next",
  "futures",
  "image 0.25.5",
  "mp4",
+ "tauri",
  "tempfile",
  "thiserror 1.0.63",
  "tokio",
@@ -910,6 +912,8 @@ dependencies = [
  "serde_json",
  "specta",
  "specta-util",
+ "tauri",
+ "tauri-plugin-store",
 ]
 
 [[package]]
@@ -945,6 +949,7 @@ dependencies = [
  "bytemuck",
  "cap-flags",
  "cap-project",
+ "cap-recording",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",

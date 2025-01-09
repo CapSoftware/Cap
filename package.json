@@ -2,8 +2,8 @@
   "type": "module",
   "scripts": {
     "build": "dotenv -e .env -- turbo run build",
-    "dev": "(cd apps/web && docker compose up -d && cd ../..) && dotenv -e .env -- pnpm --dir packages/database db:generate && dotenv -e .env -- pnpm --dir packages/database db:push && dotenv -e .env -- turbo run dev --no-cache --concurrency 12",
-    "dev:manual": "dotenv -e .env -- turbo run dev --no-cache --concurrency 1",
+    "dev": "(cd apps/web && docker compose up -d && cd ../..) && dotenv -e .env -- pnpm --dir packages/database db:generate && dotenv -e .env -- pnpm --dir packages/database db:push && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 12",
+    "dev:manual": "dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",

@@ -25,12 +25,12 @@ use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
-use cap_project::{Content, ProjectConfiguration, RecordingMeta, SharingMeta};
+use cap_project::{Content, ProjectConfiguration, RecordingMeta, Resolution, SharingMeta};
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
-use general_settings::GeneralSettingsStore;
+use general_settings::{GeneralSettingsStore, RecordingConfig};
 use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
@@ -383,8 +383,19 @@ type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
 #[tauri::command]
 #[specta::specta]
-async fn get_recording_options(state: MutableState<'_, App>) -> Result<RecordingOptions, ()> {
+async fn get_recording_options(
+    app: AppHandle,
+    state: MutableState<'_, App>,
+) -> Result<RecordingOptions, ()> {
     let mut state = state.write().await;
+
+    // Load settings from disk if they exist
+    if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
+        if let Some(config) = settings.recording_config {
+            state.start_recording_options.fps = config.fps;
+            state.start_recording_options.output_resolution = Some(config.resolution);
+        }
+    }
 
     // If there's a saved audio input but no feed, initialize it
     if let Some(audio_input_name) = state.start_recording_options.audio_input_name() {
@@ -407,14 +418,27 @@ async fn get_recording_options(state: MutableState<'_, App>) -> Result<Recording
 #[tauri::command]
 #[specta::specta]
 async fn set_recording_options(
+    app: AppHandle,
     state: MutableState<'_, App>,
     options: RecordingOptions,
 ) -> Result<(), String> {
+    // Update in-memory state
     state
         .write()
         .await
-        .set_start_recording_options(options)
+        .set_start_recording_options(options.clone())
         .await?;
+
+    // Update persistent settings
+    GeneralSettingsStore::update(&app, |settings| {
+        settings.recording_config = Some(RecordingConfig {
+            fps: options.fps,
+            resolution: options.output_resolution.unwrap_or_else(|| Resolution {
+                width: 1920,
+                height: 1080,
+            }),
+        });
+    })?;
 
     Ok(())
 }
@@ -1856,6 +1880,7 @@ pub async fn run() {
             global_message_dialog,
             show_window,
             write_clipboard_string,
+            get_editor_total_frames,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1989,11 +2014,13 @@ pub async fn run() {
                     audio_input_feed: None,
                     start_recording_options: RecordingOptions {
                         capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
-                            id: 1,
-                            name: "Default".to_string(),
+                            id: 0,
+                            name: String::new(),
                         }),
                         camera_label: None,
                         audio_input_name: None,
+                        fps: 30,
+                        output_resolution: None,
                     },
                     current_recording: None,
                     pre_created_video: None,
@@ -2353,3 +2380,15 @@ trait EventExt: tauri_specta::Event {
 }
 
 impl<T: tauri_specta::Event> EventExt for T {}
+
+#[tauri::command(async)]
+#[specta::specta]
+async fn get_editor_total_frames(app: AppHandle, video_id: String) -> Result<u32, String> {
+    let editor_instances = app.state::<EditorInstancesState>();
+    let instances = editor_instances.lock().await;
+
+    let instance = instances
+        .get(&video_id)
+        .ok_or_else(|| "Editor instance not found".to_string())?;
+    Ok(instance.get_total_frames())
+}

@@ -1,12 +1,16 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
+use cap_media::data::RawVideoFormat;
+use cap_media::data::VideoInfo;
 use cap_media::feeds::AudioData;
 use cap_media::frame_ws::create_frame_ws;
+use cap_project::RecordingConfig;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
     RenderVideoConstants, SegmentVideoPaths,
 };
+use ffmpeg::Rational;
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
 use std::time::Instant;
@@ -31,6 +35,7 @@ pub struct EditorInstance {
     ),
     ws_shutdown: Arc<StdMutex<Option<mpsc::Sender<()>>>>,
     pub segments: Arc<Vec<Segment>>,
+    pub total_frames: u32,
 }
 
 impl EditorInstance {
@@ -55,13 +60,16 @@ impl EditorInstance {
 
         if !project_path.exists() {
             println!("Video path {} not found!", project_path.display());
-            // return Err(format!("Video path {} not found!", path.display()));
             panic!("Video path {} not found!", project_path.display());
         }
 
         let meta = cap_project::RecordingMeta::load_for_project(&project_path).unwrap();
-
         let recordings = ProjectRecordings::new(&meta);
+
+        // Calculate total frames based on actual video duration and fps
+        let duration = recordings.duration();
+        let fps = recordings.segments[0].display.fps();
+        let total_frames = (duration * fps as f64).round() as u32;
 
         let render_options = RenderOptions {
             screen_size: XY::new(
@@ -111,6 +119,7 @@ impl EditorInstance {
             project_config: watch::channel(meta.project_config()),
             ws_shutdown: Arc::new(StdMutex::new(Some(ws_shutdown))),
             segments: Arc::new(segments),
+            total_frames,
         });
 
         this.state.lock().await.preview_task =
@@ -267,6 +276,10 @@ impl EditorInstance {
             }
         })
     }
+
+    pub fn get_total_frames(&self) -> u32 {
+        self.total_frames
+    }
 }
 
 impl Drop for EditorInstance {
@@ -342,4 +355,17 @@ pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
             segments
         }
     }
+}
+
+fn create_preview_config(recording_config: &RecordingConfig, meta: &RecordingMeta) -> VideoInfo {
+    let (width, height) = if recording_config.resolution.width > 1280 {
+        (1280, 720)
+    } else {
+        (
+            recording_config.resolution.width,
+            recording_config.resolution.height,
+        )
+    };
+
+    VideoInfo::from_raw(RawVideoFormat::Rgba, width, height, 30)
 }
