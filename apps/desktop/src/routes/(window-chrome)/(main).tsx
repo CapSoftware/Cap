@@ -108,20 +108,28 @@ export default function () {
     // Enforce window size with multiple safeguards
     const currentWindow = await getCurrentWindow();
     const MAIN_WINDOW_SIZE = { width: 300, height: 360 };
-    
+
     // Set initial size
-    currentWindow.setSize(new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height));
-    
+    currentWindow.setSize(
+      new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+    );
+
     // Check size when app regains focus
-    const unlistenFocus = await currentWindow.onFocusChanged(({ payload: focused }) => {
+    const unlistenFocus = await currentWindow.onFocusChanged(
+      ({ payload: focused }) => {
         if (focused) {
-            currentWindow.setSize(new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height));
+          currentWindow.setSize(
+            new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+          );
         }
-    });
-    
+      }
+    );
+
     // Listen for resize events
     const unlistenResize = await currentWindow.onResized(() => {
-        currentWindow.setSize(new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height));
+      currentWindow.setSize(
+        new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+      );
     });
 
     setTitlebar("hideMaximize", true);
@@ -145,8 +153,8 @@ export default function () {
     );
 
     onCleanup(() => {
-        unlistenFocus();
-        unlistenResize();
+      unlistenFocus();
+      unlistenResize();
     });
   });
 
@@ -174,26 +182,24 @@ export default function () {
           </span>
         </div>
         <div class="flex items-center space-x-2">
-          {window.FLAGS.customS3 && (
-            <Tooltip.Root openDelay={0}>
-              <Tooltip.Trigger>
-                <button
-                  type="button"
-                  onClick={() =>
-                    commands.showWindow({ Settings: { page: "apps" } })
-                  }
-                >
-                  <IconLucideLayoutGrid class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-[--gray-500] rounded shadow-lg animate-in fade-in duration-100">
-                  Cap Apps
-                  <Tooltip.Arrow class="fill-[--gray-500]" />
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
-          )}
+          <Tooltip.Root openDelay={0}>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                onClick={() =>
+                  commands.showWindow({ Settings: { page: "apps" } })
+                }
+              >
+                <IconLucideLayoutGrid class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-[--gray-500] rounded shadow-lg animate-in fade-in duration-100">
+                Cap Apps
+                <Tooltip.Arrow class="fill-[--gray-500]" />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
           <Tooltip.Root openDelay={0}>
             <Tooltip.Trigger>
               <button
