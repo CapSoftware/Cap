@@ -11,23 +11,12 @@ mod platform_impl;
 
 pub use platform_impl::*;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, Type)]
 pub struct Bounds {
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
-}
-
-impl Default for Bounds {
-    fn default() -> Self {
-        Bounds {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-        }
-    }
 }
 
 #[derive(Debug)]
