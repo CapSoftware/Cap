@@ -152,6 +152,7 @@ impl App {
                 match options.capture_target {
                     ScreenCaptureTarget::Screen(screen) => screen.name,
                     ScreenCaptureTarget::Window(window) => window.owner_name,
+                    ScreenCaptureTarget::Area(area) => area.screen.name,
                 }
                 .into(),
             );
