@@ -167,11 +167,10 @@ export default function () {
                 await commands.showWindow("Upgrade");
               }
             }}
-            class={`text-[0.625rem] ${
-              isUpgraded()
-                ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
-                : "bg-gray-200 cursor-pointer hover:bg-gray-300"
-            } rounded-lg px-1.5 py-0.5`}
+            class={`text-[0.625rem] ${isUpgraded()
+              ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
+              : "bg-gray-200 cursor-pointer hover:bg-gray-300"
+              } rounded-lg px-1.5 py-0.5`}
           >
             {isUpgraded() ? "Pro" : "Free"}
           </span>
@@ -296,6 +295,8 @@ import titlebarState, { setTitlebar } from "~/utils/titlebar-state";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { checkIsUpgradedAndUpdate } from "~/utils/plans";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
+import { Transition } from "solid-transition-group";
+import { getAllWebviewWindows, getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -327,64 +328,182 @@ function TargetSelects(props: {
 }) {
   const screens = createQuery(() => listScreens);
   const windows = createQuery(() => listWindows);
+  const [selectedScreen, setSelectedScreen] = createSignal<CaptureScreen | null>(
+    screens?.data?.[0] ?? null
+  );
+
+  const isTargetScreenOrArea = createMemo(() =>
+    props.options?.captureTarget.variant === "screen" || props.options?.captureTarget.variant === "area"
+  );
+  const isTargetCaptureArea = createMemo(() =>
+    props.options?.captureTarget.variant === "area"
+  );
+
+  const [areaSelection, setAreaSelection] = createStore({
+    pending: false,
+    screen: selectedScreen(),
+  });
+
+  async function closeAreaSelection() {
+    setAreaSelection({ pending: false, screen: null });
+    (await WebviewWindow.getByLabel("capture-area"))?.close();
+  };
+
+  onMount(async () => {
+    const unlistenCaptureAreaWindow = await getCurrentWebviewWindow().listen<boolean>(
+      "cap-window://capture-area/state/pending",
+      (event) => setAreaSelection("pending", event.payload)
+    );
+    onCleanup(unlistenCaptureAreaWindow);
+  });
+
+  let shouldAnimateAreaSelect = false;
+  createEffect(async () => {
+    const target = props.options?.captureTarget;
+    if (!target) return;
+
+    if (target.variant === "screen") {
+      if (target.id !== areaSelection.screen?.id) {
+        closeAreaSelection();
+      }
+      setSelectedScreen(target);
+    }
+    else if (target.variant === "window") {
+      if (areaSelection.screen) closeAreaSelection();
+      shouldAnimateAreaSelect = true;
+    };
+  });
+
+  async function handleAreaSelectButtonClick() {
+    const targetScreen = selectedScreen();
+    if (!targetScreen) return;
+
+    closeAreaSelection();
+    if (isTargetCaptureArea() && props.options) {
+      commands.setRecordingOptions({
+        ...props.options,
+        captureTarget: { ...targetScreen, variant: "screen" },
+      });
+      return;
+    }
+
+    setAreaSelection({ pending: false, screen: targetScreen });
+    commands.showWindow({
+      CaptureArea: { screen: targetScreen }
+    });
+  }
 
   return (
-    <div class="flex flex-row items-center rounded-[0.5rem] relative border">
-      <div
-        class="w-1/2 absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden"
+    <div>
+      <Tooltip.Root openDelay={500}>
+        <Tooltip.Trigger class="fixed flex flex-row items-center w-8 h-8">
+          <Transition
+            onEnter={(el, done) => {
+              if (shouldAnimateAreaSelect) el.animate([
+                { transform: 'scale(0.5)', opacity: 0, width: '0px', height: '0px' },
+                { transform: 'scale(1)', opacity: 1, width: '2rem', height: '2rem' },
+              ], {
+                duration: 500,
+                easing: 'cubic-bezier(0.785, 0.135, 0.15, 0.86)',
+              }).finished.then(done);
+              shouldAnimateAreaSelect = true;
+            }}
+            onExit={(el, done) =>
+              el.animate([
+                { transform: 'scale(1)', opacity: 1, width: '2rem', height: '2rem' },
+                { transform: 'scale(0.2)', opacity: 0, width: '0px', height: '0px' },
+              ], {
+                duration: 420,
+                easing: 'ease-in-out'
+              }).finished.then(done)
+            }
+          >
+            {isTargetScreenOrArea() && (
+              <button
+                type="button"
+                disabled={!isTargetScreenOrArea()}
+                onClick={handleAreaSelectButtonClick}
+                class={cx(
+                  "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
+                  "hover:bg-gray-200 disabled:bg-gray-100 disabled:text-gray-400",
+                  "focus-visible:outline font-[200] text-[0.875rem]",
+                  isTargetCaptureArea() ? "bg-gray-100 text-blue-400 border border-blue-200" : "bg-gray-100 text-gray-400",
+                )}
+              >
+                <IconCapCrop class={`w-[1rem] h-[1rem] ${areaSelection.pending ? "animate-gentle-bounce duration-1000 text-gray-500" : ""}`} />
+              </button>
+            )}
+          </Transition>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+            {isTargetCaptureArea() ? "Remove selection" : areaSelection.pending ? "Selecting area..." : "Select area"}
+            <Tooltip.Arrow class="fill-gray-500" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+
+      <div class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${isTargetScreenOrArea() ? "ml-[2.4rem]" : ""}`}
         style={{
-          transform:
-            props.options?.captureTarget.variant === "window"
-              ? "translateX(100%)"
-              : undefined,
+          "transition-timing-function": "cubic-bezier(0.785, 0.135, 0.15, 0.86)",
         }}
       >
-        <div class="bg-gray-100 flex-1" />
+        <div
+          class="w-1/2 absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden"
+          style={{
+            transform:
+              props.options?.captureTarget.variant === "window"
+                ? "translateX(100%)"
+                : undefined,
+          }}
+        >
+          <div class="bg-gray-100 flex-1" />
+        </div>
+        <TargetSelect<CaptureScreen>
+          options={screens.data ?? []}
+          onChange={(value) => {
+            if (!value || !props.options) return;
+
+            commands.setRecordingOptions({
+              ...props.options,
+              captureTarget: { ...value, variant: "screen" },
+            });
+          }}
+          value={
+            props.options?.captureTarget.variant === "screen"
+              ? props.options.captureTarget
+              : null
+          }
+          placeholder="Screen"
+          optionsEmptyText="No screens found"
+          selected={isTargetScreenOrArea()}
+        />
+        <TargetSelect<CaptureWindow>
+          options={windows.data ?? []}
+          onChange={(value) => {
+            if (!props.options) return;
+
+            commands.setRecordingOptions({
+              ...props.options,
+              captureTarget: { ...value, variant: "window" },
+            });
+          }}
+          value={
+            props.options?.captureTarget.variant === "window"
+              ? props.options.captureTarget
+              : null
+          }
+          placeholder="Window"
+          optionsEmptyText="No windows found"
+          selected={props.options?.captureTarget.variant === "window"}
+          itemComponent={(props) => (
+            <div class="flex-1 flex flex-col overflow-x-hidden">
+              <div class="w-full truncate">{props.item.rawValue?.name}</div>
+              <div class="w-full text-xs">{props.item.rawValue?.owner_name}</div>
+            </div>
+          )}
+        />
       </div>
-      <TargetSelect<CaptureScreen>
-        options={screens.data ?? []}
-        onChange={(value) => {
-          if (!value || !props.options) return;
-
-          commands.setRecordingOptions({
-            ...props.options,
-            captureTarget: { ...value, variant: "screen" },
-          });
-        }}
-        value={
-          props.options?.captureTarget.variant === "screen"
-            ? props.options.captureTarget
-            : null
-        }
-        placeholder="Screen"
-        optionsEmptyText="No screens found"
-        selected={props.options?.captureTarget.variant === "screen"}
-      />
-      <TargetSelect<CaptureWindow>
-        options={windows.data ?? []}
-        onChange={(value) => {
-          if (!props.options) return;
-
-          commands.setRecordingOptions({
-            ...props.options,
-            captureTarget: { ...value, variant: "window" },
-          });
-        }}
-        value={
-          props.options?.captureTarget.variant === "window"
-            ? props.options.captureTarget
-            : null
-        }
-        placeholder="Window"
-        optionsEmptyText="No windows found"
-        selected={props.options?.captureTarget.variant === "window"}
-        itemComponent={(props) => (
-          <div class="flex-1 flex flex-col overflow-x-hidden">
-            <div class="w-full truncate">{props.item.rawValue?.name}</div>
-            <div class="w-full text-xs">{props.item.rawValue?.owner_name}</div>
-          </div>
-        )}
-      />
     </div>
   );
 }
@@ -704,16 +823,16 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
         as={
           props.options.length <= 1
             ? (p) => (
-                <button
-                  onClick={() => {
-                    props.onChange(props.options[0]);
-                  }}
-                  data-selected={props.selected}
-                  class={p.class}
-                >
-                  <span class="truncate">{props.placeholder}</span>
-                </button>
-              )
+              <button
+                onClick={() => {
+                  props.onChange(props.options[0]);
+                }}
+                data-selected={props.selected}
+                class={p.class}
+              >
+                <span class="truncate">{props.placeholder}</span>
+              </button>
+            )
             : undefined
         }
         class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
@@ -787,8 +906,8 @@ function TargetSelectInfoPill<T>(props: {
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-        ? "On"
-        : "Off"}
+          ? "On"
+          : "Off"}
     </button>
   );
 }
