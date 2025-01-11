@@ -1,6 +1,5 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import {
-  batch,
   createMemo,
   createRoot,
   createSignal,
@@ -9,9 +8,10 @@ import {
   onMount,
   type ParentProps,
 } from "solid-js";
-import { type Crop } from "~/utils/tauri";
+import { XY, type Crop } from "~/utils/tauri";
 import AreaOccluder from "./AreaOccluder";
 import type { SetStoreFunction } from "solid-js/store";
+import { Box } from "~/utils/box";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -41,53 +41,36 @@ export default function (
     cropStore: [crop: Crop, setCrop: SetStoreFunction<Crop>];
     mappedSize?: { x: number; y: number };
     minSize?: { x: number; y: number };
+    aspectRatio?: number;
   }>
 ) {
   const [crop, setCrop] = props.cropStore;
   const minSize = props.minSize || { x: 50, y: 50 };
-  const [containerSize, setContainerSize] = createSignal({ x: 0, y: 0 });
-  const mappedSize = createMemo(() => props.mappedSize || containerSize());
-
-  // Convert between screen coordinates and container coordinates
-  const scaledCrop = createMemo(() => {
-    const mapped = mappedSize();
-    const container = containerSize();
-    return {
-      position: {
-        x: (crop.position.x / mapped.x) * container.x,
-        y: (crop.position.y / mapped.y) * container.y,
-      },
-      size: {
-        x: (crop.size.x / mapped.x) * container.x,
-        y: (crop.size.y / mapped.y) * container.y,
-      },
-    };
+  const [containerSize, setContainerSize] = createSignal({
+    x: window.innerWidth,
+    y: window.innerHeight,
   });
+  const mappedSize = createMemo(() => props.mappedSize || containerSize());
 
   let containerRef: HTMLDivElement | undefined;
   onMount(() => {
     if (!containerRef) return;
 
-    const rect = containerRef.getBoundingClientRect();
-    setContainerSize({ x: rect.width, y: rect.height });
+    const handleResize = () => {
+      setContainerSize({ x: window.innerWidth, y: window.innerHeight });
+    };
+    window.addEventListener("resize", handleResize);
+    onCleanup(() => window.removeEventListener("resize", handleResize));
 
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.target === containerRef) {
-          setContainerSize({
-            x: entry.contentRect.width,
-            y: entry.contentRect.height,
-          });
-        }
-      }
-    });
-    resizeObserver.observe(containerRef);
-    onCleanup(() => resizeObserver.disconnect());
-
-    // Set initial crop area to center
     const mapped = mappedSize();
-    const width = Math.min(mapped.x / 2, mapped.x - minSize.x);
-    const height = Math.min(mapped.y / 2, mapped.y - minSize.y);
+    let width = Math.min(mapped.x / 2, mapped.x - minSize.x);
+    let height = Math.min(mapped.y / 2, mapped.y - minSize.y);
+
+    const ratio = props.aspectRatio;
+    if (ratio) {
+      if (width / height > ratio) width = height * ratio;
+      else height = width / ratio;
+    }
 
     setCrop({
       size: { x: width, y: height },
@@ -100,26 +83,18 @@ export default function (
 
   const [isDragging, setIsDragging] = createSignal(false);
 
-  const styles = createMemo(() => {
-    const scaled = scaledCrop();
-    return {
-      transform: `translate(${scaled.position.x}px, ${scaled.position.y}px)`,
-      width: `${scaled.size.x}px`,
-      height: `${scaled.size.y}px`,
-      cursor: isDragging() ? "grabbing" : "grab",
-    };
-  });
+  const styles = createMemo(() => ({
+    transform: `translate(${crop.position.x}px, ${crop.position.y}px)`,
+    width: `${crop.size.x}px`,
+    height: `${crop.size.y}px`,
+    cursor: isDragging() ? "grabbing" : "grab",
+  }));
 
   function handleDragStart(event: MouseEvent) {
     event.stopPropagation();
     setIsDragging(true);
-    const prev = Object.assign(
-      {},
-      {
-        position: Object.assign({}, crop.position),
-        size: Object.assign({}, crop.size),
-      }
-    );
+    let lastValidPos = { x: event.clientX, y: event.clientY };
+    const box = Box.from(crop.position, crop.size);
 
     createRoot((dispose) => {
       const mapped = mappedSize();
@@ -129,13 +104,30 @@ export default function (
           dispose();
         },
         mousemove: (e) => {
-          const dx = ((e.clientX - event.clientX) / mapped.x) * mapped.x;
-          const dy = ((e.clientY - event.clientY) / mapped.y) * mapped.y;
+          const dx = e.clientX - lastValidPos.x;
+          const dy = e.clientY - lastValidPos.y;
 
-          setCrop("position", {
-            x: clamp(prev.position.x + dx, 0, mapped.x - crop.size.x),
-            y: clamp(prev.position.y + dy, 0, mapped.y - crop.size.y),
-          });
+          box.move(
+            clamp(
+              box.toPositionAndSize().position.x + dx,
+              0,
+              mapped.x - box.width()
+            ),
+            clamp(
+              box.toPositionAndSize().position.y + dy,
+              0,
+              mapped.y - box.height()
+            )
+          );
+
+          const newBox = box.toPositionAndSize();
+          if (
+            newBox.position.x !== crop.position.x ||
+            newBox.position.y !== crop.position.y
+          ) {
+            lastValidPos = { x: e.clientX, y: e.clientY };
+            setCrop(newBox);
+          }
         },
       });
     });
@@ -143,64 +135,67 @@ export default function (
 
   function handleResizeStart(event: MouseEvent, handle: HandleSide) {
     event.stopPropagation();
-    const startPos = { x: event.clientX, y: event.clientY };
-    const startCrop = { ...crop };
+    const dir = handle.direction;
+    const origin: XY<number> = {
+      x: dir.includes("w") ? 1 : 0,
+      y: dir.includes("n") ? 1 : 0,
+    };
+    let lastValidPos = { x: event.clientX, y: event.clientY };
+    const box = Box.from(crop.position, crop.size);
 
     createRoot((dispose) => {
       const mapped = mappedSize();
       createEventListenerMap(window, {
         mouseup: dispose,
         mousemove: (e) => {
-          const dx =
-            ((e.clientX - startPos.x) / containerRef!.clientWidth) * mapped.x;
-          const dy =
-            ((e.clientY - startPos.y) / containerRef!.clientHeight) * mapped.y;
+          const dx = e.clientX - lastValidPos.x;
+          const dy = e.clientY - lastValidPos.y;
 
-          let newSize = { ...startCrop.size };
-          let newPos = { ...startCrop.position };
+          const currentBox = box.toPositionAndSize();
+          let newWidth = currentBox.size.x;
+          let newHeight = currentBox.size.y;
 
-          if (handle.direction.includes("w")) {
-            newSize.x = clamp(
-              startCrop.size.x - dx,
+          if (dir.includes("e") || dir.includes("w")) {
+            newWidth = clamp(
+              dir.includes("w")
+                ? currentBox.size.x - dx
+                : currentBox.size.x + dx,
               minSize.x,
-              startCrop.position.x + startCrop.size.x
+              mapped.x
             );
-            newPos.x = clamp(
-              startCrop.position.x + dx,
-              0,
-              startCrop.position.x + startCrop.size.x - minSize.x
-            );
-          } else if (handle.direction.includes("e")) {
-            newSize.x = clamp(
-              startCrop.size.x + dx,
-              minSize.x,
-              mapped.x - startCrop.position.x
+          }
+          if (dir.includes("n") || dir.includes("s")) {
+            newHeight = clamp(
+              dir.includes("n")
+                ? currentBox.size.y - dy
+                : currentBox.size.y + dy,
+              minSize.y,
+              mapped.y
             );
           }
 
-          if (handle.direction.includes("n")) {
-            newSize.y = clamp(
-              startCrop.size.y - dy,
-              minSize.y,
-              startCrop.position.y + startCrop.size.y
-            );
-            newPos.y = clamp(
-              startCrop.position.y + dy,
-              0,
-              startCrop.position.y + startCrop.size.y - minSize.y
-            );
-          } else if (handle.direction.includes("s")) {
-            newSize.y = clamp(
-              startCrop.size.y + dy,
-              minSize.y,
-              mapped.y - startCrop.position.y
+          box.resize(newWidth, newHeight, origin);
+
+          if (props.aspectRatio) {
+            box.constrainToRatio(
+              props.aspectRatio,
+              origin,
+              dir.includes("n") || dir.includes("s") ? "width" : "height"
             );
           }
 
-          setCrop({
-            position: newPos,
-            size: newSize,
-          });
+          box.constrainToBoundary(mapped.x, mapped.y, origin);
+
+          const newBox = box.toPositionAndSize();
+          if (
+            newBox.size.x !== crop.size.x ||
+            newBox.size.y !== crop.size.y ||
+            newBox.position.x !== crop.position.x ||
+            newBox.position.y !== crop.position.y
+          ) {
+            lastValidPos = { x: e.clientX, y: e.clientY };
+            setCrop(newBox);
+          }
         },
       });
     });
@@ -208,7 +203,6 @@ export default function (
 
   return (
     <div ref={containerRef} class="relative h-full w-full overflow-hidden">
-      <div class="-z-10">{props.children}</div>
       <AreaOccluder
         bounds={{
           x: crop.position.x,
@@ -216,6 +210,8 @@ export default function (
           width: crop.size.x,
           height: crop.size.y,
         }}
+        borderRadius={0}
+        guideLines={true}
       >
         {props.children}
       </AreaOccluder>

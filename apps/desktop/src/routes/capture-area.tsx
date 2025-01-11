@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { createSignal, onCleanup, onMount } from "solid-js";
 import { createOptionsQuery } from "~/utils/queries";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Cropper from "~/components/Cropper";
@@ -87,7 +87,7 @@ export default function CaptureArea() {
         </div>
       </div>
 
-      <Cropper cropStore={[crop, setCrop]} />
+      <Cropper cropStore={[crop, setCrop]} aspectRatio={4 / 3} />
     </div>
   );
 }
