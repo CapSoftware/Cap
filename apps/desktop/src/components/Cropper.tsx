@@ -1,17 +1,18 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import {
+  type ParentProps,
   createMemo,
   createRoot,
   createSignal,
   For,
   onCleanup,
   onMount,
-  type ParentProps,
+  Show,
 } from "solid-js";
-import { XY, type Crop } from "~/utils/tauri";
 import AreaOccluder from "./AreaOccluder";
+import Box from "~/utils/box";
+import type { XY, Crop } from "~/utils/tauri";
 import type { SetStoreFunction } from "solid-js/store";
-import { Box } from "~/utils/box";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -42,6 +43,7 @@ export default function (
     mappedSize?: { x: number; y: number };
     minSize?: { x: number; y: number };
     aspectRatio?: number;
+    showGuideLines?: boolean;
   }>
 ) {
   const [crop, setCrop] = props.cropStore;
@@ -211,15 +213,22 @@ export default function (
           height: crop.size.y,
         }}
         borderRadius={0}
-        guideLines={true}
+        // guideLines={true}
       >
         {props.children}
       </AreaOccluder>
       <div
-        class="absolute bg-transparent border-2 border-white shadow-lg"
+        class="absolute bg-transparent border-dashed border"
         style={styles()}
         onMouseDown={handleDragStart}
       >
+        <Show when={props.showGuideLines}>
+          <div class="*:border-dashed *:border *:opacity-50 *:absolute border-[#eee]">
+            <div class="border-b-[1px] border-t-[1px] left-0 w-full h-[calc(100%/3)] top-[calc(100%/3)]" />
+            <div class="border-l-[1px] border-r-[1px] left-[calc(100%/3)] w-[calc(100%/3)] h-full top-0" />
+          </div>
+        </Show>
+
         <For each={HANDLES}>
           {(handle) => {
             const isCorner = handle.x !== "c" && handle.y !== "c";

@@ -3,7 +3,7 @@
 
 import type { XY } from "./tauri";
 
-export class Box {
+export default class Box {
   private x1: number;
   private y1: number;
   private x2: number;
@@ -100,10 +100,6 @@ export class Box {
     origin: XY<number>
   ): Box {
     const originPoint = this.getAbsolutePoint(origin);
-    const maxIfLeft = originPoint.x;
-    const maxIfTop = originPoint.y;
-    const maxIfRight = boundaryWidth - originPoint.x;
-    const maxIfBottom = boundaryHeight - originPoint.y;
 
     const directionX = -2 * origin.x + 1;
     const directionY = -2 * origin.y + 1;
@@ -113,13 +109,13 @@ export class Box {
 
     switch (directionX) {
       case -1:
-        maxWidth = maxIfLeft;
+        maxWidth = originPoint.x;
         break;
       case 0:
-        maxWidth = Math.min(maxIfLeft, maxIfRight) * 2;
+        maxWidth = Math.min(originPoint.x, boundaryWidth - originPoint.x) * 2;
         break;
       case 1:
-        maxWidth = maxIfRight;
+        maxWidth = boundaryWidth - originPoint.x;
         break;
       default:
         maxWidth = boundaryWidth;
@@ -127,13 +123,13 @@ export class Box {
 
     switch (directionY) {
       case -1:
-        maxHeight = maxIfTop;
+        maxHeight = originPoint.y;
         break;
       case 0:
-        maxHeight = Math.min(maxIfTop, maxIfBottom) * 2;
+        maxHeight = Math.min(originPoint.y, boundaryHeight - originPoint.y) * 2;
         break;
       case 1:
-        maxHeight = maxIfBottom;
+        maxHeight = boundaryHeight - originPoint.y;
         break;
       default:
         maxHeight = boundaryHeight;

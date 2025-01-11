@@ -87,7 +87,7 @@ export default function CaptureArea() {
         </div>
       </div>
 
-      <Cropper cropStore={[crop, setCrop]} aspectRatio={4 / 3} />
+      <Cropper cropStore={[crop, setCrop]} showGuideLines={true} />
     </div>
   );
 }
