@@ -6,7 +6,7 @@ function draw(
   ctx: CanvasRenderingContext2D,
   bounds: Bounds,
   radius: number,
-  guideLines: boolean,
+  guideLines: boolean
 ) {
   ctx.save();
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -17,8 +17,8 @@ function draw(
 
   // Shadow
   ctx.save();
-  ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
-  ctx.shadowBlur = 200;
+  ctx.shadowColor = "rgba(0, 0, 0, 0.25)";
+  ctx.shadowBlur = 100;
   ctx.shadowOffsetY = 15;
   ctx.fillStyle = "white";
   ctx.beginPath();
@@ -34,7 +34,7 @@ function draw(
 
   // Guide lines (Rule of thirds)
   if (guideLines) {
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.15)";
     ctx.lineWidth = 1;
 
     for (let i = 1; i < 3; i++) {
@@ -63,7 +63,7 @@ export default function AreaOccluder(
     bounds: Bounds;
     guideLines?: boolean;
     borderRadius?: number;
-  }>,
+  }>
 ) {
   let canvasRef: HTMLCanvasElement | undefined;
 
@@ -74,7 +74,12 @@ export default function AreaOccluder(
     }
 
     const hidpiCanvas = createHiDPICanvasContext(canvasRef, (ctx) =>
-      draw(ctx, props.bounds, props.borderRadius || 0, props.guideLines || false),
+      draw(
+        ctx,
+        props.bounds,
+        props.borderRadius || 0,
+        props.guideLines || false
+      )
     );
     const ctx = hidpiCanvas?.ctx;
     if (!ctx) return;
@@ -85,7 +90,12 @@ export default function AreaOccluder(
 
       const { x, y, width, height } = props.bounds;
       lastAnimationFrameId = requestAnimationFrame(() =>
-        draw(ctx, { x, y, width, height }, props.borderRadius || 0, props.guideLines || false),
+        draw(
+          ctx,
+          { x, y, width, height },
+          props.borderRadius || 0,
+          props.guideLines || false
+        )
       );
     });
 
@@ -96,8 +106,8 @@ export default function AreaOccluder(
   });
 
   return (
-    <div class="relative *:h-full *:w-full">
-      <canvas ref={canvasRef} class="pointer-events-none absolute"/>
+    <div class="*:h-full *:w-full">
+      <canvas ref={canvasRef} class="pointer-events-none absolute" />
       <div>{props.children}</div>
     </div>
   );
