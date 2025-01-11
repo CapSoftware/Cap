@@ -13,13 +13,23 @@ import { type Crop } from "~/utils/tauri";
 import AreaOccluder from "./AreaOccluder";
 import type { SetStoreFunction } from "solid-js/store";
 
-type HandlePosition = "nw" | "ne" | "se" | "sw";
+type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
+type HandleSide = {
+  x: "l" | "r" | "c";
+  y: "t" | "b" | "c";
+  direction: Direction;
+  cursor: string;
+};
 
-const HANDLES: { position: HandlePosition; cursor: string }[] = [
-  { position: "nw", cursor: "nw-resize" },
-  { position: "ne", cursor: "ne-resize" },
-  { position: "se", cursor: "se-resize" },
-  { position: "sw", cursor: "sw-resize" },
+const HANDLES: HandleSide[] = [
+  { x: "l", y: "t", direction: "nw", cursor: "nwse-resize" },
+  { x: "r", y: "t", direction: "ne", cursor: "nesw-resize" },
+  { x: "l", y: "b", direction: "sw", cursor: "nesw-resize" },
+  { x: "r", y: "b", direction: "se", cursor: "nwse-resize" },
+  { x: "c", y: "t", direction: "n", cursor: "ns-resize" },
+  { x: "c", y: "b", direction: "s", cursor: "ns-resize" },
+  { x: "l", y: "c", direction: "w", cursor: "ew-resize" },
+  { x: "r", y: "c", direction: "e", cursor: "ew-resize" },
 ];
 
 function clamp(n: number, min = 0, max = 1) {
@@ -93,20 +103,23 @@ export default function (
   const styles = createMemo(() => {
     const scaled = scaledCrop();
     return {
-      left: `${scaled.position.x}px`,
-      top: `${scaled.position.y}px`,
+      transform: `translate(${scaled.position.x}px, ${scaled.position.y}px)`,
       width: `${scaled.size.x}px`,
       height: `${scaled.size.y}px`,
       cursor: isDragging() ? "grabbing" : "grab",
     };
   });
 
-  // Handle dragging the selection area
   function handleDragStart(event: MouseEvent) {
     event.stopPropagation();
     setIsDragging(true);
-    const startPos = { x: event.clientX, y: event.clientY };
-    const startCrop = { ...crop };
+    const prev = Object.assign(
+      {},
+      {
+        position: Object.assign({}, crop.position),
+        size: Object.assign({}, crop.size),
+      }
+    );
 
     createRoot((dispose) => {
       const mapped = mappedSize();
@@ -116,22 +129,19 @@ export default function (
           dispose();
         },
         mousemove: (e) => {
-          const dx =
-            ((e.clientX - startPos.x) / containerRef!.clientWidth) * mapped.x;
-          const dy =
-            ((e.clientY - startPos.y) / containerRef!.clientHeight) * mapped.y;
+          const dx = ((e.clientX - event.clientX) / mapped.x) * mapped.x;
+          const dy = ((e.clientY - event.clientY) / mapped.y) * mapped.y;
 
           setCrop("position", {
-            x: clamp(startCrop.position.x + dx, 0, mapped.x - crop.size.x),
-            y: clamp(startCrop.position.y + dy, 0, mapped.y - crop.size.y),
+            x: clamp(prev.position.x + dx, 0, mapped.x - crop.size.x),
+            y: clamp(prev.position.y + dy, 0, mapped.y - crop.size.y),
           });
         },
       });
     });
   }
 
-  // Handle resizing from corners
-  function handleResizeStart(event: MouseEvent, handle: HandlePosition) {
+  function handleResizeStart(event: MouseEvent, handle: HandleSide) {
     event.stopPropagation();
     const startPos = { x: event.clientX, y: event.clientY };
     const startCrop = { ...crop };
@@ -146,52 +156,50 @@ export default function (
           const dy =
             ((e.clientY - startPos.y) / containerRef!.clientHeight) * mapped.y;
 
-          batch(() => {
-            let newSize = { ...startCrop.size };
-            let newPos = { ...startCrop.position };
+          let newSize = { ...startCrop.size };
+          let newPos = { ...startCrop.position };
 
-            if (handle.includes("w")) {
-              newSize.x = clamp(
-                startCrop.size.x - dx,
-                minSize.x,
-                startCrop.position.x + startCrop.size.x
-              );
-              newPos.x = clamp(
-                startCrop.position.x + dx,
-                0,
-                startCrop.position.x + startCrop.size.x - minSize.x
-              );
-            } else if (handle.includes("e")) {
-              newSize.x = clamp(
-                startCrop.size.x + dx,
-                minSize.x,
-                mapped.x - startCrop.position.x
-              );
-            }
+          if (handle.direction.includes("w")) {
+            newSize.x = clamp(
+              startCrop.size.x - dx,
+              minSize.x,
+              startCrop.position.x + startCrop.size.x
+            );
+            newPos.x = clamp(
+              startCrop.position.x + dx,
+              0,
+              startCrop.position.x + startCrop.size.x - minSize.x
+            );
+          } else if (handle.direction.includes("e")) {
+            newSize.x = clamp(
+              startCrop.size.x + dx,
+              minSize.x,
+              mapped.x - startCrop.position.x
+            );
+          }
 
-            if (handle.includes("n")) {
-              newSize.y = clamp(
-                startCrop.size.y - dy,
-                minSize.y,
-                startCrop.position.y + startCrop.size.y
-              );
-              newPos.y = clamp(
-                startCrop.position.y + dy,
-                0,
-                startCrop.position.y + startCrop.size.y - minSize.y
-              );
-            } else if (handle.includes("s")) {
-              newSize.y = clamp(
-                startCrop.size.y + dy,
-                minSize.y,
-                mapped.y - startCrop.position.y
-              );
-            }
+          if (handle.direction.includes("n")) {
+            newSize.y = clamp(
+              startCrop.size.y - dy,
+              minSize.y,
+              startCrop.position.y + startCrop.size.y
+            );
+            newPos.y = clamp(
+              startCrop.position.y + dy,
+              0,
+              startCrop.position.y + startCrop.size.y - minSize.y
+            );
+          } else if (handle.direction.includes("s")) {
+            newSize.y = clamp(
+              startCrop.size.y + dy,
+              minSize.y,
+              mapped.y - startCrop.position.y
+            );
+          }
 
-            setCrop({
-              position: newPos,
-              size: newSize,
-            });
+          setCrop({
+            position: newPos,
+            size: newSize,
           });
         },
       });
@@ -217,21 +225,36 @@ export default function (
         onMouseDown={handleDragStart}
       >
         <For each={HANDLES}>
-          {(handle) => (
-            <div
-              class="absolute w-4 h-4 bg-white rounded-full shadow-md border border-gray-200 -translate-x-1/2 -translate-y-1/2"
-              style={{
-                cursor: handle.cursor,
-                ...(handle.position.includes("n")
-                  ? { top: "0" }
-                  : { bottom: "100%" }),
-                ...(handle.position.includes("w")
-                  ? { left: "0" }
-                  : { right: "100%" }),
-              }}
-              onMouseDown={(e) => handleResizeStart(e, handle.position)}
-            />
-          )}
+          {(handle) => {
+            const isCorner = handle.x !== "c" && handle.y !== "c";
+            return (
+              <div
+                class={`absolute ${
+                  isCorner ? "h-[26px] w-[26px]" : "h-[24px] w-[24px]"
+                } group z-10 flex items-center justify-center`}
+                style={{
+                  ...(handle.x === "l"
+                    ? { left: "-12px" }
+                    : handle.x === "r"
+                    ? { right: "-12px" }
+                    : { left: "50%", transform: "translateX(-50%)" }),
+                  ...(handle.y === "t"
+                    ? { top: "-12px" }
+                    : handle.y === "b"
+                    ? { bottom: "-12px" }
+                    : { top: "50%", transform: "translateY(-50%)" }),
+                  cursor: handle.cursor,
+                }}
+                onMouseDown={(e) => handleResizeStart(e, handle)}
+              >
+                <div
+                  class={`${
+                    isCorner ? "h-[8px] w-[8px]" : "h-[6px] w-[6px]"
+                  } rounded-full border border-[#FFFFFF] bg-[#929292] transition-transform duration-150 group-hover:scale-150`}
+                />
+              </div>
+            );
+          }}
         </For>
       </div>
     </div>

@@ -87,7 +87,7 @@ export default function CaptureArea() {
         </div>
       </div>
 
-      <Cropper cropStore={[crop, setCrop]} mappedSize={windowSize()} />
+      <Cropper cropStore={[crop, setCrop]} />
     </div>
   );
 }
