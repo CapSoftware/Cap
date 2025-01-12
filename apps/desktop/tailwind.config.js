@@ -18,9 +18,6 @@ module.exports = {
         ...baseConfig.theme?.extend?.animation,
         "gentle-bounce": "gentleBounce 1.5s ease-in-out infinite",
       },
-      content: {
-        emptySpace: "' '",
-      },
     },
   },
 };

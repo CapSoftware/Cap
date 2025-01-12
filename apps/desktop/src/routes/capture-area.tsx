@@ -3,7 +3,7 @@ import { createOptionsQuery } from "~/utils/queries";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Cropper from "~/components/Cropper";
 import { createStore } from "solid-js/store";
-import { Crop } from "~/utils/tauri";
+import type { Crop } from "~/utils/tauri";
 
 export default function CaptureArea() {
   const { options, setOptions } = createOptionsQuery();

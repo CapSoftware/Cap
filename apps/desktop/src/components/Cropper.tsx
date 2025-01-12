@@ -40,8 +40,8 @@ function clamp(n: number, min = 0, max = 1) {
 export default function (
   props: ParentProps<{
     cropStore: [crop: Crop, setCrop: SetStoreFunction<Crop>];
-    mappedSize?: { x: number; y: number };
-    minSize?: { x: number; y: number };
+    mappedSize?: XY<number>;
+    minSize?: XY<number>;
     aspectRatio?: number;
     showGuideLines?: boolean;
   }>
@@ -218,47 +218,79 @@ export default function (
         {props.children}
       </AreaOccluder>
       <div
-        class="absolute bg-transparent border-dashed border-[#eee]"
+        class="absolute bg-transparent"
         style={styles()}
         onMouseDown={handleDragStart}
       >
         <Show when={props.showGuideLines}>
-          <div></div>
-          {/* <div class="relative w-10 h-10"> */}
-          {/* <div class="area-selection-center relative before:content-empty-space before:absolute before:top-0 before:left-[-3px] before:w-[7px] before:h-[1px] before:bg-gray-300 after:content-empty-space after:absolute after:top-[-3px] after:left-0 after:w-[1px] after:h-[7px] after:bg-gray-300" /> */}
-          {/* </div> */}
+          <div class="before:absolute block absolute left-1/2 top-1/2 before:top-0 before:left-[-6px] before:w-[14px] before:h-[2px] before:bg-gray-400 after:absolute after:top-[-6px] after:left-0 after:w-[2px] after:h-[14px] after:bg-gray-400" />
         </Show>
 
         <For each={HANDLES}>
           {(handle) => {
             const isCorner = handle.x !== "c" && handle.y !== "c";
-            return (
-              <div
-                class={`absolute ${
-                  isCorner ? "h-[30px] w-[30px]" : "h-[25px] w-[25px]"
-                } group z-10 flex items-center justify-center`}
-                style={{
-                  ...(handle.x === "l"
-                    ? { left: "-12px" }
-                    : handle.x === "r"
-                    ? { right: "-12px" }
-                    : { left: "50%", transform: "translateX(-50%)" }),
-                  ...(handle.y === "t"
-                    ? { top: "-12px" }
-                    : handle.y === "b"
-                    ? { bottom: "-12px" }
-                    : { top: "50%", transform: "translateY(-50%)" }),
-                  cursor: `${handle.cursor}-resize`,
-                }}
-                onMouseDown={(e) => handleResizeStart(e, handle.direction)}
-              >
-                {/* <div
-                  class={`${
-                    isCorner ? "h-[8px] w-[8px]" : "h-[6px] w-[6px]"
-                  } rounded-full border border-[#FFFFFF] bg-[#929292] transition-transform duration-150 group-hover:scale-150`}
-                /> */}
-              </div>
-            );
+
+            if (isCorner)
+              return (
+                <div
+                  class={`absolute z-10 flex items-center justify-center ${
+                    isCorner ? "h-[30px] w-[30px]" : "h-[25px] w-[25px]"
+                  }`}
+                  style={{
+                    ...(handle.x === "l"
+                      ? { left: "-12px" }
+                      : handle.x === "r"
+                      ? { right: "-12px" }
+                      : { left: "50%", transform: "translateX(-50%)" }),
+                    ...(handle.y === "t"
+                      ? { top: "-12px" }
+                      : handle.y === "b"
+                      ? { bottom: "-12px" }
+                      : { top: "50%", transform: "translateY(-50%)" }),
+                    cursor: `${handle.cursor}-resize`,
+                  }}
+                  onMouseDown={(e) => handleResizeStart(e, handle.direction)}
+                />
+              );
+            else
+              return (
+                <div
+                  class="absolute"
+                  style={{
+                    ...(handle.x === "l"
+                      ? {
+                          left: "0",
+                          width: "16px",
+                          transform: "translateX(-50%)",
+                        }
+                      : handle.x === "r"
+                      ? {
+                          right: "0",
+                          width: "16px",
+                          transform: "translateX(50%)",
+                        }
+                      : {
+                          left: "0",
+                          right: "0",
+                          transform: "translateY(50%)",
+                        }),
+                    ...(handle.y === "t"
+                      ? {
+                          top: "0",
+                          height: "16px",
+                          transform: "translateY(-50%)",
+                        }
+                      : handle.y === "b"
+                      ? {
+                          bottom: "0",
+                          height: "16px",
+                        }
+                      : { top: "0", bottom: "0" }),
+                    cursor: `${handle.cursor}-resize`,
+                  }}
+                  onMouseDown={(e) => handleResizeStart(e, handle.direction)}
+                />
+              );
           }}
         </For>
       </div>

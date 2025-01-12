@@ -18,23 +18,22 @@ function draw(
 
   // Shadow
   ctx.save();
-  ctx.shadowColor = "rgba(0, 0, 0, 1)";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.7)";
   ctx.shadowBlur = 200;
-  ctx.shadowOffsetY = 40;
+  ctx.shadowOffsetY = 25;
   ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
   ctx.beginPath();
   ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
   ctx.fill();
   ctx.restore();
 
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
-  ctx.lineWidth = 2;
-  ctx.setLineDash([5, 5]);
-  ctx.beginPath();
-  ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
-  ctx.stroke();
-
   if (showHandles) {
+    ctx.strokeStyle = "rgba(255, 255, 255, 1)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
+    ctx.stroke();
+
     const cornerHandleDistance = radius;
     const sideHandleDistance = 0;
     const handleLength = 20;
