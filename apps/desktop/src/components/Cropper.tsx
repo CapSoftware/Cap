@@ -19,18 +19,18 @@ type HandleSide = {
   x: "l" | "r" | "c";
   y: "t" | "b" | "c";
   direction: Direction;
-  cursor: string;
+  cursor: "ew" | "ns" | "nesw" | "nwse";
 };
 
 const HANDLES: HandleSide[] = [
-  { x: "l", y: "t", direction: "nw", cursor: "nwse-resize" },
-  { x: "r", y: "t", direction: "ne", cursor: "nesw-resize" },
-  { x: "l", y: "b", direction: "sw", cursor: "nesw-resize" },
-  { x: "r", y: "b", direction: "se", cursor: "nwse-resize" },
-  { x: "c", y: "t", direction: "n", cursor: "ns-resize" },
-  { x: "c", y: "b", direction: "s", cursor: "ns-resize" },
-  { x: "l", y: "c", direction: "w", cursor: "ew-resize" },
-  { x: "r", y: "c", direction: "e", cursor: "ew-resize" },
+  { x: "l", y: "t", direction: "nw", cursor: "nwse" },
+  { x: "r", y: "t", direction: "ne", cursor: "nesw" },
+  { x: "l", y: "b", direction: "sw", cursor: "nesw" },
+  { x: "r", y: "b", direction: "se", cursor: "nwse" },
+  { x: "c", y: "t", direction: "n", cursor: "ns" },
+  { x: "c", y: "b", direction: "s", cursor: "ns" },
+  { x: "l", y: "c", direction: "w", cursor: "ew" },
+  { x: "r", y: "c", direction: "e", cursor: "ew" },
 ];
 
 function clamp(n: number, min = 0, max = 1) {
@@ -135,9 +135,8 @@ export default function (
     });
   }
 
-  function handleResizeStart(event: MouseEvent, handle: HandleSide) {
+  function handleResizeStart(event: MouseEvent, dir: Direction) {
     event.stopPropagation();
-    const dir = handle.direction;
     const origin: XY<number> = {
       x: dir.includes("w") ? 1 : 0,
       y: dir.includes("n") ? 1 : 0,
@@ -212,21 +211,22 @@ export default function (
           width: crop.size.x,
           height: crop.size.y,
         }}
-        borderRadius={0}
-        // guideLines={true}
+        borderRadius={10}
+        guideLines={props.showGuideLines}
+        handles={true}
       >
         {props.children}
       </AreaOccluder>
       <div
-        class="absolute bg-transparent border-dashed border"
+        class="absolute bg-transparent border-dashed border-[#eee]"
         style={styles()}
         onMouseDown={handleDragStart}
       >
         <Show when={props.showGuideLines}>
-          <div class="*:border-dashed *:border *:opacity-50 *:absolute border-[#eee]">
-            <div class="border-b-[1px] border-t-[1px] left-0 w-full h-[calc(100%/3)] top-[calc(100%/3)]" />
-            <div class="border-l-[1px] border-r-[1px] left-[calc(100%/3)] w-[calc(100%/3)] h-full top-0" />
-          </div>
+          <div></div>
+          {/* <div class="relative w-10 h-10"> */}
+          {/* <div class="area-selection-center relative before:content-empty-space before:absolute before:top-0 before:left-[-3px] before:w-[7px] before:h-[1px] before:bg-gray-300 after:content-empty-space after:absolute after:top-[-3px] after:left-0 after:w-[1px] after:h-[7px] after:bg-gray-300" /> */}
+          {/* </div> */}
         </Show>
 
         <For each={HANDLES}>
@@ -235,7 +235,7 @@ export default function (
             return (
               <div
                 class={`absolute ${
-                  isCorner ? "h-[26px] w-[26px]" : "h-[24px] w-[24px]"
+                  isCorner ? "h-[30px] w-[30px]" : "h-[25px] w-[25px]"
                 } group z-10 flex items-center justify-center`}
                 style={{
                   ...(handle.x === "l"
@@ -248,15 +248,15 @@ export default function (
                     : handle.y === "b"
                     ? { bottom: "-12px" }
                     : { top: "50%", transform: "translateY(-50%)" }),
-                  cursor: handle.cursor,
+                  cursor: `${handle.cursor}-resize`,
                 }}
-                onMouseDown={(e) => handleResizeStart(e, handle)}
+                onMouseDown={(e) => handleResizeStart(e, handle.direction)}
               >
-                <div
+                {/* <div
                   class={`${
                     isCorner ? "h-[8px] w-[8px]" : "h-[6px] w-[6px]"
                   } rounded-full border border-[#FFFFFF] bg-[#929292] transition-transform duration-150 group-hover:scale-150`}
-                />
+                /> */}
               </div>
             );
           }}

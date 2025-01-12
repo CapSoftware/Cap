@@ -10,14 +10,17 @@ module.exports = {
       keyframes: {
         ...baseConfig.theme?.extend?.keyframes,
         gentleBounce: {
-          '0%, 100%': { transform: 'translateY(0)' },
-          '50%': { transform: 'translateY(-4px)' },
-        }
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(-4px)" },
+        },
       },
       animation: {
         ...baseConfig.theme?.extend?.animation,
-        'gentle-bounce': 'gentleBounce 1.5s ease-in-out infinite',
-      }
-    }
-  }
+        "gentle-bounce": "gentleBounce 1.5s ease-in-out infinite",
+      },
+      content: {
+        emptySpace: "' '",
+      },
+    },
+  },
 };
