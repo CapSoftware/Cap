@@ -171,7 +171,10 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         };
 
         if let Some(Target::Display(d)) = &target {
+            #[cfg(target_os = "macos")]
             dbg!(d.raw_handle.display_mode().unwrap().refresh_rate());
+            #[cfg(target_os = "windows")]
+            dbg!(platform::get_display_refresh_rate(d.raw_handle));
         }
 
         Options {
@@ -487,57 +490,19 @@ pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
 
 pub fn get_target_fps(target: &scap::Target) -> Option<u32> {
     #[cfg(target_os = "macos")]
-    {
-        match target {
-            scap::Target::Display(display) => refresh_rate_for_display(display.raw_handle.id),
-            scap::Target::Window(window) => {
-                refresh_rate_for_display(display_for_window(window.raw_handle)?.id)
-            }
+    match target {
+        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle.id),
+        scap::Target::Window(window) => {
+            platform::get_display_refresh_rate(platform::display_for_window(window.raw_handle)?.id)
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        todo!()
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn display_for_window(
-    window: core_graphics::window::CGWindowID,
-) -> Option<core_graphics::display::CGDisplay> {
-    use core_foundation::array::CFArray;
-    use core_graphics::{
-        display::{CFDictionary, CGDisplay, CGRect},
-        window::{create_description_from_array, kCGWindowBounds},
-    };
-
-    let descriptions = create_description_from_array(CFArray::from_copyable(&[window]))?;
-
-    let window_bounds = CGRect::from_dict_representation(
-        &descriptions
-            .get(0)?
-            .get(unsafe { kCGWindowBounds })
-            .downcast::<CFDictionary>()?,
-    )?;
-
-    for id in CGDisplay::active_displays().ok()? {
-        let display = CGDisplay::new(id);
-        if window_bounds.is_intersects(&display.bounds()) {
-            return Some(display);
+    #[cfg(target_os = "windows")]
+    match target {
+        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle),
+        scap::Target::Window(window) => {
+            platform::get_display_refresh_rate(platform::display_for_window(window.raw_handle)?)
         }
     }
-
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     None
-}
-
-#[cfg(target_os = "macos")]
-fn refresh_rate_for_display(display_id: core_graphics::display::CGDirectDisplayID) -> Option<u32> {
-    use core_graphics::display::CGDisplay;
-
-    Some(
-        CGDisplay::new(display_id)
-            .display_mode()?
-            .refresh_rate()
-            .round() as u32,
-    )
 }
