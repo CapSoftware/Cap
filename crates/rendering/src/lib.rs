@@ -667,7 +667,7 @@ impl ProjectUniforms {
 
         let interpolated_zoom = zoom_keyframes.interpolate(time as f64);
 
-        let (zoom_amount, zoom_origin) = {
+        let (zoom_amount, zoom_origin, lowered_zoom) = {
             let origin = match interpolated_zoom.position {
                 ZoomPosition::Manual { x, y } => Coord::<RawDisplayUVSpace>::new(XY {
                     x: x as f64,
@@ -691,7 +691,7 @@ impl ProjectUniforms {
                 }
             };
 
-            (interpolated_zoom.amount, origin)
+            (interpolated_zoom.amount, origin, interpolated_zoom.lowered)
         };
 
         let (display, zoom) = {
@@ -721,8 +721,21 @@ impl ProjectUniforms {
                 // padding: screen_scale_origin,
             };
 
-            let start = zoom.apply_scale(display_offset);
-            let end = zoom.apply_scale(end);
+            let target_size = end - display_offset;
+
+            let (zoom_start, zoom_end) = (
+                Coord::new(XY::new(
+                    lowered_zoom.top_left.0 as f64 * target_size.x,
+                    lowered_zoom.top_left.1 as f64 * target_size.y,
+                )),
+                Coord::new(XY::new(
+                    (lowered_zoom.bottom_right.0 as f64 - 1.0) * target_size.x,
+                    (lowered_zoom.bottom_right.1 as f64 - 1.0) * target_size.y,
+                )),
+            );
+
+            let start = display_offset + zoom_start;
+            let end = end + zoom_end;
 
             let target_size = end - start;
             let min_target_axis = target_size.x.min(target_size.y);
