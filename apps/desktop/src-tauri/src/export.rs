@@ -1,6 +1,6 @@
 use crate::{
-    get_video_metadata, upsert_editor_instance, windows::ShowCapWindow, RenderProgress,
-    VideoRecordingMetadata, VideoType,
+    general_settings::GeneralSettingsStore, get_video_metadata, upsert_editor_instance,
+    windows::ShowCapWindow, RenderProgress, VideoRecordingMetadata, VideoType,
 };
 use cap_project::ProjectConfiguration;
 use std::path::PathBuf;
@@ -44,10 +44,8 @@ pub async fn export_video(
             .unwrap_or(screen_metadata.duration),
     );
 
-    // Calculate total frames with ceiling to ensure we don't exceed 100%
-    let total_frames = ((duration * 30.0).ceil() as u32).max(1);
-
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let total_frames = editor_instance.get_total_frames();
 
     let output_path = editor_instance.meta().output_path();
 
@@ -72,6 +70,7 @@ pub async fn export_video(
     }
 
     let exporter = cap_export::Exporter::new(
+        &app,
         modified_project,
         output_path.clone(),
         move |frame_index| {
@@ -91,11 +90,7 @@ pub async fn export_video(
         e.to_string()
     })?;
 
-    let result = if use_custom_muxer {
-        exporter.export_with_custom_muxer().await
-    } else {
-        exporter.export_with_ffmpeg_cli().await
-    };
+    let result = exporter.export_with_custom_muxer().await;
 
     match result {
         Ok(_) => {

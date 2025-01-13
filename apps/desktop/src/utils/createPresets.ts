@@ -2,6 +2,7 @@ import { createResource, onCleanup } from "solid-js";
 
 import type { ProjectConfiguration } from "~/utils/tauri";
 import { presetsStore, type PresetsStore } from "~/store";
+import { DEFAULT_PROJECT_CONFIG } from "~/routes/editor/projectConfig";
 
 export type CreatePreset = {
   name: string;
@@ -56,9 +57,13 @@ export function createPresets() {
       }),
     getDefaultConfig: () => {
       const p = query();
-      if (!p) return;
+      if (!p) return DEFAULT_PROJECT_CONFIG;
 
       const config = p.presets[p.default ?? 0]?.config;
+      if (!config) return DEFAULT_PROJECT_CONFIG;
+
+      console.log("Config:", config);
+      
       // @ts-ignore we reeeally don't want the timeline in the preset
       config.timeline = undefined;
       return config;

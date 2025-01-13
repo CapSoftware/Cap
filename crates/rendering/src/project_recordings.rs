@@ -9,6 +9,7 @@ pub struct Video {
     pub duration: f64,
     pub width: u32,
     pub height: u32,
+    pub fps: u32,
 }
 
 impl Video {
@@ -26,11 +27,19 @@ impl Video {
             .video()
             .map_err(|e| format!("Failed to get video decoder: {}", e))?;
 
+        let rate = stream.avg_frame_rate();
+        let fps = rate.numerator() as f64 / rate.denominator() as f64;
+
         Ok(Video {
             width: video_decoder.width(),
             height: video_decoder.height(),
             duration: input.duration() as f64 / 1_000_000.0,
+            fps: fps.round() as u32,
         })
+    }
+
+    pub fn fps(&self) -> u32 {
+        self.fps
     }
 }
 

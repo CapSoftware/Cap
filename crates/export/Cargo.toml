@@ -7,7 +7,6 @@ edition = "2021"
 cap-utils = { path = "../utils" }
 cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
-cap-ffmpeg-cli = { path = "../ffmpeg-cli" }
 cap-editor = { path = "../editor" }
 cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
@@ -18,3 +17,5 @@ image = "0.25.2"
 mp4 = "0.14.0"
 thiserror.workspace = true
 futures = "0.3.31"
+tauri = { workspace = true }
+ffmpeg = { workspace = true }
