@@ -26,6 +26,7 @@ import {
   useTrackContext,
 } from "./context";
 import { formatTime } from "./utils";
+import { FPS } from "./Editor";
 
 export function Timeline() {
   const {
@@ -99,7 +100,7 @@ export function Timeline() {
           commands.setPlayheadPosition(
             videoId,
             Math.round(
-              30 *
+              FPS *
                 editorInstance.recordingDuration *
                 ((e.clientX - left!) / width!)
             )

@@ -15,7 +15,7 @@ use crate::{
 };
 use cap_flags::FLAGS;
 use cap_media::feeds::CameraFeed;
-use cap_media::sources::{AVFrameCapture, CaptureScreen, CaptureWindow, ScreenCaptureSource};
+use cap_media::sources::{CaptureScreen, CaptureWindow};
 use cap_project::{
     Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment,
 };
@@ -28,13 +28,19 @@ use tauri_specta::Event;
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_capture_screens() -> Vec<CaptureScreen> {
-    ScreenCaptureSource::<AVFrameCapture>::list_screens()
+    cap_media::sources::list_screens()
+        .into_iter()
+        .map(|(v, _)| v)
+        .collect()
 }
 
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_capture_windows() -> Vec<CaptureWindow> {
-    ScreenCaptureSource::<AVFrameCapture>::list_windows()
+    cap_media::sources::list_windows()
+        .into_iter()
+        .map(|(v, _)| v)
+        .collect()
 }
 
 #[tauri::command(async)]

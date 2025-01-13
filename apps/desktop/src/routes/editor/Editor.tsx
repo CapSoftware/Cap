@@ -41,6 +41,9 @@ import { Header } from "./Header";
 import { Player } from "./Player";
 import { ConfigSidebar } from "./ConfigSidebar";
 import { Timeline } from "./Timeline";
+import { JSX } from "solid-js/jsx-runtime";
+
+export const FPS = 30;
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -78,13 +81,13 @@ function Inner() {
   onMount(() => {
     events.editorStateChanged.listen((e) => {
       renderFrame.clear();
-      setPlaybackTime(e.payload.playhead_position / 30);
+      setPlaybackTime(e.payload.playhead_position / FPS);
     });
   });
 
   const renderFrame = throttle((time: number) => {
     events.renderFrameEvent.emit({
-      frame_number: Math.max(Math.floor(time * 30), 0),
+      frame_number: Math.max(Math.floor(time * FPS), 0),
     });
   }, 1000 / 60);
 

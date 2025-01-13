@@ -342,6 +342,7 @@ async fn stop_recording(
                                     .strip_prefix(&actor.recording_dir)
                                     .unwrap()
                                     .to_owned(),
+                                fps: 60,
                             },
                             camera: s
                                 .pipeline
@@ -352,6 +353,7 @@ async fn stop_recording(
                                         .strip_prefix(&actor.recording_dir)
                                         .unwrap()
                                         .to_owned(),
+                                    fps: 30,
                                 }),
                             audio: s.pipeline.audio_output_path.as_ref().map(|path| AudioMeta {
                                 path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
@@ -400,7 +402,6 @@ fn create_screen_capture(
             dbg!(&recording_options.capture_target),
             recording_options.output_resolution.clone(),
             None,
-            recording_options.fps,
         )
     }
     #[cfg(not(target_os = "macos"))]
@@ -409,7 +410,6 @@ fn create_screen_capture(
             dbg!(&recording_options.capture_target),
             recording_options.output_resolution.clone(),
             None,
-            recording_options.fps,
         )
     }
 }

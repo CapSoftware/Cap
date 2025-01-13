@@ -2,7 +2,6 @@ use std::{sync::Arc, time::Duration};
 
 use cap_media::data::{AudioInfo, AudioInfoError, FromSampleBytes};
 use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
-use cap_media::MediaError;
 use cap_project::ProjectConfiguration;
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{

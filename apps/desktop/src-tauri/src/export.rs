@@ -70,7 +70,6 @@ pub async fn export_video(
     }
 
     let exporter = cap_export::Exporter::new(
-        &app,
         modified_project,
         output_path.clone(),
         move |frame_index| {
@@ -84,6 +83,7 @@ pub async fn export_video(
         editor_instance.meta(),
         editor_instance.render_constants.clone(),
         &editor_instance.segments,
+        30,
     )
     .map_err(|e| {
         sentry::capture_message(&e.to_string(), sentry::Level::Error);

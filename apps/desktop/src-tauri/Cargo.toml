@@ -1,5 +1,5 @@
 [package]
-name = "desktop"
+name = "cap-desktop"
 version = "0.3.10"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
@@ -75,7 +75,6 @@ clipboard-rs = "0.2.2"
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
 cap-rendering = { path = "../../../crates/rendering" }
-cap-ffmpeg-cli = { path = "../../../crates/ffmpeg-cli" }
 cap-editor = { path = "../../../crates/editor" }
 cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }

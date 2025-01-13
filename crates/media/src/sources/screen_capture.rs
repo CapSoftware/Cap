@@ -84,12 +84,13 @@ impl<TCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
     }
 }
 
+const MAX_FPS: u32 = 60;
+
 impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     pub fn init(
         target: &ScreenCaptureTarget,
         output_resolution: Option<cap_project::Resolution>,
         output_type: Option<FrameType>,
-        fps: u32,
     ) -> Self {
         let mut this = Self {
             target: target.clone(),
@@ -110,14 +111,15 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 }
             }),
             output_type,
-            fps,
-            video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, fps),
+            fps: MAX_FPS,
+            video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, MAX_FPS),
             _phantom: std::marker::PhantomData,
         };
 
         let options = this.create_options();
         let [frame_width, frame_height] = get_output_frame_size(&options);
-        this.video_info = VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, fps);
+        this.video_info =
+            VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, MAX_FPS);
 
         this
     }
@@ -168,6 +170,10 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 .cloned(),
         };
 
+        if let Some(Target::Display(d)) = &target {
+            dbg!(d.raw_handle.display_mode().unwrap().refresh_rate());
+        }
+
         Options {
             fps: self.fps,
             show_cursor: FLAGS.record_mouse,
@@ -178,64 +184,6 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
             excluded_targets: Some(excluded_targets),
         }
-    }
-
-    pub fn list_screens() -> Vec<CaptureScreen> {
-        if !scap::has_permission() {
-            return vec![];
-        }
-
-        let mut targets = vec![];
-        let screens = scap::get_all_targets()
-            .into_iter()
-            .filter_map(|t| match t {
-                Target::Display(screen) => Some(screen),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        let names = crate::platform::display_names();
-
-        for (idx, screen) in screens.into_iter().enumerate() {
-            targets.push(CaptureScreen {
-                id: screen.id,
-                name: names
-                    .get(&screen.id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("Screen {}", idx + 1)),
-            });
-        }
-        targets
-    }
-
-    pub fn list_windows() -> Vec<CaptureWindow> {
-        if !scap::has_permission() {
-            return vec![];
-        }
-
-        let targets = scap::get_all_targets();
-
-        let platform_windows: HashMap<u32, Window> = crate::platform::get_on_screen_windows()
-            .into_iter()
-            .map(|window| (window.window_id, window))
-            .collect();
-
-        targets
-            .into_iter()
-            .filter_map(|target| match target {
-                Target::Window(window) => {
-                    platform_windows
-                        .get(&window.id)
-                        .map(|platform_window| CaptureWindow {
-                            id: window.id,
-                            owner_name: platform_window.owner_name.clone(),
-                            name: platform_window.name.clone(),
-                            bounds: platform_window.bounds,
-                        })
-                }
-                Target::Display(_) => None,
-            })
-            .collect()
     }
 
     pub fn info(&self) -> VideoInfo {
@@ -470,4 +418,126 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
         println!("Shutting down screen capture source thread.");
     }
+}
+
+pub fn list_screens() -> Vec<(CaptureScreen, Target)> {
+    if !scap::has_permission() {
+        return vec![];
+    }
+
+    let mut targets = vec![];
+    let screens = scap::get_all_targets()
+        .into_iter()
+        .filter_map(|t| match t {
+            Target::Display(screen) => Some(screen),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let names = crate::platform::display_names();
+
+    for (idx, screen) in screens.into_iter().enumerate() {
+        targets.push((
+            CaptureScreen {
+                id: screen.id,
+                name: names
+                    .get(&screen.id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Screen {}", idx + 1)),
+            },
+            Target::Display(screen),
+        ));
+    }
+    targets
+}
+
+pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
+    if !scap::has_permission() {
+        return vec![];
+    }
+
+    let targets = scap::get_all_targets();
+
+    let platform_windows: HashMap<u32, Window> = crate::platform::get_on_screen_windows()
+        .into_iter()
+        .map(|window| (window.window_id, window))
+        .collect();
+
+    targets
+        .into_iter()
+        .filter_map(|target| match &target {
+            Target::Window(window) => {
+                let id = window.id;
+                platform_windows.get(&id).map(|platform_window| {
+                    (
+                        CaptureWindow {
+                            id,
+                            owner_name: platform_window.owner_name.clone(),
+                            name: platform_window.name.clone(),
+                            bounds: platform_window.bounds,
+                        },
+                        target,
+                    )
+                })
+            }
+            Target::Display(_) => None,
+        })
+        .collect()
+}
+
+pub fn get_target_fps(target: &scap::Target) -> Option<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        match target {
+            scap::Target::Display(display) => refresh_rate_for_display(display.raw_handle.id),
+            scap::Target::Window(window) => {
+                refresh_rate_for_display(display_for_window(window.raw_handle)?.id)
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        todo!()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn display_for_window(
+    window: core_graphics::window::CGWindowID,
+) -> Option<core_graphics::display::CGDisplay> {
+    use core_foundation::array::CFArray;
+    use core_graphics::{
+        display::{CFDictionary, CGDisplay, CGRect},
+        window::{create_description_from_array, kCGWindowBounds},
+    };
+
+    let descriptions = create_description_from_array(CFArray::from_copyable(&[window]))?;
+
+    let window_bounds = CGRect::from_dict_representation(
+        &descriptions
+            .get(0)?
+            .get(unsafe { kCGWindowBounds })
+            .downcast::<CFDictionary>()?,
+    )?;
+
+    for id in CGDisplay::active_displays().ok()? {
+        let display = CGDisplay::new(id);
+        if window_bounds.is_intersects(&display.bounds()) {
+            return Some(display);
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn refresh_rate_for_display(display_id: core_graphics::display::CGDirectDisplayID) -> Option<u32> {
+    use core_graphics::display::CGDisplay;
+
+    Some(
+        CGDisplay::new(display_id)
+            .display_mode()?
+            .refresh_rate()
+            .round() as u32,
+    )
 }
