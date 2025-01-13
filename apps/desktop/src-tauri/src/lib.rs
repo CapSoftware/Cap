@@ -1441,6 +1441,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
                 segment: cap_project::SingleSegment {
                     display: Display {
                         path: screenshot_path.clone(),
+                        fps: 0,
                     },
                     camera: None,
                     audio: None,

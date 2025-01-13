@@ -1,6 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use cap_editor::create_segments;
+use cap_media::sources::get_target_fps;
 use cap_project::{RecordingMeta, XY};
 use cap_rendering::RenderVideoConstants;
 use clap::{Parser, Subcommand};
@@ -17,6 +18,18 @@ enum Commands {
         project_path: PathBuf,
         output_path: Option<PathBuf>,
     },
+    Record {
+        #[command(subcommand)]
+        command: Option<RecordCommands>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RecordCommands {
+    Screens,
+    Windows,
+    Cameras,
+    Mics,
 }
 
 #[tokio::main]
@@ -54,6 +67,7 @@ async fn main() {
 
             let segments = create_segments(&meta);
 
+            let fps = meta.content.max_fps();
             let project_output_path = project_path.join("output/result.mp4");
             let exporter = cap_export::Exporter::new(
                 project,
@@ -63,6 +77,7 @@ async fn main() {
                 meta,
                 render_constants,
                 &segments,
+                fps,
             )
             .unwrap();
 
@@ -77,5 +92,42 @@ async fn main() {
 
             println!("Exported video to '{}'", output_path.display());
         }
+        Commands::Record { command } => match command {
+            Some(RecordCommands::Screens) => {
+                let screens = cap_media::sources::list_screens();
+
+                for (i, (screen, target)) in screens.iter().enumerate() {
+                    println!(
+                        "
+screen {}:
+  id: {}
+  name: {}
+  fps: {}",
+                        i,
+                        screen.id,
+                        screen.name,
+                        get_target_fps(target).unwrap()
+                    );
+                }
+            }
+            Some(RecordCommands::Windows) => {
+                let windows = cap_media::sources::list_windows();
+
+                for (i, (window, target)) in windows.iter().enumerate() {
+                    println!(
+                        "
+window {}:
+  id: {}
+  name: {}
+  fps: {}",
+                        i,
+                        window.id,
+                        window.name,
+                        get_target_fps(target).unwrap()
+                    );
+                }
+            }
+            _ => {}
+        },
     }
 }
