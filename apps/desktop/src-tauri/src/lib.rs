@@ -941,11 +941,6 @@ async fn copy_video_to_clipboard(
 }
 
 
-#[derive(Serialize, Deserialize, specta::Type)]
-pub struct VideoRecordingMetadata {
-    duration: f64,
-    size: f64,
-}
 
 // Helper function to estimate rendered file size based on duration and quality
 fn estimate_rendered_size(duration: f64) -> f64 {
