@@ -159,6 +159,7 @@ pub async fn render_video_to_channel(
     sender: mpsc::Sender<RenderedFrame>,
     meta: &RecordingMeta,
     segments: Vec<RenderSegment>,
+    fps: u32,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, meta).await?;
     let recordings = ProjectRecordings::new(meta);
@@ -206,7 +207,7 @@ pub async fn render_video_to_channel(
         }
     };
 
-    let total_frames = (30_f64 * duration).ceil() as u32;
+    let total_frames = (fps as f64 * duration).ceil() as u32;
     println!(
         "Final export duration: {} seconds ({} frames at 30fps)",
         duration, total_frames
@@ -356,7 +357,6 @@ impl RenderVideoConstants {
                 depth_or_array_layers: 1,
             },
         );
-        println!("Watermark texture created and written to GPU");
 
         let watermark_view = watermark_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let watermark_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1091,12 +1091,12 @@ pub async fn produce_frame(
             is_upgraded: 0.0,
         };
 
-        println!(
-            "Rendering watermark at position: {:?}, size: {:?}, output_size: {:?}",
-            watermark_uniforms.position,
-            watermark_uniforms.watermark_size,
-            watermark_uniforms.output_size
-        );
+        // println!(
+        //     "Rendering watermark at position: {:?}, size: {:?}, output_size: {:?}",
+        //     watermark_uniforms.position,
+        //     watermark_uniforms.watermark_size,
+        //     watermark_uniforms.output_size
+        // );
 
         let watermark_buffer =
             constants
@@ -1170,7 +1170,7 @@ pub async fn produce_frame(
             render_pass.set_pipeline(&constants.watermark_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &watermark_bind_group, &[]);
             render_pass.draw(0..6, 0..1); // Using 6 vertices for two triangles
-            println!("Drew watermark with 6 vertices");
+                                          // println!("Drew watermark with 6 vertices");
         }
 
         constants.queue.submit(Some(watermark_encoder.finish()));

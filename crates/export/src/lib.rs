@@ -156,7 +156,7 @@ where
                     MP4Encoder::video_format(),
                     self.output_size.0,
                     self.output_size.1,
-                    30,
+                    FPS,
                 ),
                 audio_info,
                 cap_media::encoders::Output::File(self.output_path.clone()),
@@ -310,6 +310,7 @@ where
             tx_image_data,
             &self.meta,
             self.render_segments,
+            FPS,
         )
         .then(|f| async { f.map_err(Into::into) });
 
@@ -489,6 +490,7 @@ where
             tx_image_data,
             &self.meta,
             self.render_segments,
+            FPS,
         )
         .await?;
 

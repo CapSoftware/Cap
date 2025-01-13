@@ -183,3 +183,8 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
   },
   null!
 );
+
+export const [SegmentContextProvider, useSegmentContext] =
+  createContextProvider((props: { width: Accessor<number> }) => {
+    return props;
+  }, null!);
