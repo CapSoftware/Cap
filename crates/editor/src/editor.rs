@@ -52,7 +52,6 @@ impl Renderer {
         }
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
-        println!("Editor total frames: {total_frames}");
 
         let (tx, rx) = mpsc::channel(4);
 

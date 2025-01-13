@@ -160,7 +160,6 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
     let now = Instant::now();
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
-    println!("stopped recording in {:?}", now.elapsed());
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
         window.hide().unwrap();
@@ -183,14 +182,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     };
 
     let display_screenshot = screenshots_dir.join("display.jpg");
-    let now = Instant::now();
     create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
-    println!("created screenshot in {:?}", now.elapsed());
-
-    // let thumbnail = screenshots_dir.join("thumbnail.png");
-    // let now = Instant::now();
-    // create_thumbnail(display_screenshot, thumbnail, (100, 100)).await?;
-    // println!("created thumbnail in {:?}", now.elapsed());
 
     let recording_dir = completed_recording.recording_dir.clone();
 

@@ -7,6 +7,7 @@ pub struct ZoomKeyframe {
     pub scale: f64,
     pub position: ZoomPosition,
     pub has_segment: bool,
+    pub lowered: LoweredKeyframe,
 }
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ZoomPosition {
@@ -16,13 +17,15 @@ pub enum ZoomPosition {
 #[derive(Debug, PartialEq)]
 pub struct ZoomKeyframes(Vec<ZoomKeyframe>);
 
-pub const ZOOM_DURATION: f64 = 0.6;
+pub const ZOOM_DURATION: f64 = 1.0;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct InterpolatedZoom {
     pub amount: f64,
     pub t: f64,
     pub position: ZoomPosition,
+    pub time_t: f64,
+    pub lowered: LoweredKeyframe,
 }
 
 impl ZoomKeyframes {
@@ -50,6 +53,11 @@ impl ZoomKeyframes {
             let prev = if i > 0 { segments.get(i - 1) } else { None };
             let next = segments.get(i + 1);
 
+            let lowered_position = match segment.mode {
+                cap_project::ZoomMode::Auto => (0.0, 0.0),
+                cap_project::ZoomMode::Manual { x, y } => (x, y),
+            };
+
             if let Some(prev) = prev {
                 if prev.end + ZOOM_DURATION < segment.start {
                     // keyframes.push(ZoomKeyframe {
@@ -64,6 +72,7 @@ impl ZoomKeyframes {
                     scale: segment.amount,
                     position,
                     has_segment: true,
+                    lowered: LoweredKeyframe::new(lowered_position, segment.amount as f32),
                 });
             } else {
                 if segment.start != 0.0 {
@@ -73,18 +82,21 @@ impl ZoomKeyframes {
                             scale: 1.0,
                             position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
                             has_segment: false,
+                            lowered: LoweredKeyframe::new((0.0, 0.0), 1.0),
                         },
                         ZoomKeyframe {
                             time: segment.start,
                             scale: 1.0,
                             position,
                             has_segment: true,
+                            lowered: LoweredKeyframe::new(lowered_position, 1.0),
                         },
                         ZoomKeyframe {
                             time: segment.start + ZOOM_DURATION,
                             scale: segment.amount,
                             position,
                             has_segment: true,
+                            lowered: LoweredKeyframe::new(lowered_position, segment.amount as f32),
                         },
                     ]);
                 } else {
@@ -93,6 +105,7 @@ impl ZoomKeyframes {
                         scale: segment.amount,
                         position,
                         has_segment: true,
+                        lowered: LoweredKeyframe::new(lowered_position, segment.amount as f32),
                     });
                 }
             }
@@ -102,6 +115,7 @@ impl ZoomKeyframes {
                 scale: segment.amount,
                 position,
                 has_segment: true,
+                lowered: LoweredKeyframe::new(lowered_position, segment.amount as f32),
             });
 
             if let Some(next) = next {
@@ -114,6 +128,10 @@ impl ZoomKeyframes {
                         scale: 1.0 * t + (1.0 - t) * segment.amount,
                         position,
                         has_segment: false,
+                        lowered: LoweredKeyframe::new(
+                            lowered_position,
+                            (1.0 * t + (1.0 - t) * segment.amount) as f32,
+                        ),
                     });
                 }
             } else {
@@ -122,6 +140,7 @@ impl ZoomKeyframes {
                     scale: 1.0,
                     position,
                     has_segment: false,
+                    lowered: LoweredKeyframe::new(lowered_position, 1.0),
                 });
             }
         }
@@ -134,6 +153,8 @@ impl ZoomKeyframes {
             amount: 1.0,
             position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
             t: 0.0,
+            time_t: 0.0,
+            lowered: LoweredKeyframe::new((0.0, 0.0), 1.0),
         };
 
         if !FLAGS.zoom {
@@ -166,57 +187,95 @@ impl ZoomKeyframes {
             bezier_easing::bezier_easing(0.5, 0.0, 0.5, 1.0).unwrap()
         };
 
-        let time_t = delta_time / keyframe_length;
+        let time_t_raw = delta_time / keyframe_length;
 
         let keyframe_diff = next.scale - prev.scale;
 
+        // let time_t = ease(time_t_raw as f32) as f64;
+        let time_t = time_t_raw;
+
         let amount = prev.scale + (keyframe_diff) * time_t;
 
-        let time_t = ease(time_t as f32) as f64;
-
         // the process we use to get to this is way too convoluted lol
-        let t = ease(
-            (if prev.scale > 1.0 && next.scale > 1.0 {
-                if !next.has_segment {
-                    (amount - 1.0) / (prev.scale - 1.0)
-                } else if !prev.has_segment {
-                    (amount - 1.0) / (next.scale - 1.0)
-                } else {
-                    1.0
-                }
-            } else if next.scale > 1.0 {
-                (amount - 1.0) / (next.scale - 1.0)
-            } else if prev.scale > 1.0 {
+        let t = if prev.scale > 1.0 && next.scale > 1.0 {
+            if !next.has_segment {
                 (amount - 1.0) / (prev.scale - 1.0)
+            } else if !prev.has_segment {
+                (amount - 1.0) / (next.scale - 1.0)
             } else {
-                0.0
-            }) as f32,
-        ) as f64;
+                1.0
+            }
+        } else if next.scale > 1.0 {
+            (amount - 1.0) / (next.scale - 1.0)
+        } else if prev.scale > 1.0 {
+            (amount - 1.0) / (prev.scale - 1.0)
+        } else {
+            0.0
+        };
 
         let position = match (&prev.position, &next.position) {
             (ZoomPosition::Manual { x: x1, y: y1 }, ZoomPosition::Manual { x: x2, y: y2 }) => {
                 ZoomPosition::Manual {
-                    x: x1 + (x2 - x1) * time_t as f32,
-                    y: y1 + (y2 - y1) * time_t as f32,
+                    x: x1 + (x2 - x1) * time_t_raw as f32,
+                    y: y1 + (y2 - y1) * time_t_raw as f32,
                 }
             }
             _ => ZoomPosition::Manual { x: 0.0, y: 0.0 },
         };
 
+        let eased_time_t = ease(time_t as f32);
+
         InterpolatedZoom {
-            amount: if next.scale > prev.scale {
-                prev.scale + (next.scale - prev.scale) * t
-            } else {
-                prev.scale + (next.scale - prev.scale) * (1.0 - t)
-            },
+            time_t,
+            amount: prev.scale + (next.scale - prev.scale) * time_t,
             position,
-            t,
+            t: ease(t as f32) as f64,
+            lowered: LoweredKeyframe {
+                top_left: {
+                    let prev = prev.lowered.top_left;
+                    let next = next.lowered.top_left;
+
+                    (
+                        prev.0 + (next.0 - prev.0) * eased_time_t,
+                        prev.1 + (next.1 - prev.1) * eased_time_t,
+                    )
+                },
+                bottom_right: {
+                    let prev = prev.lowered.bottom_right;
+                    let next = next.lowered.bottom_right;
+
+                    (
+                        prev.0 + (next.0 - prev.0) * eased_time_t,
+                        prev.1 + (next.1 - prev.1) * eased_time_t,
+                    )
+                },
+            },
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct LoweredKeyframe {
+    pub top_left: (f32, f32),
+    pub bottom_right: (f32, f32),
+}
+
+impl LoweredKeyframe {
+    fn new(center: (f32, f32), amount: f32) -> Self {
+        let scaled_center = (center.0 * amount, center.1 * amount);
+        let center_diff = (scaled_center.0 - center.0, scaled_center.1 - center.1);
+
+        Self {
+            top_left: (0.0 - center_diff.0, 0.0 - center_diff.1),
+            bottom_right: (amount - center_diff.0, amount - center_diff.1),
         }
     }
 }
 
 #[cfg(test)]
 mod test {
+    use cap_project::ZoomMode;
+
     use super::*;
 
     #[test]
@@ -238,30 +297,35 @@ mod test {
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
                     has_segment: false,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.0)
                 },
                 ZoomKeyframe {
                     time: 0.5,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.0)
                 },
                 ZoomKeyframe {
                     time: 0.5 + ZOOM_DURATION,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.5)
                 },
                 ZoomKeyframe {
                     time: 1.5,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.5)
                 },
                 ZoomKeyframe {
                     time: 1.5 + ZOOM_DURATION,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: false,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.0)
                 }
             ])
         );
@@ -294,42 +358,49 @@ mod test {
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
                     has_segment: false,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.0)
                 },
                 ZoomKeyframe {
                     time: 0.5,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.0)
                 },
                 ZoomKeyframe {
                     time: 0.5 + ZOOM_DURATION,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.5)
                 },
                 ZoomKeyframe {
                     time: 1.5,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.5)
                 },
                 ZoomKeyframe {
                     time: 1.5 + ZOOM_DURATION,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.8, y: 0.8 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.8, 0.8), 1.5)
                 },
                 ZoomKeyframe {
                     time: 2.5,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.8, y: 0.8 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.8, 0.8), 1.5)
                 },
                 ZoomKeyframe {
                     time: 2.5 + ZOOM_DURATION,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.8, y: 0.8 },
                     has_segment: false,
+                    lowered: LoweredKeyframe::new((0.8, 0.8), 1.0)
                 }
             ])
         );
@@ -362,42 +433,49 @@ mod test {
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
                     has_segment: false,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.0)
                 },
                 ZoomKeyframe {
                     time: 0.5,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.0)
                 },
                 ZoomKeyframe {
                     time: 0.5 + ZOOM_DURATION,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.5)
                 },
                 ZoomKeyframe {
                     time: 1.5,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.5)
                 },
                 ZoomKeyframe {
                     time: 1.5 + ZOOM_DURATION,
                     scale: 2.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 2.0)
                 },
                 ZoomKeyframe {
                     time: 2.5,
                     scale: 2.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 2.0)
                 },
                 ZoomKeyframe {
                     time: 2.5 + ZOOM_DURATION,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: false,
+                    lowered: LoweredKeyframe::new((0.2, 0.2), 1.0)
                 }
             ])
         );
@@ -428,6 +506,7 @@ mod test {
             scale: 1.0,
             position,
             has_segment: true,
+            lowered: LoweredKeyframe::new((0.0, 0.0), 1.0),
         };
 
         pretty_assertions::assert_eq!(
@@ -437,41 +516,46 @@ mod test {
                     has_segment: false,
                     ..base
                 },
-                ZoomKeyframe {
-                    time: 0.5,
-                    scale: 1.0,
-                    ..base
-                },
+                ZoomKeyframe { time: 0.5, ..base },
                 ZoomKeyframe {
                     time: 0.5 + ZOOM_DURATION,
                     scale: 1.5,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.5),
                     ..base
                 },
                 ZoomKeyframe {
                     time: 1.5,
                     scale: 1.5,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.5),
                     ..base
                 },
                 ZoomKeyframe {
                     time: 1.8,
                     scale: 1.5 - (0.3 / ZOOM_DURATION) * 0.5,
+                    lowered: LoweredKeyframe::new(
+                        (0.0, 0.0),
+                        1.5 - (0.3 / ZOOM_DURATION as f32) * 0.5
+                    ),
                     has_segment: false,
                     ..base
                 },
                 ZoomKeyframe {
                     time: 1.8 + ZOOM_DURATION,
                     scale: 1.5,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.5),
                     ..base
                 },
                 ZoomKeyframe {
                     time: 2.5,
                     scale: 1.5,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.5),
                     ..base
                 },
                 ZoomKeyframe {
                     time: 2.5 + ZOOM_DURATION,
                     scale: 1.0,
                     has_segment: false,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.0),
                     ..base
                 }
             ])
@@ -503,6 +587,7 @@ mod test {
             scale: 1.0,
             position,
             has_segment: true,
+            lowered: LoweredKeyframe::new((0.0, 0.0), 1.0),
         };
 
         pretty_assertions::assert_eq!(
@@ -514,36 +599,116 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 0.3966305848375451,
-                    scale: 1.0,
                     ..base
                 },
                 ZoomKeyframe {
                     time: 0.3966305848375451 + ZOOM_DURATION,
                     scale: 1.176,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.176),
                     ..base
                 },
                 ZoomKeyframe {
                     time: 1.396630584837545,
                     scale: 1.176,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.176),
                     ..base
                 },
                 ZoomKeyframe {
                     time: 1.396630584837545 + ZOOM_DURATION,
                     scale: 1.204,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.204),
                     ..base
                 },
                 ZoomKeyframe {
                     time: 3.21881273465704,
                     scale: 1.204,
+                    lowered: LoweredKeyframe::new((0.0, 0.0), 1.204),
                     ..base
                 },
                 ZoomKeyframe {
                     time: 3.21881273465704 + ZOOM_DURATION,
-                    scale: 1.0,
                     has_segment: false,
                     ..base
                 },
             ])
         );
+    }
+
+    mod interpolate {
+        use super::*;
+
+        #[test]
+        fn amount() {
+            let keyframes = ZoomKeyframes::from_zoom_segments(&[
+                ZoomSegment {
+                    start: 0.0,
+                    end: 1.0,
+                    amount: 1.2,
+                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
+                },
+                ZoomSegment {
+                    start: 1.0,
+                    end: 2.0,
+                    amount: 1.5,
+                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
+                },
+            ]);
+
+            assert_eq!(keyframes.interpolate(0.0).amount, 1.2);
+            assert_eq!(keyframes.interpolate(1.0).amount, 1.2);
+            assert_eq!(keyframes.interpolate(2.0).amount, 1.5);
+        }
+
+        #[test]
+        fn t() {
+            let keyframes = ZoomKeyframes::from_zoom_segments(&[
+                ZoomSegment {
+                    start: 0.0,
+                    end: 1.0,
+                    amount: 1.2,
+                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
+                },
+                ZoomSegment {
+                    start: 1.0,
+                    end: 2.0,
+                    amount: 1.5,
+                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
+                },
+            ]);
+
+            assert_eq!(keyframes.interpolate(0.0).t, 1.0);
+            assert_eq!(keyframes.interpolate(1.0).t, 1.0);
+            assert_eq!(keyframes.interpolate(2.0).t, 1.0);
+            assert_eq!(keyframes.interpolate(2.0 + ZOOM_DURATION).t, 0.0);
+        }
+    }
+
+    mod new_keyframe_lowering {
+        use super::*;
+
+        #[test]
+        fn basic() {
+            let center = (0.0, 0.0);
+            let amount = 2.0;
+
+            assert_eq!(
+                LoweredKeyframe::new(center, amount),
+                LoweredKeyframe {
+                    top_left: (0.0, 0.0),
+                    bottom_right: (2.0, 2.0)
+                }
+            );
+
+            let center = (1.0, 1.0);
+            let amount = 2.0;
+
+            assert_eq!(
+                LoweredKeyframe::new(center, amount),
+                LoweredKeyframe {
+                    top_left: (-1.0, -1.0),
+                    bottom_right: (1.0, 1.0)
+                }
+            );
+        }
     }
 }
