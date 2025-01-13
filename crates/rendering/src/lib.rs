@@ -1073,7 +1073,7 @@ pub async fn produce_frame(
     if uniforms.project.background.inset <= 0 {
         // Calculate watermark width as 10% of frame width, but no larger than 200px
         let frame_width = uniforms.output_size.0 as f32;
-        let target_width = (frame_width * 0.10).min(200.0);
+        let target_width = (frame_width * 0.15).min(280.0);
         let aspect_ratio =
             constants.watermark_dimensions.1 as f32 / constants.watermark_dimensions.0 as f32;
 
@@ -1087,7 +1087,7 @@ pub async fn produce_frame(
                 padding,
                 uniforms.output_size.1 as f32 - (target_width * aspect_ratio) - padding,
             ],
-            opacity: 0.5, // Reduced opacity from 0.8 to 0.5
+            opacity: 0.5,
             is_upgraded: 0.0,
         };
 
