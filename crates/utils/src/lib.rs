@@ -33,15 +33,6 @@ pub fn format_error_message(error_code: u32) -> String {
     }
 }
 
-#[cfg(unix)]
-fn create_named_pipe(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    use nix::sys::stat;
-    use nix::unistd;
-    std::fs::remove_file(path).ok();
-    unistd::mkfifo(path, stat::Mode::S_IRWXU)?;
-    Ok(())
-}
-
 pub fn create_channel_named_pipe<T, F>(
     mut rx: Receiver<T>,
     pipe_path: PathBuf,
