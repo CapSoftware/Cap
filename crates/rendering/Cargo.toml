@@ -19,7 +19,7 @@ image = "0.25.2"
 log = "0.4"
 serde = "1.0.209"
 specta.workspace = true
-# TODO(Ilya): remove when specta releases rc.21
+# TODO(Ilya): Remove with next tauri and specta updates
 specta-util.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true

@@ -20,7 +20,7 @@ tokio = { version = "1.39.3", features = [
 ] }
 tauri = { version = "2.2.0", features = [ "specta" ] }
 specta = { version = "=2.0.0-rc.20", features = [ "derive" ] }
-# TODO(Ilya): remove when specta releases rc.21
+# TODO(Ilya): Remove with next tauri and specta updates
 specta-util = { version = "^0.0.7", features = [ "export" ] }
 
 scap = { git = "https://github.com/CapSoftware/scap", rev = "58d4410bf52f" }

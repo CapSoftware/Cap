@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 specta.workspace = true
-# TODO(Ilya): remove when specta releases rc.21
+# TODO(Ilya): Remove with next tauri and specta updates
 specta-util.workspace = true
 
 serde = { version = "1", features = ["derive"] }

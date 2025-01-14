@@ -25,7 +25,7 @@ tauri = { workspace = true, features = [
 	"image-png",
 ] }
 tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
-# TODO(Ilya): remove when specta releases rc.21
+# TODO(Ilya): Remove with next tauri and specta updates
 specta-util.workspace = true
 tauri-plugin-dialog = "2.2.0"
 tauri-plugin-fs = "2.2.0"
