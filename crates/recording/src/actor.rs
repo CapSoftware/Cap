@@ -32,7 +32,7 @@ enum ActorState {
     Paused {
         next_index: u32,
         cursors: Cursors,
-        next_cursor_id: i32,
+        next_cursor_id: u32,
     },
     Stopped,
 }
@@ -60,7 +60,7 @@ struct RecordingPipeline {
     pub inner: Pipeline<RealTimeClock<()>>,
     pub display_output_path: PathBuf,
     pub audio_output_path: Option<PathBuf>,
-    pub camera_output_path: Option<PathBuf>,
+    pub camera: Option<CameraPipelineInfo>,
     pub cursor: Option<CursorPipeline>,
 }
 
@@ -145,7 +145,7 @@ pub async fn spawn_recording_actor(
         camera_feed.as_deref(),
         audio_input_feed.as_ref(),
         Default::default(),
-        0,
+        index,
     )
     .await?;
 
@@ -184,7 +184,7 @@ pub async fn spawn_recording_actor(
                             mut pipeline: RecordingPipeline,
                             actor: &mut Actor,
                             segment_start_time: f64,
-                        ) -> Result<(Cursors, i32), RecordingError> {
+                        ) -> Result<(Cursors, u32), RecordingError> {
                             pipeline.inner.shutdown().await?;
 
                             let segment_stop_time = current_time_f64();
@@ -342,19 +342,16 @@ async fn stop_recording(
                                     .strip_prefix(&actor.recording_dir)
                                     .unwrap()
                                     .to_owned(),
-                                fps: 60,
+                                fps: actor.options.capture_target.recording_fps(),
                             },
-                            camera: s
-                                .pipeline
-                                .camera_output_path
-                                .as_ref()
-                                .map(|path| CameraMeta {
-                                    path: path
-                                        .strip_prefix(&actor.recording_dir)
-                                        .unwrap()
-                                        .to_owned(),
-                                    fps: 30,
-                                }),
+                            camera: s.pipeline.camera.as_ref().map(|camera| CameraMeta {
+                                path: camera
+                                    .output_path
+                                    .strip_prefix(&actor.recording_dir)
+                                    .unwrap()
+                                    .to_owned(),
+                                fps: camera.fps,
+                            }),
                             audio: s.pipeline.audio_output_path.as_ref().map(|path| AudioMeta {
                                 path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
                             }),
@@ -422,7 +419,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     camera_feed: Option<&Mutex<CameraFeed>>,
     audio_input_feed: Option<&AudioInputFeed>,
     prev_cursors: Cursors,
-    next_cursors_id: i32,
+    next_cursors_id: u32,
 ) -> Result<RecordingPipeline, MediaError> {
     let camera_feed = match camera_feed.as_ref() {
         Some(camera_feed) => Some(camera_feed.lock().await),
@@ -461,7 +458,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
             .sink("microphone_encoder", mic_encoder);
     }
 
-    if let Some(camera_source) = camera_feed.map(CameraSource::init) {
+    let camera = if let Some(camera_source) = camera_feed.map(CameraSource::init) {
         let camera_config = camera_source.info();
         let output_config = camera_config.scaled(1280_u32, 30_u32);
         camera_output_path = Some(dir.join("camera.mp4"));
@@ -477,7 +474,14 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
             .source("camera_capture", camera_source)
             .pipe("camera_filter", camera_filter)
             .sink("camera_encoder", camera_encoder);
-    }
+
+        Some(CameraPipelineInfo {
+            output_path: camera_output_path.clone().unwrap(),
+            fps: (camera_config.frame_rate.0 / camera_config.frame_rate.1) as u32,
+        })
+    } else {
+        None
+    };
 
     let mut pipeline = pipeline_builder.build().await?;
 
@@ -501,9 +505,14 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
         inner: pipeline,
         display_output_path,
         audio_output_path,
-        camera_output_path,
+        camera,
         cursor,
     })
+}
+
+struct CameraPipelineInfo {
+    output_path: PathBuf,
+    fps: u32,
 }
 
 fn ensure_dir(path: PathBuf) -> Result<PathBuf, MediaError> {

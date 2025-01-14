@@ -1,3 +1,4 @@
+// @refresh reload
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
@@ -24,6 +25,8 @@ export type CurrentDialog =
   | { type: "crop"; position: XY<number>; size: XY<number> };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
+
+export const FPS = 30;
 
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
   (props: {

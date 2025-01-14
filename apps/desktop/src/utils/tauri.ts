@@ -53,8 +53,8 @@ async focusCapturesPanel() : Promise<void> {
 async getCurrentRecording() : Promise<JsonValue<RecordingInfo | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
-async exportVideo(videoId: string, project: ProjectConfiguration, progress: TAURI_CHANNEL<RenderProgress>, force: boolean, useCustomMuxer: boolean) : Promise<string> {
-    return await TAURI_INVOKE("export_video", { videoId, project, progress, force, useCustomMuxer });
+async exportVideo(videoId: string, project: ProjectConfiguration, progress: TAURI_CHANNEL<RenderProgress>, force: boolean, fps: number) : Promise<string> {
+    return await TAURI_INVOKE("export_video", { videoId, project, progress, force, fps });
 },
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
@@ -74,8 +74,8 @@ async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<V
 async createEditorInstance(videoId: string) : Promise<SerializedEditorInstance> {
     return await TAURI_INVOKE("create_editor_instance", { videoId });
 },
-async startPlayback(videoId: string) : Promise<void> {
-    await TAURI_INVOKE("start_playback", { videoId });
+async startPlayback(videoId: string, fps: number) : Promise<void> {
+    await TAURI_INVOKE("start_playback", { videoId, fps });
 },
 async stopPlayback(videoId: string) : Promise<void> {
     await TAURI_INVOKE("stop_playback", { videoId });
@@ -231,8 +231,8 @@ export type CameraMeta = { path: string; fps?: number }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
-export type CaptureScreen = { id: number; name: string }
-export type CaptureWindow = { id: number; owner_name: string; name: string; bounds: Bounds }
+export type CaptureScreen = { id: number; name: string; refresh_rate: number }
+export type CaptureWindow = { id: number; owner_name: string; name: string; bounds: Bounds; refresh_rate: number }
 export type Crop = { position: XY<number>; size: XY<number> }
 export type CurrentRecordingChanged = null
 export type CursorAnimationStyle = "regular" | "slow" | "fast"
@@ -267,7 +267,7 @@ export type RecordingOptions = { captureTarget: ScreenCaptureTarget; cameraLabel
 export type RecordingOptionsChanged = null
 export type RecordingStarted = null
 export type RecordingStopped = { path: string }
-export type RenderFrameEvent = { frame_number: number }
+export type RenderFrameEvent = { frame_number: number; fps: number }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }

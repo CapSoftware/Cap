@@ -9,6 +9,7 @@ import { createQueryInvalidate } from "./events";
 import { createStore, reconcile } from "solid-js/store";
 import { createEffect, createMemo } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
+import { FPS } from "~/routes/editor/context";
 
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
@@ -76,6 +77,11 @@ export function createOptionsQuery() {
     createStore<PartialRecordingOptions>({
       cameraLabel: null,
       audioInputName: null,
+      fps: FPS,
+      outputResolution: {
+        width: 1920,
+        height: 1080,
+      },
     }),
     { name: "recordingOptionsQuery" }
   );

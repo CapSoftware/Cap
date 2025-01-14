@@ -31,12 +31,14 @@ pub struct CaptureWindow {
     pub owner_name: String,
     pub name: String,
     pub bounds: Bounds,
+    pub refresh_rate: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CaptureScreen {
     pub id: u32,
     pub name: String,
+    pub refresh_rate: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -58,6 +60,16 @@ impl PartialEq<Target> for ScreenCaptureTarget {
             (&ScreenCaptureTarget::Window(_), &scap::Target::Display(_))
             | (&ScreenCaptureTarget::Screen(_), &scap::Target::Window(_)) => todo!(),
         }
+    }
+}
+
+impl ScreenCaptureTarget {
+    pub fn recording_fps(&self) -> u32 {
+        match self {
+            ScreenCaptureTarget::Window(window) => window.refresh_rate,
+            ScreenCaptureTarget::Screen(screen) => screen.refresh_rate,
+        }
+        .min(MAX_FPS)
     }
 }
 
@@ -111,12 +123,13 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 }
             }),
             output_type,
-            fps: MAX_FPS,
+            fps: target.recording_fps(),
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, MAX_FPS),
             _phantom: std::marker::PhantomData,
         };
 
         let options = this.create_options();
+
         let [frame_width, frame_height] = get_output_frame_size(&options);
         this.video_info =
             VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, MAX_FPS);
@@ -160,7 +173,10 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         };
 
         let target = match &self.target {
-            ScreenCaptureTarget::Window(_) => None,
+            ScreenCaptureTarget::Window(w) => targets.into_iter().find(|t| match &t {
+                Target::Window(window) if window.id == w.id => true,
+                _ => false,
+            }),
             ScreenCaptureTarget::Screen(capture_screen) => targets
                 .iter()
                 .find(|t| match t {
@@ -168,20 +184,14 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                     _ => false,
                 })
                 .cloned(),
-        };
-
-        if let Some(Target::Display(d)) = &target {
-            #[cfg(target_os = "macos")]
-            dbg!(d.raw_handle.display_mode().unwrap().refresh_rate());
-            #[cfg(target_os = "windows")]
-            dbg!(platform::get_display_refresh_rate(d.raw_handle));
         }
+        .expect("Capture target not found");
 
         Options {
             fps: self.fps,
             show_cursor: FLAGS.record_mouse,
             show_highlight: true,
-            target,
+            target: Some(target),
             crop_area,
             output_type: self.output_type.unwrap_or(FrameType::YUVFrame),
             output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
@@ -447,6 +457,7 @@ pub fn list_screens() -> Vec<(CaptureScreen, Target)> {
                     .get(&screen.id)
                     .cloned()
                     .unwrap_or_else(|| format!("Screen {}", idx + 1)),
+                refresh_rate: get_target_fps(&Target::Display(screen.clone())).unwrap(),
             },
             Target::Display(screen),
         ));
@@ -478,6 +489,7 @@ pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
                             owner_name: platform_window.owner_name.clone(),
                             name: platform_window.name.clone(),
                             bounds: platform_window.bounds,
+                            refresh_rate: get_target_fps(&target).unwrap(),
                         },
                         target,
                     )

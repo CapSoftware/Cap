@@ -15,7 +15,7 @@ import { Tooltip } from "@kobalte/core";
 
 import { type RenderProgress, commands } from "~/utils/tauri";
 
-import { useEditorContext } from "./context";
+import { FPS, useEditorContext } from "./context";
 import { Dialog, DialogContent } from "./ui";
 import {
   type ProgressState,
@@ -304,7 +304,7 @@ function ExportButton() {
           project,
           progress,
           true,
-          useCustomMuxer
+          FPS
         );
         await commands.copyFileToPath(videoPath, path);
 
@@ -442,13 +442,7 @@ function ShareButton() {
 
         getRequestEvent()?.nativeEvent;
 
-        await commands.exportVideo(
-          videoId,
-          projectConfig,
-          progress,
-          true,
-          false
-        );
+        await commands.exportVideo(videoId, projectConfig, progress, true, FPS);
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
