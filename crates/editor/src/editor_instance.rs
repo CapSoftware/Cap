@@ -7,7 +7,7 @@ use cap_media::frame_ws::create_frame_ws;
 use cap_project::RecordingConfig;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
-    ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
+    get_duration, ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
     RenderVideoConstants, SegmentVideoPaths,
 };
 use std::ops::Deref;
@@ -32,7 +32,7 @@ pub struct EditorInstance {
     ),
     ws_shutdown: Arc<StdMutex<Option<mpsc::Sender<()>>>>,
     pub segments: Arc<Vec<Segment>>,
-    pub total_frames: u32,
+    meta: RecordingMeta,
 }
 
 impl EditorInstance {
@@ -61,12 +61,8 @@ impl EditorInstance {
         }
 
         let meta = cap_project::RecordingMeta::load_for_project(&project_path).unwrap();
+        let project = meta.project_config();
         let recordings = ProjectRecordings::new(&meta);
-
-        // Calculate total frames based on actual video duration and fps
-        let duration = recordings.duration();
-        let fps = recordings.segments[0].display.fps();
-        let total_frames = (duration * fps as f64).round() as u32;
 
         let render_options = RenderOptions {
             screen_size: XY::new(
@@ -113,10 +109,10 @@ impl EditorInstance {
             })),
             on_state_change: Box::new(on_state_change),
             preview_tx,
-            project_config: watch::channel(meta.project_config()),
+            project_config: watch::channel(project),
             ws_shutdown: Arc::new(StdMutex::new(Some(ws_shutdown))),
             segments: Arc::new(segments),
-            total_frames,
+            meta,
         });
 
         this.state.lock().await.preview_task =
@@ -268,8 +264,15 @@ impl EditorInstance {
         })
     }
 
-    pub fn get_total_frames(&self) -> u32 {
-        self.total_frames
+    pub fn get_total_frames(&self, fps: u32) -> u32 {
+        // Calculate total frames based on actual video duration and fps
+        let duration = get_duration(
+            &self.recordings,
+            &self.meta,
+            &self.project_config.1.borrow(),
+        );
+
+        (fps as f64 * duration).ceil() as u32
     }
 }
 

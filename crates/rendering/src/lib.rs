@@ -131,19 +131,8 @@ impl RecordingSegmentDecoders {
             OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_time)))
         );
 
-        // Create black frames with the correct dimensions
-        let black_screen = vec![0; (1920 * 804 * 4) as usize];
-        let black_camera = vec![0; (1920 * 1080 * 4) as usize];
-
         // Return frames or black frames as needed
-        Some((
-            screen_frame.unwrap_or_else(|| Arc::new(black_screen)),
-            self.camera.as_ref().map(|_| {
-                camera_frame
-                    .flatten()
-                    .unwrap_or_else(|| Arc::new(black_camera))
-            }),
-        ))
+        Some((screen_frame?, camera_frame.flatten()))
     }
 }
 
@@ -182,43 +171,7 @@ pub async fn render_video_to_channel(
     let start_time = Instant::now();
 
     // Get the duration from the timeline if it exists, otherwise use the longest source duration
-    let duration = {
-        let mut max_duration = recordings.duration();
-        println!("Initial screen recording duration: {}", max_duration);
-
-        // Check camera duration if it exists
-        if let Some(camera_path) = meta.content.camera_path() {
-            if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
-                println!("Camera recording duration: {}", camera_duration);
-                max_duration = max_duration.max(camera_duration);
-                println!("New max duration after camera check: {}", max_duration);
-            }
-        }
-
-        // If there's a timeline, ensure all segments extend to the max duration
-        if let Some(timeline) = &mut project.timeline {
-            println!("Found timeline with {} segments", timeline.segments.len());
-            for (i, segment) in timeline.segments.iter_mut().enumerate() {
-                println!(
-                    "Segment {} - current end: {}, max_duration: {}",
-                    i, segment.end, max_duration
-                );
-                if segment.end < max_duration {
-                    segment.end = max_duration;
-                    println!("Extended segment {} to new end: {}", i, segment.end);
-                }
-            }
-            let final_duration = timeline.duration();
-            println!(
-                "Final timeline duration after adjustments: {}",
-                final_duration
-            );
-            final_duration
-        } else {
-            println!("No timeline found, using max_duration: {}", max_duration);
-            max_duration
-        }
-    };
+    let duration = get_duration(&recordings, meta, &project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
     println!(
@@ -235,12 +188,12 @@ pub async fn render_video_to_channel(
         }
 
         let (time, segment_i) = if let Some(timeline) = &project.timeline {
-            match timeline.get_recording_time(frame_number as f64 / 30_f64) {
+            match timeline.get_recording_time(frame_number as f64 / fps as f64) {
                 Some(value) => (value.0, value.1),
-                None => (frame_number as f64 / 30_f64, Some(0u32)),
+                None => (frame_number as f64 / fps as f64, Some(0u32)),
             }
         } else {
-            (frame_number as f64 / 30_f64, Some(0u32))
+            (frame_number as f64 / fps as f64, Some(0u32))
         };
 
         let segment = &segments[segment_i.unwrap() as usize];
@@ -278,6 +231,48 @@ pub async fn render_video_to_channel(
     );
 
     Ok(())
+}
+
+pub fn get_duration(
+    recordings: &ProjectRecordings,
+    meta: &RecordingMeta,
+    project: &ProjectConfiguration,
+) -> f64 {
+    let mut max_duration = recordings.duration();
+    println!("Initial screen recording duration: {}", max_duration);
+
+    // Check camera duration if it exists
+    if let Some(camera_path) = meta.content.camera_path() {
+        if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
+            println!("Camera recording duration: {}", camera_duration);
+            max_duration = max_duration.max(camera_duration);
+            println!("New max duration after camera check: {}", max_duration);
+        }
+    }
+
+    // If there's a timeline, ensure all segments extend to the max duration
+    if let Some(timeline) = &project.timeline {
+        println!("Found timeline with {} segments", timeline.segments.len());
+        // for (i, segment) in timeline.segments.iter().enumerate() {
+        //     println!(
+        //         "Segment {} - current end: {}, max_duration: {}",
+        //         i, segment.end, max_duration
+        //     );
+        //     if segment.end < max_duration {
+        //         segment.end = max_duration;
+        //         println!("Extended segment {} to new end: {}", i, segment.end);
+        //     }
+        // }
+        let final_duration = timeline.duration();
+        println!(
+            "Final timeline duration after adjustments: {}",
+            final_duration
+        );
+        final_duration
+    } else {
+        println!("No timeline found, using max_duration: {}", max_duration);
+        max_duration
+    }
 }
 
 pub struct RenderVideoConstants {
@@ -969,6 +964,7 @@ pub async fn produce_frame(
 
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // dbg!(constants.options.screen_size.x, screen_frame.len());
         constants.queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &texture,
