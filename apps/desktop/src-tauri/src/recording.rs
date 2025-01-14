@@ -252,7 +252,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                         config,
                         tauri::ipc::Channel::new(|_| Ok(())),
                         true,
-                        true,
+                        completed_recording.meta.content.max_fps(),
                     )
                     .await
                     .ok();

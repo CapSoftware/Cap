@@ -7,7 +7,8 @@ use std::{
 use ffmpeg::{
     codec::{self, Capabilities},
     format::{self},
-    frame, rescale,
+    frame::{self, Video},
+    rescale,
     software::{self, scaling},
     Codec, Rational, Rescale,
 };
@@ -17,7 +18,7 @@ use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 pub type DecodedFrame = Arc<Vec<u8>>;
 
 enum VideoDecoderMessage {
-    GetFrame(u32, tokio::sync::oneshot::Sender<Option<Arc<Vec<u8>>>>),
+    GetFrame(f32, tokio::sync::oneshot::Sender<Option<Arc<Vec<u8>>>>),
 }
 
 fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
@@ -26,10 +27,6 @@ fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
 }
 
 const FRAME_CACHE_SIZE: usize = 100;
-// TODO: Allow dynamic FPS values by either passing it into `spawn`
-// or changing `get_frame` to take the requested time instead of frame number,
-// so that the lookup can be done by PTS instead of frame number.
-const FPS: u32 = 30;
 
 #[derive(Clone)]
 struct CachedFrame {
@@ -37,27 +34,24 @@ struct CachedFrame {
 }
 
 impl CachedFrame {
-    fn process(
-        &mut self,
-        scaler_input_format: &mut format::Pixel,
-        scaler: &mut scaling::Context,
-        decoder: &codec::decoder::Video,
-    ) -> Arc<Vec<u8>> {
+    fn process(&mut self, decoder: &codec::decoder::Video) -> Arc<Vec<u8>> {
         match &mut self.data {
             CachedFrameData::Raw(frame) => {
-                if frame.format() != *scaler_input_format {
+                let rgb_frame = if frame.format() != format::Pixel::RGBA {
                     // Reinitialize the scaler with the new input format
-                    *scaler_input_format = frame.format();
-                    *scaler = software::converter(
+                    let mut scaler = software::converter(
                         (decoder.width(), decoder.height()),
-                        *scaler_input_format,
+                        frame.format(),
                         format::Pixel::RGBA,
                     )
                     .unwrap();
-                }
 
-                let mut rgb_frame = frame::Video::empty();
-                scaler.run(&frame, &mut rgb_frame).unwrap();
+                    let mut rgb_frame = frame::Video::empty();
+                    scaler.run(&frame, &mut rgb_frame).unwrap();
+                    rgb_frame
+                } else {
+                    std::mem::replace(frame, frame::Video::empty())
+                };
 
                 let width = rgb_frame.width() as usize;
                 let height = rgb_frame.height() as usize;
@@ -93,7 +87,7 @@ enum CachedFrameData {
 pub struct AsyncVideoDecoder;
 
 impl AsyncVideoDecoder {
-    pub fn spawn(path: PathBuf) -> AsyncVideoDecoderHandle {
+    pub fn spawn(path: PathBuf, fps: u32) -> AsyncVideoDecoderHandle {
         let (tx, rx) = mpsc::channel();
 
         std::thread::spawn(move || {
@@ -149,18 +143,6 @@ impl AsyncVideoDecoder {
 
             use ffmpeg::format::Pixel;
 
-            let mut scaler_input_format = hw_device
-                .as_ref()
-                .map(|d| d.pix_fmt)
-                .unwrap_or(decoder.format());
-
-            let mut scaler = ffmpeg::software::converter(
-                (decoder.width(), decoder.height()),
-                scaler_input_format,
-                Pixel::RGBA,
-            )
-            .unwrap();
-
             let mut temp_frame = ffmpeg::frame::Video::empty();
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
@@ -177,10 +159,10 @@ impl AsyncVideoDecoder {
 
             while let Ok(r) = peekable_requests.recv() {
                 match r {
-                    VideoDecoderMessage::GetFrame(requested_frame, sender) => {
+                    VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                        let requested_frame = (requested_time * fps as f32).floor() as u32;
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
-                            let data =
-                                cached.process(&mut scaler_input_format, &mut scaler, &decoder);
+                            let data = cached.process(&decoder);
 
                             sender.send(Some(data.clone())).ok();
                             last_sent_frame = Some((requested_frame, data));
@@ -258,7 +240,7 @@ impl AsyncVideoDecoder {
                                     let current_frame = pts_to_frame(
                                         temp_frame.pts().unwrap() - start_offset,
                                         time_base,
-                                        FPS,
+                                        fps,
                                     );
 
                                     last_decoded_frame = Some(current_frame);
@@ -294,11 +276,7 @@ impl AsyncVideoDecoder {
 
                                         if current_frame == requested_frame {
                                             if let Some(sender) = sender.take() {
-                                                let data = cache_frame.process(
-                                                    &mut scaler_input_format,
-                                                    &mut scaler,
-                                                    &decoder,
-                                                );
+                                                let data = cache_frame.process(&decoder);
                                                 last_sent_frame =
                                                     Some((current_frame, data.clone()));
                                                 sender.send(Some(data)).ok();
@@ -361,7 +339,7 @@ pub struct AsyncVideoDecoderHandle {
 }
 
 impl AsyncVideoDecoderHandle {
-    pub async fn get_frame(&self, time: u32) -> Option<Arc<Vec<u8>>> {
+    pub async fn get_frame(&self, time: f32) -> Option<Arc<Vec<u8>>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.sender
             .send(VideoDecoderMessage::GetFrame(time, tx))

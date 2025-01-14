@@ -8,7 +8,6 @@ use cap_project::{
     REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD, SLOW_SMOOTHING_SAMPLES,
     SLOW_VELOCITY_THRESHOLD, XY,
 };
-use cap_recording::segmented_actor::RecordingSegment;
 use core::f64;
 use decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle};
 use futures::future::OptionFuture;
@@ -101,21 +100,35 @@ pub struct SegmentVideoPaths<'a> {
 
 impl RecordingSegmentDecoders {
     pub fn new(meta: &RecordingMeta, segment: SegmentVideoPaths) -> Self {
-        let screen = AsyncVideoDecoder::spawn(meta.project_path.join(segment.display));
-        let camera = segment
-            .camera
-            .map(|camera| AsyncVideoDecoder::spawn(meta.project_path.join(camera)));
+        let screen = AsyncVideoDecoder::spawn(
+            meta.project_path.join(segment.display),
+            match &meta.content {
+                Content::SingleSegment { segment } => segment.display.fps,
+                Content::MultipleSegments { inner } => inner.segments[0].display.fps,
+            },
+        );
+        let camera = segment.camera.map(|camera| {
+            AsyncVideoDecoder::spawn(
+                meta.project_path.join(camera),
+                match &meta.content {
+                    Content::SingleSegment { segment } => segment.camera.as_ref().unwrap().fps,
+                    Content::MultipleSegments { inner } => {
+                        inner.segments[0].camera.as_ref().unwrap().fps
+                    }
+                },
+            )
+        });
 
         Self { screen, camera }
     }
 
     pub async fn get_frames(
         &self,
-        frame_number: u32,
+        frame_time: f32,
     ) -> Option<(DecodedFrame, Option<DecodedFrame>)> {
         let (screen_frame, camera_frame) = tokio::join!(
-            self.screen.get_frame(frame_number),
-            OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
+            self.screen.get_frame(frame_time),
+            OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_time)))
         );
 
         // Create black frames with the correct dimensions
@@ -231,8 +244,8 @@ pub async fn render_video_to_channel(
         };
 
         let segment = &segments[segment_i.unwrap() as usize];
-        let frame_time = frame_number;
-        let Some((screen_frame, camera_frame)) = segment.decoders.get_frames(frame_time).await
+        // let frame_time = frame_number;
+        let Some((screen_frame, camera_frame)) = segment.decoders.get_frames(time as f32).await
         else {
             break;
         };
@@ -774,7 +787,7 @@ impl ProjectUniforms {
 
                 // Calculate camera size based on zoom
                 let base_size = project.camera.size / 100.0;
-                let zoom_size = project.camera.zoom_size.unwrap_or(20.0) / 100.0;
+                let zoom_size = project.camera.zoom_size.unwrap_or(60.0) / 100.0;
 
                 let zoomed_size = (interpolated_zoom.t as f32) * zoom_size * base_size
                     + (1.0 - interpolated_zoom.t as f32) * base_size;

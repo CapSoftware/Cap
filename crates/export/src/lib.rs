@@ -10,12 +10,9 @@ use cap_rendering::{
     ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants, RenderedFrame,
     SegmentVideoPaths,
 };
-use ffmpeg::Rational;
 use futures::FutureExt;
 use image::{ImageBuffer, Rgba};
 use std::{path::PathBuf, sync::Arc};
-
-const FPS: u32 = 30;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExportError {
@@ -45,6 +42,7 @@ pub struct Exporter<TOnProgress> {
     on_progress: TOnProgress,
     meta: RecordingMeta,
     render_constants: Arc<RenderVideoConstants>,
+    fps: u32,
 }
 
 impl<TOnProgress> Exporter<TOnProgress>
@@ -105,6 +103,7 @@ where
             render_segments,
             audio_segments,
             output_size,
+            fps,
         })
     }
 
@@ -117,6 +116,8 @@ where
 
         let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<RenderedFrame>(4);
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
+
+        let fps = self.fps;
 
         let audio_info = match self.audio_segments.get(0).and_then(|d| d.as_ref().as_ref()) {
             Some(audio_data) => Some(
@@ -137,7 +138,7 @@ where
                     MP4Encoder::video_format(),
                     self.output_size.0,
                     self.output_size.1,
-                    FPS,
+                    self.fps,
                 ),
                 audio_info,
                 cap_media::encoders::Output::File(self.output_path.clone()),
@@ -192,7 +193,7 @@ where
 
                         let audio_info = audio.buffer.info();
                         let estimated_samples_per_frame =
-                            f64::from(audio_info.sample_rate) / f64::from(FPS);
+                            f64::from(audio_info.sample_rate) / f64::from(self.fps);
                         let samples = estimated_samples_per_frame.ceil() as usize;
 
                         if let Some((_, frame_data)) = audio
@@ -200,7 +201,7 @@ where
                             .next_frame_data(samples, project.timeline.as_ref().map(|t| t))
                         {
                             let mut frame = audio_info.wrap_frame(&frame_data, 0);
-                            let pts = (frame_count as f64 * f64::from(audio_info.sample_rate) / f64::from(FPS)) as i64;
+                            let pts = (frame_count as f64 * f64::from(audio_info.sample_rate) / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
                             println!(
                                 "Export: Sending audio frame {} with PTS: {:?}, samples: {}, data size: {}",
@@ -291,7 +292,7 @@ where
             tx_image_data,
             &self.meta,
             self.render_segments,
-            FPS,
+            self.fps,
         )
         .then(|f| async { f.map_err(Into::into) });
 

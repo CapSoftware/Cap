@@ -17,14 +17,11 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { createMutation } from "@tanstack/solid-query";
-import {
-  createEventListener,
-  createEventListenerMap,
-} from "@solid-primitives/event-listener";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { events, commands } from "~/utils/tauri";
-import { EditorContextProvider, useEditorContext } from "./context";
+import { events } from "~/utils/tauri";
+import { EditorContextProvider, FPS, useEditorContext } from "./context";
 import {
   Dialog,
   DialogContent,
@@ -41,9 +38,6 @@ import { Header } from "./Header";
 import { Player } from "./Player";
 import { ConfigSidebar } from "./ConfigSidebar";
 import { Timeline } from "./Timeline";
-import { JSX } from "solid-js/jsx-runtime";
-
-export const FPS = 30;
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -88,6 +82,7 @@ function Inner() {
   const renderFrame = throttle((time: number) => {
     events.renderFrameEvent.emit({
       frame_number: Math.max(Math.floor(time * FPS), 0),
+      fps: FPS,
     });
   }, 1000 / 60);
 

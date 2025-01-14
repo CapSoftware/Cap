@@ -17,6 +17,7 @@ import { createMemo } from "solid-js";
 
 import { commands, TimelineSegment } from "~/utils/tauri";
 import {
+  FPS,
   SegmentContextProvider,
   TimelineContextProvider,
   TrackContextProvider,
@@ -26,7 +27,6 @@ import {
   useTrackContext,
 } from "./context";
 import { formatTime } from "./utils";
-import { FPS } from "./Editor";
 
 export function Timeline() {
   const {

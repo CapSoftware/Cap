@@ -4,6 +4,7 @@ import { createEffect, createResource } from "solid-js";
 import { events, commands } from "~/utils/tauri";
 import { createPresets } from "~/utils/createPresets";
 import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import { FPS } from "./context";
 
 export const OUTPUT_SIZE = {
   width: 1920,
@@ -31,6 +32,7 @@ export const [EditorInstanceContextProvider, useEditorInstanceContext] =
         if (isConnected()) {
           events.renderFrameEvent.emit({
             frame_number: Math.floor(0),
+            fps: FPS,
           });
         }
       });

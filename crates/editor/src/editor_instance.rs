@@ -10,14 +10,11 @@ use cap_rendering::{
     ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
     RenderVideoConstants, SegmentVideoPaths,
 };
-use ffmpeg::Rational;
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
 use std::time::Instant;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
-
-const FPS: u32 = 30;
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
@@ -180,7 +177,7 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
-    pub async fn start_playback(self: Arc<Self>) {
+    pub async fn start_playback(self: Arc<Self>, fps: u32) {
         let (mut handle, prev) = {
             let Ok(mut state) = self.state.try_lock() else {
                 return;
@@ -195,7 +192,7 @@ impl EditorInstance {
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
             }
-            .start()
+            .start(fps)
             .await;
 
             let prev = state.playback_task.replace(playback_handle.clone());
@@ -230,36 +227,30 @@ impl EditorInstance {
 
     fn spawn_preview_renderer(
         self: Arc<Self>,
-        mut preview_rx: watch::Receiver<Option<u32>>,
+        mut preview_rx: watch::Receiver<Option<(u32, u32)>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 preview_rx.changed().await.unwrap();
-                let Some(frame_number) = *preview_rx.borrow().deref() else {
+                let Some((frame_number, fps)) = *preview_rx.borrow().deref() else {
                     continue;
                 };
 
                 let project = self.project_config.1.borrow().clone();
 
-                let now = Instant::now();
-
                 let Some((time, segment)) = project
                     .timeline
                     .as_ref()
-                    .map(|timeline| timeline.get_recording_time(frame_number as f64 / FPS as f64))
-                    .unwrap_or(Some((frame_number as f64 / FPS as f64, None)))
+                    .map(|timeline| timeline.get_recording_time(frame_number as f64 / fps as f64))
+                    .unwrap_or(Some((frame_number as f64 / fps as f64, None)))
                 else {
                     continue;
                 };
 
                 let segment = &self.segments[segment.unwrap_or(0) as usize];
 
-                let now = Instant::now();
-
-                let Some((screen_frame, camera_frame)) = segment
-                    .decoders
-                    .get_frames((time * FPS as f64) as u32)
-                    .await
+                let Some((screen_frame, camera_frame)) =
+                    segment.decoders.get_frames(time as f32).await
                 else {
                     continue;
                 };
@@ -290,7 +281,7 @@ impl Drop for EditorInstance {
     }
 }
 
-type PreviewFrameInstruction = u32;
+type PreviewFrameInstruction = (u32, u32);
 
 pub struct EditorState {
     pub playhead_position: u32,

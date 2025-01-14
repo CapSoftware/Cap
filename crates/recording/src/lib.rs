@@ -23,6 +23,7 @@ impl Default for RecordingOptions {
             capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
                 id: 0,
                 name: String::new(),
+                refresh_rate: 0,
             }),
             camera_label: None,
             audio_input_name: None,

@@ -8,7 +8,7 @@ import { For, Show, Suspense, createEffect, createSignal } from "solid-js";
 import { reconcile } from "solid-js/store";
 
 import { type AspectRatio, commands } from "~/utils/tauri";
-import { useEditorContext } from "./context";
+import { FPS, useEditorContext } from "./context";
 import { ASPECT_RATIOS } from "./projectConfig";
 import {
   ComingSoonTooltip,
@@ -88,13 +88,13 @@ export function Player() {
         await commands.stopPlayback(videoId);
         setPlaybackTime(0);
         await commands.seekTo(videoId, 0);
-        await commands.startPlayback(videoId);
+        await commands.startPlayback(videoId, FPS);
         setPlaying(true);
       } else if (playing()) {
         await commands.stopPlayback(videoId);
         setPlaying(false);
       } else {
-        await commands.startPlayback(videoId);
+        await commands.startPlayback(videoId, FPS);
         setPlaying(true);
       }
     } catch (error) {

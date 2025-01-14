@@ -849,6 +849,7 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
 #[derive(Deserialize, specta::Type, tauri_specta::Event, Debug, Clone)]
 struct RenderFrameEvent {
     frame_number: u32,
+    fps: u32,
 }
 
 #[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
@@ -866,10 +867,10 @@ impl EditorStateChanged {
 
 #[tauri::command]
 #[specta::specta]
-async fn start_playback(app: AppHandle, video_id: String) {
+async fn start_playback(app: AppHandle, video_id: String, fps: u32) {
     upsert_editor_instance(&app, video_id)
         .await
-        .start_playback()
+        .start_playback(fps)
         .await
 }
 
@@ -1449,7 +1450,8 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
                 },
             },
         }
-        .save_for_project();
+        .save_for_project()
+        .unwrap();
 
         NewScreenshotAdded {
             path: screenshot_path,
@@ -2017,6 +2019,7 @@ pub async fn run() {
                         capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
                             id: 0,
                             name: String::new(),
+                            refresh_rate: 0,
                         }),
                         camera_label: None,
                         audio_input_name: None,
@@ -2265,7 +2268,9 @@ async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<E
     RenderFrameEvent::listen_any(app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
-            preview_tx.send(Some(e.payload.frame_number)).ok();
+            preview_tx
+                .send(Some((e.payload.frame_number, e.payload.fps)))
+                .ok();
         }
     });
 
