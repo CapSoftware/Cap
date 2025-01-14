@@ -356,15 +356,23 @@ impl FrameConverter {
             camera_format.frame_rate(),
         );
 
-        // Create FFmpeg converter
+        // Create FFmpeg converter with platform-specific pixel format
+        let initial_pixel_format = if camera_format.format() == FrameFormat::YUYV {
+            #[cfg(target_os = "macos")]
+            {
+                ffmpeg::format::Pixel::UYVY422
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                ffmpeg::format::Pixel::YUYV422
+            }
+        } else {
+            video_info.pixel_format
+        };
+
         let context = ffmpeg::software::converter(
             (video_info.width, video_info.height),
-            if camera_format.format() == FrameFormat::YUYV {
-                // Try YUYV422 first, if that doesn't work the converter will be recreated with UYVY422
-                ffmpeg::format::Pixel::YUYV422
-            } else {
-                video_info.pixel_format
-            },
+            initial_pixel_format,
             ffmpeg::format::Pixel::RGBA,
         )
         .unwrap();
@@ -382,37 +390,55 @@ impl FrameConverter {
 
         match self.format {
             FrameFormat::YUYV => {
-                // Try converting with YUYV422 first
-                let result = self.convert_with_ffmpeg(buffer, resolution);
-                
-                // If conversion fails (black/corrupted output), try with UYVY422
-                if result.iter().all(|&x| x == 0) {
-                    // Recreate context with UYVY422
-                    self.context = ffmpeg::software::converter(
-                        (self.video_info.width, self.video_info.height),
-                        ffmpeg::format::Pixel::UYVY422,
-                        ffmpeg::format::Pixel::RGBA,
-                    )
-                    .unwrap();
-                    
-                    // Try converting again with UYVY422
-                    self.convert_with_ffmpeg(buffer, resolution)
-                } else {
-                    result
+                // Use platform-specific pixel format
+                #[cfg(target_os = "macos")]
+                let pixel_format = ffmpeg::format::Pixel::UYVY422;
+                #[cfg(not(target_os = "macos"))]
+                let pixel_format = ffmpeg::format::Pixel::YUYV422;
+
+                // Create input frame with platform-specific format
+                let mut input_frame =
+                    FFVideo::new(pixel_format, resolution.width(), resolution.height());
+
+                let stride = resolution.width() as usize * 2;
+                let src = buffer.buffer();
+
+                // Copy data line by line
+                {
+                    let dst_stride = input_frame.stride(0);
+                    let dst = input_frame.data_mut(0);
+                    for y in 0..resolution.height() as usize {
+                        let src_offset = y * stride;
+                        let dst_offset = y * dst_stride;
+                        dst[dst_offset..dst_offset + stride]
+                            .copy_from_slice(&src[src_offset..src_offset + stride]);
+                    }
                 }
-            },
+
+                // Create output frame
+                let mut rgba_frame = FFVideo::new(
+                    ffmpeg::format::Pixel::RGBA,
+                    resolution.width(),
+                    resolution.height(),
+                );
+
+                // Convert the frame
+                if self.context.run(&input_frame, &mut rgba_frame).is_ok() {
+                    rgba_frame.data(0).to_vec()
+                } else {
+                    vec![0; (resolution.width() * resolution.height() * 4) as usize]
+                }
+            }
             _ => match &self.hw_converter {
-                Some(HwConverter::NV12(converter)) => {
-                    converter.convert(
-                        NV12Input::from_buffer(
-                            buffer.buffer(),
-                            resolution.width(),
-                            resolution.height(),
-                        ),
+                Some(HwConverter::NV12(converter)) => converter.convert(
+                    NV12Input::from_buffer(
+                        buffer.buffer(),
                         resolution.width(),
                         resolution.height(),
-                    )
-                }
+                    ),
+                    resolution.width(),
+                    resolution.height(),
+                ),
                 _ => self.convert_with_ffmpeg(buffer, resolution),
             },
         }
