@@ -1,10 +1,13 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{env::current_dir, path::PathBuf, sync::Arc};
 
 use cap_editor::create_segments;
 use cap_media::sources::{get_target_fps, ScreenCaptureTarget};
 use cap_project::{RecordingMeta, XY};
+use cap_recording::RecordingOptions;
 use cap_rendering::RenderVideoConstants;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use uuid::Uuid;
 
 #[derive(Parser)]
 struct Cli {
@@ -54,6 +57,12 @@ struct RecordStartArgs {
     /// ID of the microphone to record
     #[arg(long)]
     mic: Option<u32>,
+    #[arg(long)]
+    /// Path to save the '.cap' project to
+    path: Option<PathBuf>,
+    /// Maximum fps to record at (max 60)
+    #[arg(long)]
+    fps: Option<u32>,
 }
 
 #[derive(Args)]
@@ -183,7 +192,39 @@ window {}:
                     })
                     .ok_or("No target specified".to_string())??;
 
-                dbg!(target_info);
+                dbg!(&target_info);
+
+                let id = Uuid::new_v4().to_string();
+                let path = args
+                    .path
+                    .unwrap_or_else(|| current_dir().unwrap().join(format!("{id}.cap")));
+
+                let actor = cap_recording::spawn_recording_actor(
+                    id,
+                    path,
+                    RecordingOptions {
+                        capture_target: target_info,
+                        camera_label: None,
+                        audio_input_name: None,
+                        fps: 30,
+                        output_resolution: None,
+                    },
+                    None,
+                    None,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+                println!("Recording starting, press Enter to stop");
+
+                tokio::io::BufReader::new(tokio::io::stdin())
+                    .read_line(&mut String::new())
+                    .await
+                    .unwrap();
+
+                println!("Recording stopped");
+
+                actor.stop().await.unwrap();
             }
             _ => {}
         },

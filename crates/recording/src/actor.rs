@@ -6,6 +6,7 @@ use std::{
 
 use cap_flags::FLAGS;
 use cap_media::{
+    data::Pixel,
     encoders::{H264Encoder, MP3Encoder, Output},
     feeds::{AudioInputFeed, CameraFeed},
     filters::VideoFilter,
@@ -542,7 +543,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         let screen_config = source.info();
         let screen_encoder = cap_media::encoders::H264AVAssetWriterEncoder::init(
             "screen",
-            screen_config,
+            dbg!(screen_config),
             Output::File(output_path.into()),
         )?;
 
@@ -561,8 +562,11 @@ impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
     where
         Self: Sized,
     {
-        let screen_config = source.info();
-        let screen_filter = VideoFilter::init("screen", screen_config, screen_config)?;
+        let mut screen_config = source.info();
+        let screen_filter = VideoFilter::init("screen", screen_config, {
+            screen_config.pixel_format = Pixel::NV12;
+            screen_config
+        })?;
         let screen_encoder =
             H264Encoder::init("screen", screen_config, Output::File(output_path.into()))?;
         Ok(builder
