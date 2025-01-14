@@ -142,8 +142,14 @@ impl AsyncVideoDecoder {
                         )
                         .ok()
                 }
+                #[cfg(target_os = "windows")]
+                {
+                    decoder
+                        .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA, Pixel::NV12)
+                        .ok()
+                }
 
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                 None
             };
 
