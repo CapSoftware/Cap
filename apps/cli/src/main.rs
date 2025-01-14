@@ -5,8 +5,8 @@ use cap_media::sources::{get_target_fps, ScreenCaptureTarget};
 use cap_project::{RecordingMeta, XY};
 use cap_recording::RecordingOptions;
 use cap_rendering::RenderVideoConstants;
-use clap::{Args, Parser, Subcommand, ValueEnum};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use clap::{Args, Parser, Subcommand};
+use tokio::io::AsyncBufReadExt;
 use uuid::Uuid;
 
 #[derive(Parser)]

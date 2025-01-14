@@ -45,7 +45,7 @@ pub async fn export_video(
     );
 
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-    let total_frames = editor_instance.get_total_frames();
+    let total_frames = editor_instance.get_total_frames(fps);
 
     let output_path = editor_instance.meta().output_path();
 

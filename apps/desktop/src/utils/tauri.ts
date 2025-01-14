@@ -161,8 +161,8 @@ async showWindow(window: ShowCapWindow) : Promise<void> {
 async writeClipboardString(text: string) : Promise<null> {
     return await TAURI_INVOKE("write_clipboard_string", { text });
 },
-async getEditorTotalFrames(videoId: string) : Promise<number> {
-    return await TAURI_INVOKE("get_editor_total_frames", { videoId });
+async getEditorTotalFrames(videoId: string, fps: number) : Promise<number> {
+    return await TAURI_INVOKE("get_editor_total_frames", { videoId, fps });
 }
 }
 
