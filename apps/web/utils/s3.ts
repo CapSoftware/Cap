@@ -1,7 +1,9 @@
 import { S3Client } from "@aws-sdk/client-s3";
-import type { s3Buckets } from "@cap/database/schema";
+import { s3Buckets } from "@cap/database/schema";
 import type { InferSelectModel } from "drizzle-orm";
 import { decrypt } from "@cap/database/crypto";
+
+type S3Bucket = InferSelectModel<typeof s3Buckets>;
 
 type S3Config = {
   endpoint?: string | null;
@@ -42,14 +44,18 @@ export async function getS3Config(config?: S3Config) {
   };
 }
 
-export async function getS3Bucket(
-  bucket?: InferSelectModel<typeof s3Buckets> | null
-) {
-  if (!bucket?.bucketName) {
-    return process.env.NEXT_PUBLIC_CAP_AWS_BUCKET || "";
+export async function getS3Bucket(bucket: S3Bucket | null) {
+  if (!bucket) {
+    return process.env.CAP_S3_BUCKET || "";
   }
 
-  return (await tryDecrypt(bucket.bucketName) ?? process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) || "";
+  // For Supabase, we need to use the bucket name directly without any path
+  if (bucket.provider === 'supabase') {
+    return bucket.bucketName;
+  }
+
+  // For other providers, use existing logic
+  return bucket.bucketName || process.env.CAP_S3_BUCKET || "";
 }
 
 export async function createS3Client(config?: S3Config) {

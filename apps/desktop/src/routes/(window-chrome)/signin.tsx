@@ -10,11 +10,12 @@ import {
   useNavigate,
 } from "@solidjs/router";
 import { onMount, onCleanup } from "solid-js";
+import { getCurrentWindow, Window } from "@tauri-apps/api/window";
 
 import callbackTemplate from "./callback.template";
 import { authStore } from "~/store";
 import { clientEnv } from "~/utils/env";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { commands } from "~/utils/tauri";
 
 const signInAction = action(async () => {
   let res: (url: URL) => void;
@@ -75,10 +76,6 @@ const signInAction = action(async () => {
       plan: { upgraded: false, last_checked: 0 },
     });
 
-    getCurrentWindow()
-      .setFocus()
-      .catch(() => {});
-
     return redirect("/");
   } catch (error) {
     console.error("Sign in failed:", error);
@@ -91,6 +88,15 @@ export default function Page() {
   const signIn = useAction(signInAction);
   const submission = useSubmission(signInAction);
   const navigate = useNavigate();
+
+  const handleSkipAuth = async () => {
+    // Use the Rust-side command which properly handles showing and focusing
+    await commands.openMainWindow();
+    // Close the current window after a small delay
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const currentWindow = await getCurrentWindow();
+    await currentWindow.close();
+  };
 
   // Listen for auth changes and redirect to signin if auth is cleared
   onMount(async () => {
@@ -122,16 +128,26 @@ export default function Page() {
     <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100">
       <div class="space-y-[0.375rem] flex-1">
         <IconCapLogo class="size-[3rem]" />
-        <h1 class="text-[1rem] font-[700] text-black-transparent-80">Sign in to Cap</h1>
+        <h1 class="text-[1rem] font-[700] text-black-transparent-80">
+          Sign in to Cap
+        </h1>
         <p class="text-gray-400">Beautiful screen recordings, owned by you.</p>
       </div>
-      {submission.pending ? (
-        <Button variant="secondary" onClick={() => submission.clear()}>
-          Cancel sign in
-        </Button>
-      ) : (
-        <Button onClick={() => signIn()}>Sign in with your browser</Button>
-      )}
+      <div class="flex flex-col gap-2">
+        {submission.pending ? (
+          <Button variant="secondary" onClick={() => submission.clear()}>
+            Cancel sign in
+          </Button>
+        ) : (
+          <Button onClick={() => signIn()}>Sign in with your browser</Button>
+        )}
+        <span
+          onClick={handleSkipAuth}
+          class="text-center text-gray-400 hover:text-gray-500 underline cursor-pointer"
+        >
+          Skip auth
+        </span>
+      </div>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { S3Client, HeadBucketCommand } from "@aws-sdk/client-s3";
 
-const TIMEOUT_MS = 5000; // 5 second timeout
+const TIMEOUT_MS = 5000;
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
     const origin = request.headers.get("origin") as string;
 
     if (!user) {
+      console.error("Unauthorized user attempted to test S3 config");
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
         headers: {
@@ -33,9 +34,11 @@ export async function POST(request: NextRequest) {
     }
 
     const data = await request.json();
+    console.log("Received S3 config test request with data:", data);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
+      console.warn("S3 config test request timed out after 5 seconds");
       controller.abort();
     }, TIMEOUT_MS);
 
@@ -48,7 +51,8 @@ export async function POST(request: NextRequest) {
       },
       requestHandler: {
         abortSignal: controller.signal
-      }
+      },
+      forcePathStyle: data.provider === 'supabase'
     });
 
     try {
@@ -59,8 +63,10 @@ export async function POST(request: NextRequest) {
       );
       
       clearTimeout(timeoutId);
+      console.log("S3 config test successful");
     } catch (error) {
       clearTimeout(timeoutId);
+      console.error("S3 config test failed:", error);
       let errorMessage = "Failed to connect to S3";
       
       if (error instanceof Error) {
@@ -104,6 +110,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    console.error("An unexpected error occurred during S3 config test:", error);
     return new Response(
       JSON.stringify({ 
         error: "Failed to connect to S3",

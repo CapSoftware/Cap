@@ -54,7 +54,7 @@ export const Navbar = ({ auth }: { auth: boolean }) => {
               />
             </a>
           </div>
-          <div className="block md:hidden">
+          <div className="flex items-center md:hidden">
             <button onClick={() => setShowMobileMenu(!showMobileMenu)}>
               <Menu
                 className={`w-[28px] h-[28px] ${

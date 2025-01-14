@@ -11,7 +11,7 @@ export default function AppsTab() {
   const [isUpgraded] = createResource(checkIsUpgradedAndUpdate);
 
   const apps = [
-    window.FLAGS.customS3 && {
+    {
       name: "S3 Config",
       description:
         "Connect your own S3 bucket. All new shareable link uploads will be uploaded here. Maintain complete ownership over your data.",

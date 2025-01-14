@@ -24,6 +24,13 @@ const DEFAULT_CONFIG = {
   region: "us-east-1",
 };
 
+const PROVIDER_ENDPOINTS = {
+  aws: "https://s3.amazonaws.com",
+  cloudflare: "https://{{accountid}}.r2.cloudflarestorage.com",
+  supabase: "https://{{projectid}}.supabase.co",
+  other: "",
+};
+
 export default function S3ConfigPage() {
   const [provider, setProvider] = createSignal(DEFAULT_CONFIG.provider);
   const [accessKeyId, setAccessKeyId] = createSignal(
@@ -49,12 +56,6 @@ export default function S3ConfigPage() {
     setBucketName(DEFAULT_CONFIG.bucketName);
     setRegion(DEFAULT_CONFIG.region);
     setHasConfig(false);
-  };
-
-  const handleAuthError = async () => {
-    console.error("User not authenticated");
-    const window = getCurrentWindow();
-    window.close();
   };
 
   onMount(async () => {
@@ -144,7 +145,9 @@ export default function S3ConfigPage() {
     setTesting(true);
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5500); // 5.5s timeout (slightly longer than backend)
+      const timeoutId = setTimeout(() => controller.abort(), 5500);
+
+      console.log("Testing with provider:", provider());
 
       const response = await apiClient.desktop.testS3Config({
         body: {
@@ -156,6 +159,9 @@ export default function S3ConfigPage() {
           region: region(),
         },
         headers: await protectedHeaders(),
+        fetchOptions: {
+          signal: controller.signal,
+        },
       });
 
       clearTimeout(timeoutId);
@@ -178,11 +184,12 @@ export default function S3ConfigPage() {
           try {
             const errorResponse = (error as { response: Response }).response;
             const errorData = await errorResponse.json();
+            console.error("S3 test error response:", errorData);
             if (errorData?.error) {
               errorMessage = errorData.error;
             }
           } catch (e) {
-            // If we can't parse the error response, use the default message
+            console.error("Failed to parse error response:", e);
           }
         }
       }
@@ -190,6 +197,15 @@ export default function S3ConfigPage() {
       await commands.globalMessageDialog(errorMessage);
     } finally {
       setTesting(false);
+    }
+  };
+
+  const handleProviderChange = (value: string) => {
+    setProvider(value);
+    if (value === "aws") {
+      setEndpoint("https://s3.amazonaws.com");
+    } else {
+      setEndpoint("");
     }
   };
 
@@ -248,11 +264,14 @@ export default function S3ConfigPage() {
                 <div class="relative">
                   <select
                     value={provider()}
-                    onChange={(e) => setProvider(e.currentTarget.value)}
+                    onChange={(e) =>
+                      handleProviderChange(e.currentTarget.value)
+                    }
                     class="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white pr-10"
                   >
                     <option value="aws">AWS S3</option>
                     <option value="cloudflare">Cloudflare R2</option>
+                    <option value="supabase">Supabase</option>
                     <option value="other">Other S3-Compatible</option>
                   </select>
                   <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">

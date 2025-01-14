@@ -8,6 +8,7 @@ import {
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
@@ -67,6 +68,7 @@ export const route = {
 };
 
 export default function () {
+  const navigate = useNavigate();
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
 
@@ -89,6 +91,15 @@ export default function () {
   createUpdateCheck();
 
   onMount(async () => {
+    // Listen for start-auth event
+    const unlisten = await listen("start-auth", () => {
+      navigate("/signin", { replace: true });
+    });
+
+    onCleanup(() => {
+      unlisten();
+    });
+
     if (options.data?.cameraLabel && options.data.cameraLabel !== "No Camera") {
       const cameraWindowActive = await commands.isCameraWindowOpen();
 

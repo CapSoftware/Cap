@@ -2,13 +2,25 @@ import { A, type RouteSectionProps } from "@solidjs/router";
 import { createResource, For, Show, Suspense } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { emit } from "@tauri-apps/api/event";
 import "@total-typescript/ts-reset/filter-boolean";
 
 import { commands } from "~/utils/tauri";
+import { authStore } from "~/store";
 
 export default function Settings(props: RouteSectionProps) {
+  const [auth] = createResource(() => authStore.get());
+
   const handleSignOut = async () => {
     await commands.deleteAuthOpenSignin();
+  };
+
+  const handleSignIn = async () => {
+    await emit("start-auth");
+    await commands.openMainWindow();
+    const window = await getCurrentWindow();
+    await window.close();
   };
 
   const [version] = createResource(() => getVersion());
@@ -68,8 +80,12 @@ export default function Settings(props: RouteSectionProps) {
           <Show when={version()}>
             {(v) => <p class="text-xs text-gray-400 mb-1">v{v()}</p>}
           </Show>
-          <Button onClick={handleSignOut} variant="secondary" class="w-full">
-            Sign Out
+          <Button
+            onClick={auth() ? handleSignOut : handleSignIn}
+            variant="secondary"
+            class="w-full"
+          >
+            {auth() ? "Sign Out" : "Sign in"}
           </Button>
         </div>
       </div>

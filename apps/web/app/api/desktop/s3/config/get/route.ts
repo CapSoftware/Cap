@@ -7,6 +7,7 @@ import { decrypt } from "@cap/database/crypto";
 import { cookies } from "next/headers";
 
 export async function OPTIONS(request: NextRequest) {
+  console.log("OPTIONS request received for S3 config");
   return new Response(null, {
     status: 200,
     headers: {
@@ -19,9 +20,11 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  console.log("GET request received for S3 config");
   try {
     const token = request.headers.get("authorization")?.split(" ")[1];
     if (token) {
+      console.log("Token found in authorization header, setting cookie");
       cookies().set({
         name: "next-auth.session-token",
         value: token,
@@ -34,8 +37,10 @@ export async function GET(request: NextRequest) {
 
     const user = await getCurrentUser();
     const origin = request.headers.get("origin") as string;
+    console.log("Origin:", origin);
 
     if (!user) {
+      console.log("User not found, returning 401");
       return Response.json(
         { error: "Unauthorized" },
         {
@@ -50,12 +55,14 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    console.log("Fetching S3 bucket for user:", user.id);
     const [bucket] = await db
       .select()
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
 
     if (!bucket) {
+      console.log("No S3 bucket found for user, returning default config");
       return Response.json(
         {
           config: {
@@ -78,7 +85,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Decrypt the values before sending
+    console.log("Decrypting S3 config for bucket:", bucket.id);
     const decryptedConfig = {
       provider: bucket.provider,
       accessKeyId: await decrypt(bucket.accessKeyId),
@@ -90,6 +97,7 @@ export async function GET(request: NextRequest) {
       region: await decrypt(bucket.region),
     };
 
+    console.log("Returning decrypted S3 config");
     return Response.json(
       { config: decryptedConfig },
       {
