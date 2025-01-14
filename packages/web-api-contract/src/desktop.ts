@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import { c } from "./util";
 
 const CHANGELOG = z.object({
@@ -54,7 +53,10 @@ const protectedContract = c.router(
       method: "GET",
       path: "/desktop/plan",
       responses: {
-        200: z.object({ upgraded: z.boolean() }),
+        200: z.object({ 
+          upgraded: z.boolean(),
+          stripeSubscriptionStatus: z.string().nullable(),
+        }),
       },
     },
     getS3Config: {

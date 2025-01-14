@@ -1721,9 +1721,10 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
         window.close().ok();
     }
 
-    while CapWindowId::Main.get(&app).is_none() {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    // Show the signin window
+    ShowCapWindow::SignIn
+        .show(&app)
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }

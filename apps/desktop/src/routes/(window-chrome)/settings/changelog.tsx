@@ -1,4 +1,4 @@
-import { For, Show, ErrorBoundary, Suspense } from "solid-js";
+import { For, Show, ErrorBoundary, Suspense, onMount } from "solid-js";
 import { SolidMarkdown } from "solid-markdown";
 import { createQuery } from "@tanstack/solid-query";
 import { cx } from "cva";
@@ -7,17 +7,42 @@ import { AbsoluteInsetLoader } from "~/components/Loader";
 import { apiClient } from "~/utils/web-api";
 
 export default function Page() {
-  const changelog = createQuery(() => ({
-    queryKey: ["changelog"],
-    queryFn: async () => {
-      const response = await apiClient.desktop.getChangelogPosts({
-        query: { origin: window.location.origin },
-      });
+  console.log("[Changelog] Component mounted");
 
-      if (response.status !== 200) throw new Error("Failed to fetch changelog");
-      return response.body;
-    },
-  }));
+  const changelog = createQuery(() => {
+    console.log("[Changelog] Creating query");
+    return {
+      queryKey: ["changelog"],
+      queryFn: async () => {
+        console.log("[Changelog] Executing query function");
+        try {
+          const response = await apiClient.desktop.getChangelogPosts({
+            query: { origin: window.location.origin },
+          });
+
+          console.log("[Changelog] Response", response);
+
+          if (response.status !== 200) {
+            console.error("[Changelog] Error status:", response.status);
+            throw new Error("Failed to fetch changelog");
+          }
+          return response.body;
+        } catch (error) {
+          console.error("[Changelog] Error in query:", error);
+          throw error;
+        }
+      },
+    };
+  });
+
+  onMount(() => {
+    console.log("[Changelog] Query state:", {
+      isLoading: changelog.isLoading,
+      isError: changelog.isError,
+      error: changelog.error,
+      data: changelog.data,
+    });
+  });
 
   let fadeIn = changelog.isLoading;
 

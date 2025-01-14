@@ -34,7 +34,10 @@ import {
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
 import { progressState, setProgressState } from "~/store/progress";
-import { checkIsUpgradedAndUpdate } from "~/utils/plans";
+import {
+  checkIsUpgradedAndUpdate,
+  canCreateShareableLink,
+} from "~/utils/plans";
 import { FPS } from "./editor/context";
 
 type MediaEntry = {
@@ -961,10 +964,15 @@ function createRecordingMutations(
         return;
       }
 
-      const isUpgraded = await checkIsUpgradedAndUpdate();
-      if (!isUpgraded) {
-        await commands.showWindow("Upgrade");
-        return;
+      const metadata = await commands.getVideoMetadata(media.path, null);
+      const canShare = await canCreateShareableLink(metadata?.duration);
+
+      if (!canShare.allowed) {
+        if (canShare.reason === "upgrade_required") {
+          onEvent("upgradeRequired");
+          await commands.showWindow("Upgrade");
+          return;
+        }
       }
 
       if (!isRecording) {

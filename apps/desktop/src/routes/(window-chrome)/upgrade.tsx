@@ -112,25 +112,25 @@ export default function Page() {
             <div class="border text-card-foreground shadow-sm bg-blue-300 p-3 md:p-3 rounded-xl flex-grow border-blue-500/20">
               <div class="space-y-3">
                 <div class="flex flex-col space-y-1.5 pt-6 px-6 pb-3">
-                  <h3 class="font-medium tracking-tight text-2xl text-[--text-primary]">
+                  <h3 class="font-medium tracking-tight text-2xl text-gray-50">
                     Cap Pro — Early Adopter Pricing
                   </h3>
-                  <p class="text-[0.875rem] leading-[1.25rem] text-[--text-tertiary]">
+                  <p class="text-[0.875rem] leading-[1.25rem] text-gray-50">
                     For professional use and teams.
                   </p>
                   <div>
                     <div class="flex items-center space-x-3">
-                      <h3 class="text-4xl text-[--text-primary]">
+                      <h3 class="text-4xl text-gray-50">
                         {isAnnual() ? "$6/mo" : "$9/mo"}
                       </h3>
                       <div>
-                        <p class="text-sm font-medium text-[--text-tertiary]">
+                        <p class="text-sm font-medium text-gray-50">
                           {isAnnual()
                             ? "per user, billed annually."
                             : "per user, billed monthly."}
                         </p>
                         {isAnnual() && (
-                          <p class="text-sm text-[--text-tertiary]">
+                          <p class="text-sm text-gray-50">
                             or, $9/month, billed monthly.
                           </p>
                         )}
@@ -140,7 +140,7 @@ export default function Page() {
                 </div>
                 <div class="mt-3 px-3 md:px-8">
                   <div class="flex items-center mt-3 pt-4 pb-1 border-t-2 border-gray-50/20">
-                    <span class="text-xs text-[--text-tertiary] mr-2">
+                    <span class="text-xs text-gray-50 mr-2">
                       Switch to {isAnnual() ? "monthly" : "annually"}
                     </span>
                     <button
@@ -162,7 +162,7 @@ export default function Page() {
                 <div class="px-6 pb-4 pt-0">
                   <button
                     onClick={openCheckoutInExternalBrowser}
-                    class="flex items-center justify-center rounded-full bg-[--gray-50] text-[--text-primary] hover:bg-[--gray-200] disabled:bg-[--gray-100] border border-[--gray-300] font-medium text-lg px-6 h-12 w-full no-underline"
+                    class="flex items-center justify-center rounded-full bg-[--gray-50] hover:bg-[--gray-200] disabled:bg-[--gray-100] border border-[--gray-300] font-medium text-lg px-6 h-12 w-full no-underline"
                     disabled={loading()}
                   >
                     {loading() ? "Loading..." : "Upgrade to Cap Pro"}
@@ -177,7 +177,7 @@ export default function Page() {
                             <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
                               <IconLucideCheck class="w-5 h-5 stroke-[4px] text-[--gray-50]" />
                             </div>
-                            <span class="ml-2 text-lg text-[--text-primary]">
+                            <span class="ml-2 text-lg text-gray-50">
                               {feature}
                             </span>
                           </li>

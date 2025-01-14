@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
+import { s3Buckets, videos, users } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { cookies } from "next/headers";
@@ -54,6 +54,7 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
+  const duration = params.get("duration") ? parseFloat(params.get("duration")!) : null;
 
   const user = await getCurrentUser();
   console.log("/api/desktop/video/create user", user);
@@ -62,6 +63,26 @@ export async function GET(req: NextRequest) {
     console.log("User not authenticated, returning 401");
     return new Response(JSON.stringify({ error: true }), {
       status: 401,
+      headers: {
+        "Access-Control-Allow-Origin":
+          origin && allowedOrigins.includes(origin)
+            ? origin
+            : allowedOrigins.includes(originalOrigin)
+            ? originalOrigin
+            : "null",
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Authorization, sentry-trace, baggage",
+      },
+    });
+  }
+
+  // Check if user is on free plan and video is over 5 minutes
+  const isUpgraded = user.stripeSubscriptionStatus === "active";
+
+  if (!isUpgraded && duration && duration > 300) {
+    return new Response(JSON.stringify({ error: "upgrade_required" }), {
+      status: 403,
       headers: {
         "Access-Control-Allow-Origin":
           origin && allowedOrigins.includes(origin)

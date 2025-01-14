@@ -14,6 +14,7 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { Tooltip } from "@kobalte/core";
 
 import { type RenderProgress, commands } from "~/utils/tauri";
+import { canCreateShareableLink } from "~/utils/plans";
 
 import { FPS, useEditorContext } from "./context";
 import { Dialog, DialogContent } from "./ui";
@@ -347,16 +348,22 @@ function ShareButton() {
   const uploadVideo = createMutation(() => ({
     mutationFn: async (useCustomMuxer: boolean) => {
       console.log("Starting upload process...");
-      if (!recordingMeta()) {
+      const meta = recordingMeta();
+      if (!meta) {
         console.error("No recording metadata available");
         throw new Error("Recording metadata not available");
       }
 
-      // Check for pro access first before starting the export
-      const isUpgraded = await checkIsUpgradedAndUpdate();
-      if (!isUpgraded) {
-        await commands.showWindow("Upgrade");
-        throw new Error("Upgrade required to share recordings");
+      const metadata = await commands.getVideoMetadata(videoId, null);
+      const canShare = await canCreateShareableLink(metadata?.duration);
+
+      if (!canShare.allowed) {
+        if (canShare.reason === "upgrade_required") {
+          await commands.showWindow("Upgrade");
+          throw new Error(
+            "Upgrade required to share recordings over 5 minutes"
+          );
+        }
       }
 
       let unlisten: (() => void) | undefined;
@@ -450,8 +457,6 @@ function ShareButton() {
           : await commands.uploadExportedVideo(videoId, {
               Initial: { pre_created_video: null },
             });
-
-        console.log("Upload result:", result);
 
         if (result === "NotAuthenticated") {
           throw new Error("You need to sign in to share recordings");
