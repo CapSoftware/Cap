@@ -1,10 +1,10 @@
 use std::{path::PathBuf, sync::Arc};
 
 use cap_editor::create_segments;
-use cap_media::sources::get_target_fps;
+use cap_media::sources::{get_target_fps, ScreenCaptureTarget};
 use cap_project::{RecordingMeta, XY};
 use cap_rendering::RenderVideoConstants;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 struct Cli {
@@ -14,26 +14,60 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Export a '.cap' project to an mp4 file
     Export {
         project_path: PathBuf,
         output_path: Option<PathBuf>,
     },
-    Record {
-        #[command(subcommand)]
-        command: Option<RecordCommands>,
-    },
+    /// Start a recording or list available capture targets and devices
+    Record(RecordArgs),
+}
+
+#[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
+// #[command(flatten_help = true)]
+struct RecordArgs {
+    #[command(subcommand)]
+    command: Option<RecordCommands>,
+
+    #[command(flatten)]
+    args: RecordStartArgs,
 }
 
 #[derive(Subcommand)]
 enum RecordCommands {
+    /// List screens available for capturing
     Screens,
+    /// List windows available for capturing
     Windows,
-    Cameras,
-    Mics,
+    // Cameras,
+    // Mics,
+}
+
+#[derive(Args)]
+struct RecordStartArgs {
+    #[command(flatten)]
+    target: RecordTargets,
+    /// ID of the camera to record
+    #[arg(long)]
+    camera: Option<u32>,
+    /// ID of the microphone to record
+    #[arg(long)]
+    mic: Option<u32>,
+}
+
+#[derive(Args)]
+struct RecordTargets {
+    /// ID of the screen to capture
+    #[arg(long, group = "target")]
+    screen: Option<u32>,
+    /// ID of the window to capture
+    #[arg(long, group = "target")]
+    window: Option<u32>,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -92,7 +126,7 @@ async fn main() {
 
             println!("Exported video to '{}'", output_path.display());
         }
-        Commands::Record { command } => match command {
+        Commands::Record(RecordArgs { command, args }) => match command {
             Some(RecordCommands::Screens) => {
                 let screens = cap_media::sources::list_screens();
 
@@ -127,7 +161,33 @@ window {}:
                     );
                 }
             }
+            None => {
+                let (target_info, scap_target) = args
+                    .target
+                    .screen
+                    .map(|id| {
+                        cap_media::sources::list_screens()
+                            .into_iter()
+                            .find(|s| s.0.id == id)
+                            .map(|(s, t)| (ScreenCaptureTarget::Screen(s), t))
+                            .ok_or(format!("Screen with id '{id}' not found"))
+                    })
+                    .or_else(|| {
+                        args.target.window.map(|id| {
+                            cap_media::sources::list_windows()
+                                .into_iter()
+                                .find(|s| s.0.id == id)
+                                .map(|(s, t)| (ScreenCaptureTarget::Window(s), t))
+                                .ok_or(format!("Window with id '{id}' not found"))
+                        })
+                    })
+                    .ok_or("No target specified".to_string())??;
+
+                dbg!(target_info);
+            }
             _ => {}
         },
     }
+
+    Ok(())
 }
