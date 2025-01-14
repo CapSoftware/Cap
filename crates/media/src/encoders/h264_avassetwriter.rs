@@ -58,7 +58,7 @@ impl H264AVAssetWriterEncoder {
 
         let mut video_input = av::AssetWriterInput::with_media_type_and_output_settings(
             av::MediaType::video(),
-            Some(output_settings.as_ref()),
+            Some(dbg!(output_settings.as_ref())),
         )
         .map_err(|_| MediaError::Any("Failed to create AVAssetWriterInput"))?;
         video_input.set_expects_media_data_in_real_time(true);

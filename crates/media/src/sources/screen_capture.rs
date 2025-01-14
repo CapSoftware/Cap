@@ -130,7 +130,8 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         let options = this.create_options();
 
-        let [frame_width, frame_height] = get_output_frame_size(&options);
+        let [frame_width, frame_height] = get_output_frame_size(&dbg!(options));
+        dbg!(frame_width, frame_height);
         this.video_info =
             VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, MAX_FPS);
 
@@ -147,7 +148,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     }
 
     fn create_options(&self) -> Options {
-        let targets = dbg!(scap::get_all_targets());
+        let targets = scap::get_all_targets();
 
         let excluded_targets: Vec<scap::Target> = targets
             .iter()
@@ -176,14 +177,24 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             ScreenCaptureTarget::Window(w) => {
                 #[cfg(target_os = "macos")]
                 {
-                    targets.into_iter().find(|t| match &t {
-                        Target::Window(window) if window.id == w.id => true,
-                        _ => false,
+                    let window_target = targets
+                        .iter()
+                        .find_map(|t| match t {
+                            Target::Window(window) if window.id == w.id => Some(window),
+                            _ => None,
+                        })
+                        .unwrap();
+
+                    display_for_window(window_target.raw_handle).and_then(|display| {
+                        targets.into_iter().find(|t| match t {
+                            Target::Display(d) => d.raw_handle.id == display.id,
+                            _ => false,
+                        })
                     })
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    todo!()
+                    todo!("implement display_for_window on windows")
                 }
             }
             ScreenCaptureTarget::Screen(capture_screen) => targets
