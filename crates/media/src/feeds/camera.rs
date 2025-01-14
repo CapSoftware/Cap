@@ -6,6 +6,7 @@ use std::{
     thread::{self, JoinHandle},
     time::Instant,
 };
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
@@ -59,7 +60,7 @@ impl CameraFeed {
         rgba_data: Sender<WSFrame>,
     ) -> Result<CameraFeed, MediaError> {
         #[cfg(feature = "debug-logging")]
-        println!("Initializing camera feed for: {}", selected_camera);
+        debug!("Initializing camera feed for: {}", selected_camera);
 
         let camera_info = find_camera(selected_camera)?;
         let (control, control_receiver) = flume::bounded(1);
@@ -137,7 +138,7 @@ fn find_camera(selected_camera: &str) -> Result<CameraInfo, MediaError> {
 
 fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
     #[cfg(feature = "debug-logging")]
-    println!("Creating camera with info: {:?}", info);
+    debug!("Creating camera with info: {:?}", info);
 
     let format = RequestedFormat::with_formats(
         RequestedFormatType::AbsoluteHighestFrameRate,
@@ -145,7 +146,7 @@ fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
     );
 
     #[cfg(feature = "debug-logging")]
-    println!("Requested camera format: {:?}", format);
+    trace!("Requested camera format: {:?}", format);
 
     let index = info.index().clone();
 
@@ -154,14 +155,14 @@ fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
         let device = nokhwa_bindings_macos::AVCaptureDevice::new(&index).unwrap();
         if let Ok(formats) = device.supported_formats() {
             #[cfg(feature = "debug-logging")]
-            println!("Supported formats: {:?}", formats);
+            trace!("Supported formats: {:?}", formats);
         }
     }
 
     let camera = Camera::new(index, format)?;
 
     #[cfg(feature = "debug-logging")]
-    println!("Created camera with format: {:?}", camera.camera_format());
+    debug!("Created camera with format: {:?}", camera.camera_format());
 
     Ok(camera)
 }
@@ -171,7 +172,7 @@ fn find_and_create_camera(selected_camera: &String) -> Result<(CameraInfo, Camer
     let camera = create_camera(&info)?;
 
     #[cfg(feature = "debug-logging")]
-    println!("Camera format: {:?}", camera.camera_format());
+    trace!("Camera format: {:?}", camera.camera_format());
 
     Ok((info, camera))
 }
@@ -207,12 +208,14 @@ fn run_camera_feed(
     let mut camera = match create_camera(&camera_info) {
         Ok(cam) => cam,
         Err(error) => {
+            error!("Failed to create camera: {:?}", error);
             ready_signal.send(Err(error)).unwrap();
             return;
         }
     };
 
     if let Err(error) = camera.open_stream() {
+        error!("Failed to open camera stream: {:?}", error);
         ready_signal.send(Err(error.into())).unwrap();
         return;
     }
@@ -317,6 +320,7 @@ fn run_camera_feed(
                 }
             }
             Err(error) => {
+                warn!("Failed to capture frame: {:?}", error);
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 continue;
             }
@@ -360,8 +364,7 @@ impl FrameConverter {
         let context = ffmpeg::software::converter(
             (video_info.width, video_info.height),
             if camera_format.format() == FrameFormat::YUYV {
-                // Try YUYV422 first, if that doesn't work the converter will be recreated with UYVY422
-                ffmpeg::format::Pixel::YUYV422
+                ffmpeg::format::Pixel::UYVY422
             } else {
                 video_info.pixel_format
             },
@@ -373,7 +376,7 @@ impl FrameConverter {
             video_info,
             context,
             format: camera_format.format(),
-            hw_converter: None,
+            hw_converter: None, // Don't use hardware converters
         }
     }
 
@@ -381,38 +384,17 @@ impl FrameConverter {
         let resolution = buffer.resolution();
 
         match self.format {
-            FrameFormat::YUYV => {
-                // Try converting with YUYV422 first
-                let result = self.convert_with_ffmpeg(buffer, resolution);
-                
-                // If conversion fails (black/corrupted output), try with UYVY422
-                if result.iter().all(|&x| x == 0) {
-                    // Recreate context with UYVY422
-                    self.context = ffmpeg::software::converter(
-                        (self.video_info.width, self.video_info.height),
-                        ffmpeg::format::Pixel::UYVY422,
-                        ffmpeg::format::Pixel::RGBA,
-                    )
-                    .unwrap();
-                    
-                    // Try converting again with UYVY422
-                    self.convert_with_ffmpeg(buffer, resolution)
-                } else {
-                    result
-                }
-            },
+            FrameFormat::YUYV => self.convert_with_ffmpeg(buffer, resolution),
             _ => match &self.hw_converter {
-                Some(HwConverter::NV12(converter)) => {
-                    converter.convert(
-                        NV12Input::from_buffer(
-                            buffer.buffer(),
-                            resolution.width(),
-                            resolution.height(),
-                        ),
+                Some(HwConverter::NV12(converter)) => converter.convert(
+                    NV12Input::from_buffer(
+                        buffer.buffer(),
                         resolution.width(),
                         resolution.height(),
-                    )
-                }
+                    ),
+                    resolution.width(),
+                    resolution.height(),
+                ),
                 _ => self.convert_with_ffmpeg(buffer, resolution),
             },
         }
@@ -420,16 +402,13 @@ impl FrameConverter {
 
     fn convert_with_ffmpeg(&mut self, buffer: &nokhwa::Buffer, resolution: Resolution) -> Vec<u8> {
         if self.format == FrameFormat::YUYV {
-            let stride = resolution.width() as usize * 2;
+            // For YUYV, we need to handle the conversion differently
+            let stride = resolution.width() as usize * 2; // YUYV uses 2 bytes per pixel
             let src = buffer.buffer();
 
-            // Create input frame with current format
+            // Create input frame with YUYV format and copy data
             let mut input_frame = FFVideo::new(
-                if self.context.input().format == ffmpeg::format::Pixel::YUYV422 {
-                    ffmpeg::format::Pixel::YUYV422
-                } else {
-                    ffmpeg::format::Pixel::UYVY422
-                },
+                ffmpeg::format::Pixel::UYVY422,
                 resolution.width(),
                 resolution.height(),
             );
@@ -523,7 +502,7 @@ impl FrameConverter {
 
             // Create input frame with YUYV format and copy data
             let mut input_frame = FFVideo::new(
-                ffmpeg::format::Pixel::YUYV422,
+                ffmpeg::format::Pixel::UYVY422,
                 resolution.width(),
                 resolution.height(),
             );
