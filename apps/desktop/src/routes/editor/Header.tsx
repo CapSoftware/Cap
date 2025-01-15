@@ -60,15 +60,27 @@ export function Header() {
   const { videoId, project, prettyName } = useEditorContext();
 
   const [showExportOptions, setShowExportOptions] = createSignal(false);
-  const [selectedFps, setSelectedFps] = createSignal(30);
+  const [selectedFps, setSelectedFps] = createSignal(
+    Number(localStorage.getItem("cap-export-fps")) || 30
+  );
   const [selectedResolution, setSelectedResolution] =
-    createSignal<ResolutionOption>(RESOLUTION_OPTIONS[1]);
+    createSignal<ResolutionOption>(
+      RESOLUTION_OPTIONS.find(
+        (opt) => opt.value === localStorage.getItem("cap-export-resolution")
+      ) || RESOLUTION_OPTIONS[0]
+    );
 
   let unlistenTitlebar: UnlistenFn | undefined;
   onMount(async () => {
     unlistenTitlebar = await initializeTitlebar();
   });
   onCleanup(() => unlistenTitlebar?.());
+
+  // Save settings when they change
+  createEffect(() => {
+    localStorage.setItem("cap-export-fps", selectedFps().toString());
+    localStorage.setItem("cap-export-resolution", selectedResolution().value);
+  });
 
   createEffect(() => {
     const state = progressState;
