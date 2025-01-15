@@ -1,5 +1,11 @@
 import type { Bounds } from "~/utils/tauri";
-import { onMount, onCleanup, createEffect, type ParentProps } from "solid-js";
+import {
+  onMount,
+  onCleanup,
+  createEffect,
+  type ParentProps,
+  createSignal,
+} from "solid-js";
 import { createHiDPICanvasContext } from "~/utils/canvas";
 
 function draw(
@@ -7,13 +13,14 @@ function draw(
   bounds: Bounds,
   radius: number,
   guideLines: boolean,
-  showHandles: boolean
+  showHandles: boolean,
+  prefersDark: boolean
 ) {
   ctx.save();
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
   // Background overlay
-  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+  ctx.fillStyle = prefersDark ? "rgba(0, 0, 0, 0.5)" : "rgba(0, 0, 0, 0.6)";
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
   // Shadow
@@ -39,8 +46,8 @@ function draw(
     const handleLength = 20;
     ctx.strokeStyle = "white";
     ctx.lineWidth = 5;
-    ctx.setLineDash([]);
     ctx.lineCap = "round";
+    ctx.setLineDash([]);
 
     // Top-left corner
     ctx.beginPath();
@@ -130,7 +137,9 @@ function draw(
 
   // Guide lines (Rule of thirds)
   if (guideLines) {
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.25)";
+    ctx.strokeStyle = prefersDark
+      ? "rgba(255, 255, 255, 0.5)"
+      : "rgba(0, 0, 0, 0.5)";
     ctx.lineWidth = 1;
     ctx.setLineDash([5, 2]);
 
@@ -164,6 +173,7 @@ export default function AreaOccluder(
   }>
 ) {
   let canvasRef: HTMLCanvasElement | undefined;
+  const [prefersDarkScheme, setPrefersDarkScheme] = createSignal(false);
 
   onMount(() => {
     if (!canvasRef) {
@@ -171,13 +181,20 @@ export default function AreaOccluder(
       return;
     }
 
+    const colorSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    setPrefersDarkScheme(colorSchemeQuery.matches);
+    const handleChange = (e: MediaQueryListEvent) =>
+      setPrefersDarkScheme(e.matches);
+    colorSchemeQuery.addEventListener("change", handleChange);
+
     const hidpiCanvas = createHiDPICanvasContext(canvasRef, (ctx) =>
       draw(
         ctx,
         props.bounds,
         props.borderRadius || 0,
         props.guideLines || false,
-        props.handles || false
+        props.handles || false,
+        prefersDarkScheme()
       )
     );
     const ctx = hidpiCanvas?.ctx;
@@ -188,13 +205,16 @@ export default function AreaOccluder(
       if (lastAnimationFrameId) cancelAnimationFrame(lastAnimationFrameId);
 
       const { x, y, width, height } = props.bounds;
+      
+      const prefersDark = prefersDarkScheme();
       lastAnimationFrameId = requestAnimationFrame(() =>
         draw(
           ctx,
           { x, y, width, height },
           props.borderRadius || 0,
           props.guideLines || false,
-          props.handles || false
+          props.handles || false,
+          prefersDark
         )
       );
     });
@@ -202,6 +222,7 @@ export default function AreaOccluder(
     onCleanup(() => {
       if (lastAnimationFrameId) cancelAnimationFrame(lastAnimationFrameId);
       hidpiCanvas.cleanup();
+      colorSchemeQuery.removeEventListener("change", handleChange);
     });
   });
 

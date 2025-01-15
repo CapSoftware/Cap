@@ -19,20 +19,15 @@ export function createHiDPICanvasContext(
   if (!ctx) return null;
   polyfillCanvasContextRoundRect();
 
-  const scale = () => {
+  const scale = (rect: DOMRect) => {
     const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
     ctx.scale(dpr, dpr);
+    drawOnResizeCallback(ctx);
   };
 
-  const observer = new ResizeObserver(() =>
-    requestAnimationFrame(() => {
-      scale();
-      drawOnResizeCallback(ctx);
-    })
-  );
+  const observer = new ResizeObserver(([entry]) => scale(entry.contentRect));
   observer.observe(canvas);
 
   return {

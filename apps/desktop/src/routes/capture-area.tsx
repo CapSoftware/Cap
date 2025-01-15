@@ -87,7 +87,13 @@ export default function CaptureArea() {
         </div>
       </div>
 
-      <Cropper cropStore={[crop, setCrop]} showGuideLines={true} />
+      <Cropper
+        // cropStore={[crop, setCrop]}
+        value={crop}
+        onCropChange={setCrop}
+        showGuideLines={true}
+        mappedSize={{ x: window.innerWidth, y: window.innerHeight }}
+      />
     </div>
   );
 }

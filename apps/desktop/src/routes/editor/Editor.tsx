@@ -23,7 +23,7 @@ import {
 } from "@solid-primitives/event-listener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { events, commands } from "~/utils/tauri";
+import { events, commands, type Crop } from "~/utils/tauri";
 import { EditorContextProvider, useEditorContext } from "./context";
 import {
   Dialog,
@@ -41,6 +41,7 @@ import { Header } from "./Header";
 import { Player } from "./Player";
 import { ConfigSidebar } from "./ConfigSidebar";
 import { Timeline } from "./Timeline";
+import Cropper from "~/components/Cropper";
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -283,7 +284,7 @@ function Dialogs() {
               {(dialog) => {
                 const { setProject: setState, editorInstance } =
                   useEditorContext();
-                const [crop, setCrop] = createStore({
+                const [crop, setCrop] = createStore<Crop>({
                   position: dialog().position,
                   size: dialog().size,
                 });
@@ -306,9 +307,6 @@ function Dialogs() {
                     }%)`,
                   };
                 });
-
-                let cropAreaRef!: HTMLDivElement;
-                let cropTargetRef!: HTMLDivElement;
 
                 return (
                   <>
@@ -358,226 +356,25 @@ function Dialogs() {
                     </Dialog.Header>
                     <Dialog.Content>
                       <div class="flex flex-row justify-center">
-                        <div class="relative bg-blue-200" ref={cropAreaRef}>
-                          <div class="divide-black-transparent-10 overflow-hidden rounded-lg">
-                            <img
-                              class="shadow pointer-events-none max-h-[70vh]"
-                              alt="screenshot"
-                              src={convertFileSrc(
-                                `${editorInstance.path}/screenshots/display.jpg`
-                              )}
-                            />
-                          </div>
-                          <div
-                            class="bg-white-transparent-20 absolute cursor-move"
-                            ref={cropTargetRef}
-                            style={styles()}
-                            onMouseDown={(downEvent) => {
-                              const original = {
-                                position: { ...crop.position },
-                                size: { ...crop.size },
-                              };
-
-                              createRoot((dispose) => {
-                                createEventListenerMap(window, {
-                                  mouseup: () => dispose(),
-                                  mousemove: (moveEvent) => {
-                                    const diff = {
-                                      x:
-                                        ((moveEvent.clientX -
-                                          downEvent.clientX) /
-                                          cropAreaRef.clientWidth) *
-                                        display.width,
-                                      y:
-                                        ((moveEvent.clientY -
-                                          downEvent.clientY) /
-                                          cropAreaRef.clientHeight) *
-                                        display.height,
-                                    };
-
-                                    const x = Math.floor(
-                                      (() => {
-                                        if (original.position.x + diff.x < 0)
-                                          return 0;
-                                        if (
-                                          original.position.x + diff.x >
-                                          display.width - crop.size.x
-                                        )
-                                          return display.width - crop.size.x;
-
-                                        return original.position.x + diff.x;
-                                      })()
-                                    );
-
-                                    const y = Math.floor(
-                                      (() => {
-                                        if (original.position.y + diff.y < 0)
-                                          return 0;
-                                        if (
-                                          original.position.y + diff.y >
-                                          display.height - crop.size.y
-                                        )
-                                          return display.height - crop.size.y;
-
-                                        return original.position.y + diff.y;
-                                      })()
-                                    );
-
-                                    setCrop("position", { x, y });
-                                  },
-                                });
-                              });
-                            }}
-                          >
-                            <For
-                              each={Array.from({ length: 4 }, (_, i) => ({
-                                x: i < 2 ? ("l" as const) : ("r" as const),
-                                y:
-                                  i % 2 === 0 ? ("t" as const) : ("b" as const),
-                              }))}
-                            >
-                              {(pos) => {
-                                const behaviours = {
-                                  x:
-                                    pos.x === "l"
-                                      ? ("both" as const)
-                                      : ("resize" as const),
-                                  y:
-                                    pos.y === "t"
-                                      ? ("both" as const)
-                                      : ("resize" as const),
-                                };
-
-                                return (
-                                  <button
-                                    type="button"
-                                    class="absolute"
-                                    style={{
-                                      ...(pos.x === "l"
-                                        ? { left: "0px" }
-                                        : { right: "0px" }),
-                                      ...(pos.y === "t"
-                                        ? { top: "0px" }
-                                        : { bottom: "0px" }),
-                                    }}
-                                    onMouseDown={(downEvent) => {
-                                      downEvent.stopPropagation();
-
-                                      const original = {
-                                        position: { ...crop.position },
-                                        size: { ...crop.size },
-                                      };
-
-                                      const MIN_SIZE = 100;
-
-                                      createRoot((dispose) => {
-                                        createEventListenerMap(window, {
-                                          mouseup: () => dispose(),
-                                          mousemove: (moveEvent) => {
-                                            batch(() => {
-                                              const diff = {
-                                                x:
-                                                  ((moveEvent.clientX -
-                                                    downEvent.clientX) /
-                                                    cropAreaRef.clientWidth) *
-                                                  display.width,
-                                                y:
-                                                  ((moveEvent.clientY -
-                                                    downEvent.clientY) /
-                                                    cropAreaRef.clientHeight) *
-                                                  display.height,
-                                              };
-
-                                              if (behaviours.x === "resize") {
-                                                setCrop(
-                                                  "size",
-                                                  "x",
-                                                  Math.floor(
-                                                    clamp(
-                                                      original.size.x + diff.x,
-                                                      MIN_SIZE,
-                                                      display.width -
-                                                        crop.position.x
-                                                    )
-                                                  )
-                                                );
-                                              } else {
-                                                setCrop(
-                                                  "position",
-                                                  "x",
-                                                  Math.floor(
-                                                    clamp(
-                                                      original.position.x +
-                                                        diff.x,
-                                                      0,
-                                                      display.width - MIN_SIZE
-                                                    )
-                                                  )
-                                                );
-                                                setCrop(
-                                                  "size",
-                                                  "x",
-                                                  Math.floor(
-                                                    clamp(
-                                                      original.size.x - diff.x,
-                                                      MIN_SIZE,
-                                                      display.width
-                                                    )
-                                                  )
-                                                );
-                                              }
-
-                                              if (behaviours.y === "resize") {
-                                                setCrop(
-                                                  "size",
-                                                  "y",
-                                                  Math.floor(
-                                                    clamp(
-                                                      original.size.y + diff.y,
-                                                      MIN_SIZE,
-                                                      display.height -
-                                                        crop.position.y
-                                                    )
-                                                  )
-                                                );
-                                              } else {
-                                                setCrop(
-                                                  "position",
-                                                  "y",
-                                                  Math.floor(
-                                                    clamp(
-                                                      original.position.y +
-                                                        diff.y,
-                                                      0,
-                                                      display.height - MIN_SIZE
-                                                    )
-                                                  )
-                                                );
-                                                setCrop(
-                                                  "size",
-                                                  "y",
-                                                  Math.floor(
-                                                    clamp(
-                                                      original.size.y - diff.y,
-                                                      MIN_SIZE,
-                                                      display.height
-                                                    )
-                                                  )
-                                                );
-                                              }
-                                            });
-                                          },
-                                        });
-                                      });
-                                    }}
-                                  >
-                                    <div class="size-[1rem] bg-gray-500 border border-gray-50 rounded-full absolute -top-[0.5rem] -left-[0.5rem]" />
-                                  </button>
-                                );
+                          <div class="divide-black-transparent-10 overflow-hidden rounded-xl">
+                            <Cropper
+                              value={crop}
+                              onCropChange={setCrop}
+                              mappedSize={{
+                                x: display.width,
+                                y: display.height,
                               }}
-                            </For>
+                              aspectRatio={1/1}
+                            >
+                              <img
+                                class="shadow pointer-events-none max-h-[70vh]"
+                                alt="screenshot"
+                                src={convertFileSrc(
+                                  `${editorInstance.path}/screenshots/display.jpg`
+                                )}
+                              />
+                            </Cropper>
                           </div>
-                        </div>
                       </div>
                     </Dialog.Content>
                     <Dialog.Footer>
@@ -599,8 +396,4 @@ function Dialogs() {
       </Show>
     </Dialog.Root>
   );
-}
-
-function clamp(n: number, min = 0, max = 1) {
-  return Math.max(min, Math.min(max, n));
 }
