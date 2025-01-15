@@ -369,6 +369,8 @@ fn project_config_from_recording(
                 })
                 .collect(),
             zoom_segments: generate_zoom_segments_from_clicks(&completed_recording, &recordings),
+            output_width: None,
+            output_height: None,
         }),
         ..Default::default()
     }

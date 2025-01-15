@@ -28,7 +28,7 @@ pub mod decoder;
 mod project_recordings;
 mod zoom;
 pub use decoder::DecodedFrame;
-pub use project_recordings::{ProjectRecordings, SegmentRecordings};
+pub use project_recordings::{ProjectRecordings, SegmentRecordings, Video};
 
 use zoom::*;
 
@@ -566,34 +566,71 @@ impl ProjectUniforms {
 
     pub fn get_output_size(options: &RenderOptions, project: &ProjectConfiguration) -> (u32, u32) {
         let crop = Self::get_crop(options, project);
-
         let crop_aspect = crop.aspect_ratio();
-
         let padding = Self::get_padding(options, project) * 2.0;
 
-        let aspect = match &project.aspect_ratio {
+        let (base_width, base_height) = match &project.aspect_ratio {
             None => {
                 let width = ((crop.size.x as f64 + padding) as u32 + 1) & !1;
                 let height = ((crop.size.y as f64 + padding) as u32 + 1) & !1;
-                return (width, height);
+                (width, height)
             }
-            Some(AspectRatio::Square) => 1.0,
-            Some(AspectRatio::Wide) => 16.0 / 9.0,
-            Some(AspectRatio::Vertical) => 9.0 / 16.0,
-            Some(AspectRatio::Classic) => 4.0 / 3.0,
-            Some(AspectRatio::Tall) => 3.0 / 4.0,
+            Some(AspectRatio::Square) => {
+                let size = if crop_aspect > 1.0 {
+                    crop.size.y
+                } else {
+                    crop.size.x
+                };
+                (size, size)
+            }
+            Some(AspectRatio::Wide) => {
+                if crop_aspect > 16.0 / 9.0 {
+                    (((crop.size.y as f32 * 16.0 / 9.0) as u32), crop.size.y)
+                } else {
+                    (crop.size.x, ((crop.size.x as f32 * 9.0 / 16.0) as u32))
+                }
+            }
+            Some(AspectRatio::Vertical) => {
+                if crop_aspect > 9.0 / 16.0 {
+                    ((crop.size.y as f32 * 9.0 / 16.0) as u32, crop.size.y)
+                } else {
+                    (crop.size.x, ((crop.size.x as f32 * 16.0 / 9.0) as u32))
+                }
+            }
+            Some(AspectRatio::Classic) => {
+                if crop_aspect > 4.0 / 3.0 {
+                    ((crop.size.y as f32 * 4.0 / 3.0) as u32, crop.size.y)
+                } else {
+                    (crop.size.x, ((crop.size.x as f32 * 3.0 / 4.0) as u32))
+                }
+            }
+            Some(AspectRatio::Tall) => {
+                if crop_aspect > 3.0 / 4.0 {
+                    ((crop.size.y as f32 * 3.0 / 4.0) as u32, crop.size.y)
+                } else {
+                    (crop.size.x, ((crop.size.x as f32 * 4.0 / 3.0) as u32))
+                }
+            }
         };
 
-        let (width, height) = if crop_aspect > aspect {
-            (crop.size.x, (crop.size.x as f32 / aspect) as u32)
-        } else if crop_aspect < aspect {
-            ((crop.size.y as f32 * aspect) as u32, crop.size.y)
-        } else {
-            (crop.size.x, crop.size.y)
-        };
+        // Apply timeline output size limits if they exist
+        if let Some(timeline) = &project.timeline {
+            if let (Some(max_width), Some(max_height)) =
+                (timeline.output_width, timeline.output_height)
+            {
+                if base_width > max_width || base_height > max_height {
+                    let width_scale = max_width as f32 / base_width as f32;
+                    let height_scale = max_height as f32 / base_height as f32;
+                    let scale = width_scale.min(height_scale);
 
-        // Ensure width and height are divisible by 2
-        ((width + 1) & !1, (height + 1) & !1)
+                    let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
+                    let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
+                    return (scaled_width, scaled_height);
+                }
+            }
+        }
+
+        ((base_width + 1) & !1, (base_height + 1) & !1)
     }
 
     pub fn get_display_offset(

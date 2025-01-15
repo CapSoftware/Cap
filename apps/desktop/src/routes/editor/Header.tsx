@@ -7,31 +7,62 @@ import {
   batch,
   createEffect,
   createResource,
+  createSignal,
   onCleanup,
   onMount,
 } from "solid-js";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { Tooltip } from "@kobalte/core";
+import { createMutation } from "@tanstack/solid-query";
+import { getRequestEvent } from "solid-js/web";
+import { save } from "@tauri-apps/plugin-dialog";
+import { Channel } from "@tauri-apps/api/core";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 
 import { type RenderProgress, commands } from "~/utils/tauri";
-import { canCreateShareableLink } from "~/utils/plans";
-
+import {
+  canCreateShareableLink,
+  checkIsUpgradedAndUpdate,
+} from "~/utils/plans";
 import { FPS, useEditorContext } from "./context";
 import { Dialog, DialogContent } from "./ui";
+import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import {
   type ProgressState,
   progressState,
   setProgressState,
 } from "~/store/progress";
-
 import { events } from "~/utils/tauri";
 import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
+
+type ResolutionOption = {
+  label: string;
+  value: string;
+  width: number;
+  height: number;
+};
+
+const RESOLUTION_OPTIONS: ResolutionOption[] = [
+  { label: "720p", value: "720p", width: 1280, height: 720 },
+  { label: "1080p", value: "1080p", width: 1920, height: 1080 },
+  { label: "4K", value: "4k", width: 3840, height: 2160 },
+];
+
+const FPS_OPTIONS = [
+  { label: "30 FPS", value: 30 },
+  { label: "60 FPS", value: 60 },
+] as const;
 
 export function Header() {
   const currentWindow = getCurrentWindow();
+  const { videoId, project, prettyName } = useEditorContext();
+
+  const [showExportOptions, setShowExportOptions] = createSignal(false);
+  const [selectedFps, setSelectedFps] = createSignal(30);
+  const [selectedResolution, setSelectedResolution] =
+    createSignal<ResolutionOption>(RESOLUTION_OPTIONS[1]);
 
   let unlistenTitlebar: UnlistenFn | undefined;
   onMount(async () => {
@@ -61,6 +92,104 @@ export function Header() {
       currentWindow.setProgressBar({ progress: Math.round(percentage) });
   });
 
+  const exportWithSettings = async () => {
+    setShowExportOptions(false);
+
+    const path = await save({
+      filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
+      defaultPath: `~/Desktop/${prettyName()}.mp4`,
+    });
+    if (!path) return;
+
+    setProgressState({
+      type: "saving",
+      progress: 0,
+      renderProgress: 0,
+      totalFrames: 0,
+      message: "Preparing to render...",
+      mediaPath: path,
+      stage: "rendering",
+    });
+
+    const progress = new Channel<RenderProgress>();
+    progress.onmessage = (p) => {
+      if (p.type === "FrameRendered" && progressState.type === "saving") {
+        const percentComplete = Math.min(
+          Math.round(
+            (p.current_frame / (progressState.totalFrames || 1)) * 100
+          ),
+          100
+        );
+
+        setProgressState({
+          ...progressState,
+          renderProgress: p.current_frame,
+          message: `Rendering video - ${percentComplete}%`,
+        });
+
+        // If rendering is complete, update to finalizing state
+        if (percentComplete === 100) {
+          setProgressState({
+            ...progressState,
+            message: "Finalizing export...",
+          });
+        }
+      }
+      if (
+        p.type === "EstimatedTotalFrames" &&
+        progressState.type === "saving"
+      ) {
+        setProgressState({
+          ...progressState,
+          totalFrames: p.total_frames,
+          message: "Starting render...",
+        });
+      }
+    };
+
+    try {
+      const updatedProject = {
+        ...project,
+        timeline: project.timeline
+          ? {
+              ...project.timeline,
+              outputWidth: selectedResolution().width,
+              outputHeight: selectedResolution().height,
+            }
+          : {
+              segments: [],
+              zoomSegments: [],
+              outputWidth: selectedResolution().width,
+              outputHeight: selectedResolution().height,
+            },
+        fps: selectedFps(),
+      };
+
+      const videoPath = await commands.exportVideo(
+        videoId,
+        updatedProject,
+        progress,
+        true,
+        selectedFps()
+      );
+      await commands.copyFileToPath(videoPath, path);
+
+      setProgressState({
+        type: "saving",
+        progress: 100,
+        message: "Saved successfully!",
+        mediaPath: path,
+      });
+
+      setTimeout(() => {
+        setProgressState({ type: "idle" });
+      }, 1500);
+    } catch (error) {
+      setProgressState({ type: "idle" });
+      throw error;
+    }
+  };
+
   batch(() => {
     setTitlebar("border", false);
     setTitlebar("height", "4rem");
@@ -76,8 +205,66 @@ export function Header() {
       >
         <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]"></div>
         <div class="flex flex-row gap-2 font-medium items-center">
-          <ShareButton />
-          <ExportButton />
+          <ShareButton
+            selectedResolution={selectedResolution}
+            selectedFps={selectedFps}
+          />
+          <div class="relative">
+            <Button
+              variant="primary"
+              onClick={() => setShowExportOptions(!showExportOptions())}
+            >
+              Export
+            </Button>
+            <Show when={showExportOptions()}>
+              <div class="absolute right-0 top-full mt-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 p-4 min-w-[240px]">
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                      Resolution
+                    </label>
+                    <select
+                      class="w-full p-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md text-sm"
+                      value={selectedResolution().value}
+                      onChange={(e) => {
+                        const option = RESOLUTION_OPTIONS.find(
+                          (opt) => opt.value === e.currentTarget.value
+                        );
+                        if (option) setSelectedResolution(option);
+                      }}
+                    >
+                      {RESOLUTION_OPTIONS.map((option) => (
+                        <option value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                      Frame Rate
+                    </label>
+                    <select
+                      class="w-full p-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md text-sm"
+                      value={selectedFps()}
+                      onChange={(e) =>
+                        setSelectedFps(Number(e.currentTarget.value))
+                      }
+                    >
+                      {FPS_OPTIONS.map((option) => (
+                        <option value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <Button
+                    variant="primary"
+                    class="w-full justify-center"
+                    onClick={exportWithSettings}
+                  >
+                    Export Video
+                  </Button>
+                </div>
+              </div>
+            </Show>
+          </div>
         </div>
       </div>
     );
@@ -235,111 +422,12 @@ export function Header() {
   );
 }
 
-import { Channel } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
-import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
-import { createMutation } from "@tanstack/solid-query";
-import { getRequestEvent } from "solid-js/web";
-import { checkIsUpgradedAndUpdate } from "~/utils/plans";
+type ShareButtonProps = {
+  selectedResolution: () => ResolutionOption;
+  selectedFps: () => number;
+};
 
-function ExportButton() {
-  const { videoId, project, prettyName } = useEditorContext();
-
-  const exportVideo = createMutation(() => ({
-    mutationFn: async (useCustomMuxer: boolean) => {
-      const path = await save({
-        filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-        defaultPath: `~/Desktop/${prettyName()}.mp4`,
-      });
-      if (!path) return;
-
-      setProgressState({
-        type: "saving",
-        progress: 0,
-        renderProgress: 0,
-        totalFrames: 0,
-        message: "Preparing to render...",
-        mediaPath: path,
-        stage: "rendering",
-      });
-
-      const progress = new Channel<RenderProgress>();
-      progress.onmessage = (p) => {
-        if (p.type === "FrameRendered" && progressState.type === "saving") {
-          const percentComplete = Math.min(
-            Math.round(
-              (p.current_frame / (progressState.totalFrames || 1)) * 100
-            ),
-            100
-          );
-
-          setProgressState({
-            ...progressState,
-            renderProgress: p.current_frame,
-            message: `Rendering video - ${percentComplete}%`,
-          });
-
-          // If rendering is complete, update to finalizing state
-          if (percentComplete === 100) {
-            setProgressState({
-              ...progressState,
-              message: "Finalizing export...",
-            });
-          }
-        }
-        if (
-          p.type === "EstimatedTotalFrames" &&
-          progressState.type === "saving"
-        ) {
-          setProgressState({
-            ...progressState,
-            totalFrames: p.total_frames,
-            message: "Starting render...",
-          });
-        }
-      };
-
-      try {
-        const videoPath = await commands.exportVideo(
-          videoId,
-          project,
-          progress,
-          true,
-          FPS
-        );
-        await commands.copyFileToPath(videoPath, path);
-
-        setProgressState({
-          type: "saving",
-          progress: 100,
-          message: "Saved successfully!",
-          mediaPath: path,
-        });
-
-        setTimeout(() => {
-          setProgressState({ type: "idle" });
-        }, 1500);
-      } catch (error) {
-        setProgressState({ type: "idle" });
-        throw error;
-      }
-    },
-  }));
-
-  return (
-    <Button
-      variant="primary"
-      size="md"
-      onClick={(e) =>
-        exportVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
-      }
-    >
-      Export
-    </Button>
-  );
-}
-
-function ShareButton() {
+function ShareButton(props: ShareButtonProps) {
   const { videoId, project, presets } = useEditorContext();
   const [recordingMeta, metaActions] = createResource(() =>
     commands.getRecordingMeta(videoId, "recording")
@@ -407,8 +495,13 @@ function ShareButton() {
         });
 
         console.log("Starting actual upload...");
-        const projectConfig =
-          project ?? presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG;
+        const projectConfig = {
+          ...(project ?? presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG),
+          outputResolution: {
+            width: props.selectedResolution().width,
+            height: props.selectedResolution().height,
+          },
+        };
 
         setProgressState({
           type: "uploading",
@@ -449,7 +542,13 @@ function ShareButton() {
 
         getRequestEvent()?.nativeEvent;
 
-        await commands.exportVideo(videoId, projectConfig, progress, true, FPS);
+        await commands.exportVideo(
+          videoId,
+          projectConfig,
+          progress,
+          true,
+          props.selectedFps()
+        );
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
