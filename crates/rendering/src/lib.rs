@@ -9,7 +9,7 @@ use cap_project::{
     SLOW_VELOCITY_THRESHOLD, XY,
 };
 use core::f64;
-use decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle};
+use decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle, GetFrameError};
 use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use wgpu::util::DeviceExt;
 use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
-use image::GenericImageView;
+use image::{GenericImageView, ImageDecoderRect};
 use std::path::Path;
 use std::time::Instant;
 
@@ -125,14 +125,16 @@ impl RecordingSegmentDecoders {
     pub async fn get_frames(
         &self,
         frame_time: f32,
-    ) -> Option<(DecodedFrame, Option<DecodedFrame>)> {
-        let (screen_frame, camera_frame) = tokio::join!(
+        needs_camera: bool,
+    ) -> (DecodedFrame, Option<DecodedFrame>) {
+        tokio::join!(
             self.screen.get_frame(frame_time),
-            OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_time)))
-        );
-
-        // Return frames or black frames as needed
-        Some((screen_frame?, camera_frame.flatten()))
+            OptionFuture::from(
+                needs_camera
+                    .then(|| self.camera.as_ref().map(|d| d.get_frame(frame_time)))
+                    .flatten()
+            )
+        )
     }
 }
 
@@ -198,10 +200,10 @@ pub async fn render_video_to_channel(
 
         let segment = &segments[segment_i.unwrap() as usize];
         // let frame_time = frame_number;
-        let Some((screen_frame, camera_frame)) = segment.decoders.get_frames(time as f32).await
-        else {
-            break;
-        };
+        let (screen_frame, camera_frame) = segment
+            .decoders
+            .get_frames(time as f32, !project.camera.hide)
+            .await;
 
         let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
 

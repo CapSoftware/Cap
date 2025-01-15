@@ -245,11 +245,10 @@ impl EditorInstance {
 
                 let segment = &self.segments[segment.unwrap_or(0) as usize];
 
-                let Some((screen_frame, camera_frame)) =
-                    segment.decoders.get_frames(time as f32).await
-                else {
-                    continue;
-                };
+                let (screen_frame, camera_frame) = segment
+                    .decoders
+                    .get_frames(time as f32, !project.camera.hide)
+                    .await;
 
                 self.renderer
                     .render_frame(

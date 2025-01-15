@@ -94,8 +94,7 @@ impl Playback {
                         _ = stop_rx.changed() => {
                            break;
                         },
-                        value = segment.decoders.get_frames(time as f32) => {
-                            if let Some((screen_frame, camera_frame)) = value {
+                        (screen_frame, camera_frame) = segment.decoders.get_frames(time as f32, !project.camera.hide) => {
                                 let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32);
 
                                 self
@@ -108,7 +107,6 @@ impl Playback {
                                         time as f32  // Add the time parameter
                                     )
                                     .await;
-                            }
                         }
                         else => {
                         }
