@@ -304,10 +304,6 @@ pub enum ZoomMode {
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
     pub zoom_segments: Vec<ZoomSegment>,
-    #[serde(default)]
-    pub output_width: Option<u32>,
-    #[serde(default)]
-    pub output_height: Option<u32>,
 }
 
 impl TimelineConfiguration {

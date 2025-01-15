@@ -173,7 +173,7 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
-    pub async fn start_playback(self: Arc<Self>, fps: u32) {
+    pub async fn start_playback(self: Arc<Self>, fps: u32, resolution_base: XY<u32>) {
         let (mut handle, prev) = {
             let Ok(mut state) = self.state.try_lock() else {
                 return;
@@ -188,7 +188,7 @@ impl EditorInstance {
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
             }
-            .start(fps)
+            .start(fps, resolution_base)
             .await;
 
             let prev = state.playback_task.replace(playback_handle.clone());
@@ -223,12 +223,13 @@ impl EditorInstance {
 
     fn spawn_preview_renderer(
         self: Arc<Self>,
-        mut preview_rx: watch::Receiver<Option<(u32, u32)>>,
+        mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 preview_rx.changed().await.unwrap();
-                let Some((frame_number, fps)) = *preview_rx.borrow().deref() else {
+                let Some((frame_number, fps, resolution_base)) = *preview_rx.borrow().deref()
+                else {
                     continue;
                 };
 
@@ -255,8 +256,14 @@ impl EditorInstance {
                         screen_frame,
                         camera_frame,
                         project.background.source.clone(),
-                        ProjectUniforms::new(&self.render_constants, &project, time as f32),
-                        time as f32, // Add the time parameter
+                        ProjectUniforms::new(
+                            &self.render_constants,
+                            &project,
+                            time as f32,
+                            resolution_base,
+                        ),
+                        time as f32,
+                        resolution_base,
                     )
                     .await;
             }
@@ -283,7 +290,7 @@ impl Drop for EditorInstance {
     }
 }
 
-type PreviewFrameInstruction = (u32, u32);
+type PreviewFrameInstruction = (u32, u32, XY<u32>);
 
 pub struct EditorState {
     pub playhead_position: u32,

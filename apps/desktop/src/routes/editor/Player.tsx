@@ -88,13 +88,13 @@ export function Player() {
         await commands.stopPlayback(videoId);
         setPlaybackTime(0);
         await commands.seekTo(videoId, 0);
-        await commands.startPlayback(videoId, FPS);
+        await commands.startPlayback(videoId, FPS, { x: 1280, y: 720 });
         setPlaying(true);
       } else if (playing()) {
         await commands.stopPlayback(videoId);
         setPlaying(false);
       } else {
-        await commands.startPlayback(videoId, FPS);
+        await commands.startPlayback(videoId, FPS, { x: 1280, y: 720 });
         setPlaying(true);
       }
     } catch (error) {

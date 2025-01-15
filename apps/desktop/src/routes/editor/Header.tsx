@@ -168,29 +168,16 @@ export function Header() {
     };
 
     try {
-      const updatedProject = {
-        ...project,
-        timeline: project.timeline
-          ? {
-              ...project.timeline,
-              outputWidth: selectedResolution().width,
-              outputHeight: selectedResolution().height,
-            }
-          : {
-              segments: [],
-              zoomSegments: [],
-              outputWidth: selectedResolution().width,
-              outputHeight: selectedResolution().height,
-            },
-        fps: selectedFps(),
-      };
-
       const videoPath = await commands.exportVideo(
         videoId,
-        updatedProject,
+        project,
         progress,
         true,
-        selectedFps()
+        selectedFps(),
+        {
+          x: selectedResolution().width,
+          y: selectedResolution().height,
+        }
       );
       await commands.copyFileToPath(videoPath, path);
 
@@ -574,13 +561,6 @@ function ShareButton(props: ShareButtonProps) {
         });
 
         console.log("Starting actual upload...");
-        const projectConfig = {
-          ...(project ?? presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG),
-          outputResolution: {
-            width: props.selectedResolution().width,
-            height: props.selectedResolution().height,
-          },
-        };
 
         setProgressState({
           type: "uploading",
@@ -623,10 +603,14 @@ function ShareButton(props: ShareButtonProps) {
 
         await commands.exportVideo(
           videoId,
-          projectConfig,
+          project,
           progress,
           true,
-          props.selectedFps()
+          props.selectedFps(),
+          {
+            x: props.selectedResolution().width,
+            y: props.selectedResolution().height,
+          }
         );
 
         // Now proceed with upload

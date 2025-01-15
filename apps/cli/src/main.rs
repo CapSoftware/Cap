@@ -121,6 +121,7 @@ async fn main() -> Result<(), String> {
                 render_constants,
                 &segments,
                 fps,
+                XY::new(1920, 1080),
             )
             .unwrap();
 

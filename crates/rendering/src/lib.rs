@@ -164,6 +164,7 @@ pub async fn render_video_to_channel(
     meta: &RecordingMeta,
     segments: Vec<RenderSegment>,
     fps: u32,
+    resolution_base: XY<u32>,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, meta).await?;
     let recordings = ProjectRecordings::new(meta);
@@ -214,7 +215,8 @@ pub async fn render_video_to_channel(
             .get_frames(source_time as f32, !project.camera.hide)
             .await;
 
-        let uniforms = ProjectUniforms::new(&constants, &project, source_time as f32);
+        let uniforms =
+            ProjectUniforms::new(&constants, &project, source_time as f32, resolution_base);
 
         let frame = produce_frame(
             &constants,
@@ -224,6 +226,7 @@ pub async fn render_video_to_channel(
             &uniforms,
             source_time as f32,
             total_frames,
+            resolution_base,
         )
         .await?;
 
@@ -573,7 +576,11 @@ impl ProjectUniforms {
         basis as f64 * padding_factor
     }
 
-    pub fn get_output_size(options: &RenderOptions, project: &ProjectConfiguration) -> (u32, u32) {
+    pub fn get_output_size(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
+    ) -> (u32, u32) {
         let crop = Self::get_crop(options, project);
         let crop_aspect = crop.aspect_ratio();
         let padding = Self::get_padding(options, project) * 2.0;
@@ -622,28 +629,23 @@ impl ProjectUniforms {
             }
         };
 
-        if let Some(timeline) = &project.timeline {
-            if let (Some(max_width), Some(max_height)) =
-                (timeline.output_width, timeline.output_height)
-            {
-                let width_scale = max_width as f32 / base_width as f32;
-                let height_scale = max_height as f32 / base_height as f32;
-                let scale = width_scale.min(height_scale);
+        let width_scale = resolution_base.x as f32 / base_width as f32;
+        let height_scale = resolution_base.y as f32 / base_height as f32;
+        let scale = width_scale.min(height_scale);
 
-                let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
-                let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
-                return (scaled_width, scaled_height);
-            }
-        }
+        let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
+        let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
+        return (scaled_width, scaled_height);
 
-        ((base_width + 1) & !1, (base_height + 1) & !1)
+        // ((base_width + 1) & !1, (base_height + 1) & !1)
     }
 
     pub fn get_display_offset(
         options: &RenderOptions,
         project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        let output_size = Self::get_output_size(options, project);
+        let output_size = Self::get_output_size(options, project, resolution_base);
         let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
 
         let output_aspect = output_size.x / output_size.y;
@@ -685,9 +687,10 @@ impl ProjectUniforms {
         constants: &RenderVideoConstants,
         project: &ProjectConfiguration,
         time: f32,
+        resolution_base: XY<u32>,
     ) -> Self {
         let options = &constants.options;
-        let output_size = Self::get_output_size(options, project);
+        let output_size = Self::get_output_size(options, project, resolution_base);
 
         let cursor_position = interpolate_cursor_position(
             &Default::default(), /*constants.cursor*/
@@ -760,12 +763,12 @@ impl ProjectUniforms {
                 (crop.position.y + crop.size.y) as f64,
             ));
 
-            let display_offset = Self::get_display_offset(options, project);
+            let display_offset = Self::get_display_offset(options, project, resolution_base);
 
             let end = Coord::new(output_size) - display_offset;
 
             let screen_scale_origin = zoom_origin
-                .to_frame_space(options, project)
+                .to_frame_space(options, project, resolution_base)
                 .clamp(display_offset.coord, end.coord);
 
             let zoom = Zoom {
@@ -922,6 +925,7 @@ pub async fn produce_frame(
     uniforms: &ProjectUniforms,
     time: f32,
     total_frames: u32,
+    resolution_base: XY<u32>,
 ) -> Result<RenderedFrame, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
@@ -1054,6 +1058,7 @@ pub async fn produce_frame(
             time,
             &mut encoder,
             get_either(texture_views, !output_is_left),
+            resolution_base,
         );
     }
 
@@ -1316,6 +1321,7 @@ fn draw_cursor(
     time: f32,
     encoder: &mut CommandEncoder,
     view: &wgpu::TextureView,
+    resolution_base: XY<u32>,
 ) {
     let Some(cursor_position) = interpolate_cursor_position(
         &Default::default(), // constants.cursor,
@@ -1334,8 +1340,10 @@ fn draw_cursor(
 
     // Calculate velocity in screen space
     let velocity = if let Some(prev_pos) = prev_position {
-        let curr_frame_pos = cursor_position.to_frame_space(&constants.options, &uniforms.project);
-        let prev_frame_pos = prev_pos.to_frame_space(&constants.options, &uniforms.project);
+        let curr_frame_pos =
+            cursor_position.to_frame_space(&constants.options, &uniforms.project, resolution_base);
+        let prev_frame_pos =
+            prev_pos.to_frame_space(&constants.options, &uniforms.project, resolution_base);
         let frame_velocity = curr_frame_pos.coord - prev_frame_pos.coord;
 
         // Convert to pixels per frame
@@ -1378,7 +1386,8 @@ fn draw_cursor(
         STANDARD_CURSOR_HEIGHT * cursor_size_percentage,
     ];
 
-    let frame_position = cursor_position.to_frame_space(&constants.options, &uniforms.project);
+    let frame_position =
+        cursor_position.to_frame_space(&constants.options, &uniforms.project, resolution_base);
     let position = uniforms.zoom.apply_scale(frame_position);
     let relative_position = [position.x as f32, position.y as f32];
 
@@ -2117,10 +2126,11 @@ impl Coord<RawDisplayUVSpace> {
         &self,
         options: &RenderOptions,
         project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
         self.to_raw_display_space(options)
             .to_cropped_display_space(options, project)
-            .to_frame_space(options, project)
+            .to_frame_space(options, project, resolution_base)
     }
 }
 
@@ -2140,8 +2150,9 @@ impl Coord<CroppedDisplaySpace> {
         &self,
         options: &RenderOptions,
         project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        let padding = ProjectUniforms::get_display_offset(options, project);
+        let padding = ProjectUniforms::get_display_offset(options, project, resolution_base);
         Coord::new(self.coord + *padding)
     }
 }

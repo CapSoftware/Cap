@@ -82,6 +82,7 @@ export function Timeline() {
                 recordingSegment: null,
               },
             ],
+            zoomSegments: [],
           };
         })
       );

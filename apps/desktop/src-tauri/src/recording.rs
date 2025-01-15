@@ -17,7 +17,7 @@ use cap_flags::FLAGS;
 use cap_media::feeds::CameraFeed;
 use cap_media::sources::{CaptureScreen, CaptureWindow};
 use cap_project::{
-    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment,
+    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment, XY,
 };
 use cap_recording::CompletedRecording;
 use cap_rendering::ProjectRecordings;
@@ -253,6 +253,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                         tauri::ipc::Channel::new(|_| Ok(())),
                         true,
                         completed_recording.meta.content.max_fps(),
+                        XY::new(1920, 1080),
                     )
                     .await
                     .ok();
@@ -369,8 +370,6 @@ fn project_config_from_recording(
                 })
                 .collect(),
             zoom_segments: generate_zoom_segments_from_clicks(&completed_recording, &recordings),
-            output_width: None,
-            output_height: None,
         }),
         ..Default::default()
     }

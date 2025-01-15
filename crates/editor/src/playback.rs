@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use cap_media::data::{AudioInfo, AudioInfoError, FromSampleBytes};
 use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
-use cap_project::ProjectConfiguration;
+use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -35,7 +35,7 @@ pub struct PlaybackHandle {
 }
 
 impl Playback {
-    pub async fn start(self, fps: u32) -> PlaybackHandle {
+    pub async fn start(self, fps: u32, resolution_base: XY<u32>) -> PlaybackHandle {
         let (stop_tx, mut stop_rx) = watch::channel(false);
         stop_rx.borrow_and_update();
 
@@ -95,7 +95,7 @@ impl Playback {
                            break;
                         },
                         (screen_frame, camera_frame) = segment.decoders.get_frames(time as f32, !project.camera.hide) => {
-                                let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32);
+                                let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32, resolution_base);
 
                                 self
                                     .renderer
@@ -104,7 +104,8 @@ impl Playback {
                                         camera_frame,
                                         project.background.source.clone(),
                                         uniforms.clone(),
-                                        time as f32  // Add the time parameter
+                                        time as f32,
+                                        resolution_base
                                     )
                                     .await;
                         }

@@ -779,7 +779,8 @@ function createRecordingMutations(
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             false,
-            FPS
+            FPS,
+            { x: 1920, y: 1080 }
           );
 
           // Show quick progress animation for existing video
@@ -904,7 +905,8 @@ function createRecordingMutations(
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             true, // Force re-render
-            FPS
+            FPS,
+            { x: 1920, y: 1080 }
           );
 
           await commands.copyFileToPath(outputPath, savePath);
@@ -1039,7 +1041,8 @@ function createRecordingMutations(
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             false,
-            FPS
+            FPS,
+            { x: 1920, y: 1080 }
           );
           console.log("Using existing rendered video");
 
