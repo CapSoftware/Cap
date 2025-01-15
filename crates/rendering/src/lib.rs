@@ -177,8 +177,8 @@ pub async fn render_video_to_channel(
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
     println!(
-        "Final export duration: {} seconds ({} frames at 30fps)",
-        duration, total_frames
+        "Final export duration: {} seconds ({} frames at {}fps)",
+        duration, total_frames, fps
     );
 
     let mut frame_number = 0;
@@ -189,23 +189,32 @@ pub async fn render_video_to_channel(
             break;
         }
 
-        let (time, segment_i) = if let Some(timeline) = &project.timeline {
+        let source_time = if let Some(timeline) = &project.timeline {
             match timeline.get_recording_time(frame_number as f64 / fps as f64) {
-                Some(value) => (value.0, value.1),
-                None => (frame_number as f64 / fps as f64, Some(0u32)),
+                Some(value) => value.0,
+                None => frame_number as f64 / fps as f64,
             }
         } else {
-            (frame_number as f64 / fps as f64, Some(0u32))
+            frame_number as f64 / fps as f64
         };
 
-        let segment = &segments[segment_i.unwrap() as usize];
-        // let frame_time = frame_number;
+        let segment_i = if let Some(timeline) = &project.timeline {
+            timeline
+                .get_recording_time(frame_number as f64 / fps as f64)
+                .map(|value| value.1)
+                .flatten()
+                .unwrap_or(0u32)
+        } else {
+            0u32
+        };
+
+        let segment = &segments[segment_i as usize];
         let (screen_frame, camera_frame) = segment
             .decoders
-            .get_frames(time as f32, !project.camera.hide)
+            .get_frames(source_time as f32, !project.camera.hide)
             .await;
 
-        let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
+        let uniforms = ProjectUniforms::new(&constants, &project, source_time as f32);
 
         let frame = produce_frame(
             &constants,
@@ -213,7 +222,7 @@ pub async fn render_video_to_channel(
             &camera_frame,
             background,
             &uniforms,
-            time as f32,
+            source_time as f32,
             total_frames,
         )
         .await?;
@@ -613,20 +622,17 @@ impl ProjectUniforms {
             }
         };
 
-        // Apply timeline output size limits if they exist
         if let Some(timeline) = &project.timeline {
             if let (Some(max_width), Some(max_height)) =
                 (timeline.output_width, timeline.output_height)
             {
-                if base_width > max_width || base_height > max_height {
-                    let width_scale = max_width as f32 / base_width as f32;
-                    let height_scale = max_height as f32 / base_height as f32;
-                    let scale = width_scale.min(height_scale);
+                let width_scale = max_width as f32 / base_width as f32;
+                let height_scale = max_height as f32 / base_height as f32;
+                let scale = width_scale.min(height_scale);
 
-                    let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
-                    let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
-                    return (scaled_width, scaled_height);
-                }
+                let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
+                let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
+                return (scaled_width, scaled_height);
             }
         }
 

@@ -228,7 +228,7 @@ where
                         RawVideoFormat::Rgba,
                         self.output_size.0,
                         self.output_size.1,
-                        30,
+                        self.fps,
                     )
                     .wrap_frame(
                         &frame.data,
