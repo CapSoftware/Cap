@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { Tooltip } from "@kobalte/core";
+import { Select as KSelect } from "@kobalte/core/select";
 import { createMutation } from "@tanstack/solid-query";
 import { getRequestEvent } from "solid-js/web";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -26,7 +27,14 @@ import {
   checkIsUpgradedAndUpdate,
 } from "~/utils/plans";
 import { FPS, useEditorContext } from "./context";
-import { Dialog, DialogContent } from "./ui";
+import {
+  Dialog,
+  DialogContent,
+  MenuItem,
+  MenuItemList,
+  PopperContent,
+  topLeftAnimateClasses,
+} from "./ui";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import {
   type ProgressState,
@@ -53,7 +61,7 @@ const RESOLUTION_OPTIONS: ResolutionOption[] = [
 const FPS_OPTIONS = [
   { label: "30 FPS", value: 30 },
   { label: "60 FPS", value: 60 },
-] as const;
+] satisfies Array<{ label: string; value: number }>;
 
 export function Header() {
   const currentWindow = getCurrentWindow();
@@ -229,42 +237,101 @@ export function Header() {
               Export
             </Button>
             <Show when={showExportOptions()}>
-              <div class="absolute right-0 top-full mt-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 p-4 min-w-[240px]">
+              <div class="absolute right-0 top-full mt-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-40 p-4 min-w-[240px]">
                 <div class="space-y-4">
                   <div>
                     <label class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                       Resolution
                     </label>
-                    <select
-                      class="w-full p-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md text-sm"
-                      value={selectedResolution().value}
-                      onChange={(e) => {
-                        const option = RESOLUTION_OPTIONS.find(
-                          (opt) => opt.value === e.currentTarget.value
-                        );
-                        if (option) setSelectedResolution(option);
-                      }}
+                    <KSelect<ResolutionOption>
+                      options={RESOLUTION_OPTIONS}
+                      optionValue="value"
+                      optionTextValue="label"
+                      placeholder="Select Resolution"
+                      value={selectedResolution()}
+                      onChange={setSelectedResolution}
+                      itemComponent={(props) => (
+                        <MenuItem<typeof KSelect.Item>
+                          as={KSelect.Item}
+                          item={props.item}
+                        >
+                          <KSelect.ItemLabel class="flex-1">
+                            {props.item.rawValue.label}
+                          </KSelect.ItemLabel>
+                        </MenuItem>
+                      )}
                     >
-                      {RESOLUTION_OPTIONS.map((option) => (
-                        <option value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
+                      <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+                        <KSelect.Value<ResolutionOption> class="flex-1 text-sm text-left truncate">
+                          {(state) => (
+                            <span>{state.selectedOption()?.label}</span>
+                          )}
+                        </KSelect.Value>
+                        <KSelect.Icon>
+                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+                        </KSelect.Icon>
+                      </KSelect.Trigger>
+                      <KSelect.Portal>
+                        <PopperContent<typeof KSelect.Content>
+                          as={KSelect.Content}
+                          class={cx(topLeftAnimateClasses, "z-50")}
+                        >
+                          <MenuItemList<typeof KSelect.Listbox>
+                            class="max-h-32 overflow-y-auto"
+                            as={KSelect.Listbox}
+                          />
+                        </PopperContent>
+                      </KSelect.Portal>
+                    </KSelect>
                   </div>
                   <div>
                     <label class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                       Frame Rate
                     </label>
-                    <select
-                      class="w-full p-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-md text-sm"
-                      value={selectedFps()}
-                      onChange={(e) =>
-                        setSelectedFps(Number(e.currentTarget.value))
-                      }
+                    <KSelect<(typeof FPS_OPTIONS)[number]>
+                      options={FPS_OPTIONS}
+                      optionValue="value"
+                      optionTextValue="label"
+                      placeholder="Select FPS"
+                      value={FPS_OPTIONS.find(
+                        (opt) => opt.value === selectedFps()
+                      )}
+                      onChange={(option) => setSelectedFps(option?.value ?? 30)}
+                      itemComponent={(props) => (
+                        <MenuItem<typeof KSelect.Item>
+                          as={KSelect.Item}
+                          item={props.item}
+                        >
+                          <KSelect.ItemLabel class="flex-1">
+                            {props.item.rawValue.label}
+                          </KSelect.ItemLabel>
+                        </MenuItem>
+                      )}
                     >
-                      {FPS_OPTIONS.map((option) => (
-                        <option value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
+                      <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+                        <KSelect.Value<
+                          (typeof FPS_OPTIONS)[number]
+                        > class="flex-1 text-sm text-left truncate">
+                          {(state) => (
+                            <span>{state.selectedOption()?.label}</span>
+                          )}
+                        </KSelect.Value>
+                        <KSelect.Icon>
+                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+                        </KSelect.Icon>
+                      </KSelect.Trigger>
+                      <KSelect.Portal>
+                        <PopperContent<typeof KSelect.Content>
+                          as={KSelect.Content}
+                          class={cx(topLeftAnimateClasses, "z-50")}
+                        >
+                          <MenuItemList<typeof KSelect.Listbox>
+                            class="max-h-32 overflow-y-auto"
+                            as={KSelect.Listbox}
+                          />
+                        </PopperContent>
+                      </KSelect.Portal>
+                    </KSelect>
                   </div>
                   <Button
                     variant="primary"
