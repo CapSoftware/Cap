@@ -51,7 +51,7 @@ export default function (
   const minSize = props.minSize || { x: 100, y: 100 };
   const crop = props.value;
   console.log(`value ${crop}`);
-  
+
   const [containerSize, setContainerSize] = createSignal({ x: 0, y: 0 });
   const mappedSize = createMemo(() => props.mappedSize || containerSize());
 
@@ -68,10 +68,10 @@ export default function (
     const mapped = mappedSize();
     const container = containerSize();
     return {
-        x: (crop.position.x / mapped.x) * container.x,
-        y: (crop.position.y / mapped.y) * container.y,
-        width: (crop.size.x / mapped.x) * container.x,
-        height: (crop.size.y / mapped.y) * container.y,
+      x: (crop.position.x / mapped.x) * container.x,
+      y: (crop.position.y / mapped.y) * container.y,
+      width: (crop.size.x / mapped.x) * container.x,
+      height: (crop.size.y / mapped.y) * container.y,
     };
   });
 
@@ -99,17 +99,20 @@ export default function (
 
     let width = clamp(initial.x, minSize.x, mapped.x);
     let height = clamp(initial.y, minSize.y, mapped.y);
-    
-    // const box = Box.from({x: (mapped.x - width) / 2, y: (mapped.y - height) / 2}, { x: width, y: height });
+
+    const box = Box.from({ x: (mapped.x - width) / 2, y: (mapped.y - height) / 2 }, { x: width, y: height });
 
     if (props.aspectRatio) {
-      if (width / height > props.aspectRatio) {
-        width = height * props.aspectRatio;
-      } else {
-        height = width / props.aspectRatio;
-      }
-      // box.constrainToRatio(props.aspectRatio, { x: 0.5, y: 0.5 });
+      // if (width / height > props.aspectRatio) {
+      //   width = height * props.aspectRatio;
+      // } else {
+      //   height = width / props.aspectRatio;
+      // }
+      box.constrainToRatio(props.aspectRatio, { x: 0.5, y: 0.5 });
     }
+
+    box.constrainToSize(containerSize().x, containerSize().y, minSize.x, minSize.y, { x: 0.5, y: 0.5 }, props.aspectRatio);
+    box.constrainToBoundary(containerSize().x, containerSize().x, { x: 0.5, y: 0.5 });
 
     props.onCropChange({
       size: { x: width, y: height },
@@ -120,7 +123,7 @@ export default function (
     });
 
     console.log(`crop: ${JSON.stringify(crop)} display: ${JSON.stringify(displayCrop())}`);
-    
+
   });
 
   const [isDragging, setIsDragging] = createSignal(false);
@@ -169,6 +172,7 @@ export default function (
     });
   }
 
+ 
   function handleResizeStart(event: MouseEvent, dir: Direction) {
     event.stopPropagation();
     const origin: XY<number> = {
@@ -187,30 +191,42 @@ export default function (
           const dx = (e.clientX - lastValidPos.x) / scaleFactors.x;
           const dy = (e.clientY - lastValidPos.y) / scaleFactors.y;
 
-          // Calculate new dimensions
+          const currentBox = box.toBounds();
           const newWidth = dir.includes("e") || dir.includes("w")
             ? clamp(
-                box.width + (dir.includes("w") ? -dx : dx),
+                dir.includes("w") ? currentBox.size.x - dx : currentBox.size.x + dx,
                 minSize.x,
                 mapped.x
               )
-            : box.width;
+            : currentBox.size.x;
 
           const newHeight = dir.includes("n") || dir.includes("s")
             ? clamp(
-                box.height + (dir.includes("n") ? -dy : dy),
+                dir.includes("n") ? currentBox.size.y - dy : currentBox.size.y + dy,
                 minSize.y,
                 mapped.y
               )
-            : box.height;
+            : currentBox.size.y;
 
-          // Update the box with new dimensions
           box.resize(newWidth, newHeight, origin);
-          
-          // Update crop state with new bounds
-          props.onCropChange(box.toBounds());
-          lastValidPos = { x: e.clientX, y: e.clientY };
-        }
+
+          if (props.aspectRatio) {
+            box.constrainToRatio(props.aspectRatio, origin, dir.includes("n") || dir.includes("s") ? "width" : "height");
+          }
+
+          box.constrainToBoundary(mapped.x, mapped.y, origin);
+
+          const newBox = box.toBounds();
+          if (
+            newBox.size.x !== crop.size.x ||
+            newBox.size.y !== crop.size.y ||
+            newBox.position.x !== crop.position.x ||
+            newBox.position.y !== crop.position.y
+          ) {
+            lastValidPos = { x: e.clientX, y: e.clientY };
+            props.onCropChange(newBox);
+          }
+        },
       });
     });
   }
@@ -255,13 +271,13 @@ export default function (
                   ...(handle.x === "l"
                     ? { left: "-12px" }
                     : handle.x === "r"
-                    ? { right: "-12px" }
-                    : { left: "50%", transform: "translateX(-50%)" }),
+                      ? { right: "-12px" }
+                      : { left: "50%", transform: "translateX(-50%)" }),
                   ...(handle.y === "t"
                     ? { top: "-12px" }
                     : handle.y === "b"
-                    ? { bottom: "-12px" }
-                    : { top: "50%", transform: "translateY(-50%)" }),
+                      ? { bottom: "-12px" }
+                      : { top: "50%", transform: "translateY(-50%)" }),
                   cursor: `${handle.cursor}-resize`,
                 }}
                 onMouseDown={(e) => handleResizeStart(e, handle.direction)}
@@ -272,26 +288,26 @@ export default function (
                 style={{
                   ...(handle.x === "l"
                     ? {
-                        left: "0",
-                        width: "16px",
-                        transform: "translateX(-50%)",
-                      }
+                      left: "0",
+                      width: "16px",
+                      transform: "translateX(-50%)",
+                    }
                     : handle.x === "r"
-                    ? {
+                      ? {
                         right: "0",
                         width: "16px",
                         transform: "translateX(50%)",
                       }
-                    : { left: "0", right: "0", transform: "translateY(50%)" }),
+                      : { left: "0", right: "0", transform: "translateY(50%)" }),
                   ...(handle.y === "t"
                     ? {
-                        top: "0",
-                        height: "16px",
-                        transform: "translateY(-50%)",
-                      }
+                      top: "0",
+                      height: "16px",
+                      transform: "translateY(-50%)",
+                    }
                     : handle.y === "b"
-                    ? { bottom: "0", height: "16px" }
-                    : { top: "0", bottom: "0" }),
+                      ? { bottom: "0", height: "16px" }
+                      : { top: "0", bottom: "0" }),
                   cursor: `${handle.cursor}-resize`,
                 }}
                 onMouseDown={(e) => handleResizeStart(e, handle.direction)}
