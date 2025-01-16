@@ -246,26 +246,27 @@ impl EditorInstance {
 
                 let segment = &self.segments[segment.unwrap_or(0) as usize];
 
-                let (screen_frame, camera_frame) = segment
+                if let Some((screen_frame, camera_frame)) = segment
                     .decoders
                     .get_frames(time as f32, !project.camera.hide)
-                    .await;
-
-                self.renderer
-                    .render_frame(
-                        screen_frame,
-                        camera_frame,
-                        project.background.source.clone(),
-                        ProjectUniforms::new(
-                            &self.render_constants,
-                            &project,
+                    .await
+                {
+                    self.renderer
+                        .render_frame(
+                            screen_frame,
+                            camera_frame,
+                            project.background.source.clone(),
+                            ProjectUniforms::new(
+                                &self.render_constants,
+                                &project,
+                                time as f32,
+                                resolution_base,
+                            ),
                             time as f32,
                             resolution_base,
-                        ),
-                        time as f32,
-                        resolution_base,
-                    )
-                    .await;
+                        )
+                        .await;
+                }
             }
         })
     }

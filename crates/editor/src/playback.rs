@@ -94,7 +94,8 @@ impl Playback {
                         _ = stop_rx.changed() => {
                            break;
                         },
-                        (screen_frame, camera_frame) = segment.decoders.get_frames(time as f32, !project.camera.hide) => {
+                        data = segment.decoders.get_frames(time as f32, !project.camera.hide) => {
+                            if let Some((screen_frame, camera_frame)) = data {
                                 let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32, resolution_base);
 
                                 self
@@ -108,6 +109,7 @@ impl Playback {
                                         resolution_base
                                     )
                                     .await;
+                            }
                         }
                         else => {
                         }
@@ -125,8 +127,6 @@ impl Playback {
 
                 frame_number += 1;
             }
-
-            println!("stopped playback");
 
             stop_tx.send(true).ok();
 

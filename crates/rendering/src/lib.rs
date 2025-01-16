@@ -126,15 +126,17 @@ impl RecordingSegmentDecoders {
         &self,
         frame_time: f32,
         needs_camera: bool,
-    ) -> (DecodedFrame, Option<DecodedFrame>) {
-        tokio::join!(
+    ) -> Option<(DecodedFrame, Option<DecodedFrame>)> {
+        let (screen, camera) = tokio::join!(
             self.screen.get_frame(frame_time),
             OptionFuture::from(
                 needs_camera
                     .then(|| self.camera.as_ref().map(|d| d.get_frame(frame_time)))
                     .flatten()
             )
-        )
+        );
+
+        Some((screen?, camera.flatten()))
     }
 }
 
@@ -210,31 +212,34 @@ pub async fn render_video_to_channel(
         };
 
         let segment = &segments[segment_i as usize];
-        let (screen_frame, camera_frame) = segment
+
+        if let Some((screen_frame, camera_frame)) = segment
             .decoders
             .get_frames(source_time as f32, !project.camera.hide)
-            .await;
+            .await
+        {
+            let uniforms =
+                ProjectUniforms::new(&constants, &project, source_time as f32, resolution_base);
 
-        let uniforms =
-            ProjectUniforms::new(&constants, &project, source_time as f32, resolution_base);
+            let frame = produce_frame(
+                &constants,
+                &screen_frame,
+                &camera_frame,
+                background,
+                &uniforms,
+                source_time as f32,
+                total_frames,
+                resolution_base,
+            )
+            .await?;
 
-        let frame = produce_frame(
-            &constants,
-            &screen_frame,
-            &camera_frame,
-            background,
-            &uniforms,
-            source_time as f32,
-            total_frames,
-            resolution_base,
-        )
-        .await?;
+            if frame.width == 0 || frame.height == 0 {
+                continue;
+            }
 
-        if frame.width == 0 || frame.height == 0 {
-            continue;
+            sender.send(frame).await?;
         }
 
-        sender.send(frame).await?;
         frame_number += 1;
     }
 

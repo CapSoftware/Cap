@@ -703,7 +703,7 @@ export function ConfigSidebar() {
                     )
                   }
                   minValue={1}
-                  maxValue={2.5}
+                  maxValue={4.5}
                   step={0.001}
                 />
               </Field>
