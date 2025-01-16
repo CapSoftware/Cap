@@ -114,7 +114,7 @@ export default function (
     );
     box.constrainAll(box, containerSize(), ORIGIN_CENTER, props.aspectRatio);
 
-    props.onCropChange({
+    setCrop({
       size: { x: width, y: height },
       position: {
         x: (mapped.x - width) / 2,
@@ -131,7 +131,7 @@ export default function (
         const box = Box.from(crop.position, crop.size);
         box.constrainToRatio(props.aspectRatio, ORIGIN_CENTER);
         box.constrainToBoundary(mappedSize().x, mappedSize().y, ORIGIN_CENTER);
-        props.onCropChange(box.toBounds());
+        setCrop(box.toBounds());
       },
     ),
   );
@@ -172,7 +172,7 @@ export default function (
             const newBox = box;
             if (newBox.x !== crop.position.x || newBox.y !== crop.position.y) {
               lastValidPos = { x: e.clientX, y: e.clientY };
-              props.onCropChange(newBox.toBounds());
+              setCrop(newBox.toBounds());
             }
           });
         },
@@ -190,16 +190,13 @@ export default function (
 
       const velocity = Math.max(0.001, Math.abs(event.deltaY) * 0.001);
       const scale = 1 - event.deltaY * velocity;
-      const origin = ORIGIN_CENTER;
 
       box.resize(
         clamp(box.width * scale, minSize.x, mapped.x),
         clamp(box.height * scale, minSize.y, mapped.y),
-        origin
+        ORIGIN_CENTER
       );
-      box.constrainAll(box, mapped, origin, props.aspectRatio);
-      props.onCropChange(box.toBounds());
-
+      box.constrainAll(box, mapped, ORIGIN_CENTER, props.aspectRatio);
       setTimeout(() => setIsTrackpadGesture(false), 100);
     } else {
       const velocity = Math.max(1, Math.abs(event.deltaY) * 0.01);
@@ -211,9 +208,9 @@ export default function (
         clamp(box.x + dx, 0, mapped.x - box.width),
         clamp(box.y + dy, 0, mapped.y - box.height),
       );
-
-      props.onCropChange(box.toBounds());
     }
+
+    setCrop(box.toBounds());
   }
 
   function handleTouchStart(event: TouchEvent) {
@@ -279,7 +276,7 @@ export default function (
       }
 
       setLastTouchCenter({ x: centerX, y: centerY });
-      props.onCropChange(box.toBounds());
+      setCrop(box.toBounds());
     } else if (event.touches.length === 1 && isDragging()) {
       // Handle single touch drag
       const box = Box.from(crop.position, crop.size);
@@ -300,7 +297,7 @@ export default function (
         x: event.touches[0].clientX,
         y: event.touches[0].clientY,
       });
-      props.onCropChange(box.toBounds());
+      setCrop(box.toBounds());
     }
   }
 
@@ -340,13 +337,13 @@ export default function (
         touchend: dispose,
         touchmove: (e) => requestAnimationFrame(() => {
           if (e.touches.length !== 1) return;
-          handleMove(e.touches[0].clientX, e.touches[0].clientY);
+          handleResizeMove(e.touches[0].clientX, e.touches[0].clientY);
         }),
-        mousemove: (e) => requestAnimationFrame(() => handleMove(e.clientX, e.clientY, e.altKey)),
+        mousemove: (e) => requestAnimationFrame(() => handleResizeMove(e.clientX, e.clientY, e.altKey)),
       });
     });
 
-    function handleMove(moveX: number, moveY: number, centerOrigin = false) {
+    function handleResizeMove(moveX: number, moveY: number, centerOrigin = false) {
       const dx = (moveX - lastValidPos.x) / scaleFactors.x;
       const dy = (moveY - lastValidPos.y) / scaleFactors.y;
 
@@ -394,52 +391,108 @@ export default function (
         newBox.position.y !== crop.position.y
       ) {
         lastValidPos = { x: moveX, y: moveY };
-        props.onCropChange(newBox);
+        setCrop(newBox);
       }
     }
   }
 
+  function setCrop(value: Crop) {
+    props.onCropChange({
+      size: { x: Math.round(value.size.x), y: Math.round(value.size.y) },
+      position: { x: Math.round(value.position.x), y: Math.round(value.position.y) },
+    });
+    console.log(`${JSON.stringify(crop)}`);
+  }
+
+  let pressedKeys = new Set<string>([]);
+  const KEY_TO_DIR_MAP = new Map<string, Direction>([
+    ["ArrowUp", "n"],
+    ["w", "n"],
+    ["k", "n"],
+    ["ArrowRight", "e"],
+    ["d", "e"],
+    ["l", "e"],
+    ["ArrowDown", "s"],
+    ["s", "s"],
+    ["j", "s"],
+    ["ArrowLeft", "w"],
+    ["a", "w"],
+    ["h", "w"],
+  ]);
+
+  let lastKeyHandleFrame: number | null = null;
   function handleKeyDown(event: KeyboardEvent) {
-    const box = Box.from(crop.position, crop.size);
-    const mapped = mappedSize();
-    const scaleFactors = containerToMappedSizeScale();
-
-    const isLeftKey = ['ArrowLeft', 'a', 'h'].includes(event.key);
-    const isRightKey = ['ArrowRight', 'd', 'l'].includes(event.key);
-    const isUpKey = ['ArrowUp', 'w', 'k'].includes(event.key);
-    const isDownKey = ['ArrowDown', 's', 'j'].includes(event.key);
-
-    if (!isLeftKey && !isRightKey && !isUpKey && !isDownKey) return;
+    const dir = KEY_TO_DIR_MAP.has(event.key);
+    if (!dir) return;
     event.preventDefault();
+    pressedKeys.add(event.key);
 
-    const moveDelta = event.shiftKey ? 20 : 5;
-    const origin = event.altKey ? ORIGIN_CENTER : { x: 0, y: 0 };
+    if (lastKeyHandleFrame) return;
+    lastKeyHandleFrame = requestAnimationFrame(() => {
+      const box = Box.from(crop.position, crop.size);
+      const mapped = mappedSize();
+      const scaleFactors = containerToMappedSizeScale();
+      
+      const moveDelta = event.shiftKey ? 20 : 5;
+      const origin = event.altKey ? ORIGIN_CENTER : { x: 0, y: 0 };
 
-    if (event.metaKey || event.ctrlKey) {
-      const width = box.width + (isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0);
-      const height = box.height + (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0);
+      for (const key of pressedKeys) {
+        const dir = KEY_TO_DIR_MAP.get(key);
+        if (!dir) continue;
 
-      box.resize(
-        clamp(width, minSize.x, mapped.x),
-        clamp(height, minSize.y, mapped.y),
-        origin
-      );
+        const isUpKey = dir === "n";
+        const isLeftKey = dir === "w";
+        const isDownKey = dir === "s";
+        const isRightKey = dir === "e";
 
-      if (props.aspectRatio) {
-        box.constrainToRatio(props.aspectRatio, origin);
+        if (event.metaKey || event.ctrlKey) {
+          const scaleMultiplier = event.altKey ? 2 : 1;
+          const currentBox = box.toBounds();
+          const newWidth =
+            dir.includes("e") || dir.includes("w")
+              ? clamp(
+                dir.includes("w")
+                  ? currentBox.size.x - moveDelta * scaleMultiplier
+                  : currentBox.size.x + moveDelta * scaleMultiplier,
+                minSize.x,
+                mapped.x,
+              )
+              : currentBox.size.x;
+      
+          const newHeight =
+            dir.includes("n") || dir.includes("s")
+              ? clamp(
+                dir.includes("n")
+                  ? currentBox.size.y - moveDelta * scaleMultiplier
+                  : currentBox.size.y + moveDelta * scaleMultiplier,
+                minSize.y,
+                mapped.y,
+              )
+              : currentBox.size.y;
+
+          box.resize(
+            clamp(newWidth, minSize.x, mapped.x),
+            clamp(newHeight, minSize.y, mapped.y),
+            origin
+          );
+        } else {
+          const dx = (isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0) / scaleFactors.x;
+          const dy = (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
+
+          box.move(
+            clamp(box.x + dx, 0, mapped.x - box.width),
+            clamp(box.y + dy, 0, mapped.y - box.height)
+          );
+        }
       }
-    } else {
-      const dx = (isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0) / scaleFactors.x;
-      const dy = (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
 
-      box.move(
-        clamp(box.x + dx, 0, mapped.x - box.width),
-        clamp(box.y + dy, 0, mapped.y - box.height)
-      );
-    }
+      if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, origin);
+      box.constrainToBoundary(mapped.x, mapped.y, origin);
+      setCrop(box.toBounds());
 
-    box.constrainToBoundary(mapped.x, mapped.y, origin);
-    props.onCropChange(box.toBounds());
+      pressedKeys.clear();
+      lastKeyHandleFrame = null;
+    });
   }
 
   return (
