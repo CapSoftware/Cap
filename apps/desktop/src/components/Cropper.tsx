@@ -160,19 +160,21 @@ export default function (
           dispose();
         },
         mousemove: (e) => {
-          const dx = (e.clientX - lastValidPos.x) / scaleFactors.x;
-          const dy = (e.clientY - lastValidPos.y) / scaleFactors.y;
+          requestAnimationFrame(() => {
+            const dx = (e.clientX - lastValidPos.x) / scaleFactors.x;
+            const dy = (e.clientY - lastValidPos.y) / scaleFactors.y;
 
-          box.move(
-            clamp(box.x + dx, 0, mapped.x - box.width),
-            clamp(box.y + dy, 0, mapped.y - box.height),
-          );
+            box.move(
+              clamp(box.x + dx, 0, mapped.x - box.width),
+              clamp(box.y + dy, 0, mapped.y - box.height),
+            );
 
-          const newBox = box;
-          if (newBox.x !== crop.position.x || newBox.y !== crop.position.y) {
-            lastValidPos = { x: e.clientX, y: e.clientY };
-            props.onCropChange(newBox.toBounds());
-          }
+            const newBox = box;
+            if (newBox.x !== crop.position.x || newBox.y !== crop.position.y) {
+              lastValidPos = { x: e.clientX, y: e.clientY };
+              props.onCropChange(newBox.toBounds());
+            }
+          });
         },
       });
     });
@@ -190,9 +192,12 @@ export default function (
       const scale = 1 - event.deltaY * velocity;
       const origin = ORIGIN_CENTER;
 
-      box.resize(box.width * scale, box.height * scale, origin);
+      box.resize(
+        clamp(box.width * scale, minSize.x, mapped.x),
+        clamp(box.height * scale, minSize.y, mapped.y),
+        origin
+      );
       box.constrainAll(box, mapped, origin, props.aspectRatio);
-
       props.onCropChange(box.toBounds());
 
       setTimeout(() => setIsTrackpadGesture(false), 100);
@@ -304,7 +309,6 @@ export default function (
       setIsDragging(false);
       setLastTouchCenter(null);
     } else if (event.touches.length === 1) {
-      // Reset for single touch drag
       setLastTouchCenter({
         x: event.touches[0].clientX,
         y: event.touches[0].clientY,
@@ -318,6 +322,7 @@ export default function (
     const touch = event.touches[0];
     handleResizeStart(touch.clientX, touch.clientY, dir);
   }
+
   function handleResizeStart(clientX: number, clientY: number, dir: Direction) {
     const origin: XY<number> = {
       x: dir.includes("w") ? 1 : 0,
@@ -333,11 +338,11 @@ export default function (
       createEventListenerMap(window, {
         mouseup: dispose,
         touchend: dispose,
-        touchmove: (e) => {
+        touchmove: (e) => requestAnimationFrame(() => {
           if (e.touches.length !== 1) return;
           handleMove(e.touches[0].clientX, e.touches[0].clientY);
-        },
-        mousemove: (e) => handleMove(e.clientX, e.clientY, e.altKey),
+        }),
+        mousemove: (e) => requestAnimationFrame(() => handleMove(e.clientX, e.clientY, e.altKey)),
       });
     });
 
@@ -405,15 +410,14 @@ export default function (
     const isDownKey = ['ArrowDown', 's', 'j'].includes(event.key);
 
     if (!isLeftKey && !isRightKey && !isUpKey && !isDownKey) return;
-
     event.preventDefault();
 
-    const moveAmount = event.shiftKey ? 20 : 5;
+    const moveDelta = event.shiftKey ? 20 : 5;
     const origin = event.altKey ? ORIGIN_CENTER : { x: 0, y: 0 };
 
     if (event.metaKey || event.ctrlKey) {
-      const width = box.width + (isRightKey ? moveAmount : isLeftKey ? -moveAmount : 0);
-      const height = box.height + (isDownKey ? moveAmount : isUpKey ? -moveAmount : 0);
+      const width = box.width + (isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0);
+      const height = box.height + (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0);
 
       box.resize(
         clamp(width, minSize.x, mapped.x),
@@ -425,8 +429,8 @@ export default function (
         box.constrainToRatio(props.aspectRatio, origin);
       }
     } else {
-      const dx = (isRightKey ? moveAmount : isLeftKey ? -moveAmount : 0) / scaleFactors.x;
-      const dy = (isDownKey ? moveAmount : isUpKey ? -moveAmount : 0) / scaleFactors.y;
+      const dx = (isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0) / scaleFactors.x;
+      const dy = (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
 
       box.move(
         clamp(box.x + dx, 0, mapped.x - box.width),
