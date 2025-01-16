@@ -64,6 +64,12 @@ export default class Box {
     };
   }
 
+  constrainAll(box: Box, mapped: XY, origin: XY, aspectRatio?: number) {
+    if (aspectRatio) this.constrainToRatio(aspectRatio, origin);
+    this.constrainToBoundary(mapped.x, mapped.y, origin);
+    return box;
+  }
+
   constrainToRatio(
     ratio: number,
     origin: XY,

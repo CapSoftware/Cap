@@ -33,6 +33,8 @@ const HANDLES: HandleSide[] = [
   { x: "r", y: "c", direction: "e", cursor: "ew" },
 ];
 
+const ORIGIN_CENTER: XY<number> = { x: 0.5, y: 0.5 };
+
 function clamp(n: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, n));
 }
@@ -110,21 +112,7 @@ export default function (
       { x: (mapped.x - width) / 2, y: (mapped.y - height) / 2 },
       { x: width, y: height },
     );
-
-    if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, { x: 0.5, y: 0.5 });
-
-    box.constrainToSize(
-      containerSize().x,
-      containerSize().y,
-      minSize.x,
-      minSize.y,
-      { x: 0.5, y: 0.5 },
-      props.aspectRatio,
-    );
-    box.constrainToBoundary(containerSize().x, containerSize().x, {
-      x: 0.5,
-      y: 0.5,
-    });
+    box.constrainAll(box, containerSize(), ORIGIN_CENTER, props.aspectRatio);
 
     props.onCropChange({
       size: { x: width, y: height },
@@ -133,10 +121,6 @@ export default function (
         y: (mapped.y - height) / 2,
       },
     });
-
-    console.log(
-      `crop: ${JSON.stringify(crop)} display: ${JSON.stringify(displayCrop())}`,
-    );
   });
 
   createEffect(
@@ -145,9 +129,8 @@ export default function (
       () => {
         if (!props.aspectRatio) return;
         const box = Box.from(crop.position, crop.size);
-        const origin = { x: 0.5, y: 0.5 };
-        box.constrainToRatio(props.aspectRatio, origin);
-        box.constrainToBoundary(mappedSize().x, mappedSize().y, origin);
+        box.constrainToRatio(props.aspectRatio, ORIGIN_CENTER);
+        box.constrainToBoundary(mappedSize().x, mappedSize().y, ORIGIN_CENTER);
         props.onCropChange(box.toBounds());
       },
     ),
@@ -205,20 +188,10 @@ export default function (
 
       const velocity = Math.max(0.001, Math.abs(event.deltaY) * 0.001);
       const scale = 1 - event.deltaY * velocity;
-      const origin = { x: 0.5, y: 0.5 };
+      const origin = ORIGIN_CENTER;
 
       box.resize(box.width * scale, box.height * scale, origin);
-
-      if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, origin);
-      box.constrainToSize(
-        mapped.x,
-        mapped.y,
-        minSize.x,
-        minSize.y,
-        origin,
-        props.aspectRatio,
-      );
-      box.constrainToBoundary(mapped.x, mapped.y, origin);
+      box.constrainAll(box, mapped, origin, props.aspectRatio);
 
       props.onCropChange(box.toBounds());
 
@@ -283,7 +256,7 @@ export default function (
       }
 
       // Resize from center
-      box.resize(newWidth, newHeight, { x: 0.5, y: 0.5 });
+      box.resize(newWidth, newHeight, ORIGIN_CENTER);
 
       // Handle two-finger pan
       const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
@@ -345,12 +318,12 @@ export default function (
     const touch = event.touches[0];
     handleResizeStart(touch.clientX, touch.clientY, dir);
   }
-
   function handleResizeStart(clientX: number, clientY: number, dir: Direction) {
     const origin: XY<number> = {
       x: dir.includes("w") ? 1 : 0,
       y: dir.includes("n") ? 1 : 0,
     };
+
     let lastValidPos = { x: clientX, y: clientY };
     const box = Box.from(crop.position, crop.size);
     const scaleFactors = containerToMappedSizeScale();
@@ -364,21 +337,22 @@ export default function (
           if (e.touches.length !== 1) return;
           handleMove(e.touches[0].clientX, e.touches[0].clientY);
         },
-        mousemove: (e) => handleMove(e.clientX, e.clientY),
+        mousemove: (e) => handleMove(e.clientX, e.clientY, e.altKey),
       });
     });
 
-    function handleMove(moveX: number, moveY: number) {
+    function handleMove(moveX: number, moveY: number, centerOrigin = false) {
       const dx = (moveX - lastValidPos.x) / scaleFactors.x;
       const dy = (moveY - lastValidPos.y) / scaleFactors.y;
 
+      const scaleMultiplier = centerOrigin ? 2 : 1;
       const currentBox = box.toBounds();
       const newWidth =
         dir.includes("e") || dir.includes("w")
           ? clamp(
             dir.includes("w")
-              ? currentBox.size.x - dx
-              : currentBox.size.x + dx,
+              ? currentBox.size.x - dx * scaleMultiplier
+              : currentBox.size.x + dx * scaleMultiplier,
             minSize.x,
             mapped.x,
           )
@@ -388,24 +362,24 @@ export default function (
         dir.includes("n") || dir.includes("s")
           ? clamp(
             dir.includes("n")
-              ? currentBox.size.y - dy
-              : currentBox.size.y + dy,
+              ? currentBox.size.y - dy * scaleMultiplier
+              : currentBox.size.y + dy * scaleMultiplier,
             minSize.y,
             mapped.y,
           )
           : currentBox.size.y;
 
-      box.resize(newWidth, newHeight, origin);
+      const newOrigin = centerOrigin ? ORIGIN_CENTER : origin;
+      box.resize(newWidth, newHeight, newOrigin);
 
       if (props.aspectRatio) {
         box.constrainToRatio(
           props.aspectRatio,
-          origin,
+          newOrigin,
           dir.includes("n") || dir.includes("s") ? "width" : "height",
         );
       }
-
-      box.constrainToBoundary(mapped.x, mapped.y, origin);
+      box.constrainToBoundary(mapped.x, mapped.y, newOrigin);
 
       const newBox = box.toBounds();
       if (
@@ -435,7 +409,7 @@ export default function (
     event.preventDefault();
 
     const moveAmount = event.shiftKey ? 20 : 5;
-    const origin = event.altKey ? { x: 0.5, y: 0.5 } : { x: 0, y: 0 };
+    const origin = event.altKey ? ORIGIN_CENTER : { x: 0, y: 0 };
 
     if (event.metaKey || event.ctrlKey) {
       const width = box.width + (isRightKey ? moveAmount : isLeftKey ? -moveAmount : 0);
