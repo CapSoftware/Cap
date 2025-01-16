@@ -240,7 +240,7 @@ export default function (
           width: displayCrop().width,
           height: displayCrop().height,
         }}
-        borderRadius={10}
+        borderRadius={9}
         guideLines={props.showGuideLines}
         handles={true}
       >
@@ -257,9 +257,6 @@ export default function (
         }}
         onMouseDown={handleDragStart}
       >
-        <Show when={props.showGuideLines}>
-          <div class="before:absolute block absolute left-1/2 top-1/2 before:top-0 before:left-[-6px] before:w-[14px] before:h-[2px] before:bg-gray-500 after:absolute after:top-[-6px] after:left-0 after:w-[2px] after:h-[14px] after:bg-gray-500" />
-        </Show>
         <For each={HANDLES}>
           {(handle) => {
             const isCorner = handle.x !== "c" && handle.y !== "c";

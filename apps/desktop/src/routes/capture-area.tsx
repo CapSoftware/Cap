@@ -92,7 +92,7 @@ export default function CaptureArea() {
         value={crop}
         onCropChange={setCrop}
         showGuideLines={true}
-        aspectRatio={1/1}
+        // aspectRatio={1/1}
         mappedSize={{ x: window.innerWidth, y: window.innerHeight }}
       />
     </div>
