@@ -38,7 +38,7 @@ import {
   checkIsUpgradedAndUpdate,
   canCreateShareableLink,
 } from "~/utils/plans";
-import { FPS } from "./editor/context";
+import { FPS, OUTPUT_SIZE } from "./editor/context";
 
 type MediaEntry = {
   path: string;
@@ -780,7 +780,7 @@ function createRecordingMutations(
             progress,
             false,
             FPS,
-            { x: 1920, y: 1080 }
+            OUTPUT_SIZE
           );
 
           // Show quick progress animation for existing video
@@ -906,7 +906,7 @@ function createRecordingMutations(
             progress,
             true, // Force re-render
             FPS,
-            { x: 1920, y: 1080 }
+            OUTPUT_SIZE
           );
 
           await commands.copyFileToPath(outputPath, savePath);
@@ -1042,7 +1042,7 @@ function createRecordingMutations(
             progress,
             false,
             FPS,
-            { x: 1920, y: 1080 }
+            OUTPUT_SIZE
           );
           console.log("Using existing rendered video");
 
