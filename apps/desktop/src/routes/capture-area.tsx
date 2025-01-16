@@ -62,11 +62,21 @@ export default function CaptureArea() {
     webview.close();
   }
 
+  const [aspectRatio, setAspectRatio] = createSignal<number | undefined>();
+
   return (
     <div class="w-screen h-screen overflow-hidden bg-black bg-opacity-25">
       <div class="fixed w-full z-50 flex items-center justify-center">
         <div class="absolute w-[30rem] h-12 bg-gray-50 rounded-lg drop-shadow-2xl border border-1 border-gray-100 flex flex-row-reverse justify-around gap-3 p-1 *:transition-all *:duration-200 top-10">
           <div class="flex flex-row">
+            <button
+              class="py-[0.25rem] px-[0.5rem] text-red-300 dark:red-blue-300 gap-[0.25rem] hover:bg-red-50 flex flex-row items-center rounded-lg"
+              type="button"
+              onClick={() => setAspectRatio(1/1)}
+            >
+              <IconCapCircleX class="size-5" />
+              <span class="font-[500] text-[0.875rem]">1/1</span>
+            </button>
             <button
               class="py-[0.25rem] px-[0.5rem] text-red-300 dark:red-blue-300 gap-[0.25rem] hover:bg-red-50 flex flex-row items-center rounded-lg"
               type="button"
@@ -92,7 +102,7 @@ export default function CaptureArea() {
         value={crop}
         onCropChange={setCrop}
         showGuideLines={true}
-        // aspectRatio={1/1}
+        aspectRatio={aspectRatio()}
         mappedSize={{ x: window.innerWidth, y: window.innerHeight }}
       />
     </div>

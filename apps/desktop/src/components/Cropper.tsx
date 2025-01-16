@@ -1,10 +1,12 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import {
   type ParentProps,
+  createEffect,
   createMemo,
   createRoot,
   createSignal,
   For,
+  on,
   onCleanup,
   onMount,
   Show,
@@ -123,8 +125,14 @@ export default function (
     });
 
     console.log(`crop: ${JSON.stringify(crop)} display: ${JSON.stringify(displayCrop())}`);
-
   });
+
+  createEffect(on(() => props.aspectRatio, () => {
+    if (!props.aspectRatio) return;
+    const box = Box.from(crop.position, crop.size);
+    box.constrainToRatio(props.aspectRatio, { x: 0.5, y: 0.5 });
+    props.onCropChange(box.toBounds());
+  }));
 
   const [isDragging, setIsDragging] = createSignal(false);
 
@@ -315,4 +323,5 @@ export default function (
       </div>
     </div>
   );
+
 }
