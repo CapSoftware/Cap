@@ -9,12 +9,10 @@ import {
   on,
   onCleanup,
   onMount,
-  Show,
 } from "solid-js";
 import AreaOccluder from "./AreaOccluder";
 import Box from "~/utils/box";
 import type { XY, Crop } from "~/utils/tauri";
-import { createStore } from "solid-js/store";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -113,14 +111,7 @@ export default function (
       { x: width, y: height },
     );
 
-    if (props.aspectRatio) {
-      // if (width / height > props.aspectRatio) {
-      //   width = height * props.aspectRatio;
-      // } else {
-      //   height = width / props.aspectRatio;
-      // }
-      box.constrainToRatio(props.aspectRatio, { x: 0.5, y: 0.5 });
-    }
+    if (props.aspectRatio) box.constrainToRatio(props.aspectRatio, { x: 0.5, y: 0.5 });
 
     box.constrainToSize(
       containerSize().x,
@@ -154,7 +145,9 @@ export default function (
       () => {
         if (!props.aspectRatio) return;
         const box = Box.from(crop.position, crop.size);
-        box.constrainToRatio(props.aspectRatio, { x: 0.5, y: 0.5 });
+        const origin = { x: 0.5, y: 0.5 };
+        box.constrainToRatio(props.aspectRatio, origin);
+        box.constrainToBoundary(mappedSize().x, mappedSize().y, origin);
         props.onCropChange(box.toBounds());
       },
     ),
@@ -383,23 +376,23 @@ export default function (
       const newWidth =
         dir.includes("e") || dir.includes("w")
           ? clamp(
-              dir.includes("w")
-                ? currentBox.size.x - dx
-                : currentBox.size.x + dx,
-              minSize.x,
-              mapped.x,
-            )
+            dir.includes("w")
+              ? currentBox.size.x - dx
+              : currentBox.size.x + dx,
+            minSize.x,
+            mapped.x,
+          )
           : currentBox.size.x;
 
       const newHeight =
         dir.includes("n") || dir.includes("s")
           ? clamp(
-              dir.includes("n")
-                ? currentBox.size.y - dy
-                : currentBox.size.y + dy,
-              minSize.y,
-              mapped.y,
-            )
+            dir.includes("n")
+              ? currentBox.size.y - dy
+              : currentBox.size.y + dy,
+            minSize.y,
+            mapped.y,
+          )
           : currentBox.size.y;
 
       box.resize(newWidth, newHeight, origin);
@@ -427,14 +420,61 @@ export default function (
     }
   }
 
+  function handleKeyDown(event: KeyboardEvent) {
+    const box = Box.from(crop.position, crop.size);
+    const mapped = mappedSize();
+    const scaleFactors = containerToMappedSizeScale();
+
+    const isLeftKey = ['ArrowLeft', 'a', 'h'].includes(event.key);
+    const isRightKey = ['ArrowRight', 'd', 'l'].includes(event.key);
+    const isUpKey = ['ArrowUp', 'w', 'k'].includes(event.key);
+    const isDownKey = ['ArrowDown', 's', 'j'].includes(event.key);
+
+    if (!isLeftKey && !isRightKey && !isUpKey && !isDownKey) return;
+
+    event.preventDefault();
+
+    const moveAmount = event.shiftKey ? 20 : 5;
+    const origin = event.altKey ? { x: 0.5, y: 0.5 } : { x: 0, y: 0 };
+
+    if (event.metaKey || event.ctrlKey) {
+      const width = box.width + (isRightKey ? moveAmount : isLeftKey ? -moveAmount : 0);
+      const height = box.height + (isDownKey ? moveAmount : isUpKey ? -moveAmount : 0);
+
+      box.resize(
+        clamp(width, minSize.x, mapped.x),
+        clamp(height, minSize.y, mapped.y),
+        origin
+      );
+
+      if (props.aspectRatio) {
+        box.constrainToRatio(props.aspectRatio, origin);
+      }
+    } else {
+      const dx = (isRightKey ? moveAmount : isLeftKey ? -moveAmount : 0) / scaleFactors.x;
+      const dy = (isDownKey ? moveAmount : isUpKey ? -moveAmount : 0) / scaleFactors.y;
+
+      box.move(
+        clamp(box.x + dx, 0, mapped.x - box.width),
+        clamp(box.y + dy, 0, mapped.y - box.height)
+      );
+    }
+
+    box.constrainToBoundary(mapped.x, mapped.y, origin);
+    props.onCropChange(box.toBounds());
+  }
+
   return (
     <div
+      aria-label="Crop area"
       ref={containerRef}
       class="relative h-full w-full overflow-hidden"
       onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
+      onKeyDown={handleKeyDown}
+      tabIndex={0}
     >
       <AreaOccluder
         bounds={{
@@ -444,8 +484,8 @@ export default function (
           height: displayCrop().height,
         }}
         borderRadius={9}
-        // guideLines={props.showGuideLines}
-        // handles={true}
+        guideLines={props.showGuideLines}
+        handles={true}
       >
         {props.children}
       </AreaOccluder>
@@ -496,27 +536,27 @@ export default function (
                 style={{
                   ...(handle.x === "l"
                     ? {
-                        left: "0",
-                        width: "16px",
-                        transform: "translateX(-50%)",
-                      }
+                      left: "0",
+                      width: "16px",
+                      transform: "translateX(-50%)",
+                    }
                     : handle.x === "r"
                       ? {
-                          right: "0",
-                          width: "16px",
-                          transform: "translateX(50%)",
-                        }
+                        right: "0",
+                        width: "16px",
+                        transform: "translateX(50%)",
+                      }
                       : {
-                          left: "0",
-                          right: "0",
-                          transform: "translateY(50%)",
-                        }),
+                        left: "0",
+                        right: "0",
+                        transform: "translateY(50%)",
+                      }),
                   ...(handle.y === "t"
                     ? {
-                        top: "0",
-                        height: "16px",
-                        transform: "translateY(-50%)",
-                      }
+                      top: "0",
+                      height: "16px",
+                      transform: "translateY(-50%)",
+                    }
                     : handle.y === "b"
                       ? { bottom: "0", height: "16px" }
                       : { top: "0", bottom: "0" }),
