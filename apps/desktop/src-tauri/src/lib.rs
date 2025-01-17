@@ -18,7 +18,7 @@ mod web_api;
 mod windows;
 
 use audio::AppSounds;
-use auth::{AuthStore, AuthenticationInvalid};
+use auth::{AuthStore, AuthenticationInvalid, Plan};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
@@ -61,6 +61,7 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
+use web_api::ManagerExt;
 use windows::{CapWindowId, ShowCapWindow};
 
 #[derive(specta::Type, Serialize)]
@@ -908,7 +909,7 @@ async fn create_editor_instance(
     let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     // Load the RecordingMeta to get the pretty name
-    let meta = RecordingMeta::load_for_project(&editor_instance.project_path)
+    let mut meta = RecordingMeta::load_for_project(&editor_instance.project_path)
         .map_err(|e| format!("Failed to load recording meta: {}", e))?;
 
     println!("Pretty name: {}", meta.pretty_name);
@@ -963,7 +964,7 @@ async fn get_video_metadata(
         .join("recordings")
         .join(format!("{}.cap", video_id));
 
-    let meta = RecordingMeta::load_for_project(&project_path)?;
+    let mut meta = RecordingMeta::load_for_project(&project_path)?;
 
     fn get_duration_for_paths(paths: Vec<PathBuf>) -> Result<f64, String> {
         let mut max_duration: f64 = 0.0;
@@ -1168,34 +1169,48 @@ async fn upload_exported_video(
         return Ok(UploadResult::NotAuthenticated);
     };
 
-    // Check if user has an upgraded plan
-    if !auth.is_upgraded() {
-        match AuthStore::fetch_and_update_plan(&app).await {
-            Ok(_) => match AuthStore::get(&app) {
-                Ok(Some(updated_auth)) => {
-                    auth = updated_auth;
-                }
-                Ok(None) => {
-                    return Ok(UploadResult::NotAuthenticated);
-                }
-                Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
-            },
+    // Get video metadata to check duration
+    let screen_metadata =
+        match get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await {
+            Ok(meta) => meta,
             Err(e) => {
-                if e.contains("Authentication expired") {
-                    return Ok(UploadResult::NotAuthenticated);
-                }
-                return Ok(UploadResult::PlanCheckFailed);
+                sentry::capture_message(
+                    &format!("Failed to get video metadata: {}", e),
+                    sentry::Level::Error,
+                );
+                return Err(
+                "Failed to read video metadata. The recording may be from an incompatible version."
+                    .to_string(),
+            );
             }
-        }
+        };
 
-        if !auth.is_upgraded() {
-            ShowCapWindow::Upgrade.show(&app).ok();
-            return Ok(UploadResult::UpgradeRequired);
-        }
+    // Get camera metadata if it exists
+    let camera_metadata =
+        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Camera))
+            .await
+            .ok();
+
+    // Use the longer duration between screen and camera
+    let duration = screen_metadata.duration.max(
+        camera_metadata
+            .map(|m| m.duration)
+            .unwrap_or(screen_metadata.duration),
+    );
+
+    // Check if user is not pro and video is over 5 minutes
+    if !auth.is_upgraded() && duration > 300.0 {
+        // 300 seconds = 5 minutes
+        return Ok(UploadResult::UpgradeRequired);
     }
 
-    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-    let mut meta = editor_instance.meta();
+    let mut meta = RecordingMeta::load_for_project(
+        &app.path()
+            .app_data_dir()
+            .unwrap()
+            .join("recordings")
+            .join(format!("{}.cap", video_id)),
+    )?;
 
     let output_path = meta.output_path();
     if !output_path.exists() {
@@ -1690,16 +1705,64 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
 #[tauri::command]
 #[specta::specta]
 async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
-    if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
-        return Err(format!(
-            "Failed to update plan information. Try signing out and signing back in: {}",
-            e
-        ));
+    println!("Checking upgraded status and updating...");
+    let Ok(Some(mut auth)) = AuthStore::get(&app) else {
+        println!("No auth found, clearing auth store");
+        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+        return Ok(false);
+    };
+
+    // Return true early if plan is manually set
+    if let Some(ref plan) = auth.plan {
+        if plan.manual {
+            return Ok(true);
+        }
     }
 
-    let auth = AuthStore::get(&app).map_err(|e| e.to_string())?;
+    println!(
+        "Fetching plan for user {}",
+        auth.user_id.as_deref().unwrap_or("unknown")
+    );
+    let plan_url = web_api::make_url("/api/desktop/plan");
+    let response = app
+        .authed_api_request(|client| client.get(plan_url))
+        .await
+        .map_err(|e| {
+            println!("Failed to fetch plan: {}", e);
+            format!("Failed to fetch plan: {}", e)
+        })?;
 
-    Ok(auth.map_or(false, |a| a.is_upgraded()))
+    println!("Plan fetch response status: {}", response.status());
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        println!("Unauthorized response, clearing auth store");
+        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+        return Ok(false);
+    }
+
+    let plan_data = response.json::<serde_json::Value>().await.map_err(|e| {
+        println!("Failed to parse plan response: {}", e);
+        format!("Failed to parse plan response: {}", e)
+    })?;
+
+    let is_pro = plan_data
+        .get("upgraded")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    println!("Pro status: {}", is_pro);
+    let updated_auth = AuthStore {
+        token: auth.token,
+        user_id: auth.user_id,
+        expires: auth.expires,
+        plan: Some(Plan {
+            upgraded: is_pro,
+            manual: auth.plan.map(|p| p.manual).unwrap_or(false),
+            last_checked: chrono::Utc::now().timestamp() as i32,
+        }),
+    };
+    println!("Updating auth store with new pro status");
+    AuthStore::set(&app, Some(updated_auth)).map_err(|e| e.to_string())?;
+
+    Ok(is_pro)
 }
 
 #[tauri::command]

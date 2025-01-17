@@ -35,10 +35,6 @@ import {
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
 import { progressState, setProgressState } from "~/store/progress";
-import {
-  checkIsUpgradedAndUpdate,
-  canCreateShareableLink,
-} from "~/utils/plans";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
 
 type MediaEntry = {
@@ -601,13 +597,13 @@ export default function () {
                                 "border-end-start-radius": "7.4px",
                               }}
                               class={cx(
-                                "absolute bottom-0 left-0 right-0 font-medium bg-gray-500/60 dark:bg-gray-50/60 backdrop-blur-md p-2.5 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
+                                "absolute bottom-0 left-0 right-0 font-medium bg-[--gray-50] dark:bg-gray-50/60 backdrop-blur-md p-2.5 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
                                 isLoading() || showUpgradeTooltip()
                                   ? "opacity-0"
                                   : "group-hover:opacity-0"
                               )}
                             >
-                              <p class="flex items-center gap-4">
+                              <p class="flex items-center gap-4 text-[--gray-500]">
                                 <span class="flex items-center">
                                   <IconCapCamera class="w-[16px] h-[16px] mr-1.5" />
                                   {Math.floor(metadata().duration / 60)}:
@@ -621,8 +617,14 @@ export default function () {
                                 </span>
                                 <span class="flex items-center">
                                   <IconLucideClock class="w-[16px] h-[16px] mr-1.5" />
-                                  ~{Math.floor(metadata().estimatedExportTime / 60)}:
-                                  {Math.floor(metadata().estimatedExportTime % 60)
+                                  ~
+                                  {Math.floor(
+                                    metadata().estimatedExportTime / 60
+                                  )}
+                                  :
+                                  {Math.floor(
+                                    metadata().estimatedExportTime % 60
+                                  )
                                     .toString()
                                     .padStart(2, "0")}
                                 </span>
@@ -982,7 +984,11 @@ function createRecordingMutations(
       }
 
       const metadata = await commands.getVideoMetadata(media.path, null);
-      const canShare = await canCreateShareableLink(metadata?.duration);
+      const plan = await commands.checkUpgradedAndUpdate();
+      const canShare = {
+        allowed: plan || metadata.duration < 300,
+        reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
+      };
 
       if (!canShare.allowed) {
         if (canShare.reason === "upgrade_required") {

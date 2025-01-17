@@ -21,11 +21,7 @@ import { Channel } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 
-import { type RenderProgress, commands } from "~/utils/tauri";
-import {
-  canCreateShareableLink,
-  checkIsUpgradedAndUpdate,
-} from "~/utils/plans";
+import { type RenderProgress, commands, events } from "~/utils/tauri";
 import { FPS, useEditorContext } from "./context";
 import {
   Dialog,
@@ -41,7 +37,6 @@ import {
   progressState,
   setProgressState,
 } from "~/store/progress";
-import { events } from "~/utils/tauri";
 import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
 
@@ -224,7 +219,7 @@ export function Header() {
   batch(() => {
     setTitlebar("border", false);
     setTitlebar("height", "4rem");
-    setTitlebar("transparent", true);
+    setTitlebar("transparent", false);
     setTitlebar(
       "items",
       <div
@@ -251,7 +246,7 @@ export function Header() {
               <div class="absolute right-0 top-full mt-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-40 p-4 min-w-[240px]">
                 <div class="space-y-4">
                   <div>
-                    <label class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                    <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
                       Resolution
                     </label>
                     <KSelect<ResolutionOption>
@@ -273,13 +268,13 @@ export function Header() {
                       )}
                     >
                       <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
-                        <KSelect.Value<ResolutionOption> class="flex-1 text-sm text-left truncate">
+                        <KSelect.Value<ResolutionOption> class="flex-1 text-sm text-left truncate text-[--gray-500]">
                           {(state) => (
                             <span>{state.selectedOption()?.label}</span>
                           )}
                         </KSelect.Value>
                         <KSelect.Icon>
-                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
                         </KSelect.Icon>
                       </KSelect.Trigger>
                       <KSelect.Portal>
@@ -296,7 +291,7 @@ export function Header() {
                     </KSelect>
                   </div>
                   <div>
-                    <label class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                    <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
                       FPS
                     </label>
                     <KSelect
@@ -322,13 +317,13 @@ export function Header() {
                       <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
                         <KSelect.Value<
                           (typeof FPS_OPTIONS)[number]
-                        > class="flex-1 text-sm text-left truncate">
+                        > class="flex-1 text-sm text-left truncate text-[--gray-500]">
                           {(state) => (
                             <span>{state.selectedOption()?.label}</span>
                           )}
                         </KSelect.Value>
                         <KSelect.Icon>
-                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180" />
+                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
                         </KSelect.Icon>
                       </KSelect.Trigger>
                       <KSelect.Portal>
@@ -597,15 +592,11 @@ function ShareButton(props: ShareButtonProps) {
       }
 
       const metadata = await commands.getVideoMetadata(videoId, null);
-      const canShare = await canCreateShareableLink(metadata?.duration);
+      const isUpgraded = await commands.checkUpgradedAndUpdate();
 
-      if (!canShare.allowed) {
-        if (canShare.reason === "upgrade_required") {
-          await commands.showWindow("Upgrade");
-          throw new Error(
-            "Upgrade required to share recordings over 5 minutes"
-          );
-        }
+      if (!isUpgraded) {
+        await commands.showWindow("Upgrade");
+        throw new Error("Upgrade required to share recordings");
       }
 
       let unlisten: (() => void) | undefined;

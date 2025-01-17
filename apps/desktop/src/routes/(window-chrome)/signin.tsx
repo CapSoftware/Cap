@@ -69,11 +69,16 @@ const signInAction = action(async () => {
       throw new Error("Invalid token or expires");
     }
 
+    const existingAuth = await authStore.get();
     await authStore.set({
       token,
       user_id,
       expires,
-      plan: { upgraded: false, last_checked: 0 },
+      plan: {
+        upgraded: false,
+        last_checked: 0,
+        manual: existingAuth?.plan?.manual ?? false,
+      },
     });
 
     const currentWindow = getCurrentWindow();
