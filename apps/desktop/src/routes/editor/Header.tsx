@@ -341,6 +341,36 @@ export function Header() {
                   >
                     Export Video
                   </Button>
+                  <Show when={metadata()}>
+                    {(metadata) => (
+                      <div
+                        class={cx(
+                          "font-medium z-40 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden text-xs"
+                        )}
+                      >
+                        <p class="flex items-center gap-4">
+                          <span class="flex items-center text-[--gray-500]">
+                            <IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                            {Math.floor(metadata().duration / 60)}:
+                            {Math.floor(metadata().duration % 60)
+                              .toString()
+                              .padStart(2, "0")}
+                          </span>
+                          <span class="flex items-center text-[--gray-500]">
+                            <IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                            {metadata().size.toFixed(2)} MB
+                          </span>
+                          <span class="flex items-center text-[--gray-500]">
+                            <IconLucideClock class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                            ~{Math.floor(metadata().estimatedExportTime / 60)}:
+                            {Math.floor(metadata().estimatedExportTime % 60)
+                              .toString()
+                              .padStart(2, "0")}
+                          </span>
+                        </p>
+                      </div>
+                    )}
+                  </Show>
                 </div>
               </div>
             </Show>
