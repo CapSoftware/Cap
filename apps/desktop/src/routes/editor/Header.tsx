@@ -63,23 +63,15 @@ const FPS_OPTIONS = [
   { label: "60 FPS", value: 60 },
 ] satisfies Array<{ label: string; value: number }>;
 
+export interface ExportEstimates {
+  duration_seconds: number;
+  estimated_time_seconds: number;
+  estimated_size_mb: number;
+}
+
 export function Header() {
   const currentWindow = getCurrentWindow();
   const { videoId, project, prettyName } = useEditorContext();
-
-  const [metadata] = createResource(async () => {
-    const result = await commands.getVideoMetadata(videoId, null).catch((e) => {
-      console.error(`Failed to get metadata: ${e}`);
-    });
-    if (!result) return;
-
-    const { duration, size } = result;
-    const estimatedExportTime = Math.ceil(duration * 1.5);
-    console.log(
-      `Metadata for video: duration=${duration}, size=${size}, estimatedExport=${estimatedExportTime}`
-    );
-    return { duration, size, estimatedExportTime };
-  });
 
   const [showExportOptions, setShowExportOptions] = createSignal(false);
   const [selectedFps, setSelectedFps] = createSignal(
@@ -91,6 +83,24 @@ export function Header() {
         (opt) => opt.value === localStorage.getItem("cap-export-resolution")
       ) || RESOLUTION_OPTIONS[0]
     );
+
+  const [exportEstimates] = createResource(
+    () => ({
+      videoId,
+      resolution: {
+        x: selectedResolution()?.width || RESOLUTION_OPTIONS[0].width,
+        y: selectedResolution()?.height || RESOLUTION_OPTIONS[0].height,
+      },
+      fps: selectedFps(),
+    }),
+    async (params) => {
+      return commands.getExportEstimates(
+        params.videoId,
+        params.resolution,
+        params.fps
+      );
+    }
+  );
 
   let unlistenTitlebar: UnlistenFn | undefined;
   onMount(async () => {
@@ -189,8 +199,8 @@ export function Header() {
         true,
         selectedFps(),
         {
-          x: selectedResolution().width,
-          y: selectedResolution().height,
+          x: selectedResolution()?.width || RESOLUTION_OPTIONS[0].width,
+          y: selectedResolution()?.height || RESOLUTION_OPTIONS[0].height,
         }
       );
       await commands.copyFileToPath(videoPath, path);
@@ -287,9 +297,9 @@ export function Header() {
                   </div>
                   <div>
                     <label class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                      Frame Rate
+                      FPS
                     </label>
-                    <KSelect<(typeof FPS_OPTIONS)[number]>
+                    <KSelect
                       options={FPS_OPTIONS}
                       optionValue="value"
                       optionTextValue="label"
@@ -341,8 +351,8 @@ export function Header() {
                   >
                     Export Video
                   </Button>
-                  <Show when={metadata()}>
-                    {(metadata) => (
+                  <Show when={exportEstimates()}>
+                    {(est) => (
                       <div
                         class={cx(
                           "font-medium z-40 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden text-xs"
@@ -351,21 +361,55 @@ export function Header() {
                         <p class="flex items-center gap-4">
                           <span class="flex items-center text-[--gray-500]">
                             <IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
-                            {Math.floor(metadata().duration / 60)}:
-                            {Math.floor(metadata().duration % 60)
-                              .toString()
-                              .padStart(2, "0")}
+                            {(() => {
+                              const totalSeconds = Math.round(
+                                est().duration_seconds
+                              );
+                              const hours = Math.floor(totalSeconds / 3600);
+                              const minutes = Math.floor(
+                                (totalSeconds % 3600) / 60
+                              );
+                              const seconds = totalSeconds % 60;
+
+                              if (hours > 0) {
+                                return `${hours}:${minutes
+                                  .toString()
+                                  .padStart(2, "0")}:${seconds
+                                  .toString()
+                                  .padStart(2, "0")}`;
+                              }
+                              return `${minutes}:${seconds
+                                .toString()
+                                .padStart(2, "0")}`;
+                            })()}
                           </span>
                           <span class="flex items-center text-[--gray-500]">
                             <IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
-                            {metadata().size.toFixed(2)} MB
+                            {est().estimated_size_mb.toFixed(2)} MB
                           </span>
                           <span class="flex items-center text-[--gray-500]">
                             <IconLucideClock class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
-                            ~{Math.floor(metadata().estimatedExportTime / 60)}:
-                            {Math.floor(metadata().estimatedExportTime % 60)
-                              .toString()
-                              .padStart(2, "0")}
+                            {(() => {
+                              const totalSeconds = Math.round(
+                                est().estimated_time_seconds
+                              );
+                              const hours = Math.floor(totalSeconds / 3600);
+                              const minutes = Math.floor(
+                                (totalSeconds % 3600) / 60
+                              );
+                              const seconds = totalSeconds % 60;
+
+                              if (hours > 0) {
+                                return `~${hours}:${minutes
+                                  .toString()
+                                  .padStart(2, "0")}:${seconds
+                                  .toString()
+                                  .padStart(2, "0")}`;
+                              }
+                              return `~${minutes}:${seconds
+                                .toString()
+                                .padStart(2, "0")}`;
+                            })()}
                           </span>
                         </p>
                       </div>
@@ -652,8 +696,10 @@ function ShareButton(props: ShareButtonProps) {
           true,
           props.selectedFps(),
           {
-            x: props.selectedResolution().width,
-            y: props.selectedResolution().height,
+            x: props.selectedResolution()?.width || RESOLUTION_OPTIONS[0].width,
+            y:
+              props.selectedResolution()?.height ||
+              RESOLUTION_OPTIONS[0].height,
           }
         );
 

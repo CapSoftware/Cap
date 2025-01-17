@@ -943,25 +943,6 @@ async fn copy_video_to_clipboard(
     Ok(())
 }
 
-
-
-// Helper function to estimate rendered file size based on duration and quality
-fn estimate_rendered_size(duration: f64) -> f64 {
-    // Use actual encoder bitrates:
-    // - Video: 8-10 Mbps (from H264 encoder implementations)
-    // - Audio: 128 Kbps (fixed in all encoders)
-    #[cfg(target_os = "macos")]
-    let video_bitrate = 10_000_000.0; // 10 Mbps (AVAssetWriter)
-    #[cfg(not(target_os = "macos"))]
-    let video_bitrate = 8_000_000.0;  // 8 Mbps (libx264)
-    
-    let audio_bitrate = 128_000.0;    // 128 Kbps (fixed in encoders)
-    
-    // Total data = (video_bitrate + audio_bitrate) * duration / 8 bits per byte
-    // Convert to MB by dividing by (1024 * 1024)
-    ((video_bitrate + audio_bitrate) * duration) / (8.0 * 1024.0 * 1024.0)
-}
-
 #[tauri::command]
 #[specta::specta]
 async fn get_video_metadata(
@@ -987,7 +968,9 @@ async fn get_video_metadata(
     fn get_duration_for_paths(paths: Vec<PathBuf>) -> Result<f64, String> {
         let mut max_duration: f64 = 0.0;
         for path in paths {
-            let reader = BufReader::new(File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?);
+            let reader = BufReader::new(
+                File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?,
+            );
             let file_size = path
                 .metadata()
                 .map_err(|e| format!("Failed to get file metadata: {}", e))?
@@ -1041,11 +1024,28 @@ async fn get_video_metadata(
     // Use the longer duration
     let duration = display_duration.max(camera_duration);
 
-    // Estimate the rendered file size based on the duration
-    let estimated_size = estimate_rendered_size(duration);
+    // Calculate estimated size using same logic as get_export_estimates
+    let (width, height) = (1920, 1080); // Default to 1080p
+    let fps = 30; // Default to 30fps
+
+    let base_bitrate = if width <= 1280 && height <= 720 {
+        4_000_000.0
+    } else if width <= 1920 && height <= 1080 {
+        8_000_000.0
+    } else if width <= 2560 && height <= 1440 {
+        14_000_000.0
+    } else {
+        20_000_000.0
+    };
+
+    let fps_factor = (fps as f64) / 30.0;
+    let video_bitrate = base_bitrate * fps_factor;
+    let audio_bitrate = 192_000.0;
+    let total_bitrate = video_bitrate + audio_bitrate;
+    let estimated_size_mb = (total_bitrate * duration) / (8.0 * 1024.0 * 1024.0);
 
     Ok(VideoRecordingMetadata {
-        size: estimated_size,
+        size: estimated_size_mb,
         duration,
     })
 }
@@ -1862,6 +1862,7 @@ pub async fn run() {
             focus_captures_panel,
             get_current_recording,
             export::export_video,
+            export::get_export_estimates,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
