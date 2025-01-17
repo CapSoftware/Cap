@@ -27,7 +27,11 @@ export default function Settings(props: RouteSectionProps) {
           <For
             each={[
               { href: "general", name: "General", icon: IconCapSettings },
-              { href: "config", name: "Config", icon: IconLucideVideo },
+              {
+                href: "config",
+                name: "Recording Config",
+                icon: IconLucideVideo,
+              },
               { href: "hotkeys", name: "Shortcuts", icon: IconCapHotkeys },
               {
                 href: "recordings",
