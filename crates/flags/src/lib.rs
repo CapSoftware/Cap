@@ -11,5 +11,5 @@ pub const FLAGS: Flags = Flags {
     record_mouse: true,
     split: false,        // cfg!(debug_assertions),
     pause_resume: false, // cfg!(debug_assertions),
-    zoom: cfg!(debug_assertions),
+    zoom: true,
 };
