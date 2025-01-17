@@ -873,7 +873,15 @@ impl EditorStateChanged {
 async fn start_playback(app: AppHandle, video_id: String, fps: u32, resolution_base: XY<u32>) {
     upsert_editor_instance(&app, video_id)
         .await
-        .start_playback(fps, resolution_base)
+        .start_playback(
+            fps,
+            resolution_base,
+            AuthStore::get(&app)
+                .ok()
+                .flatten()
+                .map(|s| s.is_upgraded())
+                .unwrap_or(false),
+        )
         .await
 }
 
@@ -2335,15 +2343,31 @@ pub async fn upsert_editor_instance(app: &AppHandle, video_id: String) -> Arc<Ed
 }
 
 async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {
-    let instance = EditorInstance::new(recordings_path(app), video_id, {
-        let app = app.clone();
-        move |state| {
-            EditorStateChanged::new(state).emit(&app).ok();
-        }
-    })
+    let app = app.clone();
+
+    let instance = EditorInstance::new(
+        recordings_path(&app),
+        video_id,
+        {
+            let app = app.clone();
+            move |state| {
+                EditorStateChanged::new(state).emit(&app).ok();
+            }
+        },
+        {
+            let app = app.clone();
+            move || {
+                AuthStore::get(&app)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.is_upgraded())
+                    .unwrap_or(false)
+            }
+        },
+    )
     .await;
 
-    RenderFrameEvent::listen_any(app, {
+    RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
             preview_tx

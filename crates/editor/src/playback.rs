@@ -35,7 +35,12 @@ pub struct PlaybackHandle {
 }
 
 impl Playback {
-    pub async fn start(self, fps: u32, resolution_base: XY<u32>) -> PlaybackHandle {
+    pub async fn start(
+        self,
+        fps: u32,
+        resolution_base: XY<u32>,
+        is_upgraded: bool,
+    ) -> PlaybackHandle {
         let (stop_tx, mut stop_rx) = watch::channel(false);
         stop_rx.borrow_and_update();
 
@@ -101,7 +106,7 @@ impl Playback {
                                     &project,
                                     time as f32,
                                     resolution_base,
-                                    false,
+                                    is_upgraded,
                                 );
 
                                 self

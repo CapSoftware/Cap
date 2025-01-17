@@ -40,6 +40,7 @@ impl EditorInstance {
         projects_path: PathBuf,
         video_id: String,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        get_is_upgraded: impl Fn() -> bool + Send + 'static,
     ) -> Arc<Self> {
         sentry::configure_scope(|scope| {
             scope.set_tag("crate", "editor");
@@ -115,8 +116,10 @@ impl EditorInstance {
             meta,
         });
 
-        this.state.lock().await.preview_task =
-            Some(this.clone().spawn_preview_renderer(preview_rx));
+        this.state.lock().await.preview_task = Some(
+            this.clone()
+                .spawn_preview_renderer(preview_rx, get_is_upgraded),
+        );
 
         this
     }
@@ -173,7 +176,12 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
-    pub async fn start_playback(self: Arc<Self>, fps: u32, resolution_base: XY<u32>) {
+    pub async fn start_playback(
+        self: Arc<Self>,
+        fps: u32,
+        resolution_base: XY<u32>,
+        is_upgraded: bool,
+    ) {
         let (mut handle, prev) = {
             let Ok(mut state) = self.state.try_lock() else {
                 return;
@@ -188,7 +196,7 @@ impl EditorInstance {
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
             }
-            .start(fps, resolution_base)
+            .start(fps, resolution_base, is_upgraded)
             .await;
 
             let prev = state.playback_task.replace(playback_handle.clone());
@@ -224,6 +232,7 @@ impl EditorInstance {
     fn spawn_preview_renderer(
         self: Arc<Self>,
         mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
+        get_is_upgraded: impl Fn() -> bool + Send + 'static,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
@@ -261,7 +270,7 @@ impl EditorInstance {
                                 &project,
                                 time as f32,
                                 resolution_base,
-                                false,
+                                get_is_upgraded(),
                             ),
                             time as f32,
                             resolution_base,
