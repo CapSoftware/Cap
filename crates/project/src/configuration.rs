@@ -299,11 +299,10 @@ pub enum ZoomMode {
     Manual { x: f32, y: f32 },
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
-    #[serde(default)]
     pub zoom_segments: Vec<ZoomSegment>,
 }
 

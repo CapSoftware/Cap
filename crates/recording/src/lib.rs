@@ -1,7 +1,7 @@
+pub mod actor;
 pub mod cursor;
-pub mod segmented_actor;
 
-pub use segmented_actor::{spawn_recording_actor, ActorHandle, CompletedRecording, RecordingError};
+pub use actor::{spawn_recording_actor, ActorHandle, CompletedRecording, RecordingError};
 
 use cap_media::sources::*;
 use cap_project::Resolution;
@@ -23,6 +23,7 @@ impl Default for RecordingOptions {
             capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
                 id: 0,
                 name: String::new(),
+                refresh_rate: 0,
             }),
             camera_label: None,
             audio_input_name: None,

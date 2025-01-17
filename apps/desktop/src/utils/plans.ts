@@ -19,11 +19,7 @@ export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
   return planIds[environment]?.[billingCycle] || "";
 };
 
-export const isUserOnProPlan = ({
-  subscriptionStatus,
-}: {
-  subscriptionStatus: string;
-}) => {
+export function isUserOnProPlan({ subscriptionStatus }: { subscriptionStatus: string | null }): boolean {
   if (
     subscriptionStatus === "active" ||
     subscriptionStatus === "trialing" ||
@@ -32,13 +28,40 @@ export const isUserOnProPlan = ({
   ) {
     return true;
   }
-
   return false;
-};
+}
 
-export const checkIsUpgradedAndUpdate = () => commands
-    .checkUpgradedAndUpdate()
-    .catch((e) => {
-      console.error("Failed to check plan: ", e);
-      return false;
+export async function checkIsUpgradedAndUpdate(): Promise<boolean> {
+  try {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_URL}/api/desktop/plan`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
     });
+
+    if (!response.ok) {
+      throw new Error("Failed to check plan status");
+    }
+
+    const data = await response.json();
+    return isUserOnProPlan({ subscriptionStatus: data.stripeSubscriptionStatus });
+  } catch (error) {
+    console.error("Error checking plan status:", error);
+    return false;
+  }
+}
+
+export async function canCreateShareableLink(duration: number | undefined | null): Promise<{ allowed: boolean; reason?: string }> {
+  const isUpgraded = await checkIsUpgradedAndUpdate();
+  
+  if (!isUpgraded && duration && duration > 300) {
+    return { 
+      allowed: false, 
+      reason: "upgrade_required"
+    };
+  }
+
+  return { allowed: true };
+}

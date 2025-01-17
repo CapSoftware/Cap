@@ -11,12 +11,12 @@ use cap_project::{CursorClickEvent, CursorMoveEvent};
 use device_query::{DeviceQuery, DeviceState};
 use tokio::sync::oneshot;
 
-pub type Cursors = HashMap<u64, (String, i32)>;
+pub type Cursors = HashMap<u64, (String, u32)>;
 
 pub struct CursorActorResponse {
     // pub cursor_images: HashMap<String, Vec<u8>>,
     pub cursors: Cursors,
-    pub next_cursor_id: i32,
+    pub next_cursor_id: u32,
     pub moves: Vec<CursorMoveEvent>,
     pub clicks: Vec<CursorClickEvent>,
 }
@@ -38,7 +38,7 @@ pub fn spawn_cursor_recorder(
     screen_bounds: Bounds,
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
-    next_cursor_id: i32,
+    next_cursor_id: u32,
 ) -> CursorActor {
     let stop_signal = Arc::new(AtomicBool::new(false));
     let (tx, rx) = oneshot::channel();

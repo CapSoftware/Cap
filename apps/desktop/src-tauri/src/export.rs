@@ -2,7 +2,7 @@ use crate::{
     general_settings::GeneralSettingsStore, get_video_metadata, upsert_editor_instance,
     windows::ShowCapWindow, RenderProgress, VideoRecordingMetadata, VideoType,
 };
-use cap_project::ProjectConfiguration;
+use cap_project::{ProjectConfiguration, XY};
 use std::path::PathBuf;
 use tauri::AppHandle;
 
@@ -14,7 +14,8 @@ pub async fn export_video(
     project: ProjectConfiguration,
     progress: tauri::ipc::Channel<RenderProgress>,
     force: bool,
-    use_custom_muxer: bool,
+    fps: u32,
+    resolution_base: XY<u32>,
 ) -> Result<PathBuf, String> {
     let screen_metadata =
         match get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await {
@@ -45,7 +46,7 @@ pub async fn export_video(
     );
 
     let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-    let total_frames = editor_instance.get_total_frames();
+    let total_frames = editor_instance.get_total_frames(fps);
 
     let output_path = editor_instance.meta().output_path();
 
@@ -70,7 +71,6 @@ pub async fn export_video(
     }
 
     let exporter = cap_export::Exporter::new(
-        &app,
         modified_project,
         output_path.clone(),
         move |frame_index| {
@@ -84,6 +84,8 @@ pub async fn export_video(
         editor_instance.meta(),
         editor_instance.render_constants.clone(),
         &editor_instance.segments,
+        fps,
+        resolution_base,
     )
     .map_err(|e| {
         sentry::capture_message(&e.to_string(), sentry::Level::Error);

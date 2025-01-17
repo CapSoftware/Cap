@@ -25,6 +25,7 @@ use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_project::XY;
 use cap_project::{Content, ProjectConfiguration, RecordingMeta, Resolution, SharingMeta};
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
@@ -849,6 +850,8 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
 #[derive(Deserialize, specta::Type, tauri_specta::Event, Debug, Clone)]
 struct RenderFrameEvent {
     frame_number: u32,
+    fps: u32,
+    resolution_base: XY<u32>,
 }
 
 #[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
@@ -866,10 +869,10 @@ impl EditorStateChanged {
 
 #[tauri::command]
 #[specta::specta]
-async fn start_playback(app: AppHandle, video_id: String) {
+async fn start_playback(app: AppHandle, video_id: String, fps: u32, resolution_base: XY<u32>) {
     upsert_editor_instance(&app, video_id)
         .await
-        .start_playback()
+        .start_playback(fps, resolution_base)
         .await
 }
 
@@ -1452,6 +1455,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
                 segment: cap_project::SingleSegment {
                     display: Display {
                         path: screenshot_path.clone(),
+                        fps: 0,
                     },
                     camera: None,
                     audio: None,
@@ -1459,7 +1463,8 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
                 },
             },
         }
-        .save_for_project();
+        .save_for_project()
+        .unwrap();
 
         NewScreenshotAdded {
             path: screenshot_path,
@@ -1729,9 +1734,10 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
         window.close().ok();
     }
 
-    while CapWindowId::Main.get(&app).is_none() {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    // Show the signin window
+    ShowCapWindow::SignIn
+        .show(&app)
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -2027,6 +2033,7 @@ pub async fn run() {
                         capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
                             id: 0,
                             name: String::new(),
+                            refresh_rate: 0,
                         }),
                         camera_label: None,
                         audio_input_name: None,
@@ -2275,7 +2282,13 @@ async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<E
     RenderFrameEvent::listen_any(app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
-            preview_tx.send(Some(e.payload.frame_number)).ok();
+            preview_tx
+                .send(Some((
+                    e.payload.frame_number,
+                    e.payload.fps,
+                    e.payload.resolution_base,
+                )))
+                .ok();
         }
     });
 
@@ -2394,12 +2407,16 @@ impl<T: tauri_specta::Event> EventExt for T {}
 
 #[tauri::command(async)]
 #[specta::specta]
-async fn get_editor_total_frames(app: AppHandle, video_id: String) -> Result<u32, String> {
+async fn get_editor_total_frames(
+    app: AppHandle,
+    video_id: String,
+    fps: u32,
+) -> Result<u32, String> {
     let editor_instances = app.state::<EditorInstancesState>();
     let instances = editor_instances.lock().await;
 
     let instance = instances
         .get(&video_id)
         .ok_or_else(|| "Editor instance not found".to_string())?;
-    Ok(instance.get_total_frames())
+    Ok(instance.get_total_frames(fps))
 }

@@ -15,6 +15,7 @@ import callbackTemplate from "./callback.template";
 import { authStore } from "~/store";
 import { clientEnv } from "~/utils/env";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { commands } from "~/utils/tauri";
 
 const signInAction = action(async () => {
   let res: (url: URL) => void;
@@ -75,9 +76,9 @@ const signInAction = action(async () => {
       plan: { upgraded: false, last_checked: 0 },
     });
 
-    getCurrentWindow()
-      .setFocus()
-      .catch(() => {});
+    const currentWindow = getCurrentWindow();
+    await commands.openMainWindow();
+    await currentWindow.close();
 
     return redirect("/");
   } catch (error) {
@@ -122,7 +123,9 @@ export default function Page() {
     <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100">
       <div class="space-y-[0.375rem] flex-1">
         <IconCapLogo class="size-[3rem]" />
-        <h1 class="text-[1rem] font-[700] text-black-transparent-80">Sign in to Cap</h1>
+        <h1 class="text-[1rem] font-[700] text-black-transparent-80">
+          Sign in to Cap
+        </h1>
         <p class="text-gray-400">Beautiful screen recordings, owned by you.</p>
       </div>
       {submission.pending ? (
@@ -130,7 +133,19 @@ export default function Page() {
           Cancel sign in
         </Button>
       ) : (
-        <Button onClick={() => signIn()}>Sign in with your browser</Button>
+        <div class="flex flex-col gap-2">
+          <Button onClick={() => signIn()}>Sign in with your browser</Button>
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              const currentWindow = getCurrentWindow();
+              await commands.openMainWindow();
+              await currentWindow.close();
+            }}
+          >
+            Continue without signing in
+          </Button>
+        </div>
       )}
     </div>
   );

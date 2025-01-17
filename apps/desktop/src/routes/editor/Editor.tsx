@@ -17,14 +17,18 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { createMutation } from "@tanstack/solid-query";
-import {
-  createEventListener,
-  createEventListenerMap,
-} from "@solid-primitives/event-listener";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { events, commands } from "~/utils/tauri";
-import { EditorContextProvider, useEditorContext } from "./context";
+import { events } from "~/utils/tauri";
+import {
+  EditorContextProvider,
+  EditorInstanceContextProvider,
+  FPS,
+  OUTPUT_SIZE,
+  useEditorContext,
+  useEditorInstanceContext,
+} from "./context";
 import {
   Dialog,
   DialogContent,
@@ -33,10 +37,6 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
-import {
-  EditorInstanceContextProvider,
-  useEditorInstanceContext,
-} from "./editorInstanceContext";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { ConfigSidebar } from "./ConfigSidebar";
@@ -78,13 +78,15 @@ function Inner() {
   onMount(() => {
     events.editorStateChanged.listen((e) => {
       renderFrame.clear();
-      setPlaybackTime(e.payload.playhead_position / 30);
+      setPlaybackTime(e.payload.playhead_position / FPS);
     });
   });
 
   const renderFrame = throttle((time: number) => {
     events.renderFrameEvent.emit({
-      frame_number: Math.max(Math.floor(time * 30), 0),
+      frame_number: Math.max(Math.floor(time * FPS), 0),
+      fps: FPS,
+      resolution_base: OUTPUT_SIZE,
     });
   }, 1000 / 60);
 

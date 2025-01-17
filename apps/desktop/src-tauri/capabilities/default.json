@@ -33,7 +33,10 @@
     "notification:default",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "https://cap.so" }]
+      "allow": [
+        { "url": "https://cap.so" },
+        { "url": "http://localhost:3000/*" }
+      ]
     }
   ]
 }

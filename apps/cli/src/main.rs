@@ -1,9 +1,13 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{env::current_dir, path::PathBuf, sync::Arc};
 
 use cap_editor::create_segments;
+use cap_media::sources::{get_target_fps, ScreenCaptureTarget};
 use cap_project::{RecordingMeta, XY};
+use cap_recording::RecordingOptions;
 use cap_rendering::RenderVideoConstants;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use tokio::io::AsyncBufReadExt;
+use uuid::Uuid;
 
 #[derive(Parser)]
 struct Cli {
@@ -13,14 +17,66 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Export a '.cap' project to an mp4 file
     Export {
         project_path: PathBuf,
         output_path: Option<PathBuf>,
     },
+    /// Start a recording or list available capture targets and devices
+    Record(RecordArgs),
+}
+
+#[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
+// #[command(flatten_help = true)]
+struct RecordArgs {
+    #[command(subcommand)]
+    command: Option<RecordCommands>,
+
+    #[command(flatten)]
+    args: RecordStartArgs,
+}
+
+#[derive(Subcommand)]
+enum RecordCommands {
+    /// List screens available for capturing
+    Screens,
+    /// List windows available for capturing
+    Windows,
+    // Cameras,
+    // Mics,
+}
+
+#[derive(Args)]
+struct RecordStartArgs {
+    #[command(flatten)]
+    target: RecordTargets,
+    /// ID of the camera to record
+    #[arg(long)]
+    camera: Option<u32>,
+    /// ID of the microphone to record
+    #[arg(long)]
+    mic: Option<u32>,
+    #[arg(long)]
+    /// Path to save the '.cap' project to
+    path: Option<PathBuf>,
+    /// Maximum fps to record at (max 60)
+    #[arg(long)]
+    fps: Option<u32>,
+}
+
+#[derive(Args)]
+struct RecordTargets {
+    /// ID of the screen to capture
+    #[arg(long, group = "target")]
+    screen: Option<u32>,
+    /// ID of the window to capture
+    #[arg(long, group = "target")]
+    window: Option<u32>,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -54,6 +110,7 @@ async fn main() {
 
             let segments = create_segments(&meta);
 
+            let fps = meta.content.max_fps();
             let project_output_path = project_path.join("output/result.mp4");
             let exporter = cap_export::Exporter::new(
                 project,
@@ -63,6 +120,8 @@ async fn main() {
                 meta,
                 render_constants,
                 &segments,
+                fps,
+                XY::new(1920, 1080),
             )
             .unwrap();
 
@@ -77,5 +136,100 @@ async fn main() {
 
             println!("Exported video to '{}'", output_path.display());
         }
+        Commands::Record(RecordArgs { command, args }) => match command {
+            Some(RecordCommands::Screens) => {
+                let screens = cap_media::sources::list_screens();
+
+                for (i, (screen, target)) in screens.iter().enumerate() {
+                    println!(
+                        "
+screen {}:
+  id: {}
+  name: {}
+  fps: {}",
+                        i,
+                        screen.id,
+                        screen.name,
+                        get_target_fps(target).unwrap()
+                    );
+                }
+            }
+            Some(RecordCommands::Windows) => {
+                let windows = cap_media::sources::list_windows();
+
+                for (i, (window, target)) in windows.iter().enumerate() {
+                    println!(
+                        "
+window {}:
+  id: {}
+  name: {}
+  fps: {}",
+                        i,
+                        window.id,
+                        window.name,
+                        get_target_fps(target).unwrap()
+                    );
+                }
+            }
+            None => {
+                let (target_info, scap_target) = args
+                    .target
+                    .screen
+                    .map(|id| {
+                        cap_media::sources::list_screens()
+                            .into_iter()
+                            .find(|s| s.0.id == id)
+                            .map(|(s, t)| (ScreenCaptureTarget::Screen(s), t))
+                            .ok_or(format!("Screen with id '{id}' not found"))
+                    })
+                    .or_else(|| {
+                        args.target.window.map(|id| {
+                            cap_media::sources::list_windows()
+                                .into_iter()
+                                .find(|s| s.0.id == id)
+                                .map(|(s, t)| (ScreenCaptureTarget::Window(s), t))
+                                .ok_or(format!("Window with id '{id}' not found"))
+                        })
+                    })
+                    .ok_or("No target specified".to_string())??;
+
+                dbg!(&target_info);
+
+                let id = Uuid::new_v4().to_string();
+                let path = args
+                    .path
+                    .unwrap_or_else(|| current_dir().unwrap().join(format!("{id}.cap")));
+
+                let actor = cap_recording::spawn_recording_actor(
+                    id,
+                    path,
+                    RecordingOptions {
+                        capture_target: target_info,
+                        camera_label: None,
+                        audio_input_name: None,
+                        fps: 30,
+                        output_resolution: None,
+                    },
+                    None,
+                    None,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+                println!("Recording starting, press Enter to stop");
+
+                tokio::io::BufReader::new(tokio::io::stdin())
+                    .read_line(&mut String::new())
+                    .await
+                    .unwrap();
+
+                println!("Recording stopped");
+
+                actor.stop().await.unwrap();
+            }
+            _ => {}
+        },
     }
+
+    Ok(())
 }

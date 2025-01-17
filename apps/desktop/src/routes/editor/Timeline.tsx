@@ -17,6 +17,7 @@ import { createMemo } from "solid-js";
 
 import { commands, TimelineSegment } from "~/utils/tauri";
 import {
+  FPS,
   SegmentContextProvider,
   TimelineContextProvider,
   TrackContextProvider,
@@ -81,6 +82,7 @@ export function Timeline() {
                 recordingSegment: null,
               },
             ],
+            zoomSegments: [],
           };
         })
       );
@@ -99,7 +101,7 @@ export function Timeline() {
           commands.setPlayheadPosition(
             videoId,
             Math.round(
-              30 *
+              FPS *
                 editorInstance.recordingDuration *
                 ((e.clientX - left!) / width!)
             )

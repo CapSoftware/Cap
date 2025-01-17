@@ -35,7 +35,11 @@ import {
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
 import { progressState, setProgressState } from "~/store/progress";
-import { checkIsUpgradedAndUpdate } from "~/utils/plans";
+import {
+  checkIsUpgradedAndUpdate,
+  canCreateShareableLink,
+} from "~/utils/plans";
+import { FPS, OUTPUT_SIZE } from "./editor/context";
 
 type MediaEntry = {
   path: string;
@@ -386,17 +390,20 @@ export default function () {
                                       ),
                                       100
                                     );
-                                    
+
                                     // If we hit 100%, transition to the next stage
-                                    if (progress === 100 && progressState.type === "uploading") {
+                                    if (
+                                      progress === 100 &&
+                                      progressState.type === "uploading"
+                                    ) {
                                       setProgressState({
                                         ...progressState,
                                         stage: "uploading",
                                         message: "Starting upload...",
-                                        uploadProgress: 0
+                                        uploadProgress: 0,
                                       });
                                     }
-                                    
+
                                     return `${progress}%`;
                                   }
 
@@ -787,7 +794,8 @@ function createRecordingMutations(
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             false,
-            useCustomMuxer
+            FPS,
+            OUTPUT_SIZE
           );
 
           // Show quick progress animation for existing video
@@ -912,7 +920,8 @@ function createRecordingMutations(
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             true, // Force re-render
-            false
+            FPS,
+            OUTPUT_SIZE
           );
 
           await commands.copyFileToPath(outputPath, savePath);
@@ -972,10 +981,15 @@ function createRecordingMutations(
         return;
       }
 
-      const isUpgraded = await checkIsUpgradedAndUpdate();
-      if (!isUpgraded) {
-        await commands.showWindow("Upgrade");
-        return;
+      const metadata = await commands.getVideoMetadata(media.path, null);
+      const canShare = await canCreateShareableLink(metadata?.duration);
+
+      if (!canShare.allowed) {
+        if (canShare.reason === "upgrade_required") {
+          onEvent("upgradeRequired");
+          await commands.showWindow("Upgrade");
+          return;
+        }
       }
 
       if (!isRecording) {
@@ -1042,7 +1056,8 @@ function createRecordingMutations(
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             false,
-            useCustomMuxer
+            FPS,
+            OUTPUT_SIZE
           );
           console.log("Using existing rendered video");
 

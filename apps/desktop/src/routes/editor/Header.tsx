@@ -334,32 +334,6 @@ export function Header() {
                       </KSelect.Portal>
                     </KSelect>
                   </div>
-                  <Show when={metadata()}>
-                    {(meta) => (
-                      <div class="text-xs bg-gray-100 dark:bg-gray-600/30 text-gray-500 dark:text-gray-400 flex items-center gap-4 px-3 py-1.5 rounded-full">
-                        <span class="flex items-center">
-                          <IconCapCamera class="w-3 h-3 mr-1.5 opacity-80" />
-                          {Math.floor(meta().duration / 60)}:
-                          {Math.floor(meta().duration % 60)
-                            .toString()
-                            .padStart(2, "0")}
-                        </span>
-                        <div class="w-[1px] h-2.5 bg-gray-300 dark:bg-gray-500/50"></div>
-                        <span class="flex items-center">
-                          <IconLucideHardDrive class="w-3 h-3 mr-1.5 opacity-80" />
-                          {meta().size.toFixed(2)} MB
-                        </span>
-                        <div class="w-[1px] h-2.5 bg-gray-300 dark:bg-gray-500/50"></div>
-                        <span class="flex items-center">
-                          <IconLucideClock class="w-3 h-3 mr-1.5 opacity-80" />~
-                          {Math.floor(meta().estimatedExportTime / 60)}:
-                          {Math.floor(meta().estimatedExportTime % 60)
-                            .toString()
-                            .padStart(2, "0")}
-                        </span>
-                      </div>
-                    )}
-                  </Show>
                   <Button
                     variant="primary"
                     class="w-full justify-center"

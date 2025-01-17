@@ -826,6 +826,100 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap"
+version = "0.1.0"
+dependencies = [
+ "cap-editor",
+ "cap-export",
+ "cap-flags",
+ "cap-media",
+ "cap-project",
+ "cap-recording",
+ "cap-rendering",
+ "cap-utils",
+ "clap 4.5.23",
+ "core-graphics 0.24.0",
+ "editor",
+ "scap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "cap-desktop"
+version = "0.3.10"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "cap-editor",
+ "cap-export",
+ "cap-flags",
+ "cap-media",
+ "cap-project",
+ "cap-recording",
+ "cap-rendering",
+ "cap-utils",
+ "chrono",
+ "clipboard-rs",
+ "cocoa 0.26.0",
+ "core-foundation 0.10.0",
+ "core-graphics 0.24.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
+ "device_query",
+ "dotenvy_macro",
+ "ffmpeg-next",
+ "flume 0.11.0",
+ "futures",
+ "futures-intrusive",
+ "global-hotkey",
+ "image 0.25.5",
+ "keyed_priority_queue",
+ "mp4",
+ "nix 0.29.0",
+ "objc",
+ "objc2-app-kit",
+ "png",
+ "rand 0.8.5",
+ "reqwest",
+ "rodio",
+ "scap",
+ "sentry",
+ "serde",
+ "serde_json",
+ "specta",
+ "specta-typescript",
+ "swift-rs",
+ "tauri",
+ "tauri-build",
+ "tauri-nspanel",
+ "tauri-plugin-deep-link",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-http",
+ "tauri-plugin-notification",
+ "tauri-plugin-oauth",
+ "tauri-plugin-os",
+ "tauri-plugin-positioner",
+ "tauri-plugin-process",
+ "tauri-plugin-shell",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-store",
+ "tauri-plugin-updater",
+ "tauri-plugin-window-state",
+ "tauri-specta",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "windows 0.58.0",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "cap-editor"
 version = "0.1.0"
 dependencies = [
@@ -858,19 +952,8 @@ dependencies = [
  "futures",
  "image 0.25.5",
  "mp4",
- "tauri",
  "tempfile",
  "thiserror 1.0.63",
- "tokio",
-]
-
-[[package]]
-name = "cap-ffmpeg-cli"
-version = "0.1.0"
-dependencies = [
- "nix 0.29.0",
- "tauri",
- "tauri-plugin-shell",
  "tokio",
 ]
 
@@ -934,8 +1017,6 @@ dependencies = [
  "serde",
  "serde_json",
  "specta",
- "tauri",
- "tauri-plugin-store",
 ]
 
 [[package]]
@@ -1216,26 +1297,6 @@ name = "claxon"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
-
-[[package]]
-name = "cli"
-version = "0.1.0"
-dependencies = [
- "cap-editor",
- "cap-export",
- "cap-ffmpeg-cli",
- "cap-flags",
- "cap-media",
- "cap-project",
- "cap-recording",
- "cap-rendering",
- "cap-utils",
- "clap 4.5.23",
- "editor",
- "serde",
- "serde_json",
- "tokio",
-]
 
 [[package]]
 name = "clipboard-rs"
@@ -1932,79 +1993,6 @@ dependencies = [
  "quote",
  "rustc_version",
  "syn 2.0.90",
-]
-
-[[package]]
-name = "desktop"
-version = "0.3.10"
-dependencies = [
- "anyhow",
- "axum",
- "base64 0.22.1",
- "cap-editor",
- "cap-export",
- "cap-ffmpeg-cli",
- "cap-flags",
- "cap-media",
- "cap-project",
- "cap-recording",
- "cap-rendering",
- "cap-utils",
- "chrono",
- "clipboard-rs",
- "cocoa 0.26.0",
- "core-foundation 0.10.0",
- "core-graphics 0.24.0",
- "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
- "device_query",
- "dotenvy_macro",
- "ffmpeg-next",
- "flume 0.11.0",
- "futures",
- "futures-intrusive",
- "global-hotkey",
- "image 0.25.5",
- "keyed_priority_queue",
- "mp4",
- "nix 0.29.0",
- "objc",
- "objc2-app-kit",
- "png",
- "rand 0.8.5",
- "reqwest",
- "rodio",
- "scap",
- "sentry",
- "serde",
- "serde_json",
- "specta",
- "specta-typescript",
- "swift-rs",
- "tauri",
- "tauri-build",
- "tauri-nspanel",
- "tauri-plugin-deep-link",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-http",
- "tauri-plugin-notification",
- "tauri-plugin-oauth",
- "tauri-plugin-os",
- "tauri-plugin-positioner",
- "tauri-plugin-process",
- "tauri-plugin-shell",
- "tauri-plugin-single-instance",
- "tauri-plugin-store",
- "tauri-plugin-updater",
- "tauri-plugin-window-state",
- "tauri-specta",
- "tempfile",
- "tokio",
- "tracing",
- "uuid",
- "windows 0.58.0",
- "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8054,9 +8042,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.11.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8c5f0a0af699448548ad1a2fbf920fb4bee257eae39953ba95cb84891a0446a"
+checksum = "b913a3b5fe84142e269d63cc62b64319ccaf89b748fc31fe025177f767a756c4"
 dependencies = [
  "getrandom 0.2.15",
  "serde",

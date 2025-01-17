@@ -2,8 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use cap_media::data::{AudioInfo, AudioInfoError, FromSampleBytes};
 use cap_media::feeds::{AudioData, AudioPlaybackBuffer};
-use cap_media::MediaError;
-use cap_project::ProjectConfiguration;
+use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -22,8 +21,6 @@ pub struct Playback {
     pub segments: Arc<Vec<Segment>>,
 }
 
-const FPS: u32 = 30;
-
 #[derive(Clone, Copy)]
 pub enum PlaybackEvent {
     Start,
@@ -38,7 +35,7 @@ pub struct PlaybackHandle {
 }
 
 impl Playback {
-    pub async fn start(self) -> PlaybackHandle {
+    pub async fn start(self, fps: u32, resolution_base: XY<u32>) -> PlaybackHandle {
         let (stop_tx, mut stop_rx) = watch::channel(false);
         stop_rx.borrow_and_update();
 
@@ -63,7 +60,7 @@ impl Playback {
                 .unwrap_or(f64::MAX);
 
             // TODO: make this work with >1 segment
-            if let Some(audio_data) = self.segments[0].audio.as_ref() {
+            if self.segments[0].audio.is_some() {
                 AudioPlayback {
                     segments: self
                         .segments
@@ -73,12 +70,13 @@ impl Playback {
                     stop_rx: stop_rx.clone(),
                     start_frame_number: self.start_frame_number,
                     project: self.project.clone(),
+                    fps,
                 }
                 .spawn();
             };
 
             loop {
-                if frame_number as f64 > FPS as f64 * duration {
+                if frame_number as f64 >= fps as f64 * duration {
                     break;
                 };
 
@@ -86,8 +84,8 @@ impl Playback {
 
                 let time = project
                     .timeline()
-                    .map(|t| t.get_recording_time(frame_number as f64 / FPS as f64))
-                    .unwrap_or(Some((frame_number as f64 / FPS as f64, None)));
+                    .map(|t| t.get_recording_time(frame_number as f64 / fps as f64))
+                    .unwrap_or(Some((frame_number as f64 / fps as f64, None)));
 
                 if let Some((time, segment)) = time {
                     let segment = &self.segments[segment.unwrap_or(0) as usize];
@@ -96,9 +94,9 @@ impl Playback {
                         _ = stop_rx.changed() => {
                            break;
                         },
-                        value = segment.decoders.get_frames((time * FPS as f64) as u32) => {
-                            if let Some((screen_frame, camera_frame)) = value {
-                                let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32);
+                        data = segment.decoders.get_frames(time as f32, !project.camera.hide) => {
+                            if let Some((screen_frame, camera_frame)) = data {
+                                let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32, resolution_base);
 
                                 self
                                     .renderer
@@ -107,7 +105,8 @@ impl Playback {
                                         camera_frame,
                                         project.background.source.clone(),
                                         uniforms.clone(),
-                                        time as f32  // Add the time parameter
+                                        time as f32,
+                                        resolution_base
                                     )
                                     .await;
                             }
@@ -120,7 +119,7 @@ impl Playback {
                 tokio::time::sleep_until(
                     start
                         + (frame_number - self.start_frame_number)
-                            * Duration::from_secs_f32(1.0 / FPS as f32),
+                            * Duration::from_secs_f32(1.0 / fps as f32),
                 )
                 .await;
 
@@ -128,8 +127,6 @@ impl Playback {
 
                 frame_number += 1;
             }
-
-            println!("stopped playback");
 
             stop_tx.send(true).ok();
 
@@ -156,6 +153,7 @@ struct AudioPlayback {
     stop_rx: watch::Receiver<bool>,
     start_frame_number: u32,
     project: watch::Receiver<ProjectConfiguration>,
+    fps: u32,
 }
 
 impl AudioPlayback {
@@ -204,6 +202,7 @@ impl AudioPlayback {
             start_frame_number,
             project,
             segments,
+            fps,
             ..
         } = self;
 
@@ -214,7 +213,7 @@ impl AudioPlayback {
         // Also, it's a bit weird that self.duration can ever be infinity to begin with, since
         // pre-recorded videos are obviously a fixed size
         let mut audio_renderer = AudioPlaybackBuffer::new(segments, output_info);
-        let playhead = f64::from(start_frame_number) / f64::from(FPS);
+        let playhead = f64::from(start_frame_number) / f64::from(fps);
         audio_renderer.set_playhead(playhead, project.borrow().timeline());
 
         // Prerender enough for smooth playback

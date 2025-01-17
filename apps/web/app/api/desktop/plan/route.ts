@@ -94,6 +94,7 @@ export async function GET(req: NextRequest) {
   return new Response(
     JSON.stringify({
       upgraded: isSubscribed,
+      stripeSubscriptionStatus: user.stripeSubscriptionStatus,
     }),
     {
       status: 200,

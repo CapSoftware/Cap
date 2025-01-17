@@ -1,5 +1,5 @@
 [package]
-name = "cli"
+name = "cap"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,7 +8,6 @@ clap = { version = "4.5.23", features = ["derive"] }
 cap-utils = { path = "../../crates/utils" }
 cap-project = { path = "../../crates/project" }
 cap-rendering = { path = "../../crates/rendering" }
-cap-ffmpeg-cli = { path = "../../crates/ffmpeg-cli" }
 cap-editor = { path = "../../crates/editor" }
 cap-media = { path = "../../crates/media" }
 cap-flags = { path = "../../crates/flags" }
@@ -18,3 +17,6 @@ serde = "1.0.216"
 serde_json = "1.0.133"
 tokio.workspace = true
 editor = "0.1.1"
+scap.workspace = true
+core-graphics = "0.24.0"
+uuid = { version = "1.11.1", features = ["v4"] }

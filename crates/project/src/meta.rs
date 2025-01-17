@@ -12,11 +12,19 @@ use crate::{CursorData, CursorEvents, CursorImages, ProjectConfiguration};
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Display {
     pub path: PathBuf,
+    #[serde(default = "legacy_static_video_fps")]
+    pub fps: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CameraMeta {
     pub path: PathBuf,
+    #[serde(default = "legacy_static_video_fps")]
+    pub fps: u32,
+}
+
+fn legacy_static_video_fps() -> u32 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -90,6 +98,24 @@ impl Content {
                 .segments
                 .first()
                 .and_then(|s| s.camera.as_ref().map(|c| c.path.clone())),
+        }
+    }
+
+    pub fn min_fps(&self) -> u32 {
+        match self {
+            Content::SingleSegment { segment } => segment.display.fps,
+            Content::MultipleSegments { inner } => {
+                inner.segments.iter().map(|s| s.display.fps).min().unwrap()
+            }
+        }
+    }
+
+    pub fn max_fps(&self) -> u32 {
+        match self {
+            Content::SingleSegment { segment } => segment.display.fps,
+            Content::MultipleSegments { inner } => {
+                inner.segments.iter().map(|s| s.display.fps).max().unwrap()
+            }
         }
     }
 }

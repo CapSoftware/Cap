@@ -15,9 +15,9 @@ use crate::{
 };
 use cap_flags::FLAGS;
 use cap_media::feeds::CameraFeed;
-use cap_media::sources::{AVFrameCapture, CaptureScreen, CaptureWindow, ScreenCaptureSource};
+use cap_media::sources::{CaptureScreen, CaptureWindow};
 use cap_project::{
-    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment,
+    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment, XY,
 };
 use cap_recording::CompletedRecording;
 use cap_rendering::ProjectRecordings;
@@ -28,13 +28,19 @@ use tauri_specta::Event;
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_capture_screens() -> Vec<CaptureScreen> {
-    ScreenCaptureSource::<AVFrameCapture>::list_screens()
+    cap_media::sources::list_screens()
+        .into_iter()
+        .map(|(v, _)| v)
+        .collect()
 }
 
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_capture_windows() -> Vec<CaptureWindow> {
-    ScreenCaptureSource::<AVFrameCapture>::list_windows()
+    cap_media::sources::list_windows()
+        .into_iter()
+        .map(|(v, _)| v)
+        .collect()
 }
 
 #[tauri::command(async)]
@@ -158,7 +164,6 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
         return Err("Recording not in progress".to_string())?;
     };
 
-    let now = Instant::now();
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
@@ -246,7 +251,8 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                         config,
                         tauri::ipc::Channel::new(|_| Ok(())),
                         true,
-                        true,
+                        completed_recording.meta.content.max_fps(),
+                        XY::new(1920, 1080),
                     )
                     .await
                     .ok();

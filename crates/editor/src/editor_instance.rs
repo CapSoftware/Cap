@@ -7,17 +7,14 @@ use cap_media::frame_ws::create_frame_ws;
 use cap_project::RecordingConfig;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
-    ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
+    get_duration, ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
     RenderVideoConstants, SegmentVideoPaths,
 };
-use ffmpeg::Rational;
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
 use std::time::Instant;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
-
-const FPS: u32 = 30;
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
@@ -35,7 +32,7 @@ pub struct EditorInstance {
     ),
     ws_shutdown: Arc<StdMutex<Option<mpsc::Sender<()>>>>,
     pub segments: Arc<Vec<Segment>>,
-    pub total_frames: u32,
+    meta: RecordingMeta,
 }
 
 impl EditorInstance {
@@ -64,12 +61,8 @@ impl EditorInstance {
         }
 
         let meta = cap_project::RecordingMeta::load_for_project(&project_path).unwrap();
+        let project = meta.project_config();
         let recordings = ProjectRecordings::new(&meta);
-
-        // Calculate total frames based on actual video duration and fps
-        let duration = recordings.duration();
-        let fps = recordings.segments[0].display.fps();
-        let total_frames = (duration * fps as f64).round() as u32;
 
         let render_options = RenderOptions {
             screen_size: XY::new(
@@ -116,10 +109,10 @@ impl EditorInstance {
             })),
             on_state_change: Box::new(on_state_change),
             preview_tx,
-            project_config: watch::channel(meta.project_config()),
+            project_config: watch::channel(project),
             ws_shutdown: Arc::new(StdMutex::new(Some(ws_shutdown))),
             segments: Arc::new(segments),
-            total_frames,
+            meta,
         });
 
         this.state.lock().await.preview_task =
@@ -180,7 +173,7 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
-    pub async fn start_playback(self: Arc<Self>) {
+    pub async fn start_playback(self: Arc<Self>, fps: u32, resolution_base: XY<u32>) {
         let (mut handle, prev) = {
             let Ok(mut state) = self.state.try_lock() else {
                 return;
@@ -195,7 +188,7 @@ impl EditorInstance {
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
             }
-            .start()
+            .start(fps, resolution_base)
             .await;
 
             let prev = state.playback_task.replace(playback_handle.clone());
@@ -230,55 +223,63 @@ impl EditorInstance {
 
     fn spawn_preview_renderer(
         self: Arc<Self>,
-        mut preview_rx: watch::Receiver<Option<u32>>,
+        mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 preview_rx.changed().await.unwrap();
-                let Some(frame_number) = *preview_rx.borrow().deref() else {
+                let Some((frame_number, fps, resolution_base)) = *preview_rx.borrow().deref()
+                else {
                     continue;
                 };
 
                 let project = self.project_config.1.borrow().clone();
 
-                let now = Instant::now();
-
                 let Some((time, segment)) = project
                     .timeline
                     .as_ref()
-                    .map(|timeline| timeline.get_recording_time(frame_number as f64 / FPS as f64))
-                    .unwrap_or(Some((frame_number as f64 / FPS as f64, None)))
+                    .map(|timeline| timeline.get_recording_time(frame_number as f64 / fps as f64))
+                    .unwrap_or(Some((frame_number as f64 / fps as f64, None)))
                 else {
                     continue;
                 };
 
                 let segment = &self.segments[segment.unwrap_or(0) as usize];
 
-                let now = Instant::now();
-
-                let Some((screen_frame, camera_frame)) = segment
+                if let Some((screen_frame, camera_frame)) = segment
                     .decoders
-                    .get_frames((time * FPS as f64) as u32)
+                    .get_frames(time as f32, !project.camera.hide)
                     .await
-                else {
-                    continue;
-                };
-
-                self.renderer
-                    .render_frame(
-                        screen_frame,
-                        camera_frame,
-                        project.background.source.clone(),
-                        ProjectUniforms::new(&self.render_constants, &project, time as f32),
-                        time as f32, // Add the time parameter
-                    )
-                    .await;
+                {
+                    self.renderer
+                        .render_frame(
+                            screen_frame,
+                            camera_frame,
+                            project.background.source.clone(),
+                            ProjectUniforms::new(
+                                &self.render_constants,
+                                &project,
+                                time as f32,
+                                resolution_base,
+                            ),
+                            time as f32,
+                            resolution_base,
+                        )
+                        .await;
+                }
             }
         })
     }
 
-    pub fn get_total_frames(&self) -> u32 {
-        self.total_frames
+    pub fn get_total_frames(&self, fps: u32) -> u32 {
+        // Calculate total frames based on actual video duration and fps
+        let duration = get_duration(
+            &self.recordings,
+            &self.meta,
+            &self.project_config.1.borrow(),
+        );
+
+        (fps as f64 * duration).ceil() as u32
     }
 }
 
@@ -290,7 +291,7 @@ impl Drop for EditorInstance {
     }
 }
 
-type PreviewFrameInstruction = u32;
+type PreviewFrameInstruction = (u32, u32, XY<u32>);
 
 pub struct EditorState {
     pub playhead_position: u32,
