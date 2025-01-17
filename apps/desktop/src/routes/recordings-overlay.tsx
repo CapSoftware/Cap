@@ -36,6 +36,7 @@ import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
 import { progressState, setProgressState } from "~/store/progress";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
+import { authStore } from "~/store";
 
 type MediaEntry = {
   path: string;
@@ -981,6 +982,13 @@ function createRecordingMutations(
         await commands.writeClipboardString(recordingMeta.data.sharing.link);
 
         return;
+      }
+
+      // Check authentication first
+      const existingAuth = await authStore.get();
+      if (!existingAuth) {
+        await commands.showWindow("SignIn");
+        throw new Error("You need to sign in to share recordings");
       }
 
       const metadata = await commands.getVideoMetadata(media.path, null);

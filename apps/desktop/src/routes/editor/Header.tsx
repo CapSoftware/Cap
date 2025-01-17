@@ -23,6 +23,7 @@ import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 
 import { type RenderProgress, commands, events } from "~/utils/tauri";
 import { FPS, useEditorContext } from "./context";
+import { authStore } from "~/store";
 import {
   Dialog,
   DialogContent,
@@ -585,6 +586,14 @@ function ShareButton(props: ShareButtonProps) {
   const uploadVideo = createMutation(() => ({
     mutationFn: async (useCustomMuxer: boolean) => {
       console.log("Starting upload process...");
+
+      // Check authentication first
+      const existingAuth = await authStore.get();
+      if (!existingAuth) {
+        await commands.showWindow("SignIn");
+        throw new Error("You need to sign in to share recordings");
+      }
+
       const meta = recordingMeta();
       if (!meta) {
         console.error("No recording metadata available");
@@ -709,6 +718,7 @@ function ShareButton(props: ShareButtonProps) {
             });
 
         if (result === "NotAuthenticated") {
+          await commands.showWindow("SignIn");
           throw new Error("You need to sign in to share recordings");
         }
         if (result === "PlanCheckFailed") {
