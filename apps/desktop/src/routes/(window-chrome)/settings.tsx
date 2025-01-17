@@ -20,6 +20,7 @@ export default function Settings(props: RouteSectionProps) {
           <For
             each={[
               { href: "general", name: "General", icon: IconCapSettings },
+              { href: "config", name: "Config", icon: IconLucideVideo },
               { href: "hotkeys", name: "Shortcuts", icon: IconCapHotkeys },
               {
                 href: "recordings",
@@ -31,7 +32,7 @@ export default function Settings(props: RouteSectionProps) {
                 name: "Previous Screenshots",
                 icon: IconLucideCamera,
               },
-              window.FLAGS.customS3 && {
+              {
                 href: "apps",
                 name: "Cap Apps",
                 icon: IconLucideLayoutGrid,

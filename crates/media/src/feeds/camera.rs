@@ -84,7 +84,7 @@ impl CameraFeed {
                 .into_iter()
                 .map(|i| i.human_name().to_string())
                 .collect::<Vec<String>>(),
-            Err(_) => Vec::new()
+            Err(_) => Vec::new(),
         }
     }
 
@@ -144,7 +144,7 @@ fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
         RequestedFormatType::AbsoluteHighestFrameRate,
         &[FrameFormat::YUYV],
     );
-    
+
     #[cfg(feature = "debug-logging")]
     trace!("Requested camera format: {:?}", format);
 
@@ -160,10 +160,10 @@ fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
     }
 
     let camera = Camera::new(index, format)?;
-    
+
     #[cfg(feature = "debug-logging")]
     debug!("Created camera with format: {:?}", camera.camera_format());
-    
+
     Ok(camera)
 }
 
@@ -226,7 +226,7 @@ fn run_camera_feed(
     loop {
         match control.try_recv() {
             Err(TryRecvError::Disconnected) => break,
-            Err(TryRecvError::Empty) => {},
+            Err(TryRecvError::Empty) => {}
             Ok(CameraControl::Shutdown) => break,
             Ok(CameraControl::AttachRawConsumer(rgba_sender)) => {
                 maybe_raw_data = Some(rgba_sender);
@@ -364,18 +364,19 @@ impl FrameConverter {
         let context = ffmpeg::software::converter(
             (video_info.width, video_info.height),
             if camera_format.format() == FrameFormat::YUYV {
-                ffmpeg::format::Pixel::YUYV422
+                ffmpeg::format::Pixel::UYVY422
             } else {
                 video_info.pixel_format
             },
             ffmpeg::format::Pixel::RGBA,
-        ).unwrap();
+        )
+        .unwrap();
 
         Self {
             video_info,
             context,
             format: camera_format.format(),
-            hw_converter: None,  // Don't use hardware converters
+            hw_converter: None, // Don't use hardware converters
         }
     }
 
@@ -383,38 +384,55 @@ impl FrameConverter {
         let resolution = buffer.resolution();
 
         match self.format {
-            FrameFormat::YUYV => {
-                self.convert_with_ffmpeg(buffer, resolution)
-            }
-            _ => {
-                match &self.hw_converter {
-                    Some(HwConverter::NV12(converter)) => {
-                        converter.convert(
-                            NV12Input::from_buffer(buffer.buffer(), resolution.width(), resolution.height()),
-                            resolution.width(),
-                            resolution.height(),
-                        )
-                    }
-                    _ => {
-                        self.convert_with_ffmpeg(buffer, resolution)
-                    }
-                }
-            }
+            FrameFormat::YUYV => self.convert_with_ffmpeg(buffer, resolution),
+            _ => match &self.hw_converter {
+                Some(HwConverter::NV12(converter)) => converter.convert(
+                    NV12Input::from_buffer(
+                        buffer.buffer(),
+                        resolution.width(),
+                        resolution.height(),
+                    ),
+                    resolution.width(),
+                    resolution.height(),
+                ),
+                _ => self.convert_with_ffmpeg(buffer, resolution),
+            },
         }
     }
 
     fn convert_with_ffmpeg(&mut self, buffer: &nokhwa::Buffer, resolution: Resolution) -> Vec<u8> {
         if self.format == FrameFormat::YUYV {
             // For YUYV, we need to handle the conversion differently
-            let stride = resolution.width() as usize * 2;  // YUYV uses 2 bytes per pixel
-            
-            // Create input frame with YUYV format
-            let mut input_frame = FFVideo::new(ffmpeg::format::Pixel::YUYV422, resolution.width(), resolution.height());
-            input_frame.data_mut(0).copy_from_slice(buffer.buffer());
-            
-            // Convert directly to RGBA
-            let mut rgba_frame = FFVideo::new(ffmpeg::format::Pixel::RGBA, resolution.width(), resolution.height());
-            
+            let stride = resolution.width() as usize * 2; // YUYV uses 2 bytes per pixel
+            let src = buffer.buffer();
+
+            // Create input frame with YUYV format and copy data
+            let mut input_frame = FFVideo::new(
+                ffmpeg::format::Pixel::UYVY422,
+                resolution.width(),
+                resolution.height(),
+            );
+
+            // Copy data line by line
+            {
+                let dst_stride = input_frame.stride(0);
+                let dst = input_frame.data_mut(0);
+                for y in 0..resolution.height() as usize {
+                    let src_offset = y * stride;
+                    let dst_offset = y * dst_stride;
+                    dst[dst_offset..dst_offset + stride]
+                        .copy_from_slice(&src[src_offset..src_offset + stride]);
+                }
+            }
+
+            // Create output frame
+            let mut rgba_frame = FFVideo::new(
+                ffmpeg::format::Pixel::RGBA,
+                resolution.width(),
+                resolution.height(),
+            );
+
+            // Convert the frame
             if self.context.run(&input_frame, &mut rgba_frame).is_ok() {
                 rgba_frame.data(0).to_vec()
             } else {
@@ -422,10 +440,50 @@ impl FrameConverter {
             }
         } else {
             // For other formats, use the normal conversion path
-            let stride = resolution.width() as usize * 4;  // RGBA uses 4 bytes per pixel
-            let input_frame = self.video_info.wrap_frame(buffer.buffer(), 0, stride);
-            
-            let mut rgba_frame = FFVideo::empty();
+            let stride = match self.format {
+                FrameFormat::NV12 => resolution.width() as usize,
+                FrameFormat::BGRA => resolution.width() as usize * 4,
+                FrameFormat::MJPEG => resolution.width() as usize * 4,
+                FrameFormat::GRAY => resolution.width() as usize,
+                FrameFormat::RAWRGB => resolution.width() as usize * 3,
+                _ => buffer.buffer_bytes().len() / resolution.height() as usize,
+            };
+
+            // Create input frame and copy data
+            let mut input_frame = FFVideo::new(
+                match self.format {
+                    FrameFormat::NV12 => ffmpeg::format::Pixel::NV12,
+                    FrameFormat::BGRA => ffmpeg::format::Pixel::BGRA,
+                    FrameFormat::MJPEG => ffmpeg::format::Pixel::RGBA,
+                    FrameFormat::GRAY => ffmpeg::format::Pixel::GRAY8,
+                    FrameFormat::RAWRGB => ffmpeg::format::Pixel::RGB24,
+                    _ => ffmpeg::format::Pixel::RGBA,
+                },
+                resolution.width(),
+                resolution.height(),
+            );
+
+            // Copy data line by line
+            {
+                let dst_stride = input_frame.stride(0);
+                let dst = input_frame.data_mut(0);
+                let src = buffer.buffer();
+                for y in 0..resolution.height() as usize {
+                    let src_offset = y * stride;
+                    let dst_offset = y * dst_stride;
+                    dst[dst_offset..dst_offset + stride]
+                        .copy_from_slice(&src[src_offset..src_offset + stride]);
+                }
+            }
+
+            // Create output frame
+            let mut rgba_frame = FFVideo::new(
+                ffmpeg::format::Pixel::RGBA,
+                resolution.width(),
+                resolution.height(),
+            );
+
+            // Convert the frame
             if self.context.run(&input_frame, &mut rgba_frame).is_ok() {
                 rgba_frame.data(0).to_vec()
             } else {
@@ -436,31 +494,71 @@ impl FrameConverter {
 
     fn raw(&mut self, buffer: &nokhwa::Buffer) -> FFVideo {
         let resolution = buffer.resolution();
-        
+
         if self.format == FrameFormat::YUYV {
             // For YUYV, we need to handle the conversion differently
-            let stride = resolution.width() as usize * 2;  // YUYV uses 2 bytes per pixel
-            
-            // Create input frame with YUYV format
-            let mut input_frame = FFVideo::new(ffmpeg::format::Pixel::YUYV422, resolution.width(), resolution.height());
-            input_frame.data_mut(0).copy_from_slice(buffer.buffer());
+            let stride = resolution.width() as usize * 2; // YUYV uses 2 bytes per pixel
+            let src = buffer.buffer();
+
+            // Create input frame with YUYV format and copy data
+            let mut input_frame = FFVideo::new(
+                ffmpeg::format::Pixel::UYVY422,
+                resolution.width(),
+                resolution.height(),
+            );
+
+            // Copy data line by line
+            {
+                let dst_stride = input_frame.stride(0);
+                let dst = input_frame.data_mut(0);
+                for y in 0..resolution.height() as usize {
+                    let src_offset = y * stride;
+                    let dst_offset = y * dst_stride;
+                    dst[dst_offset..dst_offset + stride]
+                        .copy_from_slice(&src[src_offset..src_offset + stride]);
+                }
+            }
+
             input_frame
         } else {
             // For other formats, use the normal conversion path
             let stride = match self.format {
-                FrameFormat::NV12 => resolution.width() as usize, // 1 byte per pixel for Y plane
-                FrameFormat::BGRA => resolution.width() as usize * 4, // 4 bytes per pixel
-                FrameFormat::MJPEG => resolution.width() as usize * 4, // 4 bytes per pixel
-                FrameFormat::GRAY => resolution.width() as usize, // 1 byte per pixel
-                FrameFormat::RAWRGB => resolution.width() as usize * 3, // 3 bytes per pixel
+                FrameFormat::NV12 => resolution.width() as usize,
+                FrameFormat::BGRA => resolution.width() as usize * 4,
+                FrameFormat::MJPEG => resolution.width() as usize * 4,
+                FrameFormat::GRAY => resolution.width() as usize,
+                FrameFormat::RAWRGB => resolution.width() as usize * 3,
                 _ => buffer.buffer_bytes().len() / resolution.height() as usize,
             };
 
-            self.video_info.wrap_frame(
-                buffer.buffer(),
-                0,
-                stride,
-            )
+            // Create input frame and copy data
+            let mut input_frame = FFVideo::new(
+                match self.format {
+                    FrameFormat::NV12 => ffmpeg::format::Pixel::NV12,
+                    FrameFormat::BGRA => ffmpeg::format::Pixel::BGRA,
+                    FrameFormat::MJPEG => ffmpeg::format::Pixel::RGBA,
+                    FrameFormat::GRAY => ffmpeg::format::Pixel::GRAY8,
+                    FrameFormat::RAWRGB => ffmpeg::format::Pixel::RGB24,
+                    _ => ffmpeg::format::Pixel::RGBA,
+                },
+                resolution.width(),
+                resolution.height(),
+            );
+
+            // Copy data line by line
+            {
+                let dst_stride = input_frame.stride(0);
+                let dst = input_frame.data_mut(0);
+                let src = buffer.buffer();
+                for y in 0..resolution.height() as usize {
+                    let src_offset = y * stride;
+                    let dst_offset = y * dst_stride;
+                    dst[dst_offset..dst_offset + stride]
+                        .copy_from_slice(&src[src_offset..src_offset + stride]);
+                }
+            }
+
+            input_frame
         }
     }
 }

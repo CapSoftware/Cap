@@ -25,12 +25,12 @@ use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
-use cap_project::{Content, ProjectConfiguration, RecordingMeta, SharingMeta};
+use cap_project::{Content, ProjectConfiguration, RecordingMeta, Resolution, SharingMeta};
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
-use general_settings::GeneralSettingsStore;
+use general_settings::{GeneralSettingsStore, RecordingConfig};
 use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
@@ -91,12 +91,18 @@ pub enum VideoType {
     Camera,
 }
 
-#[derive(Serialize, Deserialize, specta::Type)]
-enum UploadResult {
+#[derive(Serialize, Deserialize, specta::Type, Debug)]
+pub enum UploadResult {
     Success(String),
     NotAuthenticated,
     PlanCheckFailed,
     UpgradeRequired,
+}
+
+#[derive(Serialize, Deserialize, specta::Type, Debug)]
+pub struct VideoRecordingMetadata {
+    pub duration: f64,
+    pub size: f64,
 }
 
 #[derive(Clone, Serialize, Deserialize, specta::Type)]
@@ -377,8 +383,19 @@ type MutableState<'a, T> = State<'a, Arc<RwLock<T>>>;
 
 #[tauri::command]
 #[specta::specta]
-async fn get_recording_options(state: MutableState<'_, App>) -> Result<RecordingOptions, ()> {
+async fn get_recording_options(
+    app: AppHandle,
+    state: MutableState<'_, App>,
+) -> Result<RecordingOptions, ()> {
     let mut state = state.write().await;
+
+    // Load settings from disk if they exist
+    if let Ok(Some(settings)) = GeneralSettingsStore::get(&app) {
+        if let Some(config) = settings.recording_config {
+            state.start_recording_options.fps = config.fps;
+            state.start_recording_options.output_resolution = Some(config.resolution);
+        }
+    }
 
     // If there's a saved audio input but no feed, initialize it
     if let Some(audio_input_name) = state.start_recording_options.audio_input_name() {
@@ -401,14 +418,27 @@ async fn get_recording_options(state: MutableState<'_, App>) -> Result<Recording
 #[tauri::command]
 #[specta::specta]
 async fn set_recording_options(
+    app: AppHandle,
     state: MutableState<'_, App>,
     options: RecordingOptions,
 ) -> Result<(), String> {
+    // Update in-memory state
     state
         .write()
         .await
-        .set_start_recording_options(options)
+        .set_start_recording_options(options.clone())
         .await?;
+
+    // Update persistent settings
+    GeneralSettingsStore::update(&app, |settings| {
+        settings.recording_config = Some(RecordingConfig {
+            fps: options.fps,
+            resolution: options.output_resolution.unwrap_or_else(|| Resolution {
+                width: 1920,
+                height: 1080,
+            }),
+        });
+    })?;
 
     Ok(())
 }
@@ -910,10 +940,23 @@ async fn copy_video_to_clipboard(
     Ok(())
 }
 
-#[derive(Serialize, Deserialize, specta::Type)]
-pub struct VideoRecordingMetadata {
-    duration: f64,
-    size: f64,
+
+
+// Helper function to estimate rendered file size based on duration and quality
+fn estimate_rendered_size(duration: f64) -> f64 {
+    // Use actual encoder bitrates:
+    // - Video: 8-10 Mbps (from H264 encoder implementations)
+    // - Audio: 128 Kbps (fixed in all encoders)
+    #[cfg(target_os = "macos")]
+    let video_bitrate = 10_000_000.0; // 10 Mbps (AVAssetWriter)
+    #[cfg(not(target_os = "macos"))]
+    let video_bitrate = 8_000_000.0;  // 8 Mbps (libx264)
+    
+    let audio_bitrate = 128_000.0;    // 128 Kbps (fixed in encoders)
+    
+    // Total data = (video_bitrate + audio_bitrate) * duration / 8 bits per byte
+    // Convert to MB by dividing by (1024 * 1024)
+    ((video_bitrate + audio_bitrate) * duration) / (8.0 * 1024.0 * 1024.0)
 }
 
 #[tauri::command]
@@ -938,6 +981,30 @@ async fn get_video_metadata(
 
     let meta = RecordingMeta::load_for_project(&project_path)?;
 
+    fn get_duration_for_paths(paths: Vec<PathBuf>) -> Result<f64, String> {
+        let mut max_duration: f64 = 0.0;
+        for path in paths {
+            let reader = BufReader::new(File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?);
+            let file_size = path
+                .metadata()
+                .map_err(|e| format!("Failed to get file metadata: {}", e))?
+                .len();
+
+            let current_duration = match Mp4Reader::read_header(reader, file_size) {
+                Ok(mp4) => mp4.duration().as_secs_f64(),
+                Err(e) => {
+                    println!(
+                        "Failed to read MP4 header: {}. Falling back to default duration.",
+                        e
+                    );
+                    0.0_f64
+                }
+            };
+            max_duration = max_duration.max(current_duration);
+        }
+        Ok(max_duration)
+    }
+
     fn content_paths(project_path: &PathBuf, meta: &RecordingMeta) -> Vec<PathBuf> {
         match &meta.content {
             Content::SingleSegment { segment } => {
@@ -951,65 +1018,33 @@ async fn get_video_metadata(
         }
     }
 
-    let paths = match video_type {
-        Some(VideoType::Screen) => content_paths(&project_path, &meta),
-        Some(VideoType::Camera) => match &meta.content {
-            Content::SingleSegment { segment } => segment
-                .camera
-                .as_ref()
-                .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
-            Content::MultipleSegments { inner } => inner
-                .segments
-                .iter()
-                .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
-                .collect(),
-        },
-        Some(VideoType::Output) | None => {
-            let output_video_path = project_path.join("output").join("result.mp4");
-            println!("Using output video path: {:?}", output_video_path);
-            if output_video_path.exists() {
-                vec![output_video_path]
-            } else {
-                println!("Output video not found, falling back to screen paths");
-                content_paths(&project_path, &meta)
-            }
-        }
+    // Get display duration
+    let display_duration = get_duration_for_paths(content_paths(&project_path, &meta))?;
+
+    // Get camera duration
+    let camera_paths = match &meta.content {
+        Content::SingleSegment { segment } => segment
+            .camera
+            .as_ref()
+            .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
+        Content::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
+            .collect(),
     };
+    let camera_duration = get_duration_for_paths(camera_paths)?;
 
-    let mut ret = VideoRecordingMetadata {
-        size: 0.0,
-        duration: 0.0,
-    };
+    // Use the longer duration
+    let duration = display_duration.max(camera_duration);
 
-    for path in paths {
-        let file = File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?;
+    // Estimate the rendered file size based on the duration
+    let estimated_size = estimate_rendered_size(duration);
 
-        ret.size += (file
-            .metadata()
-            .map_err(|e| format!("Failed to get file metadata: {}", e))?
-            .len() as f64)
-            / (1024.0 * 1024.0);
-
-        let reader = BufReader::new(file);
-        let file_size = path
-            .metadata()
-            .map_err(|e| format!("Failed to get file metadata: {}", e))?
-            .len();
-
-        ret.duration += match Mp4Reader::read_header(reader, file_size) {
-            Ok(mp4) => mp4.duration().as_secs_f64(),
-            Err(e) => {
-                println!(
-                    "Failed to read MP4 header: {}. Falling back to default duration.",
-                    e
-                );
-                // Return a default duration (e.g., 0.0) or try to estimate it based on file size
-                0.0 // or some estimated value
-            }
-        };
-    }
-
-    Ok(ret)
+    Ok(VideoRecordingMetadata {
+        size: estimated_size,
+        duration,
+    })
 }
 
 #[tauri::command(async)]
@@ -1856,6 +1891,7 @@ pub async fn run() {
             global_message_dialog,
             show_window,
             write_clipboard_string,
+            get_editor_total_frames,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1989,11 +2025,13 @@ pub async fn run() {
                     audio_input_feed: None,
                     start_recording_options: RecordingOptions {
                         capture_target: ScreenCaptureTarget::Screen(CaptureScreen {
-                            id: 1,
-                            name: "Default".to_string(),
+                            id: 0,
+                            name: String::new(),
                         }),
                         camera_label: None,
                         audio_input_name: None,
+                        fps: 30,
+                        output_resolution: None,
                     },
                     current_recording: None,
                     pre_created_video: None,
@@ -2353,3 +2391,15 @@ trait EventExt: tauri_specta::Event {
 }
 
 impl<T: tauri_specta::Event> EventExt for T {}
+
+#[tauri::command(async)]
+#[specta::specta]
+async fn get_editor_total_frames(app: AppHandle, video_id: String) -> Result<u32, String> {
+    let editor_instances = app.state::<EditorInstancesState>();
+    let instances = editor_instances.lock().await;
+
+    let instance = instances
+        .get(&video_id)
+        .ok_or_else(|| "Editor instance not found".to_string())?;
+    Ok(instance.get_total_frames())
+}
