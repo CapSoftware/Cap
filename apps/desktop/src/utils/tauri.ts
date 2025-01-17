@@ -56,6 +56,9 @@ async getCurrentRecording() : Promise<JsonValue<RecordingInfo | null>> {
 async exportVideo(videoId: string, project: ProjectConfiguration, progress: TAURI_CHANNEL<RenderProgress>, force: boolean, fps: number, resolutionBase: XY<number>) : Promise<string> {
     return await TAURI_INVOKE("export_video", { videoId, project, progress, force, fps, resolutionBase });
 },
+async getExportEstimates(videoId: string, resolution: XY<number>, fps: number) : Promise<ExportEstimates> {
+    return await TAURI_INVOKE("get_export_estimates", { videoId, resolution, fps });
+},
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
 },
@@ -240,6 +243,7 @@ export type CursorConfiguration = { hideWhenIdle: boolean; size: number; type: C
 export type CursorType = "pointer" | "circle"
 export type Display = { path: string; fps?: number }
 export type EditorStateChanged = { playhead_position: number }
+export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
 export type Flags = { recordMouse: boolean; split: boolean; pauseResume: boolean; zoom: boolean }
 export type GeneralSettingsStore = { uploadIndividualFiles?: boolean; openEditorAfterRecording?: boolean; hideDockIcon?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; recordingConfig?: RecordingConfig | null }
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }

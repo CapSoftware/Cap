@@ -965,6 +965,32 @@ async fn get_video_metadata(
 
     let meta = RecordingMeta::load_for_project(&project_path)?;
 
+    fn get_duration_for_paths(paths: Vec<PathBuf>) -> Result<f64, String> {
+        let mut max_duration: f64 = 0.0;
+        for path in paths {
+            let reader = BufReader::new(
+                File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?,
+            );
+            let file_size = path
+                .metadata()
+                .map_err(|e| format!("Failed to get file metadata: {}", e))?
+                .len();
+
+            let current_duration = match Mp4Reader::read_header(reader, file_size) {
+                Ok(mp4) => mp4.duration().as_secs_f64(),
+                Err(e) => {
+                    println!(
+                        "Failed to read MP4 header: {}. Falling back to default duration.",
+                        e
+                    );
+                    0.0_f64
+                }
+            };
+            max_duration = max_duration.max(current_duration);
+        }
+        Ok(max_duration)
+    }
+
     fn content_paths(project_path: &PathBuf, meta: &RecordingMeta) -> Vec<PathBuf> {
         match &meta.content {
             Content::SingleSegment { segment } => {
@@ -978,65 +1004,50 @@ async fn get_video_metadata(
         }
     }
 
-    let paths = match video_type {
-        Some(VideoType::Screen) => content_paths(&project_path, &meta),
-        Some(VideoType::Camera) => match &meta.content {
-            Content::SingleSegment { segment } => segment
-                .camera
-                .as_ref()
-                .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
-            Content::MultipleSegments { inner } => inner
-                .segments
-                .iter()
-                .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
-                .collect(),
-        },
-        Some(VideoType::Output) | None => {
-            let output_video_path = project_path.join("output").join("result.mp4");
-            println!("Using output video path: {:?}", output_video_path);
-            if output_video_path.exists() {
-                vec![output_video_path]
-            } else {
-                println!("Output video not found, falling back to screen paths");
-                content_paths(&project_path, &meta)
-            }
-        }
+    // Get display duration
+    let display_duration = get_duration_for_paths(content_paths(&project_path, &meta))?;
+
+    // Get camera duration
+    let camera_paths = match &meta.content {
+        Content::SingleSegment { segment } => segment
+            .camera
+            .as_ref()
+            .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
+        Content::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
+            .collect(),
+    };
+    let camera_duration = get_duration_for_paths(camera_paths)?;
+
+    // Use the longer duration
+    let duration = display_duration.max(camera_duration);
+
+    // Calculate estimated size using same logic as get_export_estimates
+    let (width, height) = (1920, 1080); // Default to 1080p
+    let fps = 30; // Default to 30fps
+
+    let base_bitrate = if width <= 1280 && height <= 720 {
+        4_000_000.0
+    } else if width <= 1920 && height <= 1080 {
+        8_000_000.0
+    } else if width <= 2560 && height <= 1440 {
+        14_000_000.0
+    } else {
+        20_000_000.0
     };
 
-    let mut ret = VideoRecordingMetadata {
-        size: 0.0,
-        duration: 0.0,
-    };
+    let fps_factor = (fps as f64) / 30.0;
+    let video_bitrate = base_bitrate * fps_factor;
+    let audio_bitrate = 192_000.0;
+    let total_bitrate = video_bitrate + audio_bitrate;
+    let estimated_size_mb = (total_bitrate * duration) / (8.0 * 1024.0 * 1024.0);
 
-    for path in paths {
-        let file = File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?;
-
-        ret.size += (file
-            .metadata()
-            .map_err(|e| format!("Failed to get file metadata: {}", e))?
-            .len() as f64)
-            / (1024.0 * 1024.0);
-
-        let reader = BufReader::new(file);
-        let file_size = path
-            .metadata()
-            .map_err(|e| format!("Failed to get file metadata: {}", e))?
-            .len();
-
-        ret.duration += match Mp4Reader::read_header(reader, file_size) {
-            Ok(mp4) => mp4.duration().as_secs_f64(),
-            Err(e) => {
-                println!(
-                    "Failed to read MP4 header: {}. Falling back to default duration.",
-                    e
-                );
-                // Return a default duration (e.g., 0.0) or try to estimate it based on file size
-                0.0 // or some estimated value
-            }
-        };
-    }
-
-    Ok(ret)
+    Ok(VideoRecordingMetadata {
+        size: estimated_size_mb,
+        duration,
+    })
 }
 
 #[tauri::command(async)]
@@ -1851,6 +1862,7 @@ pub async fn run() {
             focus_captures_panel,
             get_current_recording,
             export::export_video,
+            export::get_export_estimates,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
