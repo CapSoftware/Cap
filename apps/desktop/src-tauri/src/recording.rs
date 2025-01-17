@@ -164,7 +164,6 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
         return Err("Recording not in progress".to_string())?;
     };
 
-    let now = Instant::now();
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {

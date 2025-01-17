@@ -161,7 +161,7 @@ pub struct RenderSegment {
 
 pub async fn render_video_to_channel(
     options: RenderOptions,
-    mut project: ProjectConfiguration,
+    project: ProjectConfiguration,
     sender: mpsc::Sender<RenderedFrame>,
     meta: &RecordingMeta,
     segments: Vec<RenderSegment>,
