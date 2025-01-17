@@ -70,8 +70,11 @@ pub async fn export_video(
         }
     }
 
-    let auth = AuthStore::get(&app)?.ok_or("Not authenticated")?;
-    let is_upgraded = auth.is_upgraded();
+    let is_upgraded = AuthStore::get(&app)
+        .ok()
+        .flatten()
+        .map(|auth| auth.is_upgraded())
+        .unwrap_or(false);
 
     let exporter = cap_export::Exporter::new(
         modified_project,
