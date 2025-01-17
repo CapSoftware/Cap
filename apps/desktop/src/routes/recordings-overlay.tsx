@@ -992,9 +992,10 @@ function createRecordingMutations(
 
       if (!canShare.allowed) {
         if (canShare.reason === "upgrade_required") {
-          onEvent("upgradeRequired");
           await commands.showWindow("Upgrade");
-          return;
+          throw new Error(
+            "Upgrade required to share recordings longer than 5 minutes"
+          );
         }
       }
 

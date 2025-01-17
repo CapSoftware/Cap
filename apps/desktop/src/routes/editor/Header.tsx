@@ -592,17 +592,24 @@ function ShareButton(props: ShareButtonProps) {
       }
 
       const metadata = await commands.getVideoMetadata(videoId, null);
-      const isUpgraded = await commands.checkUpgradedAndUpdate();
+      const plan = await commands.checkUpgradedAndUpdate();
+      const canShare = {
+        allowed: plan || metadata.duration < 300,
+        reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
+      };
 
-      if (!isUpgraded) {
-        await commands.showWindow("Upgrade");
-        throw new Error("Upgrade required to share recordings");
+      if (!canShare.allowed) {
+        if (canShare.reason === "upgrade_required") {
+          await commands.showWindow("Upgrade");
+          throw new Error(
+            "Upgrade required to share recordings longer than 5 minutes"
+          );
+        }
       }
 
       let unlisten: (() => void) | undefined;
 
       try {
-        // Set initial progress state
         setProgressState({
           type: "uploading",
           renderProgress: 0,
