@@ -236,7 +236,6 @@ pub async fn render_video_to_channel(
                 source_time as f32,
                 total_frames,
                 resolution_base,
-                is_upgraded,
             )
             .await?;
 
@@ -941,7 +940,6 @@ pub async fn produce_frame(
     time: f32,
     total_frames: u32,
     resolution_base: XY<u32>,
-    is_upgraded: bool,
 ) -> Result<RenderedFrame, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {

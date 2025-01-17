@@ -105,7 +105,6 @@ impl Renderer {
                                 time,
                                 total_frames,
                                 resolution_base,
-                                false,
                             )
                             .await
                             .unwrap();
