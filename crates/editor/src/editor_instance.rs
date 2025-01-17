@@ -261,6 +261,7 @@ impl EditorInstance {
                                 &project,
                                 time as f32,
                                 resolution_base,
+                                false,
                             ),
                             time as f32,
                             resolution_base,

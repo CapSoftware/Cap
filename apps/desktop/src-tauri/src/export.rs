@@ -1,6 +1,6 @@
 use crate::{
     general_settings::GeneralSettingsStore, get_video_metadata, upsert_editor_instance,
-    windows::ShowCapWindow, RenderProgress, VideoRecordingMetadata, VideoType,
+    windows::ShowCapWindow, AuthStore, RenderProgress, VideoRecordingMetadata, VideoType,
 };
 use cap_project::{ProjectConfiguration, XY};
 use std::path::PathBuf;
@@ -70,6 +70,9 @@ pub async fn export_video(
         }
     }
 
+    let auth = AuthStore::get(&app)?.ok_or("Not authenticated")?;
+    let is_upgraded = auth.is_upgraded();
+
     let exporter = cap_export::Exporter::new(
         modified_project,
         output_path.clone(),
@@ -86,6 +89,7 @@ pub async fn export_video(
         &editor_instance.segments,
         fps,
         resolution_base,
+        is_upgraded,
     )
     .map_err(|e| {
         sentry::capture_message(&e.to_string(), sentry::Level::Error);

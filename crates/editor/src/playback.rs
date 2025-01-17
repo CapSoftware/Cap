@@ -96,7 +96,13 @@ impl Playback {
                         },
                         data = segment.decoders.get_frames(time as f32, !project.camera.hide) => {
                             if let Some((screen_frame, camera_frame)) = data {
-                                let uniforms = ProjectUniforms::new(&self.render_constants, &project, time as f32, resolution_base);
+                                let uniforms = ProjectUniforms::new(
+                                    &self.render_constants,
+                                    &project,
+                                    time as f32,
+                                    resolution_base,
+                                    false,
+                                );
 
                                 self
                                     .renderer

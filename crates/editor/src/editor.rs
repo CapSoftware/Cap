@@ -105,6 +105,7 @@ impl Renderer {
                                 time,
                                 total_frames,
                                 resolution_base,
+                                false,
                             )
                             .await
                             .unwrap();
@@ -147,7 +148,7 @@ impl RendererHandle {
         camera_frame: Option<DecodedFrame>,
         background: BackgroundSource,
         uniforms: ProjectUniforms,
-        time: f32, // Add this parameter
+        time: f32,
         resolution_base: XY<u32>,
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();

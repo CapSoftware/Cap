@@ -167,6 +167,7 @@ pub async fn render_video_to_channel(
     segments: Vec<RenderSegment>,
     fps: u32,
     resolution_base: XY<u32>,
+    is_upgraded: bool,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, meta).await?;
     let recordings = ProjectRecordings::new(meta);
@@ -218,8 +219,13 @@ pub async fn render_video_to_channel(
             .get_frames(source_time as f32, !project.camera.hide)
             .await
         {
-            let uniforms =
-                ProjectUniforms::new(&constants, &project, source_time as f32, resolution_base);
+            let uniforms = ProjectUniforms::new(
+                &constants,
+                &project,
+                source_time as f32,
+                resolution_base,
+                is_upgraded,
+            );
 
             let frame = produce_frame(
                 &constants,
@@ -230,6 +236,7 @@ pub async fn render_video_to_channel(
                 source_time as f32,
                 total_frames,
                 resolution_base,
+                is_upgraded,
             )
             .await?;
 
@@ -307,7 +314,7 @@ pub struct RenderVideoConstants {
     watermark_pipeline: WatermarkPipeline,
     watermark_texture: wgpu::Texture,
     watermark_bind_group: wgpu::BindGroup,
-    watermark_dimensions: (u32, u32), // Add watermark dimensions
+    watermark_dimensions: (u32, u32),
 }
 
 impl RenderVideoConstants {
@@ -543,6 +550,7 @@ pub struct ProjectUniforms {
     camera: Option<CompositeVideoFrameUniforms>,
     pub zoom: Zoom,
     pub project: ProjectConfiguration,
+    pub is_upgraded: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -693,6 +701,7 @@ impl ProjectUniforms {
         project: &ProjectConfiguration,
         time: f32,
         resolution_base: XY<u32>,
+        is_upgraded: bool,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
@@ -909,6 +918,7 @@ impl ProjectUniforms {
             camera,
             zoom,
             project: project.clone(),
+            is_upgraded,
         }
     }
 }
@@ -931,6 +941,7 @@ pub async fn produce_frame(
     time: f32,
     total_frames: u32,
     resolution_base: XY<u32>,
+    is_upgraded: bool,
 ) -> Result<RenderedFrame, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
@@ -1151,8 +1162,8 @@ pub async fn produce_frame(
                 padding,
                 uniforms.output_size.1 as f32 - (target_width * aspect_ratio) - padding,
             ],
-            opacity: 0.5,
-            is_upgraded: 0.0,
+            opacity: if uniforms.is_upgraded { 0.0 } else { 0.5 },
+            is_upgraded: if uniforms.is_upgraded { 1.0 } else { 0.0 },
         };
 
         // println!(

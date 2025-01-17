@@ -122,6 +122,7 @@ async fn main() -> Result<(), String> {
                 &segments,
                 fps,
                 XY::new(1920, 1080),
+                true,
             )
             .unwrap();
 
