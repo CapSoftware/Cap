@@ -167,13 +167,13 @@ export default function () {
                 await commands.showWindow("Upgrade");
               }
             }}
-            class={`text-[0.625rem] ${
+            class={`text-[0.6rem] ${
               isUpgraded()
                 ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
                 : "bg-gray-200 cursor-pointer hover:bg-gray-300"
             } rounded-lg px-1.5 py-0.5`}
           >
-            {isUpgraded() ? "Pro" : "Free"}
+            {isUpgraded() ? "Pro" : "Upgrade to Pro"}
           </span>
         </div>
         <div class="flex items-center space-x-2">

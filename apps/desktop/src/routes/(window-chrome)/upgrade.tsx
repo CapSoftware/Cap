@@ -9,6 +9,7 @@ import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 export default function Page() {
   const proFeatures = [
+    "Remove watermark from recordings",
     "Unlimited cloud storage & Shareable links",
     "Connect custom S3 storage bucket",
     "Advanced teams features",
@@ -169,15 +170,15 @@ export default function Page() {
                   </button>
                 </div>
                 <div class="flex items-center px-6 pb-6 pt-0">
-                  <div class="space-y-8">
+                  <div class="space-y-6">
                     <div>
                       <ul class="list-none p-0 space-y-3">
                         {proFeatures.map((feature) => (
                           <li class="flex items-center justify-start">
                             <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
-                              <IconLucideCheck class="w-5 h-5 stroke-[4px] text-[--gray-50]" />
+                              <IconLucideCheck class="w-4 h-4 stroke-[4px] text-[--gray-50]" />
                             </div>
-                            <span class="ml-2 text-lg text-gray-50">
+                            <span class="ml-2 text-[0.9rem] text-gray-50">
                               {feature}
                             </span>
                           </li>
