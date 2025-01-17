@@ -53,8 +53,8 @@ async focusCapturesPanel() : Promise<void> {
 async getCurrentRecording() : Promise<JsonValue<RecordingInfo | null>> {
     return await TAURI_INVOKE("get_current_recording");
 },
-async exportVideo(videoId: string, project: ProjectConfiguration, progress: TAURI_CHANNEL<RenderProgress>, force: boolean, fps: number) : Promise<string> {
-    return await TAURI_INVOKE("export_video", { videoId, project, progress, force, fps });
+async exportVideo(videoId: string, project: ProjectConfiguration, progress: TAURI_CHANNEL<RenderProgress>, force: boolean, fps: number, resolutionBase: XY<number>) : Promise<string> {
+    return await TAURI_INVOKE("export_video", { videoId, project, progress, force, fps, resolutionBase });
 },
 async copyFileToPath(src: string, dst: string) : Promise<null> {
     return await TAURI_INVOKE("copy_file_to_path", { src, dst });
@@ -74,8 +74,8 @@ async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<V
 async createEditorInstance(videoId: string) : Promise<SerializedEditorInstance> {
     return await TAURI_INVOKE("create_editor_instance", { videoId });
 },
-async startPlayback(videoId: string, fps: number) : Promise<void> {
-    await TAURI_INVOKE("start_playback", { videoId, fps });
+async startPlayback(videoId: string, fps: number, resolutionBase: XY<number>) : Promise<void> {
+    await TAURI_INVOKE("start_playback", { videoId, fps, resolutionBase });
 },
 async stopPlayback(videoId: string) : Promise<void> {
     await TAURI_INVOKE("stop_playback", { videoId });
@@ -267,7 +267,7 @@ export type RecordingOptions = { captureTarget: ScreenCaptureTarget; cameraLabel
 export type RecordingOptionsChanged = null
 export type RecordingStarted = null
 export type RecordingStopped = { path: string }
-export type RenderFrameEvent = { frame_number: number; fps: number }
+export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
 export type RenderProgress = { type: "Starting"; total_frames: number } | { type: "EstimatedTotalFrames"; total_frames: number } | { type: "FrameRendered"; current_frame: number }
 export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }
@@ -282,7 +282,7 @@ export type SerializedEditorInstance = { framesSocketUrl: string; recordingDurat
 export type SharingMeta = { id: string; link: string }
 export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_id: string } } | "PrevRecordings" | "WindowCaptureOccluder" | { Camera: { ws_port: number } } | { InProgressRecording: { position: [number, number] | null } } | "Upgrade" | "SignIn"
 export type SingleSegment = { display: Display; camera?: CameraMeta | null; audio?: AudioMeta | null; cursor?: string | null }
-export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments?: ZoomSegment[] }
+export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments: ZoomSegment[] }
 export type TimelineSegment = { recordingSegment: number | null; timescale: number; start: number; end: number }
 export type UploadMode = { Initial: { pre_created_video: PreCreatedVideo | null } } | "Reupload"
 export type UploadProgress = { stage: string; progress: number; message: string }

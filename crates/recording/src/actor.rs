@@ -193,8 +193,6 @@ pub async fn spawn_recording_actor(
                             let cursors = if let Some(cursor) = pipeline.cursor.take() {
                                 let res = cursor.actor.stop().await;
 
-                                dbg!(&res.cursors);
-
                                 std::fs::write(
                                     &cursor.output_path,
                                     serde_json::to_string_pretty(&CursorEvents {

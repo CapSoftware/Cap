@@ -25,6 +25,7 @@ use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_project::XY;
 use cap_project::{Content, ProjectConfiguration, RecordingMeta, Resolution, SharingMeta};
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
@@ -850,6 +851,7 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
 struct RenderFrameEvent {
     frame_number: u32,
     fps: u32,
+    resolution_base: XY<u32>,
 }
 
 #[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
@@ -867,10 +869,10 @@ impl EditorStateChanged {
 
 #[tauri::command]
 #[specta::specta]
-async fn start_playback(app: AppHandle, video_id: String, fps: u32) {
+async fn start_playback(app: AppHandle, video_id: String, fps: u32, resolution_base: XY<u32>) {
     upsert_editor_instance(&app, video_id)
         .await
-        .start_playback(fps)
+        .start_playback(fps, resolution_base)
         .await
 }
 
@@ -2270,7 +2272,11 @@ async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<E
         let preview_tx = instance.preview_tx.clone();
         move |e| {
             preview_tx
-                .send(Some((e.payload.frame_number, e.payload.fps)))
+                .send(Some((
+                    e.payload.frame_number,
+                    e.payload.fps,
+                    e.payload.resolution_base,
+                )))
                 .ok();
         }
     });

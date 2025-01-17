@@ -38,7 +38,7 @@ import {
   checkIsUpgradedAndUpdate,
   canCreateShareableLink,
 } from "~/utils/plans";
-import { FPS } from "./editor/context";
+import { FPS, OUTPUT_SIZE } from "./editor/context";
 
 type MediaEntry = {
   path: string;
@@ -779,7 +779,8 @@ function createRecordingMutations(
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             false,
-            FPS
+            FPS,
+            OUTPUT_SIZE
           );
 
           // Show quick progress animation for existing video
@@ -904,7 +905,8 @@ function createRecordingMutations(
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             true, // Force re-render
-            FPS
+            FPS,
+            OUTPUT_SIZE
           );
 
           await commands.copyFileToPath(outputPath, savePath);
@@ -1039,7 +1041,8 @@ function createRecordingMutations(
             presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG,
             progress,
             false,
-            FPS
+            FPS,
+            OUTPUT_SIZE
           );
           console.log("Using existing rendered video");
 

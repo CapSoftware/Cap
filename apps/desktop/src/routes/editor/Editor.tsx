@@ -21,7 +21,14 @@ import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { events } from "~/utils/tauri";
-import { EditorContextProvider, FPS, useEditorContext } from "./context";
+import {
+  EditorContextProvider,
+  EditorInstanceContextProvider,
+  FPS,
+  OUTPUT_SIZE,
+  useEditorContext,
+  useEditorInstanceContext,
+} from "./context";
 import {
   Dialog,
   DialogContent,
@@ -30,10 +37,6 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
-import {
-  EditorInstanceContextProvider,
-  useEditorInstanceContext,
-} from "./editorInstanceContext";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { ConfigSidebar } from "./ConfigSidebar";
@@ -83,6 +86,7 @@ function Inner() {
     events.renderFrameEvent.emit({
       frame_number: Math.max(Math.floor(time * FPS), 0),
       fps: FPS,
+      resolution_base: OUTPUT_SIZE,
     });
   }, 1000 / 60);
 

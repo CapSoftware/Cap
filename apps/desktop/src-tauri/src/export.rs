@@ -2,7 +2,7 @@ use crate::{
     general_settings::GeneralSettingsStore, get_video_metadata, upsert_editor_instance,
     windows::ShowCapWindow, RenderProgress, VideoRecordingMetadata, VideoType,
 };
-use cap_project::ProjectConfiguration;
+use cap_project::{ProjectConfiguration, XY};
 use std::path::PathBuf;
 use tauri::AppHandle;
 
@@ -15,6 +15,7 @@ pub async fn export_video(
     progress: tauri::ipc::Channel<RenderProgress>,
     force: bool,
     fps: u32,
+    resolution_base: XY<u32>,
 ) -> Result<PathBuf, String> {
     let screen_metadata =
         match get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await {
@@ -84,6 +85,7 @@ pub async fn export_video(
         editor_instance.render_constants.clone(),
         &editor_instance.segments,
         fps,
+        resolution_base,
     )
     .map_err(|e| {
         sentry::capture_message(&e.to_string(), sentry::Level::Error);

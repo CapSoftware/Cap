@@ -5,7 +5,7 @@ use cap_media::{
     feeds::{AudioData, AudioFrameBuffer},
     MediaError,
 };
-use cap_project::{ProjectConfiguration, RecordingMeta};
+use cap_project::{ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants, RenderedFrame,
     SegmentVideoPaths,
@@ -43,6 +43,7 @@ pub struct Exporter<TOnProgress> {
     meta: RecordingMeta,
     render_constants: Arc<RenderVideoConstants>,
     fps: u32,
+    resolution_base: XY<u32>,
 }
 
 impl<TOnProgress> Exporter<TOnProgress>
@@ -58,11 +59,13 @@ where
         render_constants: Arc<RenderVideoConstants>,
         segments: &[Segment],
         fps: u32,
+        resolution_base: XY<u32>,
     ) -> Result<Self, ExportError> {
         let output_folder = output_path.parent().unwrap();
         std::fs::create_dir_all(output_folder)?;
 
-        let output_size = ProjectUniforms::get_output_size(&render_constants.options, &project);
+        let output_size =
+            ProjectUniforms::get_output_size(&render_constants.options, &project, resolution_base);
 
         let (render_segments, audio_segments): (Vec<_>, Vec<_>) = segments
             .iter()
@@ -104,6 +107,7 @@ where
             audio_segments,
             output_size,
             fps,
+            resolution_base,
         })
     }
 
@@ -228,7 +232,7 @@ where
                         RawVideoFormat::Rgba,
                         self.output_size.0,
                         self.output_size.1,
-                        30,
+                        self.fps,
                     )
                     .wrap_frame(
                         &frame.data,
@@ -294,6 +298,7 @@ where
             &self.meta,
             self.render_segments,
             self.fps,
+            self.resolution_base,
         )
         .then(|f| async { f.map_err(Into::into) });
 
