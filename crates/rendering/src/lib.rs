@@ -928,7 +928,6 @@ pub struct RenderedFrame {
     pub width: u32,
     pub height: u32,
     pub padded_bytes_per_row: u32,
-    pub total_frames: Option<u32>,
 }
 
 pub async fn produce_frame(
@@ -1325,7 +1324,6 @@ pub async fn produce_frame(
         padded_bytes_per_row,
         width: uniforms.output_size.0,
         height: uniforms.output_size.1,
-        total_frames: Some(total_frames),
     })
 }
 

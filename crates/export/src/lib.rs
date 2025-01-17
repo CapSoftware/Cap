@@ -262,16 +262,20 @@ where
 
                 // Save the first frame as a screenshot and thumbnail
                 if let Some(frame) = first_frame {
-                    let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-                        ImageBuffer::from_raw(frame.width, frame.height, frame.data)
-                            .expect("Failed to create image from frame data");
-
-                    // Convert RGBA to RGB
-                    let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
-                        ImageBuffer::from_fn(frame.width, frame.height, |x, y| {
-                            let rgba = rgba_img.get_pixel(x, y);
-                            image::Rgb([rgba[0], rgba[1], rgba[2]])
-                        });
+                    let rgb_img = ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(
+                        frame.width,
+                        frame.height,
+                        frame
+                            .data
+                            .chunks(frame.padded_bytes_per_row as usize)
+                            .flat_map(|row| {
+                                row[0..(frame.width * 4) as usize]
+                                    .chunks(4)
+                                    .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .expect("Failed to create image from frame data");
 
                     let screenshots_dir = project_path.join("screenshots");
                     std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
