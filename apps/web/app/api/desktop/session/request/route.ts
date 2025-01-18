@@ -3,11 +3,9 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@cap/database/auth/auth-options";
 import { decode } from "next-auth/jwt";
 import { getCurrentUser } from "@cap/database/auth/session";
-
 export async function GET(req: NextRequest) {
   const searchParams = req.nextUrl.searchParams;
   const session = await getServerSession(authOptions);
-  const port = searchParams.get("port") || "";
   const secret =
     process.env.NODE_ENV === "development"
       ? process.env.NEXTAUTH_SECRET_DEV
@@ -15,17 +13,16 @@ export async function GET(req: NextRequest) {
 
   if (!session) {
     return Response.redirect(
-      `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?port=${port}`
+      `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request`
     );
   }
 
   const token = req.cookies.get("next-auth.session-token") ?? null;
   const tokenValue = token?.value ?? null;
   const user = await getCurrentUser();
-
   if (!tokenValue || !user) {
     return Response.redirect(
-      `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?port=${port}`
+      `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request`
     );
   }
 
@@ -33,15 +30,14 @@ export async function GET(req: NextRequest) {
     token: tokenValue,
     secret: secret as string,
   });
-
   if (!decodedToken) {
     return Response.redirect(
-      `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?port=${port}`
+      `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request`
     );
   }
 
   const returnUrl = new URL(
-    `http://127.0.0.1:${port}?token=${tokenValue}&expires=${decodedToken?.exp}&user_id=${user.id}`
+    `cap-desktop://auth?token=${tokenValue}&expires=${decodedToken?.exp}&user_id=${user.id}`
   );
 
   return Response.redirect(returnUrl.href);

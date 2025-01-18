@@ -34,11 +34,11 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
         build: impl FnOnce(reqwest::Client) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, String> {
         let Some(auth) = AuthStore::get(self.app_handle())? else {
-            println!("Not logged in");
+            println!("No authentication token found - initiating deep link authentication");
 
             AuthenticationInvalid.emit(self).ok();
 
-            return Err("Unauthorized".to_string());
+            return Err("Authentication required - please complete the authentication process".to_string());
         };
 
         let response = do_authed_request(&auth, build)
@@ -46,11 +46,14 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
             .map_err(|e| e.to_string())?;
 
         if response.status() == StatusCode::UNAUTHORIZED {
-            println!("Authentication expired. Please log in again.");
+            println!("Authentication token expired - initiating deep link re-authentication");
 
             AuthenticationInvalid.emit(self).ok();
 
-            return Err("Unauthorized".to_string());
+            // Clear the invalid auth token
+            AuthStore::set(self.app_handle(), None)?;
+            
+            return Err("Authentication expired - please re-authenticate".to_string());
         }
 
         Ok(response)

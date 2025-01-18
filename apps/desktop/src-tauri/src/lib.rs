@@ -1912,6 +1912,29 @@ async fn check_notification_permissions(app: AppHandle) {
     }
 }
 
+fn validate_auth_url(url: &str) -> Result<(), String> {
+    if !url.starts_with("cap-desktop://auth") {
+        return Err("Invalid URL scheme".to_string());
+    }
+    
+    let parsed_url = url::Url::parse(url)
+        .map_err(|e| format!("Invalid URL format: {}", e))?;
+    
+    // Check required parameters
+    let params: std::collections::HashMap<_, _> = parsed_url.query_pairs().collect();
+    if !params.contains_key("token") {
+        return Err("Missing token parameter".to_string());
+    }
+    if !params.contains_key("expires") {
+        return Err("Missing expires parameter".to_string());
+    }
+    if !params.contains_key("state") {
+        return Err("Missing state parameter".to_string());
+    }
+    
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
     let specta_builder = tauri_specta::Builder::new()
@@ -2078,9 +2101,70 @@ pub async fn run() {
 
             // this doesn't work in dev on mac, just a fact of deeplinks
             app.deep_link().on_open_url(|event| {
-                // TODO: handle deep link for auth
-                dbg!(event.id());
-                dbg!(event.urls());
+                let app = event.app_handle();
+                
+                for url in event.urls() {
+                    if let Err(e) = validate_auth_url(url) {
+                        println!("Invalid auth URL: {}", e);
+                        continue;
+                    }
+
+                    if let Ok(parsed_url) = url::Url::parse(url) {
+                        let params: std::collections::HashMap<_, _> = parsed_url.query_pairs().collect();
+                        
+                        // Extract required auth parameters
+                        let token = params.get("token").map(|v| v.to_string());
+                        let expires = params.get("expires")
+                            .and_then(|v| v.parse::<i32>().ok());
+                        let user_id = params.get("user_id").map(|v| v.to_string());
+                        let state = params.get("state").map(|v| v.to_string());
+                        
+                        // Validate state parameter to prevent CSRF
+                        if let Some(state) = state {
+                            if let Some(Some(current_auth)) = app.get_store("store")
+                                .ok()
+                                .map(|s| s.get::<AuthStore>("auth"))
+                            {
+                                if current_auth.auth_state.as_ref() != Some(&state) {
+                                    println!("Invalid state parameter - potential CSRF attack");
+                                    continue;
+                                }
+                            }
+                        }
+                        
+                        // Validate and store auth data
+                        if let (Some(token), Some(expires)) = (token, expires) {
+                            // Validate token format
+                            if let Err(e) = AuthStore::validate_token(&token) {
+                                println!("Invalid token format: {}", e);
+                                continue;
+                            }
+                            
+                            let auth = AuthStore {
+                                token,
+                                user_id,
+                                expires,
+                                plan: None,
+                                auth_state: None, // Clear state after successful validation
+                            };
+                            
+                            if AuthStore::set(&app, Some(auth)).is_ok() {
+                                // Show main window after successful auth
+                                ShowCapWindow::Main.show(&app).ok();
+                                
+                                // Schedule token refresh check
+                                let app_handle = app.clone();
+                                tokio::spawn(async move {
+                                    if let Ok(Some(auth)) = AuthStore::get(&app_handle) {
+                                        if auth.is_token_near_expiry() {
+                                            let _ = auth.refresh_token(&app_handle).await;
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
             });
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {

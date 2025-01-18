@@ -14,6 +14,8 @@ pub struct AuthStore {
     pub user_id: Option<String>,
     pub expires: i32,
     pub plan: Option<Plan>,
+    #[serde(default)]
+    pub auth_state: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -113,6 +115,68 @@ impl AuthStore {
 
         store.set("auth", json!(value));
         store.save().map_err(|e| e.to_string())
+    }
+
+    pub fn generate_auth_state() -> String {
+        use rand::{thread_rng, Rng};
+        const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+                                abcdefghijklmnopqrstuvwxyz\
+                                0123456789";
+        const STATE_LEN: usize = 32;
+        
+        let mut rng = thread_rng();
+        let state: String = (0..STATE_LEN)
+            .map(|_| {
+                let idx = rng.gen_range(0..CHARSET.len());
+                CHARSET[idx] as char
+            })
+            .collect();
+        state
+    }
+
+    pub fn validate_token(token: &str) -> Result<(), String> {
+        if token.is_empty() {
+            return Err("Token cannot be empty".to_string());
+        }
+        if token.len() < 32 {
+            return Err("Token is too short".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn is_token_near_expiry(&self) -> bool {
+        let current_time = chrono::Utc::now().timestamp() as i32;
+        let expiry_threshold = 300; // 5 minutes
+        self.expires - current_time < expiry_threshold
+    }
+
+    pub async fn refresh_token(&self, app: &AppHandle) -> Result<(), String> {
+        let response = app
+            .authed_api_request(|client| {
+                client.post(web_api::make_url("/api/auth/refresh"))
+                    .header("Authorization", format!("Bearer {}", self.token))
+            })
+            .await?;
+
+        if !response.status().is_success() {
+            return Err("Failed to refresh token".to_string());
+        }
+
+        #[derive(Deserialize)]
+        struct RefreshResponse {
+            token: String,
+            expires: i32,
+        }
+
+        let refresh_data: RefreshResponse = response.json().await
+            .map_err(|e| format!("Failed to parse refresh response: {}", e))?;
+
+        let mut updated_auth = self.clone();
+        updated_auth.token = refresh_data.token;
+        updated_auth.expires = refresh_data.expires;
+
+        Self::set(app, Some(updated_auth))?;
+        Ok(())
     }
 }
 
