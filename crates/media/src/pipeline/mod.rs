@@ -49,12 +49,12 @@ impl<T: PipelineClock> Pipeline<T> {
             return Err(MediaError::ShutdownPipeline);
         };
 
-        trace!("Shutting down pipeline execution");
+        trace!("Shutting down pipeline");
         let _ = self.control.broadcast(Control::Shutdown).await;
         for (_name, task) in self.task_handles.drain(..) {
             let _ = task.join();
         }
-        info!("Pipeline has been stopped.");
+        info!("Pipeline stopped");
         // TODO: Collect shutdown errors?
         Ok(())
     }

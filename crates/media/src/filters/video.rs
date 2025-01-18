@@ -1,4 +1,5 @@
 use ffmpeg::filter;
+use tracing::{info, trace};
 
 use crate::{
     data::{FFVideo, VideoInfo},
@@ -100,7 +101,6 @@ impl PipelinePipeTask for VideoFilter {
         input: flume::Receiver<Self::Input>,
         output: Sender<Self::Output>,
     ) {
-        println!("Starting {} video filtering thread", self.tag);
         ready_signal.send(Ok(())).unwrap();
 
         while let Ok(raw_frame) = input.recv() {
@@ -108,12 +108,6 @@ impl PipelinePipeTask for VideoFilter {
             self.process_frame(&output);
         }
 
-        println!(
-            "Received last raw {} frame. Finishing up filtering.",
-            self.tag
-        );
         self.finish(&output);
-
-        println!("Shutting down {} video filtering thread", self.tag);
     }
 }

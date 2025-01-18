@@ -1,15 +1,15 @@
-use std::{env::current_dir, path::PathBuf, sync::Arc};
+mod record;
+
+use std::{path::PathBuf, sync::Arc};
 
 use cap_editor::create_segments;
-use cap_media::sources::{get_target_fps, ScreenCaptureTarget};
+use cap_media::sources::get_target_fps;
 use cap_project::{RecordingMeta, XY};
-use cap_recording::RecordingOptions;
 use cap_rendering::RenderVideoConstants;
 use clap::{Args, Parser, Subcommand};
-use instrument::WithSubscriber;
-use tokio::io::AsyncBufReadExt;
+use record::RecordStart;
+use serde_json::json;
 use tracing::*;
-use uuid::Uuid;
 
 #[derive(Parser)]
 struct Cli {
@@ -20,10 +20,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Export a '.cap' project to an mp4 file
-    Export {
-        project_path: PathBuf,
-        output_path: Option<PathBuf>,
-    },
+    Export(Export),
     /// Start a recording or list available capture targets and devices
     Record(RecordArgs),
 }
@@ -36,7 +33,7 @@ struct RecordArgs {
     command: Option<RecordCommands>,
 
     #[command(flatten)]
-    args: RecordStartArgs,
+    args: RecordStart,
 }
 
 #[derive(Subcommand)]
@@ -45,36 +42,9 @@ enum RecordCommands {
     Screens,
     /// List windows available for capturing
     Windows,
-    // Cameras,
+    /// List cameras available for capturing
+    Cameras,
     // Mics,
-}
-
-#[derive(Args)]
-struct RecordStartArgs {
-    #[command(flatten)]
-    target: RecordTargets,
-    /// ID of the camera to record
-    #[arg(long)]
-    camera: Option<u32>,
-    /// ID of the microphone to record
-    #[arg(long)]
-    mic: Option<u32>,
-    #[arg(long)]
-    /// Path to save the '.cap' project to
-    path: Option<PathBuf>,
-    /// Maximum fps to record at (max 60)
-    #[arg(long)]
-    fps: Option<u32>,
-}
-
-#[derive(Args)]
-struct RecordTargets {
-    /// ID of the screen to capture
-    #[arg(long, group = "target")]
-    screen: Option<u32>,
-    /// ID of the window to capture
-    #[arg(long, group = "target")]
-    window: Option<u32>,
 }
 
 #[tokio::main]
@@ -82,63 +52,7 @@ async fn main() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Export {
-            project_path,
-            output_path,
-        } => {
-            let project = serde_json::from_reader(
-                std::fs::File::open(project_path.join("project-config.json")).unwrap(),
-            )
-            .unwrap();
-
-            let meta = RecordingMeta::load_for_project(&project_path).unwrap();
-            let recordings = cap_rendering::ProjectRecordings::new(&meta);
-
-            let render_options = cap_rendering::RenderOptions {
-                screen_size: XY::new(
-                    recordings.segments[0].display.width,
-                    recordings.segments[0].display.height,
-                ),
-                camera_size: recordings.segments[0]
-                    .camera
-                    .as_ref()
-                    .map(|c| XY::new(c.width, c.height)),
-            };
-            let render_constants = Arc::new(
-                RenderVideoConstants::new(render_options, &meta)
-                    .await
-                    .unwrap(),
-            );
-
-            let segments = create_segments(&meta);
-
-            let fps = meta.content.max_fps();
-            let project_output_path = project_path.join("output/result.mp4");
-            let exporter = cap_export::Exporter::new(
-                project,
-                project_output_path.clone(),
-                |_| {},
-                project_path.clone(),
-                meta,
-                render_constants,
-                &segments,
-                fps,
-                XY::new(1920, 1080),
-                true,
-            )
-            .unwrap();
-
-            exporter.export_with_custom_muxer().await.unwrap();
-
-            let output_path = if let Some(output_path) = output_path {
-                std::fs::copy(&project_output_path, &output_path).unwrap();
-                output_path
-            } else {
-                project_output_path
-            };
-
-            println!("Exported video to '{}'", output_path.display());
-        }
+        Commands::Export(e) => e.run().await,
         Commands::Record(RecordArgs { command, args }) => match command {
             Some(RecordCommands::Screens) => {
                 let screens = cap_media::sources::list_screens();
@@ -174,65 +88,109 @@ window {}:
                     );
                 }
             }
+            Some(RecordCommands::Cameras) => {
+                use nokhwa::{
+                    pixel_format::RgbAFormat,
+                    utils::{ApiBackend, RequestedFormat, RequestedFormatType},
+                    Camera,
+                };
+
+                let cameras = nokhwa::query(ApiBackend::Auto).unwrap();
+
+                let mut info = vec![];
+                for camera_info in cameras {
+                    let format = RequestedFormat::new::<RgbAFormat>(
+                        RequestedFormatType::AbsoluteHighestFrameRate,
+                    );
+
+                    let mut camera = Camera::new(camera_info.index().clone(), format).unwrap();
+
+                    info.push(json!({
+                        "index": camera_info.index().to_string(),
+                        "name": camera_info.human_name(),
+                        "pixel_format": camera.frame_format(),
+                        "formats":  camera
+                        		.compatible_camera_formats()
+                          	.unwrap()
+                           	.into_iter()
+                            .map(|f| format!("{}x{}@{}fps", f.resolution().x(), f.resolution().y(), f.frame_rate()))
+                            .collect::<Vec<_>>()
+                    }));
+                }
+
+                println!("{}", serde_json::to_string_pretty(&info).unwrap());
+            }
             None => {
-                let (target_info, scap_target) = args
-                    .target
-                    .screen
-                    .map(|id| {
-                        cap_media::sources::list_screens()
-                            .into_iter()
-                            .find(|s| s.0.id == id)
-                            .map(|(s, t)| (ScreenCaptureTarget::Screen(s), t))
-                            .ok_or(format!("Screen with id '{id}' not found"))
-                    })
-                    .or_else(|| {
-                        args.target.window.map(|id| {
-                            cap_media::sources::list_windows()
-                                .into_iter()
-                                .find(|s| s.0.id == id)
-                                .map(|(s, t)| (ScreenCaptureTarget::Window(s), t))
-                                .ok_or(format!("Window with id '{id}' not found"))
-                        })
-                    })
-                    .ok_or("No target specified".to_string())??;
-
-                let id = Uuid::new_v4().to_string();
-                let path = args
-                    .path
-                    .unwrap_or_else(|| current_dir().unwrap().join(format!("{id}.cap")));
-
-                let actor = cap_recording::spawn_recording_actor(
-                    id,
-                    path,
-                    RecordingOptions {
-                        capture_target: target_info,
-                        camera_label: None,
-                        audio_input_name: None,
-                        fps: 30,
-                        output_resolution: None,
-                    },
-                    None,
-                    None,
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-
-                info!("Recording starting, press Enter to stop");
-
-                tokio::io::BufReader::new(tokio::io::stdin())
-                    .read_line(&mut String::new())
-                    .await
-                    .unwrap();
-
-                info!("Recording stopped");
-
-                actor.stop().await.unwrap();
+                args.run().await?;
             }
             _ => {}
         },
     }
 
     Ok(())
+}
+
+#[derive(Args)]
+struct Export {
+    project_path: PathBuf,
+    output_path: Option<PathBuf>,
+}
+
+impl Export {
+    async fn run(self) {
+        let project = serde_json::from_reader(
+            std::fs::File::open(self.project_path.join("project-config.json")).unwrap(),
+        )
+        .unwrap();
+
+        let meta = RecordingMeta::load_for_project(&self.project_path).unwrap();
+        let recordings = cap_rendering::ProjectRecordings::new(&meta);
+
+        let render_options = cap_rendering::RenderOptions {
+            screen_size: XY::new(
+                recordings.segments[0].display.width,
+                recordings.segments[0].display.height,
+            ),
+            camera_size: recordings.segments[0]
+                .camera
+                .as_ref()
+                .map(|c| XY::new(c.width, c.height)),
+        };
+        let render_constants = Arc::new(
+            RenderVideoConstants::new(render_options, &meta)
+                .await
+                .unwrap(),
+        );
+
+        let segments = create_segments(&meta);
+
+        let fps = meta.content.max_fps();
+        let project_output_path = self.project_path.join("output/result.mp4");
+        let exporter = cap_export::Exporter::new(
+            project,
+            project_output_path.clone(),
+            |_| {},
+            self.project_path.clone(),
+            meta,
+            render_constants,
+            &segments,
+            fps,
+            XY::new(1920, 1080),
+            true,
+        )
+        .unwrap();
+
+        exporter.export_with_custom_muxer().await.unwrap();
+
+        let output_path = if let Some(output_path) = self.output_path {
+            std::fs::copy(&project_output_path, &output_path).unwrap();
+            output_path
+        } else {
+            project_output_path
+        };
+
+        println!("Exported video to '{}'", output_path.display());
+    }
 }
 
 // fn ffmpeg_callback_experiment() {

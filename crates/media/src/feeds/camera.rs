@@ -36,7 +36,7 @@ impl CameraConnection {
         let (sender, receiver) = flume::bounded(60);
         self.control
             .send(CameraControl::AttachRawConsumer(sender))
-            .unwrap();
+            .ok();
 
         receiver
     }
@@ -44,7 +44,7 @@ impl CameraConnection {
 
 // #[derive(Clone)]
 pub struct CameraFeed {
-    camera_info: CameraInfo,
+    pub camera_info: CameraInfo,
     video_info: VideoInfo,
     control: Sender<CameraControl>,
     // join_handle: JoinHandle<()>,
@@ -267,6 +267,7 @@ fn run_camera_feed(
         // Actual data capture
         match camera.frame() {
             Ok(raw_buffer) => {
+                dbg!(raw_buffer.source_frame_format());
                 let raw_buffer = if let FrameFormat::MJPEG = raw_buffer.source_frame_format() {
                     let rgba_buffer = raw_buffer
                         .decode_image::<nokhwa::pixel_format::RgbAFormat>()
@@ -497,73 +498,12 @@ impl FrameConverter {
     }
 
     fn raw(&mut self, buffer: &nokhwa::Buffer) -> FFVideo {
-        let resolution = buffer.resolution();
-
-        if self.format == FrameFormat::YUYV {
-            // For YUYV, we need to handle the conversion differently
-            let stride = resolution.width() as usize * 2; // YUYV uses 2 bytes per pixel
-            let src = buffer.buffer();
-
-            // Create input frame with YUYV format and copy data
-            let mut input_frame = FFVideo::new(
-                ffmpeg::format::Pixel::UYVY422,
-                resolution.width(),
-                resolution.height(),
-            );
-
-            // Copy data line by line
-            {
-                let dst_stride = input_frame.stride(0);
-                let dst = input_frame.data_mut(0);
-                for y in 0..resolution.height() as usize {
-                    let src_offset = y * stride;
-                    let dst_offset = y * dst_stride;
-                    dst[dst_offset..dst_offset + stride]
-                        .copy_from_slice(&src[src_offset..src_offset + stride]);
-                }
-            }
-
-            input_frame
-        } else {
-            // For other formats, use the normal conversion path
-            let stride = match self.format {
-                FrameFormat::NV12 => resolution.width() as usize,
-                FrameFormat::BGRA => resolution.width() as usize * 4,
-                FrameFormat::MJPEG => resolution.width() as usize * 4,
-                FrameFormat::GRAY => resolution.width() as usize,
-                FrameFormat::RAWRGB => resolution.width() as usize * 3,
-                _ => buffer.buffer_bytes().len() / resolution.height() as usize,
-            };
-
-            // Create input frame and copy data
-            let mut input_frame = FFVideo::new(
-                match self.format {
-                    FrameFormat::NV12 => ffmpeg::format::Pixel::NV12,
-                    FrameFormat::BGRA => ffmpeg::format::Pixel::BGRA,
-                    FrameFormat::MJPEG => ffmpeg::format::Pixel::RGBA,
-                    FrameFormat::GRAY => ffmpeg::format::Pixel::GRAY8,
-                    FrameFormat::RAWRGB => ffmpeg::format::Pixel::RGB24,
-                    _ => ffmpeg::format::Pixel::RGBA,
-                },
-                resolution.width(),
-                resolution.height(),
-            );
-
-            // Copy data line by line
-            {
-                let dst_stride = input_frame.stride(0);
-                let dst = input_frame.data_mut(0);
-                let src = buffer.buffer();
-                for y in 0..resolution.height() as usize {
-                    let src_offset = y * stride;
-                    let dst_offset = y * dst_stride;
-                    dst[dst_offset..dst_offset + stride]
-                        .copy_from_slice(&src[src_offset..src_offset + stride]);
-                }
-            }
-
-            input_frame
-        }
+        dbg!(buffer.source_frame_format());
+        self.video_info.wrap_frame(
+            buffer.buffer(),
+            0,
+            buffer.buffer_bytes().len() / buffer.resolution().height() as usize,
+        )
     }
 }
 

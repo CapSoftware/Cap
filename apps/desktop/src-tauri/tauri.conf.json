@@ -46,7 +46,6 @@
       "icons/macos/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["../../../target/binaries/ffmpeg"],
     "macOS": {
       "dmg": {
         "background": "assets/dmg-background.png",

@@ -374,7 +374,6 @@ impl PipelineSinkTask for MP4Encoder {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         input: flume::Receiver<Self::Input>,
     ) {
-        trace!("Starting {} MP4 encoding thread", self.tag);
         ready_signal.send(Ok(())).unwrap();
 
         while let Ok(frame) = input.recv() {
@@ -383,11 +382,10 @@ impl PipelineSinkTask for MP4Encoder {
                 self.queue_audio_frame(audio);
             }
         }
+    }
 
-        trace!("Received last {} frame. Finishing up encoding.", self.tag);
+    fn finish(&mut self) {
         self.finish();
-
-        info!("Shut down {} MP4 encoding thread", self.tag);
     }
 }
 
