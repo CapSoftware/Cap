@@ -2078,8 +2078,9 @@ pub async fn run() {
             fake_window::init(&app);
 
             // this doesn't work in dev on mac, just a fact of life
-            app.deep_link().on_open_url(|event| {
-                deeplink_actions::handle(app.app_handle(), dbg!(event.urls()));
+            let app_handle = app.clone();
+            app.deep_link().on_open_url(move |event| {
+                deeplink_actions::handle(&app_handle, dbg!(event.urls()));
             });
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {

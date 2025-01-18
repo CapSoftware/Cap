@@ -23,8 +23,17 @@ enum DeepLinkAction {
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) -> Result<(), String> {
     for url in urls {
+        if url.as_str().is_empty() {
+            continue;
+        }
+
         if let Ok(action) = DeepLinkAction::try_from(&url) {
-            // action.handle(&app_handle)?;
+            let handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = action.handle(&handle).await {
+                    eprintln!("Failed to handle deep link action: {}", e);
+                }
+            });
         }
     }
 
@@ -39,25 +48,23 @@ impl TryFrom<&Url> for DeepLinkAction {
         let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
 
         match path {
-            "/oauth" => {
-                // let auth = AuthStore {
-                //     token: "".into(),
-                //     user_id: None,
-                //     expires: 0i32,
-                //     plan: None,
-                // };
-                // extract AuthStore from params:
-                let auth = params.get("token").map(|token| AuthStore {
-                    token: token.to_string(),
-                    user_id: params.get("user_id").map(|s| s.to_string()),
-                    expires: params
-                        .get("expires")
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0),
-                    plan: None,
-                });
-                Err("".into())
-            }
+            "/oauth-signin" => Ok(DeepLinkAction::Oauth(AuthStore {
+                token: params
+                    .get("token")
+                    .ok_or("Missing 'token' parameter for OAuth")?
+                    .to_string(),
+                user_id: Some(
+                    params
+                        .get("user_id")
+                        .ok_or("Missing 'user_id' parameter for OAuth")?
+                        .to_string(),
+                ),
+                expires: params
+                    .get("expires")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0),
+                plan: None,
+            })),
             "/start_recording" => {
                 let mode = params
                     .get("mode")
@@ -92,7 +99,7 @@ impl TryFrom<&Url> for DeepLinkAction {
                 //         action: path.trim_start_matches('/').to_string(),
                 //     })
                 // } else {
-                Err(format!("Unsupported path: {}", path).into())
+                Err(format!("Unsupported deep-link path: {}", path).into())
             }
         }
     }
@@ -101,7 +108,10 @@ impl TryFrom<&Url> for DeepLinkAction {
 impl DeepLinkAction {
     async fn handle(self, app: &AppHandle) -> Result<(), String> {
         match self {
-            Self::Oauth(auth) => Ok(()),
+            Self::Oauth(auth) => {
+                AuthStore::set(app, Some(auth))?;
+                Ok(())
+            }
             _ => Err("Not implemented".into()),
             // DeepLinkAction::StartRecording {
             //     mode,
