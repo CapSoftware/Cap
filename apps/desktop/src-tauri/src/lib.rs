@@ -10,6 +10,7 @@ mod platform;
 mod recording;
 // mod resource;
 mod audio_meter;
+mod deeplink_actions;
 mod export;
 mod fake_window;
 mod tray;
@@ -54,6 +55,7 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
@@ -2078,11 +2080,9 @@ pub async fn run() {
             general_settings::init(&app);
             fake_window::init(&app);
 
-            // this doesn't work in dev on mac, just a fact of deeplinks
+            // this doesn't work in dev on mac, just a fact of life
             app.deep_link().on_open_url(|event| {
-                // TODO: handle deep link for auth
-                dbg!(event.id());
-                dbg!(event.urls());
+                deeplink_actions::handle(app.app_handle(), dbg!(event.urls()));
             });
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
@@ -2213,17 +2213,6 @@ pub async fn run() {
             AuthenticationInvalid::listen_any_spawn(&app, |_, app| async move {
                 delete_auth_open_signin(app).await.ok();
             });
-
-            app_handle.deep_link().on_open_url(|event| {
-
-                //
-            });
-
-            app_handle.deep_link().on_open_url(|event| {
-
-                //
-            });
-
             Ok(())
         })
         .on_window_event(|window, event| {
