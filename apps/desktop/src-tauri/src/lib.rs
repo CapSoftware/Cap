@@ -56,6 +56,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
