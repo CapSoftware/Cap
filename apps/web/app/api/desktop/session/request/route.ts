@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
   }
 
   const returnUrl = new URL(
-    `http://127.0.0.1:${port}?token=${tokenValue}&expires=${decodedToken?.exp}&user_id=${user.id}`
+    `cap-desktop://signin?token=${tokenValue}&expires=${decodedToken?.exp}&user_id=${user.id}`
   );
 
   return Response.redirect(returnUrl.href);

@@ -32,7 +32,13 @@
     "deep-link": {
       "desktop": {
         "schemes": ["cap-desktop"]
-      }
+      },
+      "mobile": [
+        {
+          "host": "cap.so",
+          "pathPrefix": ["/signin"]
+        }
+      ]
     }
   },
   "bundle": {

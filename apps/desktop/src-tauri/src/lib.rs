@@ -2047,6 +2047,7 @@ pub async fn run() {
     }
 
     builder
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -2057,7 +2058,6 @@ pub async fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(flags::plugin::init())
-        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler({
             let handler = specta_builder.invoke_handler();
 
@@ -2075,13 +2075,6 @@ pub async fn run() {
             hotkeys::init(&app);
             general_settings::init(&app);
             fake_window::init(&app);
-
-            // this doesn't work in dev on mac, just a fact of deeplinks
-            app.deep_link().on_open_url(|event| {
-                // TODO: handle deep link for auth
-                dbg!(event.id());
-                dbg!(event.urls());
-            });
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
                 sentry::configure_scope(|scope| {
