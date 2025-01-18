@@ -1,12 +1,21 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 
+use tokio::sync::RwLock;
 use web_api::ManagerExt;
 
-use crate::web_api;
+use crate::{web_api, MutableState};
+
+#[derive(Serialize, Deserialize, Type, Debug)]
+pub enum AuthState {
+    SignedIn,
+    Listening,
+}
 
 #[derive(Serialize, Deserialize, Type, Debug)]
 pub struct AuthStore {
@@ -112,6 +121,10 @@ impl AuthStore {
         });
 
         store.set("auth", json!(value));
+
+        let app_state = app.state::<Arc<RwLock<crate::App>>>();
+        app_state.blocking_write().auth_state = Some(AuthState::SignedIn);
+
         store.save().map_err(|e| e.to_string())
     }
 }

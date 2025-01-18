@@ -1,7 +1,10 @@
-use futures::TryFutureExt;
-use tauri::{AppHandle, Url};
+use std::sync::Arc;
 
-use crate::auth::AuthStore;
+use futures::TryFutureExt;
+use tauri::{AppHandle, Manager, Url};
+use tokio::sync::RwLock;
+
+use crate::auth::{AuthState, AuthStore};
 
 #[derive(Debug)]
 enum CaptureMode {
@@ -51,7 +54,14 @@ impl TryFrom<&Url> for DeepLinkAction {
             "/oauth-signin" => Ok(DeepLinkAction::Oauth(AuthStore {
                 token: params
                     .get("token")
-                    .ok_or("Missing 'token' parameter for OAuth")?
+                    .and_then(|t| {
+                        if !t.is_empty() && t.len() >= 32 {
+                            Some(t)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or("Missing or incorrect 'token' parameter for OAuth")?
                     .to_string(),
                 user_id: Some(
                     params
@@ -109,8 +119,16 @@ impl DeepLinkAction {
     async fn handle(self, app: &AppHandle) -> Result<(), String> {
         match self {
             Self::Oauth(auth) => {
-                AuthStore::set(app, Some(auth))?;
-                Ok(())
+                let app_state = app.state::<Arc<RwLock<crate::App>>>();
+                let reader_guard = app_state.read().await;
+
+                match &reader_guard.auth_state {
+                    Some(AuthState::Listening) => {
+                        AuthStore::set(app, Some(auth))?;
+                        Ok(())
+                    }
+                    None | Some(_) => Err("Not listening for OAuth events".into()),
+                }
             }
             _ => Err("Not implemented".into()),
             // DeepLinkAction::StartRecording {

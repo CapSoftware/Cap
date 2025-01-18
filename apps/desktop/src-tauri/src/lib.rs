@@ -83,6 +83,8 @@ pub struct App {
     current_recording: Option<cap_recording::ActorHandle>,
     #[serde(skip)]
     pre_created_video: Option<PreCreatedVideo>,
+    #[serde(skip)]
+    auth_state: Option<auth::AuthState>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -2114,6 +2116,7 @@ pub async fn run() {
                     },
                     current_recording: None,
                     pre_created_video: None,
+                    auth_state: None,
                 })));
 
                 app.manage(Arc::new(RwLock::new(
