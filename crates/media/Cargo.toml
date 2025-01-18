@@ -5,16 +5,18 @@ description = "A modular multimedia processing library"
 edition = "2021"
 rust-version = "1.80"
 
+[features]
+default = []
+debug-logging = [] # Feature flag to control debug logging
+
 [dependencies]
-anyhow.workspace = true
 cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
 cap-gpu-converters = { path = "../gpu-converters" }
 cpal.workspace = true
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
-ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
-flume = "0.11.0"
+flume.workspace = true
 indexmap = "2.5.0"
 nokhwa = { workspace = true, features = ["input-native", "serialize"] }
 num-traits = "0.2.19"
@@ -23,9 +25,10 @@ scap.workspace = true
 serde = { version = "1", features = ["derive"] }
 specta.workspace = true
 tempfile = "3.12.0"
-thiserror = "1.0"
-tracing = "0.1"
+thiserror.workspace = true
+tracing = { version = "0.1", features = ["release_max_level_info"] }
 futures = "0.3.31"
+axum = { version = "0.7.9", features = ["macros", "ws"] }
 tokio.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -36,7 +39,19 @@ objc = "0.2.7"
 objc-foundation = "0.1.1"
 objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
 nokhwa-bindings-macos.workspace = true
-cidre = { git = "https://github.com/yury/cidre", rev = "1e008bec49a0f97aeaaea6130a0ba20fe00aa03b" }
+cidre = { git = "https://github.com/yury/cidre", rev = "1e008bec49a0f97aeaaea6130a0ba20fe00aa03b", default-features = false, features = [
+	"private",
+
+	"blocks",
+	"async",
+
+	"av",
+	"ca",
+	"cm",
+	"dispatch",
+
+	"macos_13_0",
+] }
 screencapturekit = "0.2.8"
 
 [target.'cfg(target_os = "windows")'.dependencies]

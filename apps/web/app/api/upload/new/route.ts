@@ -19,12 +19,7 @@ export async function POST(request: NextRequest) {
   if (!user || !awsRegion || !awsBucket || !filename || !blobData) {
     console.error("Missing required data in /api/upload/new/route.ts");
 
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
 
   const fullFilepath = `${user.id}/${videoId}/${filename}`;
@@ -44,22 +39,10 @@ export async function POST(request: NextRequest) {
   if (!upload) {
     console.error("Upload failed");
 
-    return new Response(JSON.stringify({ error: true }), {
-      status: 500,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 500 });
   }
 
   console.log("Upload successful");
 
-  return new Response(
-    JSON.stringify({
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    })
-  );
+  return Response.json(true, { status: 200 });
 }

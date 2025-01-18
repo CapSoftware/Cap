@@ -7,8 +7,10 @@ use ffmpeg::{
     codec::{codec::Codec, context, encoder},
     format::{self},
     threading::Config,
-    Dictionary,
+    Dictionary, Rescale,
 };
+use ffmpeg_sys_next as sys;
+use tracing::{debug, info, trace};
 
 use super::Output;
 
@@ -18,6 +20,7 @@ pub struct H264Encoder {
     output_ctx: format::context::Output,
     last_pts: Option<i64>,
     config: VideoInfo,
+    frame_count: i64,
 }
 
 impl H264Encoder {
@@ -52,8 +55,8 @@ impl H264Encoder {
 
         let mut output_stream = output_ctx.add_stream(codec)?;
         output_stream.set_time_base(config.frame_rate.invert());
+        output_stream.set_rate(config.frame_rate);
         output_stream.set_parameters(&video_encoder);
-        // TODO: Move this to after pipeline start maybe?
         output_ctx.write_header()?;
 
         Ok(Self {
@@ -62,24 +65,25 @@ impl H264Encoder {
             output_ctx,
             last_pts: None,
             config,
+            frame_count: 0,
         })
     }
 
-    fn queue_frame(&mut self, frame: FFVideo) {
+    fn queue_frame(&mut self, mut frame: FFVideo) {
+        frame.set_pts(Some(self.frame_count));
+        self.frame_count += 1;
         self.encoder.send_frame(&frame).unwrap();
     }
 
     fn process_frame(&mut self) {
         let mut encoded_packet = FFPacket::empty();
 
-        // TODO: Handle errors that are not EGAIN/"needs more data"
         while self.encoder.receive_packet(&mut encoded_packet).is_ok() {
             encoded_packet.set_stream(0);
             encoded_packet.rescale_ts(
                 self.encoder.time_base(),
                 self.output_ctx.stream(0).unwrap().time_base(),
             );
-            // TODO: Possibly move writing to disk to its own file, to increase encoding throughput?
             encoded_packet
                 .write_interleaved(&mut self.output_ctx)
                 .unwrap();
@@ -89,6 +93,23 @@ impl H264Encoder {
     fn finish(&mut self) {
         self.encoder.send_eof().unwrap();
         self.process_frame();
+
+        // Set the duration in the output container's stream
+        if let Some(stream) = self.output_ctx.stream(0) {
+            let duration = self
+                .frame_count
+                .rescale(self.config.frame_rate.invert(), stream.time_base());
+            unsafe {
+                let stream_ptr = stream.as_ptr() as *mut sys::AVStream;
+                (*stream_ptr).duration = duration;
+                (*stream_ptr).time_base = stream.time_base().into();
+                (*stream_ptr).nb_frames = self.frame_count;
+                (*stream_ptr).start_time = 0;
+                (*stream_ptr).r_frame_rate = self.config.frame_rate.into();
+                (*stream_ptr).avg_frame_rate = self.config.frame_rate.into();
+            }
+        }
+
         self.output_ctx.write_trailer().unwrap();
     }
 }
@@ -101,7 +122,7 @@ impl PipelineSinkTask for H264Encoder {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         input: flume::Receiver<Self::Input>,
     ) {
-        println!("Starting {} video encoding thread", self.tag);
+        trace!("Starting {} video encoding thread", self.tag);
         ready_signal.send(Ok(())).unwrap();
 
         while let Ok(frame) = input.recv() {
@@ -109,10 +130,10 @@ impl PipelineSinkTask for H264Encoder {
             self.process_frame();
         }
 
-        println!("Received last {} frame. Finishing up encoding.", self.tag);
+        trace!("Received last {} frame. Finishing up encoding.", self.tag);
         self.finish();
 
-        println!("Shutting down {} video encoding thread", self.tag);
+        info!("Shut down {} video encoding thread", self.tag);
     }
 }
 

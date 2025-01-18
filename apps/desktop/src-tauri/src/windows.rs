@@ -1,24 +1,21 @@
 #![allow(unused_mut)]
-use std::path::PathBuf;
+#![allow(unused_imports)]
 
+use crate::{fake_window, general_settings::AppTheme};
+use cap_flags::FLAGS;
+use serde::Deserialize;
+use specta::Type;
+use std::{path::PathBuf, str::FromStr};
 use tauri::{
     AppHandle, LogicalPosition, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
 
+#[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
-#[derive(Clone)]
-pub enum CapWindow {
-    Setup,
-    Main,
-    Settings { page: Option<String> },
-    Editor { project_id: String },
-    PrevRecordings,
-    WindowCaptureOccluder,
-    Camera { ws_port: u16 },
-    InProgressRecording { position: Option<(f64, f64)> },
-    Upgrade,
-}
+#[cfg(target_os = "windows")]
+const WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE: tauri::LogicalSize<f64> =
+    tauri::LogicalSize::new(12.0, 35.0);
 
 #[derive(Clone)]
 pub enum CapWindowId {
@@ -27,43 +24,56 @@ pub enum CapWindowId {
     Main,
     Settings,
     Editor { project_id: String },
-    PrevRecordings,
+    RecordingsOverlay,
     WindowCaptureOccluder,
     Camera,
     InProgressRecording,
     Upgrade,
+    SignIn,
 }
 
-impl CapWindowId {
-    pub fn from_label(label: &str) -> Self {
-        match label {
+impl FromStr for CapWindowId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "setup" => Self::Setup,
             "main" => Self::Main,
             "settings" => Self::Settings,
             "camera" => Self::Camera,
             "window-capture-occluder" => Self::WindowCaptureOccluder,
             "in-progress-recording" => Self::InProgressRecording,
-            "prev-recordings" => Self::PrevRecordings,
+            "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
+            "signin" => Self::SignIn,
             s if s.starts_with("editor-") => Self::Editor {
                 project_id: s.replace("editor-", ""),
             },
-            _ => unreachable!("unknown window label: {}", label),
+            _ => return Err(format!("unknown window label: {}", s)),
+        })
+    }
+}
+
+impl std::fmt::Display for CapWindowId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Setup => write!(f, "setup"),
+            Self::Main => write!(f, "main"),
+            Self::Settings => write!(f, "settings"),
+            Self::Camera => write!(f, "camera"),
+            Self::WindowCaptureOccluder => write!(f, "window-capture-occluder"),
+            Self::InProgressRecording => write!(f, "in-progress-recording"),
+            Self::RecordingsOverlay => write!(f, "recordings-overlay"),
+            Self::Upgrade => write!(f, "upgrade"),
+            Self::SignIn => write!(f, "signin"),
+            Self::Editor { project_id } => write!(f, "editor-{}", project_id),
         }
     }
+}
 
+impl CapWindowId {
     pub fn label(&self) -> String {
-        match self {
-            Self::Setup => "setup".to_string(),
-            Self::Main => "main".to_string(),
-            Self::Settings => "settings".to_string(),
-            Self::Camera => "camera".to_string(),
-            Self::WindowCaptureOccluder => "window-capture-occluder".to_string(),
-            Self::InProgressRecording => "in-progress-recording".to_string(),
-            Self::PrevRecordings => "prev-recordings".to_string(),
-            Self::Upgrade => "upgrade".to_string(),
-            Self::Editor { project_id } => format!("editor-{}", project_id),
-        }
+        self.to_string()
     }
 
     pub fn title(&self) -> String {
@@ -73,6 +83,7 @@ impl CapWindowId {
             Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
+            Self::SignIn => "Cap Sign In".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -80,7 +91,12 @@ impl CapWindowId {
     pub fn activates_dock(&self) -> bool {
         matches!(
             self,
-            Self::Setup | Self::Main | Self::Editor { .. } | Self::Settings | Self::Upgrade
+            Self::Setup
+                | Self::Main
+                | Self::Editor { .. }
+                | Self::Settings
+                | Self::Upgrade
+                | Self::SignIn
         )
     }
 
@@ -89,95 +105,103 @@ impl CapWindowId {
         app.get_webview_window(&label)
     }
 
+    #[cfg(target_os = "macos")]
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
-            Self::Camera | Self::WindowCaptureOccluder | Self::PrevRecordings => None,
-            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.5))),
+            Self::Editor { .. } => Some(Some(LogicalPosition::new(20.0, 40.0))),
+            Self::Setup => Some(Some(LogicalPosition::new(14.0, 24.0))),
             Self::InProgressRecording => Some(Some(LogicalPosition::new(-100.0, -100.0))),
+            Self::Camera | Self::WindowCaptureOccluder | Self::RecordingsOverlay => None,
             _ => Some(None),
         }
     }
+
+    pub fn min_size(&self) -> Option<(f64, f64)> {
+        Some(match self {
+            Self::Setup => (600.0, 600.0),
+            Self::Main => (300.0, 360.0),
+            Self::SignIn => (300.0, 360.0),
+            Self::Editor { .. } => (900.0, 800.0),
+            Self::Settings => (600.0, 450.0),
+            Self::Camera => (460.0, 920.0),
+            _ => return None,
+        })
+    }
 }
 
-impl CapWindow {
-    pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
-        let label = self.id().label();
-        app.get_webview_window(&label)
-    }
+#[derive(Clone, Type, Deserialize)]
+pub enum ShowCapWindow {
+    Setup,
+    Main,
+    Settings { page: Option<String> },
+    Editor { project_id: String },
+    PrevRecordings,
+    WindowCaptureOccluder,
+    Camera { ws_port: u16 },
+    InProgressRecording { position: Option<(f64, f64)> },
+    Upgrade,
+    SignIn,
+}
 
+impl ShowCapWindow {
     pub fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
-        if let Some(window) = self.get(app) {
-            window.show().ok();
+        if let Some(window) = self.id().get(app) {
             window.set_focus().ok();
-
             return Ok(window);
         }
 
         let id = self.id();
-
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
-            Self::Setup => {
-                let mut window_builder = self
-                    .window_builder(app, "/setup")
-                    .inner_size(600.0, 600.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .center()
-                    .focused(true)
-                    .maximizable(false)
-                    .theme(Some(tauri::Theme::Light))
-                    .visible(true)
-                    .shadow(true);
-
-                let window = window_builder.build()?;
-                window.set_focus().ok();
-                window
-            }
-            Self::Main => {
-                let mut window_builder = self
-                    .window_builder(app, "/")
-                    .inner_size(300.0, 360.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .maximizable(false)
-                    .maximized(false)
-                    .theme(Some(tauri::Theme::Light));
-
-                window_builder.build()?
-            }
-            Self::Settings { page } => {
-                let mut window_builder = self
-                    .window_builder(
-                        app,
-                        format!("/settings/{}", page.clone().unwrap_or_default()),
-                    )
-                    .min_inner_size(600.0, 450.0)
-                    .resizable(true)
-                    .maximized(false);
-
-                window_builder.build()?
-            }
-            Self::Editor { project_id } => {
-                let mut window_builder = self
-                    .window_builder(app, format!("/editor?id={project_id}"))
-                    .inner_size(1150.0, 800.0)
-                    .maximizable(true)
-                    .theme(Some(tauri::Theme::Light));
-
-                window_builder.build()?
-            }
-            Self::Upgrade => {
-                let mut window_builder = self
-                    .window_builder(app, "/upgrade")
-                    .inner_size(800.0, 850.0)
-                    .resizable(false)
-                    .maximized(false)
-                    .transparent(true);
-
-                window_builder.build()?
-            }
+            Self::Setup => self
+                .window_builder(app, "/setup")
+                .resizable(false)
+                .maximized(false)
+                .center()
+                .focused(true)
+                .maximizable(false)
+                .shadow(true)
+                .build()?,
+            Self::Main => self
+                .window_builder(app, "/")
+                .resizable(false)
+                .maximized(false)
+                .maximizable(false)
+                .center()
+                .build()?,
+            Self::SignIn => self
+                .window_builder(app, "/signin")
+                .resizable(false)
+                .maximized(false)
+                .maximizable(false)
+                .center()
+                .build()?,
+            Self::Settings { page } => self
+                .window_builder(
+                    app,
+                    format!("/settings/{}", page.clone().unwrap_or_default()),
+                )
+                .resizable(true)
+                .maximized(false)
+                .center()
+                .build()?,
+            Self::Editor { project_id } => self
+                .window_builder(app, format!("/editor?id={project_id}"))
+                .inner_size(1150.0, 800.0)
+                .maximizable(true)
+                .center()
+                .build()?,
+            Self::Upgrade => self
+                .window_builder(app, "/upgrade")
+                .inner_size(800.0, 800.0)
+                .resizable(false)
+                .focused(true)
+                .always_on_top(true)
+                .maximized(false)
+                .transparent(true)
+                .center()
+                .build()?,
             Self::Camera { ws_port } => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
@@ -187,12 +211,9 @@ impl CapWindow {
                     .resizable(false)
                     .shadow(false)
                     .fullscreen(false)
-                    .decorations(false)
                     .always_on_top(true)
                     .content_protected(true)
                     .visible_on_all_workspaces(true)
-                    .min_inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
-                    .inner_size(WINDOW_SIZE, WINDOW_SIZE * 2.0)
                     .skip_taskbar(true)
                     .position(
                         100.0,
@@ -245,8 +266,16 @@ impl CapWindow {
             Self::InProgressRecording {
                 position: _position,
             } => {
-                let width = 160.0;
-                let height = 40.0;
+                let mut width = 180.0;
+                if FLAGS.pause_resume {
+                    width += 32.0;
+                }
+                let mut height = 40.0;
+                #[cfg(target_os = "windows")]
+                {
+                    width -= WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.width;
+                    height -= WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.height;
+                }
 
                 self.window_builder(app, "/in-progress-recording")
                     .maximized(false)
@@ -254,6 +283,7 @@ impl CapWindow {
                     .fullscreen(false)
                     .shadow(true)
                     .always_on_top(true)
+                    .transparent(true)
                     .visible_on_all_workspaces(true)
                     .content_protected(true)
                     .inner_size(width, height)
@@ -261,32 +291,28 @@ impl CapWindow {
                         ((monitor.size().width as f64) / monitor.scale_factor() - width) / 2.0,
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
-                    .visible(false)
-                    .theme(Some(tauri::Theme::Dark))
                     .skip_taskbar(true)
                     .build()?
             }
             Self::PrevRecordings => {
-                let mut window_builder = self
-                    .window_builder(app, "/prev-recordings")
+                let window = self
+                    .window_builder(app, "/recordings-overlay")
                     .maximized(false)
                     .resizable(false)
                     .fullscreen(false)
-                    .decorations(false)
                     .shadow(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .accept_first_mouse(true)
                     .content_protected(true)
                     .inner_size(
-                        350.0,
+                        (monitor.size().width as f64) / monitor.scale_factor(),
                         (monitor.size().height as f64) / monitor.scale_factor(),
                     )
                     .skip_taskbar(true)
                     .position(0.0, 0.0)
-                    .transparent(true);
-
-                let window = window_builder.build()?;
+                    .transparent(true)
+                    .build()?;
 
                 #[cfg(target_os = "macos")]
                 {
@@ -315,10 +341,55 @@ impl CapWindow {
 		                }).ok();
                 }
 
+                println!("about to spawn fake window listener");
+
+                fake_window::spawn_fake_window_listener(app.clone(), window.clone());
+
                 window
             }
         };
 
+        window.hide().ok();
+
+        // TODO(Ilya): Remove once Tao is updated to `0.31.0`
+        #[cfg(target_os = "windows")]
+        {
+            use tauri_plugin_positioner::{Position, WindowExt};
+
+            if matches!(
+                self,
+                Self::Setup
+                    | Self::Main
+                    | Self::Editor { .. }
+                    | Self::Settings { .. }
+                    | Self::Upgrade
+            ) {
+                let _ = window.move_window(Position::Center);
+            }
+
+            if matches!(self, Self::InProgressRecording { .. }) {
+                let _ = window.move_window(Position::BottomCenter);
+
+                if let Ok(outer_size) = window.outer_size() {
+                    let screen_position = monitor.position();
+                    let window_size = tauri::PhysicalSize::<i32> {
+                        width: outer_size.width as i32,
+                        height: outer_size.height as i32,
+                    };
+                    let screen_size = tauri::PhysicalSize::<i32> {
+                        width: monitor.size().width as i32,
+                        height: monitor.size().height as i32,
+                    };
+
+                    let _ = window.set_position(tauri::PhysicalPosition {
+                        x: screen_position.x + ((screen_size.width / 2) - (window_size.width / 2)),
+                        y: screen_size.height - (window_size.height - screen_position.y) - 120,
+                    });
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
         if let Some(position) = id.traffic_lights_position() {
             add_traffic_lights(&window, position);
         }
@@ -339,12 +410,43 @@ impl CapWindow {
             .accept_first_mouse(true)
             .shadow(true);
 
+        if let Some(min) = id.min_size() {
+            // TODO(Ilya): Remove once Tao is updated to `0.31.0`
+            // currently, undecorated windows with shadows get the invisible bounds of the titlebar and window frame added to the inner size
+            #[cfg(target_os = "windows")]
+            let size = if matches!(
+                self,
+                Self::Setup
+                    | Self::Main
+                    | Self::Editor { .. }
+                    | Self::Settings { .. }
+                    | Self::InProgressRecording { .. }
+                    | Self::Upgrade
+            ) {
+                (
+                    min.0 - WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.width,
+                    min.1 - WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.height,
+                )
+            } else {
+                min
+            };
+
+            #[cfg(not(target_os = "windows"))]
+            let size = min;
+
+            builder = builder
+                .inner_size(size.0, size.1)
+                .min_inner_size(size.0, size.1);
+        }
+
         #[cfg(target_os = "macos")]
         {
             if id.traffic_lights_position().is_some() {
                 builder = builder
                     .hidden_title(true)
                     .title_bar_style(tauri::TitleBarStyle::Overlay);
+            } else {
+                builder = builder.decorations(false)
             }
         }
 
@@ -358,48 +460,61 @@ impl CapWindow {
 
     pub fn id(&self) -> CapWindowId {
         match self {
-            CapWindow::Setup => CapWindowId::Setup,
-            CapWindow::Main => CapWindowId::Main,
-            CapWindow::Settings { .. } => CapWindowId::Settings,
-            CapWindow::Editor { project_id } => CapWindowId::Editor {
+            ShowCapWindow::Setup => CapWindowId::Setup,
+            ShowCapWindow::Main => CapWindowId::Main,
+            ShowCapWindow::Settings { .. } => CapWindowId::Settings,
+            ShowCapWindow::Editor { project_id } => CapWindowId::Editor {
                 project_id: project_id.clone(),
             },
-            CapWindow::PrevRecordings => CapWindowId::PrevRecordings,
-            CapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
-            CapWindow::Camera { .. } => CapWindowId::Camera,
-            CapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
-            CapWindow::Upgrade => CapWindowId::Upgrade,
+            ShowCapWindow::PrevRecordings => CapWindowId::RecordingsOverlay,
+            ShowCapWindow::WindowCaptureOccluder => CapWindowId::WindowCaptureOccluder,
+            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
+            ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
+            ShowCapWindow::Upgrade => CapWindowId::Upgrade,
+            ShowCapWindow::SignIn => CapWindowId::SignIn,
         }
     }
 }
+
+#[cfg(target_os = "macos")]
 fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<LogicalPosition<f64>>) {
+    use crate::platform::delegates;
+
+    let target_window = window.clone();
+    window
+        .run_on_main_thread(move || {
+            delegates::setup(
+                target_window.as_ref().window(),
+                controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
+            );
+
+            let c_win = target_window.clone();
+            target_window.on_window_event(move |event| match event {
+                tauri::WindowEvent::ThemeChanged(..) | tauri::WindowEvent::Focused(..) => {
+                    position_traffic_lights_impl(
+                        &c_win.as_ref().window(),
+                        controls_inset.map(LogicalPosition::from),
+                    );
+                }
+                _ => {}
+            });
+        })
+        .ok();
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_theme(window: tauri::Window, theme: AppTheme) {
+    let _ = window.set_theme(match theme {
+        AppTheme::System => None,
+        AppTheme::Light => Some(tauri::Theme::Light),
+        AppTheme::Dark => Some(tauri::Theme::Dark),
+    });
+
     #[cfg(target_os = "macos")]
-    {
-        use crate::platform::delegates;
-
-        let target_window = window.clone();
-        window
-            .run_on_main_thread(move || {
-                delegates::setup(
-                    target_window.as_ref().window(),
-                    controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-                );
-
-                let c_win = target_window.clone();
-                target_window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::ThemeChanged(..) = event {
-                        delegates::position_window_controls(
-                            delegates::UnsafeWindowHandle(
-                                c_win
-                                    .ns_window()
-                                    .expect("Failed to get native window handle"),
-                            ),
-                            &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-                        );
-                    }
-                });
-            })
-            .ok();
+    match CapWindowId::from_str(window.label()) {
+        Ok(win) if win.traffic_lights_position().is_some() => position_traffic_lights(window, None),
+        Ok(_) | Err(_) => {}
     }
 }
 
@@ -407,23 +522,34 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
 #[specta::specta]
 pub fn position_traffic_lights(window: tauri::Window, controls_inset: Option<(f64, f64)>) {
     #[cfg(target_os = "macos")]
-    {
-        use crate::platform::delegates::{position_window_controls, UnsafeWindowHandle};
-        let c_win = window.clone();
+    position_traffic_lights_impl(
+        &window,
+        controls_inset.map(LogicalPosition::from).or_else(|| {
+            // Attempt to get the default inset from the window's traffic lights position
+            CapWindowId::from_str(window.label())
+                .ok()
+                .and_then(|id| id.traffic_lights_position().flatten())
+        }),
+    );
+}
 
-        window
-            .run_on_main_thread(move || {
-                position_window_controls(
-                    UnsafeWindowHandle(
-                        c_win
-                            .ns_window()
-                            .expect("Failed to get native window handle"),
-                    ),
-                    &controls_inset
-                        .map(LogicalPosition::from)
-                        .unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
-                );
-            })
-            .ok();
-    }
+#[cfg(target_os = "macos")]
+fn position_traffic_lights_impl(
+    window: &tauri::Window,
+    controls_inset: Option<LogicalPosition<f64>>,
+) {
+    use crate::platform::delegates::{position_window_controls, UnsafeWindowHandle};
+    let c_win = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let ns_window = match c_win.ns_window() {
+                Ok(handle) => handle,
+                Err(_) => return,
+            };
+            position_window_controls(
+                UnsafeWindowHandle(ns_window),
+                &controls_inset.unwrap_or(DEFAULT_TRAFFIC_LIGHTS_INSET),
+            );
+        })
+        .ok();
 }

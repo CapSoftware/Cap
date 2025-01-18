@@ -15,34 +15,22 @@ export async function handlePut(request: NextRequest) {
   if (!user || !title || !videoId) {
     console.error("Missing required data in /api/video/title/route.ts");
 
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
 
   const query = await db.select().from(videos).where(eq(videos.id, videoId));
 
   if (query.length === 0) {
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
 
-  const ownerId = query[0].ownerId;
+  const video = query[0];
+  if (!video) {
+    return Response.json({ error: true }, { status: 401 });
+  }
 
-  if (ownerId !== userId) {
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+  if (video.ownerId !== userId) {
+    return Response.json({ error: true }, { status: 401 });
   }
 
   await db
@@ -52,14 +40,7 @@ export async function handlePut(request: NextRequest) {
     })
     .where(eq(videos.id, videoId));
 
-  return new Response(
-    JSON.stringify({
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    })
-  );
+  return Response.json(true, { status: 200 });
 }
 
 export const PUT = (request: NextRequest) => {

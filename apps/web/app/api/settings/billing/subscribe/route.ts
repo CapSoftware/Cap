@@ -16,26 +16,21 @@ export async function POST(request: NextRequest) {
 
   if (!priceId) {
     console.error("Price ID not found");
-    return new Response(JSON.stringify({ error: true }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
+    return Response.json({ error: true }, { status: 400 });
   }
 
   if (!user) {
     console.error("User not found");
-    return new Response(JSON.stringify({ error: true, auth: false }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
+    return Response.json({ error: true, auth: false }, { status: 401 });
   }
-  
-  if (isUserOnProPlan({ subscriptionStatus: user.stripeSubscriptionStatus as string })) {
+
+  if (
+    isUserOnProPlan({
+      subscriptionStatus: user.stripeSubscriptionStatus as string,
+    })
+  ) {
     console.error("User already has pro plan");
-    return new Response(JSON.stringify({ error: true, subscription: true }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
+    return Response.json({ error: true, subscription: true }, { status: 400 });
   }
 
   try {
@@ -73,22 +68,13 @@ export async function POST(request: NextRequest) {
 
     if (checkoutSession.url) {
       console.log("Successfully created checkout session");
-      return new Response(JSON.stringify({ url: checkoutSession.url }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return Response.json({ url: checkoutSession.url }, { status: 200 });
     }
 
     console.error("Checkout session created but no URL returned");
-    return new Response(JSON.stringify({ error: true }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
+    return Response.json({ error: true }, { status: 400 });
   } catch (error) {
     console.error("Error creating checkout session:", error);
-    return new Response(JSON.stringify({ error: true }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    return Response.json({ error: true }, { status: 500 });
   }
 }

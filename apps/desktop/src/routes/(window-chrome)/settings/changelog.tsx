@@ -1,30 +1,48 @@
-import { For, Show, createResource, ErrorBoundary, Suspense } from "solid-js";
-import { clientEnv } from "~/utils/env";
+import { For, Show, ErrorBoundary, Suspense, onMount } from "solid-js";
 import { SolidMarkdown } from "solid-markdown";
 import { createQuery } from "@tanstack/solid-query";
-import { AbsoluteInsetLoader } from "~/components/Loader";
 import { cx } from "cva";
 
-interface ChangelogEntry {
-  title: string;
-  app: string;
-  version: string;
-  publishedAt: string;
-  content: string;
-}
+import { AbsoluteInsetLoader } from "~/components/Loader";
+import { apiClient } from "~/utils/web-api";
 
 export default function Page() {
-  const changelog = createQuery(() => ({
-    queryKey: ["changelog"],
-    queryFn: async () => {
-      const response = await fetch(
-        `${clientEnv.VITE_SERVER_URL}/api/changelog?origin=${window.location.origin}`
-      );
-      if (!response.ok) throw new Error("Failed to fetch changelog");
+  console.log("[Changelog] Component mounted");
 
-      return (await response.json()) as Array<ChangelogEntry>;
-    },
-  }));
+  const changelog = createQuery(() => {
+    console.log("[Changelog] Creating query");
+    return {
+      queryKey: ["changelog"],
+      queryFn: async () => {
+        console.log("[Changelog] Executing query function");
+        try {
+          const response = await apiClient.desktop.getChangelogPosts({
+            query: { origin: window.location.origin },
+          });
+
+          console.log("[Changelog] Response", response);
+
+          if (response.status !== 200) {
+            console.error("[Changelog] Error status:", response.status);
+            throw new Error("Failed to fetch changelog");
+          }
+          return response.body;
+        } catch (error) {
+          console.error("[Changelog] Error in query:", error);
+          throw error;
+        }
+      },
+    };
+  });
+
+  onMount(() => {
+    console.log("[Changelog] Query state:", {
+      isLoading: changelog.isLoading,
+      isError: changelog.isError,
+      error: changelog.error,
+      data: changelog.data,
+    });
+  });
 
   let fadeIn = changelog.isLoading;
 
@@ -40,30 +58,32 @@ export default function Page() {
           >
             <ErrorBoundary
               fallback={(e) => (
-                <div class="text-red-500 font-medium">{e.toString()}</div>
+                <div class="text-[--text-primary] font-medium">
+                  {e.toString()}
+                </div>
               )}
             >
               <ul class="space-y-8">
                 <For each={changelog.data}>
                   {(entry, i) => (
-                    <li class="border-b-2 border-gray-200 pb-8 last:border-b-0">
+                    <li class="border-b-2 border-[--gray-200] pb-8 last:border-b-0">
                       <div class="flex mb-2">
                         <Show when={i() === 0}>
-                          <div class="bg-blue-400 text-white px-2 py-1 rounded-md uppercase font-bold">
+                          <div class="bg-[--blue-400] text-[--text-primary] px-2 py-1 rounded-md uppercase font-bold">
                             <span style="color: #fff" class="text-xs">
                               New
                             </span>
                           </div>
                         </Show>
                       </div>
-                      <h3 class="font-semibold text-gray-800 mb-2">
+                      <h3 class="font-semibold text-[--text-primary] mb-2">
                         {entry.title}
                       </h3>
-                      <div class="text-gray-500 text-sm mb-4">
+                      <div class="text-[--text-tertiary] text-sm mb-4">
                         Version {entry.version} -{" "}
                         {new Date(entry.publishedAt).toLocaleDateString()}
                       </div>
-                      <SolidMarkdown class="prose prose-sm max-w-none">
+                      <SolidMarkdown class="prose prose-sm max-w-none text-[--text-tertiary]">
                         {entry.content}
                       </SolidMarkdown>
                     </li>

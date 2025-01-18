@@ -1,7 +1,7 @@
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { VideoPlayer } from "./VideoPlayer";
 import { MP4VideoPlayer } from "./MP4VideoPlayer";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, forwardRef } from "react";
 import {
   Play,
   Pause,
@@ -14,7 +14,8 @@ import { LogoSpinner } from "@cap/ui";
 import { userSelectProps } from "@cap/database/auth/session";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import toast from "react-hot-toast";
-import { Tooltip } from "react-tooltip"; // Make sure to import this if not already present
+import { Tooltip } from "react-tooltip";
+import { apiClient } from "@/utils/web-api";
 
 declare global {
   interface Window {
@@ -37,15 +38,14 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 };
 
 // Update the component props type
-export const ShareVideo = ({
-  data,
-  user,
-  comments,
-}: {
-  data: typeof videos.$inferSelect;
-  user: typeof userSelectProps | null;
-  comments: CommentWithAuthor[];
-}) => {
+export const ShareVideo = forwardRef<
+  HTMLVideoElement,
+  {
+    data: typeof videos.$inferSelect;
+    user: typeof userSelectProps | null;
+    comments: CommentWithAuthor[];
+  }
+>(({ data, user, comments }, ref) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -66,6 +66,16 @@ export const ShareVideo = ({
   const [forceHideControls, setForceHideControls] = useState(false);
   const [isHoveringControls, setIsHoveringControls] = useState(false);
   const enterControlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      if (typeof ref === "function") {
+        ref(videoRef.current);
+      } else if (ref) {
+        ref.current = videoRef.current;
+      }
+    }
+  }, [ref]);
 
   const showControls = () => {
     setOverlayVisible(true);
@@ -139,21 +149,32 @@ export const ShareVideo = ({
 
   useEffect(() => {
     const onVideoLoadedMetadata = () => {
-      setVideoMetadataLoaded(true);
       if (videoRef.current) {
         setLongestDuration(videoRef.current.duration);
+        setVideoMetadataLoaded(true);
+        setIsLoading(false);
       }
     };
 
-    const videoElement = videoRef.current;
+    const onCanPlay = () => {
+      setVideoMetadataLoaded(true);
+      setIsLoading(false);
+    };
 
-    videoElement?.addEventListener("loadedmetadata", onVideoLoadedMetadata);
+    const videoElement = videoRef.current;
+    if (videoElement) {
+      videoElement.addEventListener("loadedmetadata", onVideoLoadedMetadata);
+      videoElement.addEventListener("canplay", onCanPlay);
+    }
 
     return () => {
-      videoElement?.removeEventListener(
-        "loadedmetadata",
-        onVideoLoadedMetadata
-      );
+      if (videoElement) {
+        videoElement.removeEventListener(
+          "loadedmetadata",
+          onVideoLoadedMetadata
+        );
+        videoElement.removeEventListener("canplay", onCanPlay);
+      }
     };
   }, []);
 
@@ -361,28 +382,54 @@ export const ShareVideo = ({
   };
 
   useEffect(() => {
-    const fetchSubtitles = () => {
-      fetch(`https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`)
-        .then((response) => response.text())
-        .then((text) => {
-          const parsedSubtitles = fromVtt(text);
-          setSubtitles(parsedSubtitles);
-        });
+    const fetchSubtitles = async () => {
+      let transcriptionUrl;
+
+      if (
+        data.bucket &&
+        data.awsBucket !== process.env.NEXT_PUBLIC_CAP_AWS_BUCKET
+      ) {
+        // For custom S3 buckets, fetch through the API
+        transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
+      } else {
+        // For default Cap storage
+        transcriptionUrl = `https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`;
+      }
+
+      try {
+        const response = await fetch(transcriptionUrl);
+        const text = await response.text();
+        const parsedSubtitles = fromVtt(text);
+        setSubtitles(parsedSubtitles);
+      } catch (error) {
+        console.error("Error fetching subtitles:", error);
+      }
     };
 
     if (data.transcriptionStatus === "COMPLETE") {
       fetchSubtitles();
     } else {
+      const startTime = Date.now();
+      const maxDuration = 2 * 60 * 1000;
+
       const intervalId = setInterval(() => {
-        fetch(`/api/video/transcribe/status?videoId=${data.id}`)
-          .then((response) => response.json())
-          .then(({ transcriptionStatus }) => {
+        if (Date.now() - startTime > maxDuration) {
+          clearInterval(intervalId);
+          return;
+        }
+
+        apiClient.video
+          .getTranscribeStatus({ query: { videoId: data.id } })
+          .then((data) => {
+            if (data.status !== 200) return;
+
+            const { transcriptionStatus } = data.body;
             if (transcriptionStatus === "PROCESSING") {
               setIsTranscriptionProcessing(true);
             } else if (transcriptionStatus === "COMPLETE") {
               fetchSubtitles();
               clearInterval(intervalId);
-            } else if (transcriptionStatus === "FAILED") {
+            } else if (transcriptionStatus === "ERROR") {
               clearInterval(intervalId);
             }
           });
@@ -729,4 +776,4 @@ export const ShareVideo = ({
       </div>
     </div>
   );
-};
+});

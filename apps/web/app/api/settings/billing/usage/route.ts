@@ -9,12 +9,7 @@ export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
 
   if (!user) {
-    return new Response(JSON.stringify({ auth: false }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ auth: false }, { status: 401 });
   }
 
   const numberOfVideos = await db
@@ -22,37 +17,34 @@ export async function GET(request: NextRequest) {
     .from(videos)
     .where(eq(videos.ownerId, user.id));
 
+  if (!numberOfVideos[0]) {
+    return Response.json(
+      { error: "Could not fetch video count" },
+      { status: 500 }
+    );
+  }
+
   if (
     isUserOnProPlan({
       subscriptionStatus: user.stripeSubscriptionStatus as string,
     })
   ) {
-    return new Response(
-      JSON.stringify({
+    return Response.json(
+      {
         subscription: true,
         videoLimit: 0,
         videoCount: numberOfVideos[0].count,
-      }),
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+      },
+      { status: 200 }
     );
   } else {
-    return new Response(
-      JSON.stringify({
+    return Response.json(
+      {
         subscription: false,
         videoLimit: 25,
         videoCount: numberOfVideos[0].count,
-      }),
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+      },
+      { status: 200 }
     );
   }
 }

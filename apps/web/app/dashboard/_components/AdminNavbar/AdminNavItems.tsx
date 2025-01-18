@@ -9,6 +9,8 @@ import {
   Settings,
   MessageSquare,
   Share2,
+  Check,
+  Building,
 } from "lucide-react";
 import Link from "next/link";
 import { classNames } from "@cap/utils";
@@ -22,6 +24,7 @@ import {
 } from "@cap/ui";
 import { Popover, PopoverContent, PopoverTrigger } from "@cap/ui";
 import { useState } from "react";
+
 import {
   Dialog,
   DialogContent,
@@ -34,20 +37,7 @@ import { signOut } from "next-auth/react";
 import { useSharedContext } from "@/app/dashboard/_components/DynamicSharedLayout";
 import { UsageButton } from "@/components/UsageButton";
 import { updateActiveSpace } from "./server";
-
-const Avatar = ({
-  children,
-  className,
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) => (
-  <div
-    className={`flex items-center justify-center rounded-lg bg-gray-200 ${className}`}
-  >
-    {children}
-  </div>
-);
+import { Avatar } from "@/app/s/[videoId]/_components/tabs/Activity";
 
 const Clapperboard = ({ className }: { className: string }) => (
   <svg
@@ -109,7 +99,19 @@ export const AdminNavItems = () => {
       icon: Download,
       subNav: [],
     },
-  ];
+    {
+      name: "Workspace",
+      href: `/dashboard/settings/workspace`,
+      icon: Building,
+      subNav: [],
+    },
+    user.email.endsWith("@cap.so") && {
+      name: "Admin",
+      href: "/dashboard/admin",
+      icon: () => {},
+      subNav: [],
+    },
+  ].filter(Boolean);
 
   const navItemClass =
     "flex items-center justify-start py-2 px-3 rounded-full outline-none tracking-tight w-full";
@@ -143,8 +145,10 @@ export const AdminNavItems = () => {
               <CommandInput placeholder="Search spaces..." />
               <CommandEmpty>No spaces found.</CommandEmpty>
               <CommandGroup>
-                {spaceData !== null &&
-                  spaceData?.map((space) => (
+                {spaceData?.map((space) => {
+                  const isSelected = activeSpace?.space.id === space.space.id;
+
+                  return (
                     <CommandItem
                       key={space.space.name + "-space"}
                       onSelect={async () => {
@@ -153,8 +157,16 @@ export const AdminNavItems = () => {
                       }}
                     >
                       {space.space.name}
+                      <Check
+                        size={18}
+                        className={classNames(
+                          "ml-auto",
+                          isSelected ? "opacity-100" : "opacity-0"
+                        )}
+                      />
                     </CommandItem>
-                  ))}
+                  );
+                })}
                 <DialogTrigger className="w-full">
                   <CommandItem className=" bg-filler aria-selected:bg-gray-200 rounded-lg">
                     <Plus className="w-4 h-auto mr-1" />
@@ -204,9 +216,7 @@ export const AdminNavItems = () => {
             <PopoverTrigger asChild>
               <div className="flex items-center justify-between cursor-pointer hover:bg-gray-100 p-2 rounded-lg transition-colors">
                 <div className="flex items-center">
-                  <Avatar className="h-8 w-8">
-                    <User className="h-4 w-4 text-gray-400" />
-                  </Avatar>
+                  <Avatar name={user.name ?? "User"} className="h-8 w-8" />
                   <span className="ml-2 text-sm">{user.name ?? "User"}</span>
                 </div>
                 <MoreVertical className="h-5 w-5 text-gray-500 group-hover:text-gray-500" />

@@ -27,6 +27,19 @@ const nanoIdNullable = customType<{ data: string; notNull: false }>({
   },
 });
 
+// Add a custom type for encrypted strings
+const encryptedText = customType<{ data: string; notNull: true }>({
+  dataType() {
+    return 'text';
+  },
+});
+
+const encryptedTextNullable = customType<{ data: string; notNull: false }>({
+  dataType() {
+    return 'text';
+  },
+});
+
 export const users = mysqlTable(
   "users",
   {
@@ -119,8 +132,11 @@ export const spaces = mysqlTable(
     name: varchar("name", { length: 255 }).notNull(),
     ownerId: nanoId("ownerId").notNull(),
     metadata: json("metadata"),
+    allowedEmailDomain: varchar("allowedEmailDomain", { length: 255 }),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    workosOrganizationId: varchar("workosOrganizationId", { length: 255 }),
+    workosConnectionId: varchar("workosConnectionId", { length: 255 }),
   },
   (table) => ({
     ownerIdIndex: index("owner_id_idx").on(table.ownerId),
@@ -252,11 +268,13 @@ export const comments = mysqlTable(
 export const s3Buckets = mysqlTable("s3_buckets", {
   id: nanoId("id").notNull().primaryKey().unique(),
   ownerId: nanoId("ownerId").notNull(),
-  region: varchar("region", { length: 255 }).notNull(),
-  endpoint: text("endpoint"),
-  bucketName: varchar("bucketName", { length: 255 }).notNull(),
-  accessKeyId: varchar("accessKeyId", { length: 255 }).notNull(),
-  secretAccessKey: varchar("secretAccessKey", { length: 255 }).notNull(),
+  // Use encryptedText for sensitive fields
+  region: encryptedText("region").notNull(),
+  endpoint: encryptedTextNullable("endpoint"),
+  bucketName: encryptedText("bucketName").notNull(),
+  accessKeyId: encryptedText("accessKeyId").notNull(),
+  secretAccessKey: encryptedText("secretAccessKey").notNull(),
+  provider: text("provider").notNull().default("aws"),
 });
 
 export const commentsRelations = relations(comments, ({ one }) => ({

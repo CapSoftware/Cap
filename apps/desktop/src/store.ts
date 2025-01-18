@@ -1,10 +1,10 @@
 import { Store } from "@tauri-apps/plugin-store";
 
-import type {
-  AuthStore,
-  ProjectConfiguration,
-  HotkeysStore,
-  GeneralSettingsStore,
+import {
+  type AuthStore,
+  type ProjectConfiguration,
+  type HotkeysStore,
+  type GeneralSettingsStore,
 } from "~/utils/tauri";
 
 let _store: Promise<Store> | undefined;
@@ -19,7 +19,7 @@ const store = () => {
 export type PresetsStore = {
   presets: Array<{
     name: string;
-    config: ProjectConfiguration;
+    config: Omit<ProjectConfiguration, "timeline">;
   }>;
   default?: number;
 };
@@ -43,7 +43,7 @@ export const authStore = {
     await s.save();
   },
   listen: (fn: (data?: AuthStore | undefined) => void) =>
-    store().then((s) => s.onKeyChange<AuthStore>("presets", fn)),
+    store().then((s) => s.onKeyChange<AuthStore>("auth", fn)),
 };
 
 export const hotkeysStore = {
@@ -68,4 +68,8 @@ export const generalSettingsStore = {
     });
     await s.save();
   },
+  listen: (fn: (data?: GeneralSettingsStore | undefined) => void) =>
+    store().then((s) =>
+      s.onKeyChange<GeneralSettingsStore>("general_settings", fn)
+    ),
 };

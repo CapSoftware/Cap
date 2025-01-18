@@ -1,3 +1,4 @@
+use cap_project::Resolution;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -23,6 +24,38 @@ pub struct GeneralSettingsStore {
     // first launch: store won't exist so show startup
     #[serde(default = "true_b")]
     pub has_completed_startup: bool,
+    #[serde(default)]
+    pub theme: AppTheme,
+    #[serde(default)]
+    pub recording_config: Option<RecordingConfig>,
+}
+
+#[derive(Default, Debug, Copy, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AppTheme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingConfig {
+    pub fps: u32,
+    pub resolution: Resolution,
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            fps: 30,
+            resolution: Resolution {
+                width: 1920,
+                height: 1080,
+            },
+        }
+    }
 }
 
 fn true_b() -> bool {
@@ -66,4 +99,21 @@ pub fn init(app: &AppHandle) {
         .unwrap_or_default();
     app.manage(GeneralSettingsState::new(store));
     println!("GeneralSettingsState managed");
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_recording_config(app: AppHandle) -> Result<RecordingConfig, String> {
+    let settings = GeneralSettingsStore::get(&app)?;
+    Ok(settings
+        .and_then(|s| s.recording_config)
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_recording_config(app: AppHandle, config: RecordingConfig) -> Result<(), String> {
+    GeneralSettingsStore::update(&app, |settings| {
+        settings.recording_config = Some(config);
+    })
 }

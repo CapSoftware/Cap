@@ -55,12 +55,7 @@ export async function GET(req: NextRequest) {
   const user = await getCurrentUser();
 
   if (!user) {
-    return new Response(JSON.stringify({ error: true }), {
-      status: 401,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: true }, { status: 401 });
   }
 
   let isSubscribed = isUserOnProPlan({
@@ -82,7 +77,6 @@ export async function GET(req: NextRequest) {
       );
       if (activeSubscription) {
         isSubscribed = true;
-        // Update the user's subscription status in the database
         await db
           .update(users)
           .set({
@@ -92,13 +86,14 @@ export async function GET(req: NextRequest) {
           .where(eq(users.id, user.id));
       }
     } catch (error) {
-      console.error("Error fetching subscription from Stripe:", error);
+      console.error("[GET] Error fetching subscription from Stripe:", error);
     }
   }
 
   return new Response(
     JSON.stringify({
       upgraded: isSubscribed,
+      stripeSubscriptionStatus: user.stripeSubscriptionStatus,
     }),
     {
       status: 200,

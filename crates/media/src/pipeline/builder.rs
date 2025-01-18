@@ -1,6 +1,7 @@
 use flume::Receiver;
 use indexmap::IndexMap;
 use std::thread::{self, JoinHandle};
+use tracing::Instrument;
 
 use crate::pipeline::{
     clock::CloneFrom,
@@ -14,13 +15,13 @@ struct Task {
     join_handle: JoinHandle<()>,
 }
 
-pub struct PipelineBuilder<T: PipelineClock> {
+pub struct PipelineBuilder<T> {
     clock: T,
     control: ControlBroadcast,
     tasks: IndexMap<String, Task>,
 }
 
-impl<T: PipelineClock> PipelineBuilder<T> {
+impl<T> PipelineBuilder<T> {
     pub fn new(clock: T) -> Self {
         Self {
             clock,
@@ -60,8 +61,14 @@ impl<T: PipelineClock> PipelineBuilder<T> {
 
         let (ready_sender, ready_signal) = flume::bounded(1);
 
+        let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
+        let span = tracing::error_span!("pipeline", task = &name);
         let join_handle = thread::spawn(move || {
-            launch(ready_sender);
+            tracing::dispatcher::with_default(&dispatcher, || {
+                span.in_scope(|| {
+                    launch(ready_sender);
+                })
+            })
         });
         self.tasks.insert(
             name,
@@ -71,7 +78,9 @@ impl<T: PipelineClock> PipelineBuilder<T> {
             },
         );
     }
+}
 
+impl<T: PipelineClock> PipelineBuilder<T> {
     pub async fn build(self) -> Result<Pipeline<T>, MediaError> {
         let Self {
             clock,
@@ -105,14 +114,12 @@ impl<T: PipelineClock> PipelineBuilder<T> {
     }
 }
 
-pub struct PipelinePathBuilder<Clock: PipelineClock, PreviousOutput: Send> {
+pub struct PipelinePathBuilder<Clock, PreviousOutput: Send> {
     pipeline: PipelineBuilder<Clock>,
     next_input: Receiver<PreviousOutput>,
 }
 
-impl<Clock: PipelineClock, PreviousOutput: Send + 'static>
-    PipelinePathBuilder<Clock, PreviousOutput>
-{
+impl<Clock, PreviousOutput: Send + 'static> PipelinePathBuilder<Clock, PreviousOutput> {
     pub fn pipe<Output: Send + 'static>(
         self,
         name: impl Into<String>,

@@ -6,6 +6,8 @@ on: workflow_dispatch
 env:
   CN_APPLICATION: cap/cap
   APP_CARGO_TOML: apps/desktop/src-tauri/Cargo.toml
+  SENTRY_ORG: cap-s2
+  SENTRY_PROJECT: cap-desktop
 
 jobs:
   draft:
@@ -66,11 +68,18 @@ jobs:
 
             main();
 
-      - name: create draft release
+      - name: Create draft CN release
         uses: crabnebula-dev/cloud-release@v0
         with:
           command: release draft ${{ env.CN_APPLICATION }} ${{ steps.read_version.outputs.value }} --framework tauri
           api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Create draft GH release
+        # TODO: Change to stable version when available
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
 
   build:
     needs: draft
@@ -128,10 +137,12 @@ jobs:
       - name: Create .env file in root
         run: |
           echo "appVersion=${{ needs.draft.outputs.version }}" >> .env
-          echo "CAP_DESKTOP_SENTRY_URL=https://efd3156d9c0a8a49bee3ee675bec80d8@o4506859771527168.ingest.us.sentry.io/4506859844403200" >> .env
+          echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568" >> .env
           echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" >> .env
           echo 'NEXTAUTH_URL=${NEXT_PUBLIC_URL}' >> .env
           echo 'VITE_SERVER_URL=${NEXT_PUBLIC_URL}' >> .env
+          echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
+          echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
 
       - name: Copy .env to apps/desktop
         run: cp .env apps/desktop/.env
@@ -142,7 +153,7 @@ jobs:
       - name: Cargo clean
         run: cargo clean
 
-      - name: Build MacOS Apps
+      - name: Build macOS apps
         working-directory: apps/desktop
         run: |
           export TARGET_TRIPLE=${{ matrix.settings.target }}
@@ -164,8 +175,16 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: upload assets
+      - name: Upload assets
         uses: crabnebula-dev/cloud-release@v0
         with:
           command: release upload ${{ env.CN_APPLICATION }} "${{ needs.draft.outputs.version }}" --framework tauri
           api-key: ${{ secrets.CN_API_KEY }}
+
+      - name: Upload debug symbols to Sentry
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        working-directory: target
+        run: |
+          curl -sL https://sentry.io/get-cli/ | bash
+          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} Cap.dSYM

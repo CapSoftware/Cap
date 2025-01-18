@@ -24,7 +24,11 @@ import {
   Toggle,
   Slider,
 } from "./ui";
-import { DEFAULT_GRADIENT_FROM, DEFAULT_GRADIENT_TO } from "./projectConfig";
+import {
+  DEFAULT_GRADIENT_FROM,
+  DEFAULT_GRADIENT_TO,
+  DEFAULT_PROJECT_CONFIG,
+} from "./projectConfig";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -91,7 +95,9 @@ export function ConfigSidebar() {
             {
               id: "camera" as const,
               icon: IconCapCamera,
-              disabled: editorInstance.recordings.camera === null,
+              disabled: editorInstance.recordings.segments.every(
+                (s) => s.camera === null
+              ),
             },
             // {
             //   id: "transcript" as const,
@@ -445,9 +451,13 @@ export function ConfigSidebar() {
               </div>
             </div>
           </Field>
-          <Field name="Size" icon={<IconCapEnlarge />}>
+          <Field
+            name="Size"
+            icon={<IconCapEnlarge />}
+            value={`${project.camera.size}%`}
+          >
             <Slider
-              value={[project.camera.size ?? 30]}
+              value={[project.camera.size]}
               onChange={(v) => setProject("camera", "size", v[0])}
               minValue={20}
               maxValue={80}
@@ -455,9 +465,19 @@ export function ConfigSidebar() {
             />
           </Field>
           {window.FLAGS.zoom && (
-            <Field name="Size During Zoom" icon={<IconCapEnlarge />}>
+            <Field
+              name="Size During Zoom"
+              icon={<IconCapEnlarge />}
+              value={`${
+                project.camera.zoom_size ??
+                DEFAULT_PROJECT_CONFIG.camera.zoom_size
+              }%`}
+            >
               <Slider
-                value={[project.camera.zoom_size ?? 20]}
+                value={[
+                  project.camera.zoom_size ??
+                    DEFAULT_PROJECT_CONFIG.camera.zoom_size,
+                ]}
                 onChange={(v) => setProject("camera", "zoom_size", v[0])}
                 minValue={10}
                 maxValue={60}
@@ -467,7 +487,10 @@ export function ConfigSidebar() {
           )}
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
-              value={[project.camera.rounding ?? 100.0]}
+              value={[
+                project.camera.rounding ??
+                  DEFAULT_PROJECT_CONFIG.camera.rounding,
+              ]}
               onChange={(v) => setProject("camera", "rounding", v[0])}
               minValue={0}
               maxValue={100}
@@ -518,68 +541,87 @@ export function ConfigSidebar() {
           </Field>
         </KTabs.Content>
         <KTabs.Content value="cursor" class="flex flex-col gap-6">
-          <Field name="Cursor" icon={<IconCapCursor />}>
-            <ComingSoonTooltip>
-              <Subfield name="Hide cursor when not moving">
-                <Toggle disabled />
-              </Subfield>
-            </ComingSoonTooltip>
-          </Field>
-          <Field name="Size" icon={<IconCapEnlarge />}>
-            <Slider
-              value={[project.cursor.size]}
-              onChange={(v) => setProject("cursor", "size", v[0])}
-              minValue={20}
-              maxValue={300}
-              step={1}
-            />
-          </Field>
-          {window.FLAGS.zoom && (
-            <Field name="Animation Style" icon={<IconLucideRabbit />}>
-              <RadioGroup
-                defaultValue="regular"
-                value={project.cursor.animationStyle}
-                onChange={(value) => {
-                  console.log("Changing animation style to:", value);
-                  setProject(
-                    "cursor",
-                    "animationStyle",
-                    value as CursorAnimationStyle
-                  );
-                }}
-                class="flex flex-col gap-2"
-              >
-                {(
-                  Object.entries(CURSOR_ANIMATION_STYLES) as [
-                    CursorAnimationStyle,
-                    string
-                  ][]
-                ).map(([value, label]) => (
-                  <RadioGroup.Item value={value} class="flex items-center">
-                    <RadioGroup.ItemInput class="peer sr-only" />
-                    <RadioGroup.ItemControl
-                      class={cx(
-                        "w-4 h-4 rounded-full border border-gray-300 mr-2",
-                        "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
-                        "after:transition-colors after:duration-200",
-                        "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
-                        "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
-                        "peer-disabled:opacity-50"
-                      )}
-                    />
-                    <span
-                      class={cx(
-                        "text-gray-500",
-                        "peer-checked:text-gray-900",
-                        "peer-disabled:opacity-50"
-                      )}
+          {window.FLAGS.recordMouse ? (
+            <>
+              <Field name="Cursor" icon={<IconCapCursor />}>
+                <Subfield name="Hide cursor when not moving">
+                  <Toggle
+                    checked={project.cursor.hideWhenIdle}
+                    onChange={(v) => setProject("cursor", "hideWhenIdle", v)}
+                  />
+                </Subfield>
+              </Field>
+              <ComingSoonTooltip>
+                <Field name="Size" icon={<IconCapEnlarge />}>
+                  <Slider
+                    value={[project.cursor.size]}
+                    onChange={(v) => setProject("cursor", "size", v[0])}
+                    minValue={20}
+                    maxValue={300}
+                    step={1}
+                    disabled
+                  />
+                </Field>
+              </ComingSoonTooltip>
+              {window.FLAGS.zoom && (
+                <ComingSoonTooltip>
+                  <Field name="Animation Style" icon={<IconLucideRabbit />}>
+                    <RadioGroup
+                      defaultValue="regular"
+                      value={project.cursor.animationStyle}
+                      onChange={(value) => {
+                        console.log("Changing animation style to:", value);
+                        setProject(
+                          "cursor",
+                          "animationStyle",
+                          value as CursorAnimationStyle
+                        );
+                      }}
+                      class="flex flex-col gap-2"
+                      disabled
                     >
-                      {label}
-                    </span>
-                  </RadioGroup.Item>
-                ))}
-              </RadioGroup>
-            </Field>
+                      {(
+                        Object.entries(CURSOR_ANIMATION_STYLES) as [
+                          CursorAnimationStyle,
+                          string
+                        ][]
+                      ).map(([value, label]) => (
+                        <RadioGroup.Item
+                          value={value}
+                          class="flex items-center"
+                        >
+                          <RadioGroup.ItemInput class="peer sr-only" />
+                          <RadioGroup.ItemControl
+                            class={cx(
+                              "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                              "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                              "after:transition-colors after:duration-200",
+                              "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                              "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
+                              "peer-disabled:opacity-50"
+                            )}
+                          />
+                          <span
+                            class={cx(
+                              "text-gray-500",
+                              "peer-checked:text-gray-900",
+                              "peer-disabled:opacity-50"
+                            )}
+                          >
+                            {label}
+                          </span>
+                        </RadioGroup.Item>
+                      ))}
+                    </RadioGroup>
+                  </Field>
+                </ComingSoonTooltip>
+              )}
+            </>
+          ) : (
+            <div class="flex flex-col items-center justify-center gap-2 text-gray-400 p-4">
+              <IconCapCursor class="size-6" />
+              <span>Cursor settings coming soon</span>
+            </div>
           )}
         </KTabs.Content>
         <KTabs.Content value="hotkeys">
@@ -621,7 +663,7 @@ export function ConfigSidebar() {
           return (
             <div
               data-visible={state.timelineSelection?.type === "zoom"}
-              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-50 z-50 animate-in slide-in-from-bottom-2 fade-in"
+              class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-6 bg-gray-50 z-50 animate-in slide-in-from-bottom-2 fade-in"
             >
               <div class="flex flex-row justify-between items-center">
                 <div class="flex items-center gap-2">
@@ -633,6 +675,7 @@ export function ConfigSidebar() {
                   </EditorButton>
                 </div>
                 <EditorButton
+                  variant="danger"
                   onClick={() => {
                     const index = value().selection.index;
 
@@ -669,9 +712,95 @@ export function ConfigSidebar() {
                     )
                   }
                   minValue={1}
-                  maxValue={2.5}
+                  maxValue={4.5}
                   step={0.001}
                 />
+              </Field>
+              <Field name="Zoom Mode" icon={<IconCapSettings />}>
+                <KTabs class="space-y-6">
+                  <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
+                    <KTabs.Trigger
+                      value="auto"
+                      class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
+                      // onClick={() => setSelectedTab(item.id)}
+                      disabled
+                    >
+                      Auto
+                    </KTabs.Trigger>
+                    <KTabs.Trigger
+                      value="manual"
+                      class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
+                      // onClick={() => setSelectedTab(item.id)}
+                    >
+                      Manual
+                    </KTabs.Trigger>
+                    <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden">
+                      <div class="bg-gray-100 flex-1" />
+                    </KTabs.Indicator>
+                  </KTabs.List>
+                  <KTabs.Content value="manual">
+                    <Show
+                      when={(() => {
+                        const m = value().segment.mode;
+                        if (m === "auto") return;
+                        return m.manual;
+                      })()}
+                    >
+                      {(mode) => (
+                        <div class="w-full h-52 bg-gray-100 rounded-xl p-1">
+                          <div
+                            class="w-full h-full bg-blue-400 rounded-lg relative"
+                            onMouseDown={(downEvent) => {
+                              const bounds =
+                                downEvent.currentTarget.getBoundingClientRect();
+
+                              createRoot((dispose) => {
+                                createEventListenerMap(window, {
+                                  mouseup: () => dispose(),
+                                  mousemove: (moveEvent) => {
+                                    setProject(
+                                      "timeline",
+                                      "zoomSegments",
+                                      value().selection.index,
+                                      "mode",
+                                      "manual",
+                                      {
+                                        x: Math.max(
+                                          Math.min(
+                                            (moveEvent.clientX - bounds.left) /
+                                              bounds.width,
+                                            1
+                                          ),
+                                          0
+                                        ),
+                                        y: Math.max(
+                                          Math.min(
+                                            (moveEvent.clientY - bounds.top) /
+                                              bounds.height,
+                                            1
+                                          ),
+                                          0
+                                        ),
+                                      }
+                                    );
+                                  },
+                                });
+                              });
+                            }}
+                          >
+                            <div
+                              class="absolute w-6 h-6 rounded-full bg-gray-50 border border-gray-400 -translate-x-1/2 -translate-y-1/2"
+                              style={{
+                                left: `${mode().x * 100}%`,
+                                top: `${mode().y * 100}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </Show>
+                  </KTabs.Content>
+                </KTabs>
               </Field>
             </div>
           );
@@ -688,7 +817,7 @@ function RgbInput(props: {
   const [text, setText] = createWritableMemo(() => rgbToHex(props.value));
   let prevHex = rgbToHex(props.value);
 
-  let colorInput: HTMLInputElement;
+  let colorInput!: HTMLInputElement;
 
   return (
     <div class="flex flex-row items-center gap-[0.75rem] relative">
@@ -701,7 +830,7 @@ function RgbInput(props: {
         onClick={() => colorInput.click()}
       />
       <input
-        ref={colorInput!}
+        ref={colorInput}
         type="color"
         class="absolute left-0 bottom-0 w-[3rem] opacity-0"
         onChange={(e) => {
@@ -710,7 +839,7 @@ function RgbInput(props: {
         }}
       />
       <input
-        class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem]"
+        class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem] bg-gray-50"
         value={text()}
         onFocus={() => {
           prevHex = rgbToHex(props.value);

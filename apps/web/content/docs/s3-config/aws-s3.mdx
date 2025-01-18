@@ -1,0 +1,160 @@
+---
+title: "Cap Apps: S3 Config (AWS)"
+summary: "Connect your own S3 bucket to Cap and maintain 100% ownership over your data."
+tags: "Cap Apps"
+image: "/docs/s3-config/aws-s3.jpg"
+---
+
+# Connecting Your Amazon S3 Bucket to Cap Desktop
+
+> **TL;DR**: Open Cap Desktop → Cap Apps → S3 Config → Configure → Select Amazon S3 → Enter your AWS credentials → Configure bucket permissions → Save and test with a shareable link upload.
+>
+> **Note**: While this guide focuses on AWS S3, Cap supports any S3-compatible storage service (like Supabase, MinIO, DigitalOcean Spaces, or Backblaze B2). The setup process is similar - you'll just need the appropriate endpoint URL and credentials from your provider.
+
+## Step 1: Launch Cap Desktop and Access Cap Apps
+
+1. **Open the Cap Desktop App**: Click the Cap icon on your desktop or find it in your applications folder to launch the app.
+
+2. **Navigate to Cap Apps**: Once the app is open, locate the 'Cap Apps' tab in Settings.
+
+## Step 2: Click on S3 Config, and then Configure
+
+1. Click on S3 config
+
+2. Click on Configure
+
+3. Select Amazon S3 from the list of available services.
+
+## Step 3: Configure AWS Resources
+
+1. **Create S3 Bucket First**:
+
+   - Log into the [AWS Management Console](https://console.aws.amazon.com)
+   - Navigate to S3
+   - Click "Create bucket"
+   - Enter a unique bucket name (e.g., "my-cap-uploads")
+   - Choose your preferred AWS Region
+   - Under "Object Ownership", select "ACLs disabled"
+   - Under "Block Public Access settings", keep "Block all public access" enabled (recommended)
+   - Under "Bucket Versioning", select "Disable"
+   - Under "Default encryption", enable "Server-side encryption with Amazon S3 managed keys (SSE-S3)"
+   - Enable "Bucket Key"
+   - Keep all other settings as default
+   - Click "Create bucket" at the bottom of the page
+
+2. **Create IAM Policy**:
+
+   - Go to IAM in AWS Console
+   - Click "Policies" → "Create policy"
+   - Switch to the JSON editor
+   - Replace `BUCKET_NAME` with your bucket name and paste:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "s3:PutObject",
+           "s3:GetObject",
+           "s3:ListBucket",
+           "s3:PutObjectAcl"
+         ],
+         "Resource": ["arn:aws:s3:::BUCKET_NAME", "arn:aws:s3:::BUCKET_NAME/*"]
+       }
+     ]
+   }
+   ```
+
+   - Click "Next"
+   - Name the policy "CapAppS3Access"
+   - Add tags if desired
+   - Click "Create policy"
+
+3. **Create IAM User**:
+
+   - Still in IAM, click "Users" → "Create user"
+   - Set username as "cap-app-user"
+   - Click "Next"
+   - Choose "Attach policies directly"
+   - Search for and select the "CapAppS3Access" policy you just created
+   - Click through to review
+   - Create the user
+   - After creation, click on the username "cap-app-user" to open user details
+   - Scroll down to "Security credentials" section
+   - Click "Create access key"
+   - Choose "Application running outside AWS"
+   - Click "Next"
+   - (Optional) Add a description tag
+   - Click "Create access key"
+   - **IMPORTANT**: Save both the Access Key ID and Secret Access Key immediately - you won't be able to see the Secret Access Key again!
+   - Click "Done"
+
+4. **Configure Bucket Policy**:
+
+   - Return to your S3 bucket
+   - Go to "Permissions" tab
+   - Click "Edit" under "Bucket policy"
+   - Add this policy (replace `BUCKET_NAME` and `YOUR_ACCOUNT_ID`):
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Sid": "CapDesktopAppAccess",
+         "Effect": "Allow",
+         "Principal": {
+           "AWS": "arn:aws:iam::YOUR_ACCOUNT_ID:user/cap-app-user"
+         },
+         "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+         "Resource": ["arn:aws:s3:::BUCKET_NAME", "arn:aws:s3:::BUCKET_NAME/*"]
+       }
+     ]
+   }
+   ```
+
+5. **Configure CORS Settings**:
+
+   - In the same "Permissions" tab, scroll down to "Cross-origin resource sharing (CORS)"
+   - Click "Edit"
+   - Add the following CORS configuration:
+
+   ```json
+   [
+     {
+       "AllowedHeaders": ["*"],
+       "AllowedMethods": ["GET", "HEAD", "PUT"],
+       "AllowedOrigins": [
+         "https://cap.so",
+         "https://www.cap.so",
+         "https://cap.link",
+         "https://www.cap.link"
+       ],
+       "ExposeHeaders": [],
+       "MaxAgeSeconds": 3000
+     }
+   ]
+   ```
+
+   - Click "Save changes"
+
+## Step 4: Configure Cap Desktop
+
+1. Open Cap Desktop and navigate to S3 Config
+2. Enter the following details:
+   - Access Key ID (from IAM user creation)
+   - Secret Access Key (from IAM user creation)
+   - Endpoint (you can most likely keep this as default)
+   - Bucket Name: Your bucket name
+   - Region: Your bucket's region (e.g., us-east-1)
+
+## Step 5: Test and Save the Connection
+
+1. Test the Connection: Click on the 'Test Connection' button to verify that Cap can successfully connect to your S3 bucket.
+2. Save the Configuration: If the test is successful, save the connection settings. Your Amazon S3 bucket is now integrated with Cap Desktop.
+
+## Accessing Your S3 Files in Cap
+
+Once the connection is established and you have saved your configuration, all new shareable links you create will serve images and videos directly from your configured S3 bucket, giving you full control over your content delivery and storage.

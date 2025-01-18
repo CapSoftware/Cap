@@ -7,6 +7,8 @@ import {
   useQueryClient,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
   JSX,
@@ -17,6 +19,7 @@ import {
   createResource,
   createSignal,
   onMount,
+  onCleanup,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { fetch } from "@tauri-apps/plugin-http";
@@ -50,11 +53,12 @@ import {
 const getAuth = cache(async () => {
   const value = await authStore.get();
   const local = import.meta.env.VITE_LOCAL_MODE === "true";
-  if (!value && !local) return redirect("/signin");
-  const res = await fetch(`${clientEnv.VITE_SERVER_URL}/api/desktop/plan`, {
-    headers: { authorization: `Bearer ${value?.token}` },
+
+  const res = await apiClient.desktop.getUserPlan({
+    headers: await protectedHeaders(),
   });
   if (res.status !== 200 && !local) return redirect("/signin");
+
   return value;
 }, "getAuth");
 
@@ -65,15 +69,6 @@ export const route = {
 export default function () {
   const { options, setOptions } = createOptionsQuery();
   const currentRecording = createCurrentRecordingQuery();
-
-  events.showCapturesPanel.listen(() => {
-    commands.showPreviousRecordingsWindow();
-  });
-
-  onMount(async () => {
-    await commands.showPreviousRecordingsWindow();
-    // await commands.showNotificationsWindow();
-  });
 
   const isRecording = () => !!currentRecording.data;
 
@@ -87,6 +82,8 @@ export default function () {
     },
   }));
 
+  const [isUpgraded] = createResource(() => commands.checkUpgradedAndUpdate());
+
   createAsync(() => getAuth());
 
   createUpdateCheck();
@@ -97,11 +94,38 @@ export default function () {
 
       if (!cameraWindowActive) {
         console.log("cameraWindow not found");
-        setOptions({
+        setOptions.mutate({
           ...options.data,
         });
       }
     }
+
+    // Enforce window size with multiple safeguards
+    const currentWindow = await getCurrentWindow();
+    const MAIN_WINDOW_SIZE = { width: 300, height: 360 };
+
+    // Set initial size
+    currentWindow.setSize(
+      new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+    );
+
+    // Check size when app regains focus
+    const unlistenFocus = await currentWindow.onFocusChanged(
+      ({ payload: focused }) => {
+        if (focused) {
+          currentWindow.setSize(
+            new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+          );
+        }
+      }
+    );
+
+    // Listen for resize events
+    const unlistenResize = await currentWindow.onResized(() => {
+      currentWindow.setSize(
+        new LogicalSize(MAIN_WINDOW_SIZE.width, MAIN_WINDOW_SIZE.height)
+      );
+    });
 
     setTitlebar("hideMaximize", true);
     setTitlebar(
@@ -114,7 +138,7 @@ export default function () {
           variant="secondary"
           size="xs"
           onClick={() => {
-            commands.openSettingsWindow("feedback");
+            commands.showWindow({ Settings: { page: "feedback" } });
           }}
         >
           Feedback
@@ -122,18 +146,62 @@ export default function () {
         <ChangelogButton />
       </div>
     );
+
+    onCleanup(() => {
+      unlistenFocus();
+      unlistenResize();
+    });
   });
 
   return (
-    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-gray-50 h-full">
+    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
       <div class="flex items-center justify-between pb-[0.25rem]">
-        <IconCapLogoFull class="w-[90px] h-auto" />
+        <div class="flex items-center space-x-1">
+          <div class="*:w-[92px] *:h-auto text-[--text-primary] ">
+            <IconCapLogoFullDark class="dark:block hidden" />
+            <IconCapLogoFull class="dark:hidden block" />
+          </div>
+          <span
+            onClick={async () => {
+              if (!isUpgraded()) {
+                await commands.showWindow("Upgrade");
+              }
+            }}
+            class={`text-[0.6rem] ${
+              isUpgraded()
+                ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
+                : "bg-gray-200 cursor-pointer hover:bg-gray-300"
+            } rounded-lg px-1.5 py-0.5`}
+          >
+            {isUpgraded() ? "Pro" : "Upgrade to Pro"}
+          </span>
+        </div>
         <div class="flex items-center space-x-2">
           <Tooltip.Root openDelay={0}>
             <Tooltip.Trigger>
               <button
                 type="button"
-                onClick={() => commands.openSettingsWindow("recordings")}
+                onClick={() =>
+                  commands.showWindow({ Settings: { page: "apps" } })
+                }
+              >
+                <IconLucideLayoutGrid class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-[--gray-500] rounded shadow-lg animate-in fade-in duration-100">
+                Cap Apps
+                <Tooltip.Arrow class="fill-[--gray-500]" />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+          <Tooltip.Root openDelay={0}>
+            <Tooltip.Trigger>
+              <button
+                type="button"
+                onClick={() =>
+                  commands.showWindow({ Settings: { page: "recordings" } })
+                }
               >
                 <IconLucideSquarePlay class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
               </button>
@@ -150,7 +218,9 @@ export default function () {
             <Tooltip.Trigger>
               <button
                 type="button"
-                onClick={() => commands.openSettingsWindow("general")}
+                onClick={() =>
+                  commands.showWindow({ Settings: { page: "general" } })
+                }
               >
                 <IconCapSettings class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
               </button>
@@ -190,7 +260,7 @@ export default function () {
         href={`${import.meta.env.VITE_SERVER_URL}/dashboard`}
         target="_blank"
         rel="noreferrer"
-        class="text-gray-400 text-[0.875rem] mx-auto hover:text-gray-500 hover:underline"
+        class="text-[--text-tertiary] text-[0.875rem] mx-auto hover:text-[--text-primary] hover:underline"
       >
         Open Cap on Web
       </a>
@@ -224,6 +294,7 @@ import * as updater from "@tauri-apps/plugin-updater";
 import { makePersisted } from "@solid-primitives/storage";
 import titlebarState, { setTitlebar } from "~/utils/titlebar-state";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import { apiClient, protectedHeaders } from "~/utils/web-api";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -334,23 +405,19 @@ function CameraSelect(props: {
 
   type Option = { isCamera: boolean; name: string };
 
+  const [loading, setLoading] = createSignal(false);
   const onChange = async (item: Option | null) => {
     if (!item && permissions?.data?.camera !== "granted") {
       return requestPermission("camera");
     }
     if (!props.options) return;
 
-    if (!item || !item.isCamera) {
-      props.setOptions({
-        ...props.options,
-        cameraLabel: null,
-      });
-    } else {
-      props.setOptions({
-        ...props.options,
-        cameraLabel: item.name,
-      });
-    }
+    let cameraLabel = !item || !item.isCamera ? null : item.name;
+
+    setLoading(true);
+    props.setOptions
+      .mutateAsync({ ...props.options, cameraLabel })
+      .finally(() => setLoading(false));
   };
 
   const selectOptions = createMemo(() => [
@@ -362,9 +429,9 @@ function CameraSelect(props: {
     selectOptions()?.find((o) => o.name === props.options?.cameraLabel) ?? null;
 
   return (
-    <div class="flex flex-col gap-[0.25rem] items-stretch">
-      <label class="text-gray-400 text-[0.875rem]">Camera</label>
-      <KSelect<Option>
+    <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+      <label class="text-[--text-tertiary] text-[0.875rem]">Camera</label>
+      <KSelect<Option | null>
         options={selectOptions()}
         optionValue="name"
         optionTextValue="name"
@@ -375,7 +442,7 @@ function CameraSelect(props: {
         itemComponent={(props) => (
           <MenuItem<typeof KSelect.Item> as={KSelect.Item} item={props.item}>
             <KSelect.ItemLabel class="flex-1">
-              {props.item.rawValue.name}
+              {props.item.rawValue?.name}
             </KSelect.ItemLabel>
           </MenuItem>
         )}
@@ -389,10 +456,13 @@ function CameraSelect(props: {
           setOpen(isOpen);
         }}
       >
-        <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+        <KSelect.Trigger
+          disabled={loading()}
+          class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect"
+        >
           <IconCapCamera class="text-gray-400 size-[1.25rem]" />
-          <KSelect.Value<Option> class="flex-1 text-left truncate">
-            {(state) => <span>{state.selectedOption().name}</span>}
+          <KSelect.Value<Option | null> class="flex-1 text-left truncate">
+            {(state) => <span>{state.selectedOption()?.name}</span>}
           </KSelect.Value>
           <TargetSelectInfoPill
             value={props.options?.cameraLabel ?? null}
@@ -400,7 +470,7 @@ function CameraSelect(props: {
             requestPermission={() => requestPermission("camera")}
             onClear={() => {
               if (!props.options) return;
-              props.setOptions({
+              props.setOptions.mutate({
                 ...props.options,
                 cameraLabel: null,
               });
@@ -413,7 +483,7 @@ function CameraSelect(props: {
             class={topLeftAnimateClasses}
           >
             <MenuItemList<typeof KSelect.Listbox>
-              class="max-h-36 overflow-y-auto"
+              class="max-h-32 overflow-y-auto"
               as={KSelect.Listbox}
             />
           </PopperContent>
@@ -434,10 +504,16 @@ function MicrophoneSelect(props: {
   const currentRecording = createCurrentRecordingQuery();
 
   const [open, setOpen] = createSignal(false);
+  const [dbs, setDbs] = createSignal<number | undefined>();
+  const [isInitialized, setIsInitialized] = createSignal(false);
 
-  const value = () =>
-    devices?.data?.find((d) => d.name === props.options?.audioInputName) ??
-    null;
+  const value = createMemo(() => {
+    if (!props.options?.audioInputName) return null;
+    return (
+      devices.data?.find((d) => d.name === props.options!.audioInputName) ??
+      null
+    );
+  });
 
   const requestPermission = useRequestPermission();
 
@@ -447,35 +523,57 @@ function MicrophoneSelect(props: {
 
   type Option = { name: string; deviceId: string };
 
+  const [loading, setLoading] = createSignal(false);
   const handleMicrophoneChange = async (item: Option | null) => {
     if (!item || !props.options) return;
 
-    props.setOptions({
-      ...props.options,
-      audioInputName: item.deviceId !== "" ? item.name : null,
-    });
+    setLoading(true);
+    props.setOptions
+      .mutateAsync({
+        ...props.options,
+        audioInputName: item.deviceId !== "" ? item.name : null,
+      })
+      .finally(() => setLoading(false));
     if (!item.deviceId) setDbs();
   };
 
-  // raw db level
-  const [dbs, setDbs] = createSignal<number | undefined>();
+  // Create a single event listener using onMount
+  onMount(() => {
+    const listener = (event: Event) => {
+      const dbs = (event as CustomEvent<number>).detail;
+      if (!props.options?.audioInputName) setDbs();
+      else setDbs(dbs);
+    };
 
-  createEffect(() => {
-    if (!props.options?.audioInputName) setDbs();
-  });
+    events.audioInputLevelChange.listen((dbs) => {
+      if (!props.options?.audioInputName) setDbs();
+      else setDbs(dbs.payload);
+    });
 
-  events.audioInputLevelChange.listen((dbs) => {
-    if (!props.options?.audioInputName) setDbs();
-    else setDbs(dbs.payload);
+    return () => {
+      window.removeEventListener("audioLevelChange", listener);
+    };
   });
 
   // visual audio level from 0 -> 1
   const audioLevel = () =>
     Math.pow(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE, 0.5);
 
+  // Initialize audio input if needed - only once when component mounts
+  onMount(() => {
+    const audioInput = props.options?.audioInputName;
+    if (!audioInput || !permissionGranted() || isInitialized()) return;
+
+    setIsInitialized(true);
+    handleMicrophoneChange({
+      name: audioInput,
+      deviceId: audioInput,
+    });
+  });
+
   return (
-    <div class="flex flex-col gap-[0.25rem] items-stretch">
-      <label class="text-gray-400">Microphone</label>
+    <div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
+      <label class="text-[--text-tertiary]">Microphone</label>
       <KSelect<Option>
         options={[{ name: "No Audio", deviceId: "" }, ...(devices.data ?? [])]}
         optionValue="deviceId"
@@ -501,7 +599,10 @@ function MicrophoneSelect(props: {
           setOpen(isOpen);
         }}
       >
-        <KSelect.Trigger class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10">
+        <KSelect.Trigger
+          disabled={loading()}
+          class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect overflow-hidden z-10"
+        >
           <Show when={dbs()}>
             {(s) => (
               <div
@@ -513,12 +614,17 @@ function MicrophoneSelect(props: {
             )}
           </Show>
           <IconCapMicrophone class="text-gray-400 size-[1.25rem]" />
-          <KSelect.Value<{
-            name: string;
-          }> class="flex-1 text-left truncate">
-            {(state) => (
-              <span>{state.selectedOption()?.name ?? "No Audio"}</span>
-            )}
+          <KSelect.Value<Option> class="flex-1 text-left truncate">
+            {(state) => {
+              const selected = state.selectedOption();
+              return (
+                <span>
+                  {selected?.name ??
+                    props.options?.audioInputName ??
+                    "No Audio"}
+                </span>
+              );
+            }}
           </KSelect.Value>
           <TargetSelectInfoPill
             value={props.options?.audioInputName ?? null}
@@ -526,7 +632,7 @@ function MicrophoneSelect(props: {
             requestPermission={() => requestPermission("microphone")}
             onClear={() => {
               if (!props.options) return;
-              props.setOptions({
+              props.setOptions.mutate({
                 ...props.options,
                 audioInputName: null,
               });
@@ -704,15 +810,16 @@ function ChangelogButton() {
       if (!version) {
         return { hasUpdate: false };
       }
-      const response = await fetch(
-        `${clientEnv.VITE_SERVER_URL}/api/changelog/status?version=${version}`
-      );
-      return await response.json();
+      const response = await apiClient.desktop.getChangelogStatus({
+        query: { version },
+      });
+      if (response.status === 200) return response.body;
+      return null;
     }
   );
 
   const handleChangelogClick = () => {
-    commands.openSettingsWindow("changelog");
+    commands.showWindow({ Settings: { page: "changelog" } });
     const version = currentVersion();
     if (version) {
       setChangelogState({

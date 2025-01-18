@@ -2,7 +2,7 @@ import { createQuery } from "@tanstack/solid-query";
 import { For, Show, Suspense, createSignal } from "solid-js";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { commands, events } from "~/utils/tauri";
+import { commands, events, type RecordingMeta } from "~/utils/tauri";
 
 type MediaEntry = {
   id: string;
@@ -18,10 +18,7 @@ export default function Recordings() {
     queryFn: async () => {
       const result = await commands
         .listRecordings()
-        .catch(
-          () =>
-            Promise.resolve([]) as ReturnType<typeof commands.listRecordings>
-        );
+        .catch(() => [] as [string, string, RecordingMeta][]);
 
       const recordings = await Promise.all(
         result.map(async (file) => {
@@ -56,13 +53,15 @@ export default function Recordings() {
   };
 
   return (
-    <div class="flex flex-col w-full h-full divide-y divide-gray-200 pt-1 pb-12">
+    <div class="flex flex-col w-full h-full divide-y divide-[--gray-200] pt-1 pb-12">
       <div class="flex-1 overflow-y-auto">
-        <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full">
+        <ul class="p-[0.625rem] flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
           <Show
             when={fetchRecordings.data && fetchRecordings.data.length > 0}
             fallback={
-              <p class="text-center text-gray-500">No recordings found</p>
+              <p class="text-center text-[--text-tertiary]">
+                No recordings found
+              </p>
             }
           >
             <For each={fetchRecordings.data}>

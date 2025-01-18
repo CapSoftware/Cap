@@ -33,7 +33,7 @@ export const DownloadPage = () => {
           <Button
             spinner={loading}
             size="lg"
-            href="https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-aarch64"
+            href="https://solitary-art-7d28.brendonovich.workers.dev/desktop/latest/platform/dmg-aarch64"
             className="w-full md:w-auto"
           >
             Download for Apple Silicon
@@ -41,7 +41,7 @@ export const DownloadPage = () => {
           {showOtherOptions && (
             <Button
               size="lg"
-              href="https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64"
+              href="https://solitary-art-7d28.brendonovich.workers.dev/desktop/latest/platform/dmg-x86_64"
               className="w-full md:w-auto"
             >
               Download for Intel

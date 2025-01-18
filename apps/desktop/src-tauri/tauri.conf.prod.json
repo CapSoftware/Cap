@@ -1,8 +1,11 @@
 {
-  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "Cap",
   "mainBinaryName": "Cap",
   "identifier": "so.cap.desktop",
+  "build": {
+    "beforeBundleCommand": "node scripts/stripDebugSymbols.js"
+  },
   "plugins": {
     "updater": {
       "active": true
@@ -11,6 +14,11 @@
   "bundle": {
     "macOS": {
       "entitlements": "Entitlements.plist"
+    },
+    "windows": {
+      "wix": {
+        "upgradeCode": "a765d9de-0ecc-55d0-b8a0-61e9d3276664"
+      }
     }
   }
 }

@@ -1,10 +1,15 @@
-import { createQuery, queryOptions } from "@tanstack/solid-query";
+import {
+  createMutation,
+  createQuery,
+  queryOptions,
+} from "@tanstack/solid-query";
 
 import { commands, RecordingOptions } from "./tauri";
 import { createQueryInvalidate } from "./events";
 import { createStore, reconcile } from "solid-js/store";
 import { createEffect, createMemo } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
+import { FPS } from "~/routes/editor/context";
 
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
@@ -56,6 +61,8 @@ export const listAudioDevices = queryOptions({
   },
   reconcile: "name",
   refetchInterval: 1000,
+  gcTime: 0,
+  staleTime: 0,
 });
 
 export const getPermissions = queryOptions({
@@ -66,33 +73,32 @@ export const getPermissions = queryOptions({
 
 type PartialRecordingOptions = Omit<RecordingOptions, "captureTarget">;
 export function createOptionsQuery() {
-  const KEY = "recordingOptionsQuery";
-  const localState = localStorage.getItem(KEY);
-  const [state, setState, _init] = makePersisted(
-    createStore<PartialRecordingOptions>(
-      localState
-        ? JSON.parse(localState)
-        : {
-            cameraLabel: null,
-            audioInputName: null,
-          }
-    )
+  const [state, setState] = makePersisted(
+    createStore<PartialRecordingOptions>({
+      cameraLabel: null,
+      audioInputName: null,
+      fps: FPS,
+      outputResolution: {
+        width: 1920,
+        height: 1080,
+      },
+    }),
+    { name: "recordingOptionsQuery" }
   );
 
-  const setOptions = (newOptions: RecordingOptions) => {
-    commands.setRecordingOptions(newOptions);
-    const { captureTarget: _, ...partialOptions } = newOptions;
-    setState(partialOptions);
-  };
-
-  createEffect(() => {
-    localStorage.setItem(KEY, JSON.stringify(state));
-  });
+  const setOptions = createMutation(() => ({
+    mutationFn: async (newOptions: RecordingOptions) => {
+      await commands.setRecordingOptions(newOptions);
+      const { captureTarget: _, ...partialOptions } = newOptions;
+      setState(partialOptions);
+    },
+  }));
 
   const options = createQuery(() => ({
     ...getOptions,
     select: (data) => {
-      return { ...data, ...state };
+      setState(data);
+      return { ...state, ...data };
     },
   }));
 

@@ -1,0 +1,112 @@
+@tailwind utilities;
+
+:root {
+  /* Light theme variables */
+  --gray-50: #ffffff;
+  --gray-100: #f7f8fa;
+  --gray-200: #e7eaf0;
+  --gray-300: #c9cedb;
+  --gray-400: #8991a3;
+  --gray-500: #12161f;
+
+  --black-transparent-5: rgba(18, 22, 31, 0.05);
+  --black-transparent-10: rgba(18, 22, 31, 0.1);
+  --black-transparent-20: rgba(18, 22, 31, 0.2);
+  --black-transparent-40: rgba(18, 22, 31, 0.4);
+  --black-transparent-60: rgba(18, 22, 31, 0.6);
+  --black-transparent-80: rgba(18, 22, 31, 0.8);
+
+  --white-transparent-5: rgba(255, 255, 255, 0.05);
+  --white-transparent-10: rgba(255, 255, 255, 0.1);
+  --white-transparent-20: rgba(255, 255, 255, 0.2);
+  --white-transparent-40: rgba(255, 255, 255, 0.4);
+
+  --blue-50: #ebf1ff;
+  --blue-100: #adc9ff;
+  --blue-200: #85adff;
+  --blue-300: #4785ff;
+  --blue-400: #3f75e0;
+
+  --blue-transparent-10: rgba(34, 64, 122, 0.1);
+  --blue-transparent-20: rgba(34, 64, 122, 0.2);
+
+  --red-50: #ffebee;
+  --red-100: #ffadbb;
+  --red-200: #ff8599;
+  --red-300: #ff4766;
+  --red-400: #e03f5a;
+
+  --red-transparent-20: rgba(255, 71, 102, 0.2);
+
+  --shadow-s: 0px 8px 16px 0px rgba(18, 22, 31, 0.04);
+}
+
+/* Dark theme variables */
+:root.dark {
+  /* Main background colors */
+  --gray-50: #1e1e1e; /* Main background */
+  --gray-100: #242424; /* Secondary background */
+  --gray-200: #2a2a2a; /* Borders and dividers */
+  --gray-300: #3a3a3a; /* Subtle highlights */
+  --gray-400: #ebebf0; /* Secondary text - descriptions */
+  --gray-500: #ffffff; /* Primary text - titles/headings (back to white) */
+
+  /* Add new variables for text hierarchy */
+  --text-primary: rgba(255, 255, 255, 0.95); /* Section titles, headings */
+  --text-secondary: rgba(255, 255, 255, 0.85); /* Important labels */
+  --text-tertiary: rgba(255, 255, 255, 0.65); /* Descriptions */
+
+  /* Transparent overlays - adjusted for better contrast */
+  --black-transparent-5: rgba(255, 255, 255, 0.05);
+  --black-transparent-10: rgba(255, 255, 255, 0.1);
+  --black-transparent-20: rgba(255, 255, 255, 0.2);
+  --black-transparent-40: rgba(255, 255, 255, 0.4);
+  --black-transparent-60: rgba(255, 255, 255, 0.6);
+  --black-transparent-80: rgba(255, 255, 255, 0.8);
+
+  /* White transparencies */
+  --white-transparent-5: rgba(18, 22, 31, 0.05);
+  --white-transparent-10: rgba(18, 22, 31, 0.1);
+  --white-transparent-20: rgba(18, 22, 31, 0.2);
+  --white-transparent-40: rgba(18, 22, 31, 0.4);
+
+  /* Accent colors remain mostly the same but adjusted for dark theme */
+  --blue-50: #1a2438;
+  --blue-100: #243352;
+  --blue-200: #2e426b;
+  --blue-300: #4785ff;
+  --blue-400: #5c8fff;
+
+  --blue-transparent-10: rgba(71, 133, 255, 0.1);
+  --blue-transparent-20: rgba(71, 133, 255, 0.2);
+
+  --red-50: #2c1a1e;
+  --red-100: #52232c;
+  --red-200: #6b2c39;
+  --red-300: #ff4766;
+  --red-400: #ff5c7a;
+
+  --red-transparent-20: rgba(255, 71, 102, 0.2);
+
+  --shadow-s: 0px 8px 16px 0px rgba(0, 0, 0, 0.4);
+}
+
+[data-transparent-window] {
+  background: transparent !important;
+}
+
+[data-transparent-window] body {
+  background: transparent !important;
+}
+
+/* Ensure transparent windows stay transparent in dark mode */
+.dark [data-transparent-window],
+.dark [data-transparent-window] body {
+  background: transparent !important;
+}
+
+@layer utilities {
+  .platform-windows .overflow-y-auto {
+    @apply scrollbar-thin scrollbar-track-transparent scrollbar-thumb-black-transparent-40;
+  }
+}

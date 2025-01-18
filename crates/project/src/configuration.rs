@@ -263,6 +263,7 @@ pub struct HotkeysConfiguration {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineSegment {
+    pub recording_segment: Option<u32>,
     pub timescale: f64,
     pub start: f64,
     pub end: f64,
@@ -282,30 +283,38 @@ impl TimelineSegment {
     }
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ZoomSegment {
     pub start: f64,
     pub end: f64,
     pub amount: f64,
-    // pub mode: Z
+    pub mode: ZoomMode,
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum ZoomMode {
+    Auto,
+    Manual { x: f32, y: f32 },
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
-    #[serde(default)]
     pub zoom_segments: Vec<ZoomSegment>,
 }
 
 impl TimelineConfiguration {
-    pub fn get_recording_time(&self, tick_time: f64) -> Option<f64> {
+    pub fn get_recording_time(&self, tick_time: f64) -> Option<(f64, Option<u32>)> {
         let mut accum_duration = 0.0;
 
-        for segment in &self.segments {
+        for segment in self.segments.iter() {
             if tick_time < accum_duration + segment.duration() {
-                return segment.interpolate_time(tick_time - accum_duration);
+                return segment
+                    .interpolate_time(tick_time - accum_duration)
+                    .map(|t| (t, segment.recording_segment));
             }
 
             accum_duration += segment.duration();

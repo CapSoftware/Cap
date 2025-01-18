@@ -79,6 +79,11 @@ html {
   @apply max-w-5xl;
 }
 
+.prose :where(blockquote p:first-of-type):not(:where([class~="not-prose"],[class~="not-prose"] *))::before {
+  content: "“" !important;
+  display: none;
+}
+
 *,
 *:before,
 *:after {
@@ -393,6 +398,32 @@ footer a {
   @apply text-2xl font-semibold mt-6;
 }
 
-.prose p {
-  @apply text-lg text-gray-400;
+.prose p, .prose li, .prose a {
+  @apply tracking-tight font-normal text-[1.125rem] leading-[1.75rem] !important;
+}
+
+.prose p, .prose li {
+  @apply text-gray-500/80 !important;
+}
+
+.new-card-style {
+  background: #FFFFFF;
+  border: 1px solid #E7EAF0;
+  box-shadow: 0px 8px 16px rgba(18, 22, 31, 0.04);
+  border-radius: 20px;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slideUp {
+  animation: slideUp 0.3s ease-out forwards;
 }

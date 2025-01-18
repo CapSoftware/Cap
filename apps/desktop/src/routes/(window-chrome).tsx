@@ -1,19 +1,10 @@
 import type { RouteSectionProps } from "@solidjs/router";
-import {
-  createEffect,
-  onCleanup,
-  onMount,
-  ParentProps,
-  Suspense,
-} from "solid-js";
+import { onCleanup, onMount, ParentProps, Suspense } from "solid-js";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { initializeTitlebar } from "~/utils/titlebar-state";
-
-import Titlebar from "~/components/titlebar/Titlebar";
-
+import { UnlistenFn } from "@tauri-apps/api/event";
 import { AbsoluteInsetLoader } from "~/components/Loader";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import { commands } from "~/utils/tauri";
+import { initializeTitlebar } from "~/utils/titlebar-state";
+import Titlebar from "~/components/titlebar/Titlebar";
 
 export const route = {
   info: {
@@ -22,11 +13,10 @@ export const route = {
 };
 
 export default function (props: RouteSectionProps) {
-  let unlistenResize: () => void | undefined;
+  let unlistenResize: UnlistenFn | undefined;
 
   onMount(async () => {
     unlistenResize = await initializeTitlebar();
-    if (ostype() === "macos") commands.positionTrafficLights(null);
     if (location.pathname === "/") getCurrentWindow().show();
   });
 

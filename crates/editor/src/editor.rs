@@ -1,101 +1,14 @@
 use std::{sync::Arc, time::Instant};
 
-use cap_project::{BackgroundSource, ProjectConfiguration};
-use cap_rendering::{decoder::DecodedFrame, produce_frame, ProjectUniforms, RenderVideoConstants};
+use cap_media::frame_ws::WSFrame;
+use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta, XY};
+use cap_rendering::{
+    decoder::DecodedFrame, produce_frame, ProjectRecordings, ProjectUniforms, RenderVideoConstants,
+};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
-
-use crate::editor_instance::SocketMessage;
-
-struct EditorState {
-    config: ProjectConfiguration,
-    playback_position: u32,
-    playing: bool,
-}
-
-pub enum EditorMessage {
-    SetPlaybackPosition(u32),
-    TogglePlayback(bool),
-    PreviewFrame(u32),
-}
-
-pub enum EditorEvent {
-    PlaybackChanged(bool),
-}
-
-struct Editor {
-    config: ProjectConfiguration,
-    playback_position: u32,
-    playing: bool,
-    rx: mpsc::Receiver<EditorMessage>,
-    // event_tx: mpsc::Sender<EditorEvent>,
-}
-
-struct EditorHandle {
-    tx: mpsc::Sender<EditorMessage>,
-}
-
-impl Editor {
-    fn new(config: ProjectConfiguration) -> EditorHandle {
-        let (tx, rx) = mpsc::channel(4);
-
-        let mut this = Self {
-            config,
-            playback_position: 0,
-            playing: false,
-            rx,
-        };
-
-        tokio::spawn(async move {
-            while let Some(msg) = this.rx.recv().await {
-                this.tick(msg).await;
-            }
-        });
-
-        EditorHandle { tx }
-    }
-
-    async fn tick(&mut self, msg: EditorMessage) {
-        match msg {
-            EditorMessage::SetPlaybackPosition(position) => {
-                if self.playing {
-                    return;
-                }
-
-                self.playback_position = position;
-            }
-            EditorMessage::TogglePlayback(play) => {
-                if self.playing == play {
-                    return;
-                }
-
-                self.playing = play;
-            }
-            EditorMessage::PreviewFrame(frame_number) => if self.playing {},
-        }
-    }
-}
-
-impl EditorHandle {
-    async fn send(&mut self, msg: EditorMessage) {
-        self.tx.send(msg).await.unwrap();
-    }
-
-    pub async fn set_playback_position(&mut self, position: u32) {
-        self.send(EditorMessage::SetPlaybackPosition(position))
-            .await;
-    }
-
-    pub async fn start_playback(&mut self) {
-        self.send(EditorMessage::TogglePlayback(true)).await;
-    }
-
-    pub async fn stop_playback(&mut self) {
-        self.send(EditorMessage::TogglePlayback(false)).await;
-    }
-}
 
 pub enum RendererMessage {
     RenderFrame {
@@ -105,6 +18,7 @@ pub enum RendererMessage {
         uniforms: ProjectUniforms,
         time: f32, // Add this field
         finished: oneshot::Sender<()>,
+        resolution_base: XY<u32>,
     },
     Stop {
         finished: oneshot::Sender<()>,
@@ -113,8 +27,9 @@ pub enum RendererMessage {
 
 pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
-    frame_tx: mpsc::UnboundedSender<SocketMessage>,
+    frame_tx: flume::Sender<WSFrame>,
     render_constants: Arc<RenderVideoConstants>,
+    total_frames: u32,
 }
 
 pub struct RendererHandle {
@@ -124,14 +39,28 @@ pub struct RendererHandle {
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
-        frame_tx: mpsc::UnboundedSender<SocketMessage>,
+        frame_tx: flume::Sender<WSFrame>,
+        meta: &RecordingMeta,
     ) -> RendererHandle {
+        let recordings = ProjectRecordings::new(meta);
+        let mut max_duration = recordings.duration();
+
+        // Check camera duration if it exists
+        if let Some(camera_path) = meta.content.camera_path() {
+            if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
+                max_duration = max_duration.max(camera_duration);
+            }
+        }
+
+        let total_frames = (30_f64 * max_duration).ceil() as u32;
+
         let (tx, rx) = mpsc::channel(4);
 
         let this = Self {
             rx,
             frame_tx,
             render_constants,
+            total_frames,
         };
 
         tokio::spawn(this.run());
@@ -150,8 +79,9 @@ impl Renderer {
                         camera_frame,
                         background,
                         uniforms,
-                        time, // Add this
+                        time,
                         finished,
+                        resolution_base,
                     } => {
                         if let Some(task) = frame_task.as_ref() {
                             if task.is_finished() {
@@ -163,26 +93,28 @@ impl Renderer {
 
                         let render_constants = self.render_constants.clone();
                         let frame_tx = self.frame_tx.clone();
+                        let total_frames = self.total_frames;
 
                         frame_task = Some(tokio::spawn(async move {
-                            let time_instant = Instant::now();
                             let frame = produce_frame(
                                 &render_constants,
                                 &screen_frame,
                                 &camera_frame,
                                 cap_rendering::Background::from(background),
                                 &uniforms,
-                                time, // Pass the actual time value
+                                time,
+                                total_frames,
+                                resolution_base,
                             )
                             .await
                             .unwrap();
-                            // println!("produced frame in {:?}", time_instant.elapsed());
 
                             frame_tx
-                                .send(SocketMessage::Frame {
-                                    data: frame,
+                                .try_send(WSFrame {
+                                    data: frame.data,
                                     width: uniforms.output_size.0,
                                     height: uniforms.output_size.1,
+                                    stride: frame.padded_bytes_per_row,
                                 })
                                 .ok();
                             finished.send(()).ok();
@@ -215,7 +147,8 @@ impl RendererHandle {
         camera_frame: Option<DecodedFrame>,
         background: BackgroundSource,
         uniforms: ProjectUniforms,
-        time: f32, // Add this parameter
+        time: f32,
+        resolution_base: XY<u32>,
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();
 
@@ -226,6 +159,7 @@ impl RendererHandle {
             uniforms,
             time, // Pass the time
             finished: finished_tx,
+            resolution_base,
         })
         .await;
 

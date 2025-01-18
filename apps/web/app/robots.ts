@@ -13,7 +13,7 @@ export default function robots(): MetadataRoute.Robots {
         userAgent: '*',
         allow: [
           '/',
-          '/updates/',
+          '/blog/',
           // Dynamically add all SEO pages
           ...seoPageSlugs.map(slug => `/${slug}`),
         ],

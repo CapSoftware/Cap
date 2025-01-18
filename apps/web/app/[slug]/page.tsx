@@ -1,21 +1,21 @@
-import { Metadata } from "next";
+import { getPageBySlug } from "@/lib/seo-pages";
+import { getMetadataBySlug } from "@/lib/seo-metadata";
 import { notFound } from "next/navigation";
-import { getPageBySlug, seoPages } from "../../lib/seo-pages";
-import { getMetadataBySlug } from "../../lib/seo-metadata";
+import type { Metadata } from "next";
 
-interface PageProps {
-  params: {
-    slug: string;
-  };
-}
+type Props = {
+  params: { slug: string };
+};
 
-export async function generateMetadata({
-  params,
-}: PageProps): Promise<Metadata> {
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const metadata = getMetadataBySlug(params.slug);
 
   if (!metadata) {
-    return {};
+    return {
+      title: "Cap — Beautiful screen recordings, owned by you.",
+      description:
+        "Cap is the open source alternative to Loom. Lightweight, powerful, and stunning. Record and share in seconds.",
+    };
   }
 
   return {
@@ -25,21 +25,12 @@ export async function generateMetadata({
     openGraph: {
       title: metadata.title,
       description: metadata.description,
-      images: metadata.ogImage
-        ? [
-            {
-              url: metadata.ogImage,
-              width: 1200,
-              height: 630,
-              alt: metadata.title,
-            },
-          ]
-        : [],
+      images: [metadata.ogImage],
     },
   };
 }
 
-export default function Page({ params }: PageProps) {
+export default function SeoPage({ params }: Props) {
   const page = getPageBySlug(params.slug);
 
   if (!page) {
@@ -48,10 +39,4 @@ export default function Page({ params }: PageProps) {
 
   const PageComponent = page.component;
   return <PageComponent />;
-}
-
-export async function generateStaticParams() {
-  return Object.keys(seoPages).map((slug) => ({
-    slug,
-  }));
 }

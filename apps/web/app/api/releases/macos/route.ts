@@ -44,19 +44,9 @@ export async function GET(
 
     const url = asset.browser_download_url;
 
-    return new Response(JSON.stringify({ version, notes, pub_date, url }), {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ version, notes, pub_date, url }, { status: 200 });
   } catch (error) {
     console.error("Error fetching latest release:", error);
-    return new Response(JSON.stringify({ error: "Missing required fields" }), {
-      status: 400,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: "Missing required fields" }, { status: 400 });
   }
 }

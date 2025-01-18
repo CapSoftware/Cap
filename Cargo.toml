@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["apps/desktop/src-tauri", "crates/*"]
+members = [ "apps/cli","apps/desktop/src-tauri", "crates/*"]
 
 [workspace.dependencies]
 anyhow = "1.0.86"
@@ -18,15 +18,22 @@ tokio = { version = "1.39.3", features = [
 	"rt-multi-thread",
 	"time",
 ] }
-tauri = { version = "2.0.0" }
+tauri = { version = "2.1.1" }
 specta = { version = "=2.0.0-rc.20" }
-scap = { git = "https://github.com/CapSoftware/scap", rev = "b1e140a3fe905c19b845dfea66b3b1aea02f0472" }
+scap = { git = "https://github.com/CapSoftware/scap", rev = "58d4410bf52f" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "0d3d1f30a78b", features = [
 	"input-native",
 	"serialize",
 ] }
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "0d3d1f30a78b" }
 wgpu = "22.1.0"
+flume = "0.11.0"
+thiserror = "1.0"
+sentry = { version = "0.34.0", features = [
+	"anyhow",
+	"backtrace",
+	"debug-images",
+] }
 
 windows = "0.58.0"
 windows-sys = "0.59.0"

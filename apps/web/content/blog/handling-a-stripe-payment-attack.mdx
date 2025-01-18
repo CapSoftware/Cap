@@ -1,0 +1,112 @@
+---
+title: Handling a Stripe Payment Attack During Our Product Hunt Launch
+description: How we handled an unexpected Stripe payment attack during Cap's Product Hunt launch, and what we learnt from it.
+publishedAt: "2024-11-30"
+category: Technical
+image: /blog/stripe-payment-attack.jpg
+author: Richie McIlroy
+tags: Security, Product Launch, Payment Attack
+---
+
+A couple of days ago, we launched Cap on Product Hunt, confident we were prepared for anything.
+
+Everything would go perfectly, right?
+
+Not quite. Let me share what happened and the mistakes we made along the way.
+
+## The Unexpected Surprise
+
+In the midst of the launch frenzy, I glanced at our Stripe dashboard. At first, I thought, "Wow, that's a lot of new subscriptions!". Transactions were pouring in—hundreds within minutes. But my excitement quickly turned to concern.
+
+Upon closer inspection, I realised that thousands of dollars in fraudulent transactions had been blocked in just a few minutes, all originating from the same country. We were under a coordinated payment attack.
+
+I couldn't believe it.
+
+## Why Payment Attacks Are a Big Deal
+
+Payment attacks are more than just a nuisance—they can have serious implications:
+
+- **Financial Risks:** Even if fraudulent transactions are blocked, they can still incur fees. If any slip through, you're on the hook for chargebacks, which can cost up to $15 per dispute.
+- **Account Standing:** High volumes of fraudulent activity can flag your account as high-risk. Payment processors might impose holds, reserve funds, or even terminate your account.
+- **Operational Disruption:** Dealing with an attack diverts time and resources from your core activities—in our case, interacting with our new users during the launch.
+- **Reputation Damage:** Customers may question the security of your platform, affecting trust and long-term loyalty.
+
+According to [research by Juniper Research](https://www.juniperresearch.com/press/online-payment-fraud-losses-to-exceed-343bn), payment fraud losses are expected to exceed $343 billion globally between 2023-2027. It's a widespread issue that can hit anyone, with fraudsters becoming increasingly sophisticated in their attack methods.
+
+## Scrambling for a Solution
+
+With our focus already split, we needed to act fast. Here's what we did:
+
+### 1. Blocked Transactions from Specific Countries
+
+I noticed all the fraudulent attempts were coming from a single country (PK). Using Stripe's Radar rules, I set up a temporary rule to block transactions originating from that country. This immediately reduced the number of incoming fraudulent attempts.
+
+### 2. Tightened Stripe Radar Settings
+
+We lowered the risk threshold in [Stripe Radar](https://stripe.com/radar) from 75% to 50%. This made our fraud detection more sensitive, catching more suspicious transactions before they could proceed.
+
+### 3. Implemented Advanced Fraud Detection with Stripe Radar
+
+We dove deeper into Stripe Radar's advanced features:
+
+- **Custom Radar Rules:** We wrote custom rules to block payments with high-risk signals, such as mismatched billing countries or known fraudulent BINs.
+- **3D Secure Enforcement:** We enabled mandatory 3D Secure authentication for all high-risk transactions. This adds an extra layer of verification, significantly reducing fraud.
+- **Real-Time Fraud Insights:** We set up real-time alerts for fraudulent activity. This way, we could respond immediately to any suspicious transactions.
+
+### 4. Added a Vercel Firewall Challenge
+
+To further enhance our security measures, we [Vercel Firewall's](https://vercel.com/docs/security/vercel-firewall) challenge system into our stack. This powerful tool helps verify legitimate users through an intelligent, customisable challenge mechanism, providing an additional layer of protection for our platform.
+
+## Reaching Out for Help
+
+After posting about our situation [on X](https://x.com/richiemcilroy/status/1862337093046788599), I was amazed by how many founders reached out sharing their own payment attack stories. It seems this is a more common issue than we thought, especially during high-visibility events like launches.
+
+### Community Suggestions
+
+- **Implement Captchas:** Several people suggested adding captchas to our payment forms to deter bots.
+- **Monitor Early Fraud Warnings:** Setting up webhooks for early fraud warnings helps act quickly.
+- **Refund Suspicious Payments Immediately:** By promptly refunding questionable transactions, you can avoid dispute fees and maintain your account health.
+- **Contact Stripe Support for Custom Solutions:** Some suggested reaching out to Stripe to implement measures like blocking payments after a certain number of failed attempts.
+
+## Reflecting on the Chaos
+
+Looking back, we realised that even with strong security measures in place, unexpected attacks can still occur. The key is how quickly and effectively you respond.
+
+### What We Learnt
+
+- **Stay Vigilant During High-Profile Events**
+  Launches can attract unwanted attention. We monitored our systems closely but learnt that real-time adjustments are crucial.
+
+- **Leverage All Available Security Tools**
+  Platforms like Stripe offer robust features—make sure you're utilising them fully. The advanced settings in Stripe Radar were instrumental in mitigating the attack.
+
+- **Community Support Is Invaluable**
+  The advice and support we received helped us act swiftly and effectively.
+
+- **Security Is an Ongoing Process**
+  Threats evolve, and so should your defences. Regularly review and update your security protocols.
+
+## Moving Forward
+
+We're taking additional steps to bolster our defences:
+
+- **Enforcing 3D Secure and Mandatory CVC Checks**
+  Strengthening authentication for all transactions to prevent unauthorised use.
+- **Integrating Captchas**
+  Adding captchas to our payment process to deter bots and automated attacks.
+- **Regular Security Audits**
+  Scheduling periodic reviews of our security settings to stay ahead of potential threats.
+- **Advanced Monitoring with Stripe Radar**
+  Continuously refining our Radar rules and utilising machine learning insights to detect and prevent fraud.
+
+## Closing Thoughts
+
+Last night was a wake-up call. It wasn't how we planned to spend our launch night, but it taught us valuable lessons.
+
+To everyone who offered advice and support—thank you. Your insights made a tough situation manageable.
+
+If you're running a business or planning a launch, take our experience as a reminder: even when you think you're prepared, there's always more you can do to protect yourself and your customers.
+
+Cheers,
+
+Richie McIlroy — Founder of Cap

@@ -37,14 +37,14 @@ export default function () {
   );
 }
 
+const MODIFIER_KEYS = new Set(["Meta", "Shift", "Control", "Alt"]);
 function Inner(props: { initialStore: HotkeysStore | null }) {
   const [hotkeys, setHotkeys] = createStore<{
     [K in HotkeyAction]?: Hotkey;
   }>(props.initialStore?.hotkeys ?? {});
 
   createEffect(() => {
-    // biome-ignore lint/suspicious/noExplicitAny: specta#283
-    hotkeysStore.set({ hotkeys: hotkeys as any });
+    hotkeysStore.set({ hotkeys: { ...hotkeys } as any });
   });
 
   const [listening, setListening] = createSignal<{
@@ -53,6 +53,8 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
   }>();
 
   createEventListener(window, "keydown", (e) => {
+    if (MODIFIER_KEYS.has(e.key)) return;
+
     const data = {
       code: e.code,
       ctrl: e.ctrlKey,
@@ -60,14 +62,6 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
       alt: e.altKey,
       meta: e.metaKey,
     };
-
-    if (
-      !(
-        (data.code >= "KeyA" && data.code <= "KeyZ") ||
-        data.code.startsWith("F")
-      )
-    )
-      return;
 
     const l = listening();
     if (l) {
@@ -94,7 +88,6 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
             createEventListener(window, "click", () => {
               if (listening()?.action !== item()) return;
 
-              console.log(listening());
               batch(() => {
                 setHotkeys(item(), listening()?.prev);
                 setListening();
@@ -102,19 +95,20 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
             });
 
             return (
-              <li class="w-full flex flex-row justify-between items-center">
+              <li class="w-full flex flex-row justify-between items-center text-[--text-primary]">
                 <span>{ACTION_TEXT[item()]}</span>
-                <div class="w-[9rem] h-[2rem]">
+                <div class="w-[9rem] h-[2rem] ">
                   <Switch>
                     <Match when={listening()?.action === item()}>
-                      <div class="border border-blue-300 rounded-lg text-gray-500 w-full h-full bg-gray-100 flex flex-row items-center justify-between px-[0.375rem]">
+                      <div class="border border-[--gray-300] rounded-lg text-[--text-tertiary] w-full h-full bg-[--gray-100] flex flex-row items-center justify-between px-[0.375rem]">
                         <Show when={hotkeys[item()]} fallback="Listening">
                           {(binding) => <HotkeyText binding={binding()} />}
                         </Show>
-                        <div class="flex flex-row items-center gap-[0.125rem]">
+                        <div class="flex flex-row items-center gap-[0.125rem] text-[--text-tertiary]">
                           <Show when={hotkeys[item()]}>
                             <button
                               type="button"
+                              onBlur={(e) => console.log(e)}
                               onClick={(e) => {
                                 e.stopPropagation();
 
@@ -125,7 +119,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                                 );
                               }}
                             >
-                              <IconCapCircleCheck class="size-[1.25rem] text-blue-300" />
+                              <IconCapCircleCheck class="size-[1.25rem] text-[--blue-400]" />
                             </button>
                           </Show>
                           <button
@@ -140,7 +134,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                               });
                             }}
                           >
-                            <IconCapCircleX class="size-[1.25rem] text-gray-400" />
+                            <IconCapCircleX class="size-[1.25rem] text-[--gray-400]" />
                           </button>
                         </div>
                       </div>
@@ -148,13 +142,15 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                     <Match when={listening()?.action !== item()}>
                       <button
                         type="button"
-                        class="border border-gray-200 rounded-lg text-gray-400 w-full h-full"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setListening({
-                            action: item(),
-                            prev: hotkeys[item()],
-                          });
+                        class="border border-[--gray-200] rounded-lg text-[--text-tertiary] w-full h-full"
+                        onClick={() => {
+                          // ensures that previously selected hotkey is cleared by letting the event propagate before listening to the new hotkey
+                          setTimeout(() => {
+                            setListening({
+                              action: item(),
+                              prev: hotkeys[item()],
+                            });
+                          }, 1);
                         }}
                       >
                         <Show when={hotkeys[item()]} fallback="None">
@@ -169,7 +165,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
           }}
         </Index>
       </ul>
-      <div class="flex flex-row-reverse p-[1rem]">
+      <div class="flex flex-row-reverse p-[1rem] text-[--text-primary]">
         <Button disabled variant="secondary">
           Restore Defaults
         </Button>
@@ -180,7 +176,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 
 function HotkeyText(props: { binding: Hotkey }) {
   return (
-    <span class="space-x-0.5">
+    <span class="space-x-0.5 text-[--text-tertiary]">
       {props.binding.meta && <span>⌘</span>}
       {props.binding.ctrl && <span>⌃</span>}
       {props.binding.alt && <span>⌥</span>}

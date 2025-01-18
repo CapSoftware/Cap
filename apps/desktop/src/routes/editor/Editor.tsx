@@ -17,14 +17,18 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { createMutation } from "@tanstack/solid-query";
-import {
-  createEventListener,
-  createEventListenerMap,
-} from "@solid-primitives/event-listener";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { events, commands } from "~/utils/tauri";
-import { EditorContextProvider, useEditorContext } from "./context";
+import { events } from "~/utils/tauri";
+import {
+  EditorContextProvider,
+  EditorInstanceContextProvider,
+  FPS,
+  OUTPUT_SIZE,
+  useEditorContext,
+  useEditorInstanceContext,
+} from "./context";
 import {
   Dialog,
   DialogContent,
@@ -33,10 +37,6 @@ import {
   Subfield,
   Toggle,
 } from "./ui";
-import {
-  EditorInstanceContextProvider,
-  useEditorInstanceContext,
-} from "./editorInstanceContext";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { ConfigSidebar } from "./ConfigSidebar";
@@ -72,26 +72,21 @@ export function Editor() {
 }
 
 function Inner() {
-  const {
-    project,
-    videoId,
-    playbackTime,
-    setPlaybackTime,
-    playing,
-    setPlaying,
-    previewTime,
-  } = useEditorContext();
+  const { project, playbackTime, setPlaybackTime, playing, previewTime } =
+    useEditorContext();
 
   onMount(() => {
     events.editorStateChanged.listen((e) => {
       renderFrame.clear();
-      setPlaybackTime(e.payload.playhead_position / 30);
+      setPlaybackTime(e.payload.playhead_position / FPS);
     });
   });
 
   const renderFrame = throttle((time: number) => {
     events.renderFrameEvent.emit({
-      frame_number: Math.max(Math.floor(time * 30), 0),
+      frame_number: Math.max(Math.floor(time * FPS), 0),
+      fps: FPS,
+      resolution_base: OUTPUT_SIZE,
     });
   }, 1000 / 60);
 
@@ -119,33 +114,11 @@ function Inner() {
     )
   );
 
-  const togglePlayback = async () => {
-    try {
-      if (playing()) {
-        await commands.stopPlayback(videoId);
-        setPlaying(false);
-      } else {
-        await commands.startPlayback(videoId);
-        setPlaying(true);
-      }
-    } catch (error) {
-      console.error("Error toggling playback:", error);
-      setPlaying(false);
-    }
-  };
-
-  createEventListener(document, "keydown", async (e: KeyboardEvent) => {
-    if (e.code === "Space" && e.target === document.body) {
-      e.preventDefault();
-      await togglePlayback();
-    }
-  });
-
   return (
     <div class="w-screen h-screen flex flex-col">
       <Header />
       <div
-        class="p-5 pt-0 flex-1 w-full overflow-y-hidden flex flex-col gap-4 bg-gray-50 rounded-lg leading-5 animate-in fade-in"
+        class="p-5 pt-0 flex-1 w-full overflow-y-hidden flex flex-col gap-4 bg-gray-50 leading-5 animate-in fade-in"
         data-tauri-drag-region
       >
         <div class="rounded-2xl overflow-hidden  shadow border flex-1 flex flex-col divide-y bg-white">
@@ -192,8 +165,9 @@ function Dialogs() {
                 });
 
                 const createPreset = createMutation(() => ({
-                  mutationFn: async () =>
-                    presets.createPreset({ ...form, config: project }),
+                  mutationFn: async () => {
+                    await presets.createPreset({ ...form, config: project });
+                  },
                   onSuccess: () => {
                     setDialog((d) => ({ ...d, open: false }));
                   },
@@ -296,9 +270,7 @@ function Dialogs() {
                     }
                   >
                     <p class="text-gray-400">
-                      Lorem ipsum dolor sit amet, consectetur adipiscing elit
-                      sed do eiusmod tempor incididunt ut labore et dolore magna
-                      aliqua.
+                      Are you sure you want to delete this preset?
                     </p>
                   </DialogContent>
                 );
@@ -318,7 +290,7 @@ function Dialogs() {
                   size: dialog().size,
                 });
 
-                const display = editorInstance.recordings.display;
+                const display = editorInstance.recordings.segments[0].display;
 
                 const styles = createMemo(() => {
                   return {
@@ -337,8 +309,8 @@ function Dialogs() {
                   };
                 });
 
-                let cropAreaRef: HTMLDivElement;
-                let cropTargetRef: HTMLDivElement;
+                let cropAreaRef!: HTMLDivElement;
+                let cropTargetRef!: HTMLDivElement;
 
                 return (
                   <>
@@ -377,8 +349,8 @@ function Dialogs() {
                           setCrop({
                             position: { x: 0, y: 0 },
                             size: {
-                              x: editorInstance.recordings.display.width,
-                              y: editorInstance.recordings.display.height,
+                              x: display.width,
+                              y: display.height,
                             },
                           })
                         }
@@ -388,11 +360,7 @@ function Dialogs() {
                     </Dialog.Header>
                     <Dialog.Content>
                       <div class="flex flex-row justify-center">
-                        <div
-                          class="relative bg-blue-200"
-                          // biome-ignore lint/style/noNonNullAssertion: ref
-                          ref={cropAreaRef!}
-                        >
+                        <div class="relative bg-blue-200" ref={cropAreaRef}>
                           <div class="divide-black-transparent-10 overflow-hidden rounded-lg">
                             <img
                               class="shadow pointer-events-none max-h-[70vh]"
@@ -404,8 +372,7 @@ function Dialogs() {
                           </div>
                           <div
                             class="bg-white-transparent-20 absolute cursor-move"
-                            // biome-ignore lint/style/noNonNullAssertion: ref
-                            ref={cropTargetRef!}
+                            ref={cropTargetRef}
                             style={styles()}
                             onMouseDown={(downEvent) => {
                               const original = {
@@ -531,8 +498,7 @@ function Dialogs() {
                                                     clamp(
                                                       original.size.x + diff.x,
                                                       MIN_SIZE,
-                                                      editorInstance.recordings
-                                                        .display.width -
+                                                      display.width -
                                                         crop.position.x
                                                     )
                                                   )
@@ -546,9 +512,7 @@ function Dialogs() {
                                                       original.position.x +
                                                         diff.x,
                                                       0,
-                                                      editorInstance.recordings
-                                                        .display.width -
-                                                        MIN_SIZE
+                                                      display.width - MIN_SIZE
                                                     )
                                                   )
                                                 );
@@ -559,8 +523,7 @@ function Dialogs() {
                                                     clamp(
                                                       original.size.x - diff.x,
                                                       MIN_SIZE,
-                                                      editorInstance.recordings
-                                                        .display.width
+                                                      display.width
                                                     )
                                                   )
                                                 );
@@ -574,8 +537,7 @@ function Dialogs() {
                                                     clamp(
                                                       original.size.y + diff.y,
                                                       MIN_SIZE,
-                                                      editorInstance.recordings
-                                                        .display.height -
+                                                      display.height -
                                                         crop.position.y
                                                     )
                                                   )
@@ -589,9 +551,7 @@ function Dialogs() {
                                                       original.position.y +
                                                         diff.y,
                                                       0,
-                                                      editorInstance.recordings
-                                                        .display.height -
-                                                        MIN_SIZE
+                                                      display.height - MIN_SIZE
                                                     )
                                                   )
                                                 );
@@ -602,8 +562,7 @@ function Dialogs() {
                                                     clamp(
                                                       original.size.y - diff.y,
                                                       MIN_SIZE,
-                                                      editorInstance.recordings
-                                                        .display.height
+                                                      display.height
                                                     )
                                                   )
                                                 );

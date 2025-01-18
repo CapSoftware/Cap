@@ -3,6 +3,10 @@ import {
   createPresignedPost,
   type PresignedPost,
 } from "@aws-sdk/s3-presigned-post";
+import {
+  CloudFrontClient,
+  CreateInvalidationCommand,
+} from "@aws-sdk/client-cloudfront";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets } from "@cap/database/schema";
@@ -17,15 +21,9 @@ export async function POST(request: NextRequest) {
 
     if (!fileKey) {
       console.error("Missing required fields in /api/upload/signed/route.ts");
-
-      return new Response(
-        JSON.stringify({ error: "Missing required fields" }),
-        {
-          status: 400,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
+      return Response.json(
+        { error: "Missing required fields" },
+        { status: 400 }
       );
     }
 
@@ -45,65 +43,141 @@ export async function POST(request: NextRequest) {
     console.log("/api/upload/signed user", user);
 
     if (!user) {
-      return new Response(JSON.stringify({ error: true }), {
-        status: 401,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+      return Response.json({ error: true }, { status: 401 });
     }
 
-    const [bucket] = await db
-      .select()
-      .from(s3Buckets)
-      .where(eq(s3Buckets.ownerId, user.id));
+    try {
+      const [bucket] = await db
+        .select()
+        .from(s3Buckets)
+        .where(eq(s3Buckets.ownerId, user.id));
 
-    const s3Client = createS3Client(bucket);
+      const s3Config = bucket
+        ? {
+            endpoint: bucket.endpoint || undefined,
+            region: bucket.region,
+            accessKeyId: bucket.accessKeyId,
+            secretAccessKey: bucket.secretAccessKey,
+          }
+        : null;
 
-    const contentType = fileKey.endsWith(".aac")
-      ? "audio/aac"
-      : fileKey.endsWith(".webm")
-      ? "audio/webm"
-      : fileKey.endsWith(".mp4")
-      ? "video/mp4"
-      : fileKey.endsWith(".mp3")
-      ? "audio/mpeg"
-      : fileKey.endsWith(".m3u8")
-      ? "application/x-mpegURL"
-      : "video/mp2t";
+      if (
+        !bucket ||
+        !s3Config ||
+        bucket.bucketName !== process.env.CAP_S3_BUCKET
+      ) {
+        const distributionId = process.env.CAP_CLOUDFRONT_DISTRIBUTION_ID;
+        if (distributionId) {
+          console.log("Creating CloudFront invalidation for", fileKey);
 
-    const Fields = {
-      "Content-Type": contentType,
-      "x-amz-meta-userid": user.id,
-      "x-amz-meta-duration": duration ?? "",
-      "x-amz-meta-bandwidth": bandwidth ?? "",
-      "x-amz-meta-resolution": resolution ?? "",
-      "x-amz-meta-videocodec": videoCodec ?? "",
-      "x-amz-meta-audiocodec": audioCodec ?? "",
-    };
+          const cloudfront = new CloudFrontClient({
+            region: process.env.NEXT_PUBLIC_CAP_AWS_REGION || "us-east-1",
+            credentials: {
+              accessKeyId: process.env.CAP_AWS_ACCESS_KEY || "",
+              secretAccessKey: process.env.CAP_AWS_SECRET_KEY || "",
+            },
+          });
 
-    const presignedPostData: PresignedPost = await createPresignedPost(
-      s3Client,
-      { Bucket: getS3Bucket(bucket), Key: fileKey, Fields, Expires: 1800 }
-    );
+          const pathToInvalidate = "/" + fileKey;
 
-    console.log("Presigned URL created successfully");
+          try {
+            const invalidation = await cloudfront.send(
+              new CreateInvalidationCommand({
+                DistributionId: distributionId,
+                InvalidationBatch: {
+                  CallerReference: `${Date.now()}`,
+                  Paths: {
+                    Quantity: 1,
+                    Items: [pathToInvalidate],
+                  },
+                },
+              })
+            );
+            console.log("CloudFront invalidation created:", invalidation);
+          } catch (error) {
+            console.error("Failed to create CloudFront invalidation:", error);
+          }
+        }
+      }
 
-    return new Response(JSON.stringify({ presignedPostData }), {
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+      console.log("Creating S3 client with config:", {
+        hasEndpoint: !!s3Config?.endpoint,
+        hasRegion: !!s3Config?.region,
+        hasAccessKey: !!s3Config?.accessKeyId,
+        hasSecretKey: !!s3Config?.secretAccessKey,
+      });
+
+      const s3Client = await createS3Client(s3Config);
+
+      const contentType = fileKey.endsWith(".aac")
+        ? "audio/aac"
+        : fileKey.endsWith(".webm")
+        ? "audio/webm"
+        : fileKey.endsWith(".mp4")
+        ? "video/mp4"
+        : fileKey.endsWith(".mp3")
+        ? "audio/mpeg"
+        : fileKey.endsWith(".m3u8")
+        ? "application/x-mpegURL"
+        : "video/mp2t";
+
+      const Fields = {
+        "Content-Type": contentType,
+        "x-amz-meta-userid": user.id,
+        "x-amz-meta-duration": duration ?? "",
+        "x-amz-meta-bandwidth": bandwidth ?? "",
+        "x-amz-meta-resolution": resolution ?? "",
+        "x-amz-meta-videocodec": videoCodec ?? "",
+        "x-amz-meta-audiocodec": audioCodec ?? "",
+      };
+
+      const bucketName = await getS3Bucket(bucket);
+
+      const presignedPostData: PresignedPost = await createPresignedPost(
+        s3Client,
+        {
+          Bucket: bucketName,
+          Key: fileKey,
+          Fields,
+          Expires: 1800,
+        }
+      );
+
+      console.log("Presigned URL created successfully");
+
+      // After successful presigned URL creation, trigger revalidation
+      const videoId = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
+      if (videoId) {
+        try {
+          await fetch(`${process.env.NEXT_PUBLIC_URL}/api/revalidate`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ videoId }),
+          });
+        } catch (revalidateError) {
+          console.error("Failed to revalidate page:", revalidateError);
+        }
+      }
+
+      return Response.json({ presignedPostData });
+    } catch (s3Error) {
+      console.error("S3 operation failed:", s3Error);
+      throw new Error(
+        `S3 operation failed: ${
+          s3Error instanceof Error ? s3Error.message : "Unknown error"
+        }`
+      );
+    }
   } catch (error) {
     console.error("Error creating presigned URL", error);
-    return new Response(
-      JSON.stringify({ error: "Error creating presigned URL" }),
+    return Response.json(
       {
-        status: 500,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+        error: "Error creating presigned URL",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
     );
   }
 }

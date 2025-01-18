@@ -18,16 +18,13 @@
     "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
     "core:window:allow-set-position",
+    "core:window:allow-set-theme",
+    "core:window:allow-set-progress-bar",
     "core:webview:default",
     "core:webview:allow-create-webview-window",
     "core:app:allow-version",
     "shell:default",
-    "fs:default",
-    "fs:read-files",
-    "fs:allow-picture-read",
-    "fs:allow-font-meta",
     "core:image:default",
-    "fs:allow-audio-read",
     "dialog:default",
     "store:default",
     "process:default",
@@ -36,7 +33,10 @@
     "notification:default",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "https://cap.so" }]
+      "allow": [
+        { "url": "https://cap.so" },
+        { "url": "http://localhost:3000/*" }
+      ]
     }
   ]
 }

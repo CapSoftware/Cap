@@ -1,4 +1,6 @@
-use std::{ffi::OsString, path::PathBuf};
+use std::future::Future;
+
+use tracing::Instrument;
 
 #[cfg(windows)]
 pub fn get_last_win32_error_formatted() -> String {
@@ -31,67 +33,12 @@ pub fn format_error_message(error_code: u32) -> String {
     }
 }
 
-#[cfg(unix)]
-fn create_named_pipe(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    use nix::sys::stat;
-    use nix::unistd;
-    std::fs::remove_file(path).ok();
-    unistd::mkfifo(path, stat::Mode::S_IRWXU)?;
-    Ok(())
-}
-
-pub fn create_channel_named_pipe(
-    mut rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    unix_path: PathBuf,
-) -> OsString {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-
-        create_named_pipe(&unix_path).unwrap();
-
-        let path = unix_path.clone();
-        tokio::spawn(async move {
-            let mut file = std::fs::File::create(&path).unwrap();
-            println!("video pipe opened");
-
-            while let Some(bytes) = rx.recv().await {
-                file.write_all(&bytes).unwrap();
-            }
-
-            println!("done writing to video pipe");
-        });
-
-        unix_path.into_os_string()
-    }
-
-    #[cfg(windows)]
-    {
-        use tokio::io::AsyncWriteExt;
-        use tokio::net::windows::named_pipe::ServerOptions;
-
-        let uuid = uuid::Uuid::new_v4();
-        let pipe_name = format!(r#"\\.\pipe\{uuid}"#);
-
-        let mut server = ServerOptions::new()
-            .first_pipe_instance(true)
-            .create(&pipe_name)
-            .unwrap();
-
-        tokio::spawn({
-            async move {
-                println!("video pipe opened");
-
-                server.connect().await.unwrap();
-
-                while let Some(bytes) = rx.recv().await {
-                    server.write_all(&bytes).await.unwrap();
-                }
-
-                println!("done writing to video pipe");
-            }
-        });
-
-        pipe_name.into()
-    }
+/// Wrapper around tokio::spawn that inherits the current tracing subscriber and span.
+pub fn spawn_actor<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    use tracing::instrument::WithSubscriber;
+    tokio::spawn(future.with_current_subscriber().in_current_span())
 }

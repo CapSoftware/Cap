@@ -89,7 +89,24 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const { video, bucket } = query[0];
+  const result = query[0];
+  if (!result) {
+    return new Response(
+      JSON.stringify({ error: true, message: "Video does not exist" }),
+      {
+        status: 401,
+        headers: {
+          "Access-Control-Allow-Origin": allowedOrigins.includes(origin)
+            ? origin
+            : "null",
+          "Access-Control-Allow-Credentials": "true",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+        },
+      }
+    );
+  }
+
+  const { video, bucket } = result;
 
   if (video.jobId !== null || video.ownerId !== userId) {
     return new Response(JSON.stringify({ assetId: video.jobId }), {
@@ -104,12 +121,12 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const Bucket = getS3Bucket(bucket);
+  const Bucket = await getS3Bucket(bucket);
   const videoPrefix = `${userId}/${videoId}/video/`;
   const audioPrefix = `${userId}/${videoId}/audio/`;
 
   try {
-    const s3Client = createS3Client(bucket);
+    const s3Client = await createS3Client(bucket);
 
     const videoSegmentCommand = new ListObjectsV2Command({
       Bucket,

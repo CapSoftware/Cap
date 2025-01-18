@@ -1,3 +1,5 @@
+import { commands } from "./tauri";
+
 const planIds = {
   development: {
     yearly: "price_1Q3esrFJxA1XpeSsFwp486RN",
@@ -17,11 +19,7 @@ export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
   return planIds[environment]?.[billingCycle] || "";
 };
 
-export const isUserOnProPlan = ({
-  subscriptionStatus,
-}: {
-  subscriptionStatus: string;
-}) => {
+export function isUserOnProPlan({ subscriptionStatus }: { subscriptionStatus: string | null }): boolean {
   if (
     subscriptionStatus === "active" ||
     subscriptionStatus === "trialing" ||
@@ -30,6 +28,5 @@ export const isUserOnProPlan = ({
   ) {
     return true;
   }
-
   return false;
-};
+}

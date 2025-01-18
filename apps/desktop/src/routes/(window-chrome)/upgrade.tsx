@@ -1,15 +1,17 @@
 import { createSignal, onCleanup, onMount } from "solid-js";
-import { getProPlanId } from "~/utils/plans";
-import { commands } from "~/utils/tauri";
-import { clientEnv } from "~/utils/env";
-import { authStore } from "../../store";
 import { Button } from "@cap/ui-solid";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { authStore } from "../../store";
+import { getProPlanId } from "~/utils/plans";
+import { commands } from "~/utils/tauri";
+import { apiClient, protectedHeaders } from "~/utils/web-api";
+
 export default function Page() {
   const proFeatures = [
+    "Remove watermark from recordings",
     "Unlimited cloud storage & Shareable links",
-    "Connect custom S3 storage bucket (soon!)",
+    "Connect custom S3 storage bucket",
     "Advanced teams features",
     "Unlimited views",
     "Password protected videos",
@@ -25,7 +27,7 @@ export default function Page() {
     setIsAnnual(!isAnnual());
   };
 
-  const getCheckoutUrl = async () => {
+  const openCheckoutInExternalBrowser = async () => {
     setLoading(true);
     const planId = getProPlanId(isAnnual() ? "yearly" : "monthly");
 
@@ -39,23 +41,13 @@ export default function Page() {
         return;
       }
 
-      console.log("auth:", auth);
+      const response = await apiClient.desktop.getProSubscribeURL({
+        body: { priceId: planId },
+        headers: await protectedHeaders(),
+      });
 
-      const response = await fetch(
-        `${clientEnv.VITE_SERVER_URL}/api/desktop/subscribe?origin=${window.location.origin}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${auth.token}`,
-          },
-          body: JSON.stringify({ priceId: planId }),
-        }
-      );
-
-      if (response.ok) {
-        const data = await response.json();
-        commands.openExternalLink(data.url);
+      if (response.status === 200) {
+        commands.openExternalLink(response.body.url);
       } else {
         console.error("Failed to get checkout URL");
       }
@@ -105,23 +97,26 @@ export default function Page() {
       {!upgradeComplete() && (
         <>
           <div class="text-center">
-            <h1 class="text-4xl md:text-5xl mb-3 tracking-[-.05em] font-medium">
+            <h1 class="text-4xl md:text-4xl mb-3 tracking-[-.05em] font-medium text-[--text-primary]">
               Upgrade to Cap Pro
             </h1>
             <p class="text-base font-normal leading-6 text-gray-400">
               Cap is currently in public beta, and we're offering special early
-              adopter pricing to our first users. This pricing will be locked in
-              for the lifetime of your subscription.
+              adopter pricing to our first users.{" "}
+              <span class="text-gray-500">
+                This pricing will be locked in for the lifetime of your
+                subscription.
+              </span>
             </p>
           </div>
           <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100">
-            <div class="border text-card-foreground shadow-sm bg-blue-300 p-3 md:p-8 rounded-xl flex-grow border-blue-500/20">
+            <div class="border text-card-foreground shadow-sm bg-blue-300 p-3 md:p-3 rounded-xl flex-grow border-blue-500/20">
               <div class="space-y-3">
                 <div class="flex flex-col space-y-1.5 pt-6 px-6 pb-3">
-                  <h3 class="font-medium tracking-tight text-3xl text-gray-50">
+                  <h3 class="font-medium tracking-tight text-2xl text-gray-50">
                     Cap Pro — Early Adopter Pricing
                   </h3>
-                  <p class="text-[0.875rem] leading-[1.25rem] text-gray-50/80">
+                  <p class="text-[0.875rem] leading-[1.25rem] text-gray-50">
                     For professional use and teams.
                   </p>
                   <div>
@@ -130,13 +125,13 @@ export default function Page() {
                         {isAnnual() ? "$6/mo" : "$9/mo"}
                       </h3>
                       <div>
-                        <p class="text-sm font-medium text-gray-50/80">
+                        <p class="text-sm font-medium text-gray-50">
                           {isAnnual()
                             ? "per user, billed annually."
                             : "per user, billed monthly."}
                         </p>
                         {isAnnual() && (
-                          <p class="text-sm text-gray-50/80">
+                          <p class="text-sm text-gray-50">
                             or, $9/month, billed monthly.
                           </p>
                         )}
@@ -146,7 +141,7 @@ export default function Page() {
                 </div>
                 <div class="mt-3 px-3 md:px-8">
                   <div class="flex items-center mt-3 pt-4 pb-1 border-t-2 border-gray-50/20">
-                    <span class="text-xs text-gray-50/80 mr-2">
+                    <span class="text-xs text-gray-50 mr-2">
                       Switch to {isAnnual() ? "monthly" : "annually"}
                     </span>
                     <button
@@ -155,35 +150,35 @@ export default function Page() {
                       aria-checked={isAnnual()}
                       data-state={isAnnual() ? "unchecked" : "checked"}
                       value={isAnnual() ? "on" : "off"}
-                      class="peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 bg-blue-400"
+                      class="peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 bg-[--blue-400]"
                       onClick={togglePricing}
                     >
                       <span
                         data-state={isAnnual() ? "unchecked" : "checked"}
-                        class="pointer-events-none block h-4 w-4 rounded-full bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0"
+                        class="pointer-events-none block h-4 w-4 rounded-full bg-[--gray-50] shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0"
                       />
                     </button>
                   </div>
                 </div>
                 <div class="px-6 pb-4 pt-0">
                   <button
-                    onClick={getCheckoutUrl}
-                    class="flex items-center justify-center rounded-full bg-gray-50 text-gray-900 hover:bg-gray-200 disabled:bg-gray-100 border border-gray-300 font-medium text-lg px-6 h-12 w-full no-underline"
+                    onClick={openCheckoutInExternalBrowser}
+                    class="flex items-center justify-center rounded-full bg-[--gray-50] hover:bg-[--gray-200] disabled:bg-[--gray-100] border border-[--gray-300] font-medium text-lg px-6 h-12 w-full no-underline"
                     disabled={loading()}
                   >
                     {loading() ? "Loading..." : "Upgrade to Cap Pro"}
                   </button>
                 </div>
                 <div class="flex items-center px-6 pb-6 pt-0">
-                  <div class="space-y-8">
+                  <div class="space-y-6">
                     <div>
                       <ul class="list-none p-0 space-y-3">
                         {proFeatures.map((feature) => (
                           <li class="flex items-center justify-start">
                             <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
-                              <IconLucideCheck class="w-5 h-5 stroke-[4px] text-gray-50" />
+                              <IconLucideCheck class="w-4 h-4 stroke-[4px] text-[--gray-50]" />
                             </div>
-                            <span class="ml-2 text-lg text-gray-50">
+                            <span class="ml-2 text-[0.9rem] text-gray-50">
                               {feature}
                             </span>
                           </li>

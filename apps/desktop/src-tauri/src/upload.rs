@@ -12,6 +12,7 @@ use tokio::task;
 use crate::web_api::{self, ManagerExt};
 
 use crate::UploadProgress;
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -19,8 +20,49 @@ use specta::Type;
 pub struct S3UploadMeta {
     id: String,
     user_id: String,
+    #[serde(default)]
     aws_region: String,
+    #[serde(default, deserialize_with = "deserialize_empty_object_as_string")]
     aws_bucket: String,
+}
+
+fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringOrObject;
+
+    impl<'de> de::Visitor<'de> for StringOrObject {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("string or empty object")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<String, E>
+        where
+            E: de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_map<M>(self, _map: M) -> Result<String, M::Error>
+        where
+            M: de::MapAccess<'de>,
+        {
+            // Return empty string for empty objects
+            Ok(String::new())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrObject)
 }
 
 impl S3UploadMeta {
@@ -46,6 +88,17 @@ impl S3UploadMeta {
             user_id,
             aws_region,
             aws_bucket,
+        }
+    }
+
+    pub fn ensure_defaults(&mut self) {
+        if self.aws_region.is_empty() {
+            self.aws_region = std::env::var("NEXT_PUBLIC_CAP_AWS_REGION")
+                .unwrap_or_else(|_| "us-east-1".to_string());
+        }
+        if self.aws_bucket.is_empty() {
+            self.aws_bucket =
+                std::env::var("NEXT_PUBLIC_CAP_AWS_BUCKET").unwrap_or_else(|_| "capso".to_string());
         }
     }
 }
@@ -147,7 +200,7 @@ pub async fn upload_video(
         },
     )?;
 
-    let (upload_url, mut form) = presigned_s3_url(app, body).await?;
+    let (upload_url, form) = presigned_s3_url(app, body).await?;
 
     let file_bytes = tokio::fs::read(&file_path)
         .await
@@ -196,7 +249,7 @@ pub async fn upload_video(
             .map_err(|e| format!("Error setting MIME type: {}", e))?
         };
 
-    let mut form = form.part("file", file_part);
+    let form = form.part("file", file_part);
 
     // Prepare screenshot upload
     let screenshot_path = file_path
@@ -456,13 +509,14 @@ pub async fn get_s3_config(
         .await
         .map_err(|e| format!("Failed to read response body: {}", e))?;
 
-    let config = serde_json::from_str::<S3UploadMeta>(&response_text).map_err(|e| {
+    let mut config = serde_json::from_str::<S3UploadMeta>(&response_text).map_err(|e| {
         format!(
             "Failed to deserialize response: {}. Response body: {}",
             e, response_text
         )
     })?;
 
+    config.ensure_defaults();
     Ok(config)
 }
 

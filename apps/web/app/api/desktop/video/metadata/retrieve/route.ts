@@ -11,29 +11,19 @@ export async function GET(request: NextRequest) {
     const videoId = url.searchParams.get("videoId");
 
     if (!videoId) {
-      return new Response(
-        JSON.stringify({ error: "Missing required fields" }),
-        {
-          status: 400,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
+      return Response.json(
+        { error: "Missing required fields" },
+        { status: 400 }
       );
     }
 
     const query = await db.select().from(videos).where(eq(videos.id, videoId));
 
     if (query.length === 0) {
-      return new Response(JSON.stringify({ error: "Video not found" }), {
-        status: 404,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
+      return Response.json({ error: "Video not found" }, { status: 404 });
     }
 
-    const video = query[0];
+    const video = query[0]!;
     const videoStartTime = video.videoStartTime
       ? new Date(video.videoStartTime).getTime()
       : 0;
@@ -43,22 +33,12 @@ export async function GET(request: NextRequest) {
 
     const timeDifference = videoStartTime - audioStartTime;
 
-    return new Response(
-      JSON.stringify({ success: true, difference: timeDifference }),
-      {
-        status: 200,
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }
+    return Response.json(
+      { success: true, difference: timeDifference },
+      { status: 200 }
     );
   } catch (error) {
     console.error("Error updating video or audio start time", error);
-    return new Response(JSON.stringify({ error: "Internal server error" }), {
-      status: 500,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    return Response.json({ error: "Internal server error" }, { status: 500 });
   }
 }

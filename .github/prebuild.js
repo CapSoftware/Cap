@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { exec as execCb } from "node:child_process";
 import { env } from "node:process";
 import { promisify } from "node:util";
+import { createTauriPlatformConfigs } from "../apps/desktop/scripts/prepare.js";
 
 const exec = promisify(execCb);
 const signId = env.APPLE_SIGNING_IDENTITY || "-";
@@ -58,45 +59,74 @@ rustflags = [
   await exec(`tar xf ${__root}/native-deps.tar.xz -C ${nativeDeps}`);
 
   if (os === "darwin") {
+    const frameworkDir = path.join(nativeDeps, "Spacedrive.framework");
+
+    const headersDir = path.join(frameworkDir, "Headers");
+    const librariesDir = path.join(frameworkDir, "Libraries");
+
+    const libraries = await fs.readdir(librariesDir);
+
+    const unnecessaryLibraries = libraries.filter(
+      (v) =>
+        !(
+          v.startsWith("libav") ||
+          v.startsWith("libsw") ||
+          v.startsWith("libpostproc")
+        )
+    );
+
+    for (const lib of unnecessaryLibraries) {
+      await fs.rm(path.join(librariesDir, lib), { recursive: true });
+    }
+
+    const headers = await fs.readdir(headersDir);
+
+    const unnecessaryHeaders = headers.filter(
+      (v) =>
+        !(
+          v.startsWith("libav") ||
+          v.startsWith("libsw") ||
+          v.startsWith("libpostproc")
+        )
+    );
+
+    for (const header of unnecessaryHeaders) {
+      await fs.rm(path.join(headersDir, header), { recursive: true });
+    }
+
+    await fs.rm(path.join(frameworkDir, "Resources", "Models"), {
+      recursive: true,
+    });
+
     await symlinkSharedLibsMacOS(nativeDeps).catch((e) => {
       console.error(`Failed to symlink shared libs.`);
       throw e;
     });
 
-    await fs.writeFile(
-      `${srcTauri}/tauri.macos.conf.json`,
-      JSON.stringify(
-        {
-          bundle: {
-            macOS: {
-              frameworks: [path.join(nativeDeps, "Spacedrive.framework")],
-            },
-          },
+    createTauriPlatformConfigs("darwin", {
+      bundle: {
+        macOS: {
+          frameworks: [path.join(nativeDeps, "Spacedrive.framework")],
         },
-        null,
-        4
-      )
-    );
+      },
+    });
   } else if (os === "windows") {
-    const binFiles = await fs.readdir(path.join(nativeDeps, "bin"));
-
-    await fs.writeFile(
-      `${srcTauri}/tauri.windows.conf.json`,
-      JSON.stringify(
-        {
-          bundle: {
-            resources: binFiles.filter(
-              (f) =>
-                f.endsWith(".dll") && (f.startsWith("av") || f.startsWith("sw"))
-            ),
-          },
-        },
-        null,
-        4
-      )
-    );
-
-    console.log();
+    // const binFiles = await fs.readdir(path.join(nativeDeps, "bin"));
+    // await fs.writeFile(
+    //   `${srcTauri}/tauri.windows.conf.json`,
+    //   JSON.stringify(
+    //     {
+    //       bundle: {
+    //         resources: binFiles.filter(
+    //           (f) =>
+    //             f.endsWith(".dll") && (f.startsWith("av") || f.startsWith("sw"))
+    //         ),
+    //       },
+    //     },
+    //     null,
+    //     4
+    //   )
+    // );
   }
 }
 

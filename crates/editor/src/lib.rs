@@ -1,7 +1,5 @@
 mod editor;
 mod editor_instance;
 mod playback;
-mod project_recordings;
 
-pub use editor_instance::{EditorInstance, EditorState, FRAMES_WS_PATH};
-pub use project_recordings::ProjectRecordings;
+pub use editor_instance::{create_segments, EditorInstance, EditorState, Segment};

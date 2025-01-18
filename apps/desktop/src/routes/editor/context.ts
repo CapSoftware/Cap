@@ -1,10 +1,18 @@
+// @refresh reload
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createUndoHistory } from "@solid-primitives/history";
 import { debounce } from "@solid-primitives/scheduled";
-import { createEffect, createSignal, on } from "solid-js";
+import {
+  Accessor,
+  createEffect,
+  createResource,
+  createSignal,
+  on,
+} from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
+import { createElementBounds } from "@solid-primitives/bounds";
 
 import type { PresetsStore } from "../../store";
 import {
@@ -12,9 +20,11 @@ import {
   type SerializedEditorInstance,
   type XY,
   commands,
+  events,
 } from "~/utils/tauri";
-import { useEditorInstanceContext } from "./editorInstanceContext";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
+import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import { createPresets } from "~/utils/createPresets";
 
 export type CurrentDialog =
   | { type: "createPreset" }
@@ -24,6 +34,13 @@ export type CurrentDialog =
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
 
+export const FPS = 30;
+
+export const OUTPUT_SIZE = {
+  x: 1920,
+  y: 1080,
+};
+
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
   (props: {
     editorInstance: SerializedEditorInstance;
@@ -32,7 +49,14 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
     const editorInstanceContext = useEditorInstanceContext();
     const [project, setProject] = createStore<ProjectConfiguration>(
       props.editorInstance.savedProjectConfig ??
-        props.presets.presets[props.presets.default ?? 0]?.config ??
+        (() => {
+          const config =
+            props.presets.presets[props.presets.default ?? 0]?.config;
+          if (!config) return;
+          // @ts-ignore
+          config.timeline = undefined;
+          return config;
+        })() ??
         DEFAULT_PROJECT_CONFIG
     );
 
@@ -92,6 +116,45 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
   null!
 );
 
+export type FrameData = { width: number; height: number; data: ImageData };
+
+export const [EditorInstanceContextProvider, useEditorInstanceContext] =
+  createContextProvider((props: { videoId: string }) => {
+    const [latestFrame, setLatestFrame] = createLazySignal<{
+      width: number;
+      data: ImageData;
+    }>();
+
+    const [editorInstance] = createResource(async () => {
+      const instance = await commands.createEditorInstance(props.videoId);
+
+      const [ws, isConnected] = createImageDataWS(
+        instance.framesSocketUrl,
+        setLatestFrame
+      );
+
+      createEffect(() => {
+        if (isConnected()) {
+          events.renderFrameEvent.emit({
+            frame_number: Math.floor(0),
+            fps: FPS,
+            resolution_base: OUTPUT_SIZE,
+          });
+        }
+      });
+
+      return instance;
+    });
+
+    return {
+      editorInstance,
+      videoId: props.videoId,
+      latestFrame,
+      presets: createPresets(),
+      prettyName: () => editorInstance()?.prettyName ?? "Cap Recording",
+    };
+  }, null!);
+
 function createStoreHistory<T extends Static>(
   ...[state, setState]: ReturnType<typeof createStore<T>>
 ) {
@@ -148,3 +211,35 @@ type Static<T = unknown> =
       [K in number | string]: T;
     }
   | T[];
+
+export const [TimelineContextProvider, useTimelineContext] =
+  createContextProvider((props: { duration: number }) => {
+    return {
+      duration: () => props.duration,
+    };
+  }, null!);
+
+export const [TrackContextProvider, useTrackContext] = createContextProvider(
+  (props: {
+    ref: Accessor<Element | undefined>;
+    isFreeForm: Accessor<boolean>;
+  }) => {
+    const [trackState, setTrackState] = createStore({
+      draggingHandle: false,
+    });
+    const bounds = createElementBounds(() => props.ref());
+
+    return {
+      trackBounds: bounds,
+      isFreeForm: () => props.isFreeForm(),
+      trackState,
+      setTrackState,
+    };
+  },
+  null!
+);
+
+export const [SegmentContextProvider, useSegmentContext] =
+  createContextProvider((props: { width: Accessor<number> }) => {
+    return props;
+  }, null!);
