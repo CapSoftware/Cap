@@ -6,7 +6,9 @@ use cap_project::{RecordingMeta, XY};
 use cap_recording::RecordingOptions;
 use cap_rendering::RenderVideoConstants;
 use clap::{Args, Parser, Subcommand};
+use instrument::WithSubscriber;
 use tokio::io::AsyncBufReadExt;
+use tracing::*;
 use uuid::Uuid;
 
 #[derive(Parser)]
@@ -121,6 +123,8 @@ async fn main() -> Result<(), String> {
                 render_constants,
                 &segments,
                 fps,
+                XY::new(1920, 1080),
+                true,
             )
             .unwrap();
 
@@ -192,8 +196,6 @@ window {}:
                     })
                     .ok_or("No target specified".to_string())??;
 
-                dbg!(&target_info);
-
                 let id = Uuid::new_v4().to_string();
                 let path = args
                     .path
@@ -215,14 +217,14 @@ window {}:
                 .await
                 .map_err(|e| e.to_string())?;
 
-                println!("Recording starting, press Enter to stop");
+                info!("Recording starting, press Enter to stop");
 
                 tokio::io::BufReader::new(tokio::io::stdin())
                     .read_line(&mut String::new())
                     .await
                     .unwrap();
 
-                println!("Recording stopped");
+                info!("Recording stopped");
 
                 actor.stop().await.unwrap();
             }
@@ -232,3 +234,35 @@ window {}:
 
     Ok(())
 }
+
+// fn ffmpeg_callback_experiment() {
+//     unsafe {
+//         unsafe extern "C" fn ffmpeg_log_callback(
+//             arg1: *mut std::ffi::c_void,
+//             arg2: std::ffi::c_int,
+//             arg3: *const std::ffi::c_char,
+//             arg4: *mut std::ffi::c_char,
+//         ) {
+//             // ffmpeg::sys::AVClass;
+
+//             if !arg1.is_null() {
+//                 let arg1_ptr = arg1;
+//                 let arg1 = **(arg1 as *mut *mut AVClass);
+//                 dbg!(CStr::from_ptr(arg1.class_name));
+//                 if let Some(item_name_fn) = arg1.item_name {
+//                     dbg!(CStr::from_ptr(item_name_fn(arg1_ptr)));
+//                 }
+//             }
+
+//             // let class_name = if !arg1.is_null() {
+//             //     CStr::from_ptr((*arg1).class_name)
+//             // } else {
+//             //     "unknown".to_string()
+//             // };
+
+//             // println!("[{class_name}] {arg2} {s:?}",);
+//         }
+
+//         ffmpeg::sys::av_log_set_callback(Some(ffmpeg_log_callback));
+//     }
+// }

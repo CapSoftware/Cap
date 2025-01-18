@@ -19,11 +19,7 @@ export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
   return planIds[environment]?.[billingCycle] || "";
 };
 
-export const isUserOnProPlan = ({
-  subscriptionStatus,
-}: {
-  subscriptionStatus: string;
-}) => {
+export function isUserOnProPlan({ subscriptionStatus }: { subscriptionStatus: string | null }): boolean {
   if (
     subscriptionStatus === "active" ||
     subscriptionStatus === "trialing" ||
@@ -32,13 +28,5 @@ export const isUserOnProPlan = ({
   ) {
     return true;
   }
-
   return false;
-};
-
-export const checkIsUpgradedAndUpdate = () => commands
-    .checkUpgradedAndUpdate()
-    .catch((e) => {
-      console.error("Failed to check plan: ", e);
-      return false;
-    });
+}

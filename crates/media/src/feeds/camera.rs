@@ -88,6 +88,10 @@ impl CameraFeed {
         }
     }
 
+    pub fn camera_info(&self) -> CameraInfo {
+        self.camera_info.clone()
+    }
+
     pub fn video_info(&self) -> VideoInfo {
         self.video_info
     }

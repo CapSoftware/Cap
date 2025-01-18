@@ -20,3 +20,6 @@ editor = "0.1.1"
 scap.workspace = true
 core-graphics = "0.24.0"
 uuid = { version = "1.11.1", features = ["v4"] }
+ffmpeg = { workspace = true }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"

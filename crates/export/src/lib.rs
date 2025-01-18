@@ -5,7 +5,7 @@ use cap_media::{
     feeds::{AudioData, AudioFrameBuffer},
     MediaError,
 };
-use cap_project::{ProjectConfiguration, RecordingMeta};
+use cap_project::{ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants, RenderedFrame,
     SegmentVideoPaths,
@@ -43,6 +43,8 @@ pub struct Exporter<TOnProgress> {
     meta: RecordingMeta,
     render_constants: Arc<RenderVideoConstants>,
     fps: u32,
+    resolution_base: XY<u32>,
+    is_upgraded: bool,
 }
 
 impl<TOnProgress> Exporter<TOnProgress>
@@ -58,11 +60,14 @@ where
         render_constants: Arc<RenderVideoConstants>,
         segments: &[Segment],
         fps: u32,
+        resolution_base: XY<u32>,
+        is_upgraded: bool,
     ) -> Result<Self, ExportError> {
         let output_folder = output_path.parent().unwrap();
         std::fs::create_dir_all(output_folder)?;
 
-        let output_size = ProjectUniforms::get_output_size(&render_constants.options, &project);
+        let output_size =
+            ProjectUniforms::get_output_size(&render_constants.options, &project, resolution_base);
 
         let (render_segments, audio_segments): (Vec<_>, Vec<_>) = segments
             .iter()
@@ -104,6 +109,8 @@ where
             audio_segments,
             output_size,
             fps,
+            resolution_base,
+            is_upgraded,
         })
     }
 
@@ -228,7 +235,7 @@ where
                         RawVideoFormat::Rgba,
                         self.output_size.0,
                         self.output_size.1,
-                        30,
+                        self.fps,
                     )
                     .wrap_frame(
                         &frame.data,
@@ -255,16 +262,20 @@ where
 
                 // Save the first frame as a screenshot and thumbnail
                 if let Some(frame) = first_frame {
-                    let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-                        ImageBuffer::from_raw(frame.width, frame.height, frame.data)
-                            .expect("Failed to create image from frame data");
-
-                    // Convert RGBA to RGB
-                    let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
-                        ImageBuffer::from_fn(frame.width, frame.height, |x, y| {
-                            let rgba = rgba_img.get_pixel(x, y);
-                            image::Rgb([rgba[0], rgba[1], rgba[2]])
-                        });
+                    let rgb_img = ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(
+                        frame.width,
+                        frame.height,
+                        frame
+                            .data
+                            .chunks(frame.padded_bytes_per_row as usize)
+                            .flat_map(|row| {
+                                row[0..(frame.width * 4) as usize]
+                                    .chunks(4)
+                                    .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .expect("Failed to create image from frame data");
 
                     let screenshots_dir = project_path.join("screenshots");
                     std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
@@ -294,6 +305,8 @@ where
             &self.meta,
             self.render_segments,
             self.fps,
+            self.resolution_base,
+            self.is_upgraded,
         )
         .then(|f| async { f.map_err(Into::into) });
 

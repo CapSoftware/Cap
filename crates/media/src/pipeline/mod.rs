@@ -1,5 +1,6 @@
 use indexmap::IndexMap;
 use std::thread::JoinHandle;
+use tracing::{info, trace};
 
 pub mod audio_buffer;
 pub mod builder;
@@ -30,7 +31,6 @@ impl<T: PipelineClock> Pipeline<T> {
             return Err(MediaError::ShutdownPipeline);
         };
 
-        println!("Starting pipeline execution");
         self.clock.start();
         self.control.broadcast(Control::Play).await
     }
@@ -40,7 +40,6 @@ impl<T: PipelineClock> Pipeline<T> {
             return Err(MediaError::ShutdownPipeline);
         };
 
-        println!("Pausing pipeline execution");
         self.clock.stop();
         self.control.broadcast(Control::Pause).await
     }
@@ -50,12 +49,12 @@ impl<T: PipelineClock> Pipeline<T> {
             return Err(MediaError::ShutdownPipeline);
         };
 
-        println!("Shutting down pipeline execution");
+        trace!("Shutting down pipeline execution");
         let _ = self.control.broadcast(Control::Shutdown).await;
         for (_name, task) in self.task_handles.drain(..) {
             let _ = task.join();
         }
-        println!("Pipeline has been stopped.");
+        info!("Pipeline has been stopped.");
         // TODO: Collect shutdown errors?
         Ok(())
     }

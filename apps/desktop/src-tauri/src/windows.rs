@@ -25,6 +25,7 @@ pub enum CapWindowId {
     Camera,
     InProgressRecording,
     Upgrade,
+    SignIn,
 }
 
 impl FromStr for CapWindowId {
@@ -40,6 +41,7 @@ impl FromStr for CapWindowId {
             "in-progress-recording" => Self::InProgressRecording,
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
+            "signin" => Self::SignIn,
             s if s.starts_with("editor-") => Self::Editor {
                 project_id: s.replace("editor-", ""),
             },
@@ -59,6 +61,7 @@ impl std::fmt::Display for CapWindowId {
             Self::InProgressRecording => write!(f, "in-progress-recording"),
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
+            Self::SignIn => write!(f, "signin"),
             Self::Editor { project_id } => write!(f, "editor-{}", project_id),
         }
     }
@@ -76,6 +79,7 @@ impl CapWindowId {
             Self::WindowCaptureOccluder => "Cap Window Capture Occluder".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
+            Self::SignIn => "Cap Sign In".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -83,7 +87,12 @@ impl CapWindowId {
     pub fn activates_dock(&self) -> bool {
         matches!(
             self,
-            Self::Setup | Self::Main | Self::Editor { .. } | Self::Settings | Self::Upgrade
+            Self::Setup
+                | Self::Main
+                | Self::Editor { .. }
+                | Self::Settings
+                | Self::Upgrade
+                | Self::SignIn
         )
     }
 
@@ -107,6 +116,7 @@ impl CapWindowId {
         Some(match self {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
+            Self::SignIn => (300.0, 360.0),
             Self::Editor { .. } => (900.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
@@ -126,19 +136,17 @@ pub enum ShowCapWindow {
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
+    SignIn,
 }
 
 impl ShowCapWindow {
     pub fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Some(window) = self.id().get(app) {
-            // window.show().ok();
             window.set_focus().ok();
-
             return Ok(window);
         }
 
         let id = self.id();
-
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
@@ -153,6 +161,13 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => self
                 .window_builder(app, "/")
+                .resizable(false)
+                .maximized(false)
+                .maximizable(false)
+                .center()
+                .build()?,
+            Self::SignIn => self
+                .window_builder(app, "/signin")
                 .resizable(false)
                 .maximized(false)
                 .maximizable(false)
@@ -386,6 +401,7 @@ impl ShowCapWindow {
             ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
+            ShowCapWindow::SignIn => CapWindowId::SignIn,
         }
     }
 }

@@ -17,13 +17,14 @@ use cap_flags::FLAGS;
 use cap_media::feeds::CameraFeed;
 use cap_media::sources::{CaptureScreen, CaptureWindow};
 use cap_project::{
-    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment,
+    Content, ProjectConfiguration, TimelineConfiguration, TimelineSegment, ZoomSegment, XY,
 };
 use cap_recording::CompletedRecording;
 use cap_rendering::ProjectRecordings;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
+use tracing::{instrument::WithSubscriber, Level};
 
 #[tauri::command(async)]
 #[specta::specta]
@@ -99,7 +100,6 @@ pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Re
             }
         }
     }
-
     let actor = cap_recording::spawn_recording_actor(
         id,
         recording_dir,
@@ -164,7 +164,6 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
         return Err("Recording not in progress".to_string())?;
     };
 
-    let now = Instant::now();
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
 
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
@@ -253,6 +252,7 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
                         tauri::ipc::Channel::new(|_| Ok(())),
                         true,
                         completed_recording.meta.content.max_fps(),
+                        XY::new(1920, 1080),
                     )
                     .await
                     .ok();

@@ -10,6 +10,7 @@ use ffmpeg::{
     Dictionary, Rescale,
 };
 use ffmpeg_sys_next as sys;
+use tracing::{debug, info, trace};
 
 use super::Output;
 
@@ -121,7 +122,7 @@ impl PipelineSinkTask for H264Encoder {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         input: flume::Receiver<Self::Input>,
     ) {
-        println!("Starting {} video encoding thread", self.tag);
+        trace!("Starting {} video encoding thread", self.tag);
         ready_signal.send(Ok(())).unwrap();
 
         while let Ok(frame) = input.recv() {
@@ -129,10 +130,10 @@ impl PipelineSinkTask for H264Encoder {
             self.process_frame();
         }
 
-        println!("Received last {} frame. Finishing up encoding.", self.tag);
+        trace!("Received last {} frame. Finishing up encoding.", self.tag);
         self.finish();
 
-        println!("Shutting down {} video encoding thread", self.tag);
+        info!("Shut down {} video encoding thread", self.tag);
     }
 }
 

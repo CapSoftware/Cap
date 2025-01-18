@@ -1,5 +1,6 @@
 use flume::{Receiver, Sender};
 use std::time::Instant;
+use tracing::info;
 
 use crate::{
     data::{FFVideo, VideoInfo},
@@ -81,7 +82,7 @@ impl PipelineSourceTask for CameraSource {
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        println!("Preparing camera source thread...");
+        info!("Preparing camera source thread...");
 
         let mut frames_rx: Option<Receiver<RawCameraFrame>> = None;
         ready_signal.send(Ok(())).unwrap();
@@ -120,6 +121,6 @@ impl PipelineSourceTask for CameraSource {
             }
         }
 
-        println!("Shutting down camera source thread.");
+        info!("Shutting down camera source thread.");
     }
 }

@@ -19,6 +19,7 @@ pub struct AuthStore {
 #[derive(Serialize, Deserialize, Type, Debug)]
 pub struct Plan {
     pub upgraded: bool,
+    pub manual: bool,
     pub last_checked: i32,
 }
 
@@ -45,14 +46,29 @@ impl AuthStore {
 
     pub async fn fetch_and_update_plan(app: &AppHandle) -> Result<(), String> {
         let auth = Self::get(app)?;
-        let Some(mut auth) = auth else {
+        let Some(auth) = auth else {
             return Err("User not authenticated".to_string());
         };
 
+        if let Some(plan) = &auth.plan {
+            if plan.manual {
+                return Ok(());
+            }
+        }
+
+        let mut auth = auth;
+        println!(
+            "Fetching plan for user {}",
+            auth.user_id.as_deref().unwrap_or("unknown")
+        );
         let response = app
             .authed_api_request(|client| client.get(web_api::make_url("/api/desktop/plan")))
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                println!("Failed to fetch plan: {}", e);
+                e.to_string()
+            })?;
+        println!("Plan fetch response status: {}", response.status());
 
         if !response.status().is_success() {
             let error_msg = format!("Failed to fetch plan: {}", response.status());
@@ -69,6 +85,7 @@ impl AuthStore {
         auth.plan = Some(Plan {
             upgraded: plan_response.upgraded,
             last_checked: chrono::Utc::now().timestamp() as i32,
+            manual: auth.plan.as_ref().map_or(false, |p| p.manual),
         });
 
         Self::set(app, Some(auth))?;
@@ -77,13 +94,22 @@ impl AuthStore {
     }
 
     pub fn is_upgraded(&self) -> bool {
-        self.plan.as_ref().map_or(false, |plan| plan.upgraded)
+        match &self.plan {
+            Some(plan) => plan.upgraded || plan.manual,
+            None => false,
+        }
     }
 
     pub fn set(app: &AppHandle, value: Option<Self>) -> Result<(), String> {
         let Some(store) = app.get_store("store") else {
             return Err("Store not found".to_string());
         };
+
+        let value = value.map(|mut auth| {
+            // Set expiration to 100 years in the future
+            auth.expires = (chrono::Utc::now() + chrono::Duration::days(36500)).timestamp() as i32;
+            auth
+        });
 
         store.set("auth", json!(value));
         store.save().map_err(|e| e.to_string())

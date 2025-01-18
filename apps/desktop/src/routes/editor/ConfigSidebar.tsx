@@ -551,61 +551,70 @@ export function ConfigSidebar() {
                   />
                 </Subfield>
               </Field>
-              <Field name="Size" icon={<IconCapEnlarge />}>
-                <Slider
-                  value={[project.cursor.size]}
-                  onChange={(v) => setProject("cursor", "size", v[0])}
-                  minValue={20}
-                  maxValue={300}
-                  step={1}
-                />
-              </Field>
-              {window.FLAGS.zoom && (
-                <Field name="Animation Style" icon={<IconLucideRabbit />}>
-                  <RadioGroup
-                    defaultValue="regular"
-                    value={project.cursor.animationStyle}
-                    onChange={(value) => {
-                      console.log("Changing animation style to:", value);
-                      setProject(
-                        "cursor",
-                        "animationStyle",
-                        value as CursorAnimationStyle
-                      );
-                    }}
-                    class="flex flex-col gap-2"
-                  >
-                    {(
-                      Object.entries(CURSOR_ANIMATION_STYLES) as [
-                        CursorAnimationStyle,
-                        string
-                      ][]
-                    ).map(([value, label]) => (
-                      <RadioGroup.Item value={value} class="flex items-center">
-                        <RadioGroup.ItemInput class="peer sr-only" />
-                        <RadioGroup.ItemControl
-                          class={cx(
-                            "w-4 h-4 rounded-full border border-gray-300 mr-2",
-                            "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
-                            "after:transition-colors after:duration-200",
-                            "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
-                            "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
-                            "peer-disabled:opacity-50"
-                          )}
-                        />
-                        <span
-                          class={cx(
-                            "text-gray-500",
-                            "peer-checked:text-gray-900",
-                            "peer-disabled:opacity-50"
-                          )}
-                        >
-                          {label}
-                        </span>
-                      </RadioGroup.Item>
-                    ))}
-                  </RadioGroup>
+              <ComingSoonTooltip>
+                <Field name="Size" icon={<IconCapEnlarge />}>
+                  <Slider
+                    value={[project.cursor.size]}
+                    onChange={(v) => setProject("cursor", "size", v[0])}
+                    minValue={20}
+                    maxValue={300}
+                    step={1}
+                    disabled
+                  />
                 </Field>
+              </ComingSoonTooltip>
+              {window.FLAGS.zoom && (
+                <ComingSoonTooltip>
+                  <Field name="Animation Style" icon={<IconLucideRabbit />}>
+                    <RadioGroup
+                      defaultValue="regular"
+                      value={project.cursor.animationStyle}
+                      onChange={(value) => {
+                        console.log("Changing animation style to:", value);
+                        setProject(
+                          "cursor",
+                          "animationStyle",
+                          value as CursorAnimationStyle
+                        );
+                      }}
+                      class="flex flex-col gap-2"
+                      disabled
+                    >
+                      {(
+                        Object.entries(CURSOR_ANIMATION_STYLES) as [
+                          CursorAnimationStyle,
+                          string
+                        ][]
+                      ).map(([value, label]) => (
+                        <RadioGroup.Item
+                          value={value}
+                          class="flex items-center"
+                        >
+                          <RadioGroup.ItemInput class="peer sr-only" />
+                          <RadioGroup.ItemControl
+                            class={cx(
+                              "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                              "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                              "after:transition-colors after:duration-200",
+                              "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                              "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
+                              "peer-disabled:opacity-50"
+                            )}
+                          />
+                          <span
+                            class={cx(
+                              "text-gray-500",
+                              "peer-checked:text-gray-900",
+                              "peer-disabled:opacity-50"
+                            )}
+                          >
+                            {label}
+                          </span>
+                        </RadioGroup.Item>
+                      ))}
+                    </RadioGroup>
+                  </Field>
+                </ComingSoonTooltip>
               )}
             </>
           ) : (
@@ -703,7 +712,7 @@ export function ConfigSidebar() {
                     )
                   }
                   minValue={1}
-                  maxValue={2.5}
+                  maxValue={4.5}
                   step={0.001}
                 />
               </Field>

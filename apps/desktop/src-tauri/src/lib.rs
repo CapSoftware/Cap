@@ -18,13 +18,14 @@ mod web_api;
 mod windows;
 
 use audio::AppSounds;
-use auth::{AuthStore, AuthenticationInvalid};
+use auth::{AuthStore, AuthenticationInvalid, Plan};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_project::XY;
 use cap_project::{Content, ProjectConfiguration, RecordingMeta, Resolution, SharingMeta};
 use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
@@ -60,6 +61,7 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
+use web_api::ManagerExt;
 use windows::{CapWindowId, ShowCapWindow};
 
 #[derive(specta::Type, Serialize)]
@@ -850,6 +852,7 @@ async fn open_file_path(_app: AppHandle, path: PathBuf) -> Result<(), String> {
 struct RenderFrameEvent {
     frame_number: u32,
     fps: u32,
+    resolution_base: XY<u32>,
 }
 
 #[derive(Serialize, specta::Type, tauri_specta::Event, Debug, Clone)]
@@ -867,10 +870,18 @@ impl EditorStateChanged {
 
 #[tauri::command]
 #[specta::specta]
-async fn start_playback(app: AppHandle, video_id: String, fps: u32) {
+async fn start_playback(app: AppHandle, video_id: String, fps: u32, resolution_base: XY<u32>) {
     upsert_editor_instance(&app, video_id)
         .await
-        .start_playback(fps)
+        .start_playback(
+            fps,
+            resolution_base,
+            AuthStore::get(&app)
+                .ok()
+                .flatten()
+                .map(|s| s.is_upgraded())
+                .unwrap_or(false),
+        )
         .await
 }
 
@@ -906,7 +917,7 @@ async fn create_editor_instance(
     let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     // Load the RecordingMeta to get the pretty name
-    let meta = RecordingMeta::load_for_project(&editor_instance.project_path)
+    let mut meta = RecordingMeta::load_for_project(&editor_instance.project_path)
         .map_err(|e| format!("Failed to load recording meta: {}", e))?;
 
     println!("Pretty name: {}", meta.pretty_name);
@@ -961,7 +972,33 @@ async fn get_video_metadata(
         .join("recordings")
         .join(format!("{}.cap", video_id));
 
-    let meta = RecordingMeta::load_for_project(&project_path)?;
+    let mut meta = RecordingMeta::load_for_project(&project_path)?;
+
+    fn get_duration_for_paths(paths: Vec<PathBuf>) -> Result<f64, String> {
+        let mut max_duration: f64 = 0.0;
+        for path in paths {
+            let reader = BufReader::new(
+                File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?,
+            );
+            let file_size = path
+                .metadata()
+                .map_err(|e| format!("Failed to get file metadata: {}", e))?
+                .len();
+
+            let current_duration = match Mp4Reader::read_header(reader, file_size) {
+                Ok(mp4) => mp4.duration().as_secs_f64(),
+                Err(e) => {
+                    println!(
+                        "Failed to read MP4 header: {}. Falling back to default duration.",
+                        e
+                    );
+                    0.0_f64
+                }
+            };
+            max_duration = max_duration.max(current_duration);
+        }
+        Ok(max_duration)
+    }
 
     fn content_paths(project_path: &PathBuf, meta: &RecordingMeta) -> Vec<PathBuf> {
         match &meta.content {
@@ -976,65 +1013,50 @@ async fn get_video_metadata(
         }
     }
 
-    let paths = match video_type {
-        Some(VideoType::Screen) => content_paths(&project_path, &meta),
-        Some(VideoType::Camera) => match &meta.content {
-            Content::SingleSegment { segment } => segment
-                .camera
-                .as_ref()
-                .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
-            Content::MultipleSegments { inner } => inner
-                .segments
-                .iter()
-                .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
-                .collect(),
-        },
-        Some(VideoType::Output) | None => {
-            let output_video_path = project_path.join("output").join("result.mp4");
-            println!("Using output video path: {:?}", output_video_path);
-            if output_video_path.exists() {
-                vec![output_video_path]
-            } else {
-                println!("Output video not found, falling back to screen paths");
-                content_paths(&project_path, &meta)
-            }
-        }
+    // Get display duration
+    let display_duration = get_duration_for_paths(content_paths(&project_path, &meta))?;
+
+    // Get camera duration
+    let camera_paths = match &meta.content {
+        Content::SingleSegment { segment } => segment
+            .camera
+            .as_ref()
+            .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
+        Content::MultipleSegments { inner } => inner
+            .segments
+            .iter()
+            .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
+            .collect(),
+    };
+    let camera_duration = get_duration_for_paths(camera_paths)?;
+
+    // Use the longer duration
+    let duration = display_duration.max(camera_duration);
+
+    // Calculate estimated size using same logic as get_export_estimates
+    let (width, height) = (1920, 1080); // Default to 1080p
+    let fps = 30; // Default to 30fps
+
+    let base_bitrate = if width <= 1280 && height <= 720 {
+        4_000_000.0
+    } else if width <= 1920 && height <= 1080 {
+        8_000_000.0
+    } else if width <= 2560 && height <= 1440 {
+        14_000_000.0
+    } else {
+        20_000_000.0
     };
 
-    let mut ret = VideoRecordingMetadata {
-        size: 0.0,
-        duration: 0.0,
-    };
+    let fps_factor = (fps as f64) / 30.0;
+    let video_bitrate = base_bitrate * fps_factor;
+    let audio_bitrate = 192_000.0;
+    let total_bitrate = video_bitrate + audio_bitrate;
+    let estimated_size_mb = (total_bitrate * duration) / (8.0 * 1024.0 * 1024.0);
 
-    for path in paths {
-        let file = File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?;
-
-        ret.size += (file
-            .metadata()
-            .map_err(|e| format!("Failed to get file metadata: {}", e))?
-            .len() as f64)
-            / (1024.0 * 1024.0);
-
-        let reader = BufReader::new(file);
-        let file_size = path
-            .metadata()
-            .map_err(|e| format!("Failed to get file metadata: {}", e))?
-            .len();
-
-        ret.duration += match Mp4Reader::read_header(reader, file_size) {
-            Ok(mp4) => mp4.duration().as_secs_f64(),
-            Err(e) => {
-                println!(
-                    "Failed to read MP4 header: {}. Falling back to default duration.",
-                    e
-                );
-                // Return a default duration (e.g., 0.0) or try to estimate it based on file size
-                0.0 // or some estimated value
-            }
-        };
-    }
-
-    Ok(ret)
+    Ok(VideoRecordingMetadata {
+        size: estimated_size_mb,
+        duration,
+    })
 }
 
 #[tauri::command(async)]
@@ -1155,34 +1177,48 @@ async fn upload_exported_video(
         return Ok(UploadResult::NotAuthenticated);
     };
 
-    // Check if user has an upgraded plan
-    if !auth.is_upgraded() {
-        match AuthStore::fetch_and_update_plan(&app).await {
-            Ok(_) => match AuthStore::get(&app) {
-                Ok(Some(updated_auth)) => {
-                    auth = updated_auth;
-                }
-                Ok(None) => {
-                    return Ok(UploadResult::NotAuthenticated);
-                }
-                Err(e) => return Err(format!("Failed to refresh auth: {}", e)),
-            },
+    // Get video metadata to check duration
+    let screen_metadata =
+        match get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await {
+            Ok(meta) => meta,
             Err(e) => {
-                if e.contains("Authentication expired") {
-                    return Ok(UploadResult::NotAuthenticated);
-                }
-                return Ok(UploadResult::PlanCheckFailed);
+                sentry::capture_message(
+                    &format!("Failed to get video metadata: {}", e),
+                    sentry::Level::Error,
+                );
+                return Err(
+                "Failed to read video metadata. The recording may be from an incompatible version."
+                    .to_string(),
+            );
             }
-        }
+        };
 
-        if !auth.is_upgraded() {
-            ShowCapWindow::Upgrade.show(&app).ok();
-            return Ok(UploadResult::UpgradeRequired);
-        }
+    // Get camera metadata if it exists
+    let camera_metadata =
+        get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Camera))
+            .await
+            .ok();
+
+    // Use the longer duration between screen and camera
+    let duration = screen_metadata.duration.max(
+        camera_metadata
+            .map(|m| m.duration)
+            .unwrap_or(screen_metadata.duration),
+    );
+
+    // Check if user is not pro and video is over 5 minutes
+    if !auth.is_upgraded() && duration > 300.0 {
+        // 300 seconds = 5 minutes
+        return Ok(UploadResult::UpgradeRequired);
     }
 
-    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
-    let mut meta = editor_instance.meta();
+    let mut meta = RecordingMeta::load_for_project(
+        &app.path()
+            .app_data_dir()
+            .unwrap()
+            .join("recordings")
+            .join(format!("{}.cap", video_id)),
+    )?;
 
     let output_path = meta.output_path();
     if !output_path.exists() {
@@ -1677,16 +1713,64 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(String, PathBuf, RecordingMet
 #[tauri::command]
 #[specta::specta]
 async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
-    if let Err(e) = AuthStore::fetch_and_update_plan(&app).await {
-        return Err(format!(
-            "Failed to update plan information. Try signing out and signing back in: {}",
-            e
-        ));
+    println!("Checking upgraded status and updating...");
+    let Ok(Some(mut auth)) = AuthStore::get(&app) else {
+        println!("No auth found, clearing auth store");
+        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+        return Ok(false);
+    };
+
+    // Return true early if plan is manually set
+    if let Some(ref plan) = auth.plan {
+        if plan.manual {
+            return Ok(true);
+        }
     }
 
-    let auth = AuthStore::get(&app).map_err(|e| e.to_string())?;
+    println!(
+        "Fetching plan for user {}",
+        auth.user_id.as_deref().unwrap_or("unknown")
+    );
+    let plan_url = web_api::make_url("/api/desktop/plan");
+    let response = app
+        .authed_api_request(|client| client.get(plan_url))
+        .await
+        .map_err(|e| {
+            println!("Failed to fetch plan: {}", e);
+            format!("Failed to fetch plan: {}", e)
+        })?;
 
-    Ok(auth.map_or(false, |a| a.is_upgraded()))
+    println!("Plan fetch response status: {}", response.status());
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        println!("Unauthorized response, clearing auth store");
+        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
+        return Ok(false);
+    }
+
+    let plan_data = response.json::<serde_json::Value>().await.map_err(|e| {
+        println!("Failed to parse plan response: {}", e);
+        format!("Failed to parse plan response: {}", e)
+    })?;
+
+    let is_pro = plan_data
+        .get("upgraded")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    println!("Pro status: {}", is_pro);
+    let updated_auth = AuthStore {
+        token: auth.token,
+        user_id: auth.user_id,
+        expires: auth.expires,
+        plan: Some(Plan {
+            upgraded: is_pro,
+            manual: auth.plan.map(|p| p.manual).unwrap_or(false),
+            last_checked: chrono::Utc::now().timestamp() as i32,
+        }),
+    };
+    println!("Updating auth store with new pro status");
+    AuthStore::set(&app, Some(updated_auth)).map_err(|e| e.to_string())?;
+
+    Ok(is_pro)
 }
 
 #[tauri::command]
@@ -1721,9 +1805,10 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
         window.close().ok();
     }
 
-    while CapWindowId::Main.get(&app).is_none() {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    // Show the signin window
+    ShowCapWindow::SignIn
+        .show(&app)
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -1848,6 +1933,7 @@ pub async fn run() {
             focus_captures_panel,
             get_current_recording,
             export::export_video,
+            export::get_export_estimates,
             copy_file_to_path,
             copy_video_to_clipboard,
             copy_screenshot_to_clipboard,
@@ -2257,19 +2343,39 @@ pub async fn upsert_editor_instance(app: &AppHandle, video_id: String) -> Arc<Ed
 }
 
 async fn create_editor_instance_impl(app: &AppHandle, video_id: String) -> Arc<EditorInstance> {
-    let instance = EditorInstance::new(recordings_path(app), video_id, {
-        let app = app.clone();
-        move |state| {
-            EditorStateChanged::new(state).emit(&app).ok();
-        }
-    })
+    let app = app.clone();
+
+    let instance = EditorInstance::new(
+        recordings_path(&app),
+        video_id,
+        {
+            let app = app.clone();
+            move |state| {
+                EditorStateChanged::new(state).emit(&app).ok();
+            }
+        },
+        {
+            let app = app.clone();
+            move || {
+                AuthStore::get(&app)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.is_upgraded())
+                    .unwrap_or(false)
+            }
+        },
+    )
     .await;
 
-    RenderFrameEvent::listen_any(app, {
+    RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();
         move |e| {
             preview_tx
-                .send(Some((e.payload.frame_number, e.payload.fps)))
+                .send(Some((
+                    e.payload.frame_number,
+                    e.payload.fps,
+                    e.payload.resolution_base,
+                )))
                 .ok();
         }
     });

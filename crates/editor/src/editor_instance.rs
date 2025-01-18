@@ -40,6 +40,7 @@ impl EditorInstance {
         projects_path: PathBuf,
         video_id: String,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        get_is_upgraded: impl Fn() -> bool + Send + 'static,
     ) -> Arc<Self> {
         sentry::configure_scope(|scope| {
             scope.set_tag("crate", "editor");
@@ -115,8 +116,10 @@ impl EditorInstance {
             meta,
         });
 
-        this.state.lock().await.preview_task =
-            Some(this.clone().spawn_preview_renderer(preview_rx));
+        this.state.lock().await.preview_task = Some(
+            this.clone()
+                .spawn_preview_renderer(preview_rx, get_is_upgraded),
+        );
 
         this
     }
@@ -173,7 +176,12 @@ impl EditorInstance {
         (self.on_state_change)(&state);
     }
 
-    pub async fn start_playback(self: Arc<Self>, fps: u32) {
+    pub async fn start_playback(
+        self: Arc<Self>,
+        fps: u32,
+        resolution_base: XY<u32>,
+        is_upgraded: bool,
+    ) {
         let (mut handle, prev) = {
             let Ok(mut state) = self.state.try_lock() else {
                 return;
@@ -188,7 +196,7 @@ impl EditorInstance {
                 start_frame_number,
                 project: self.project_config.0.subscribe(),
             }
-            .start(fps)
+            .start(fps, resolution_base, is_upgraded)
             .await;
 
             let prev = state.playback_task.replace(playback_handle.clone());
@@ -223,12 +231,14 @@ impl EditorInstance {
 
     fn spawn_preview_renderer(
         self: Arc<Self>,
-        mut preview_rx: watch::Receiver<Option<(u32, u32)>>,
+        mut preview_rx: watch::Receiver<Option<(u32, u32, XY<u32>)>>,
+        get_is_upgraded: impl Fn() -> bool + Send + 'static,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
                 preview_rx.changed().await.unwrap();
-                let Some((frame_number, fps)) = *preview_rx.borrow().deref() else {
+                let Some((frame_number, fps, resolution_base)) = *preview_rx.borrow().deref()
+                else {
                     continue;
                 };
 
@@ -245,21 +255,28 @@ impl EditorInstance {
 
                 let segment = &self.segments[segment.unwrap_or(0) as usize];
 
-                let Some((screen_frame, camera_frame)) =
-                    segment.decoders.get_frames(time as f32).await
-                else {
-                    continue;
-                };
-
-                self.renderer
-                    .render_frame(
-                        screen_frame,
-                        camera_frame,
-                        project.background.source.clone(),
-                        ProjectUniforms::new(&self.render_constants, &project, time as f32),
-                        time as f32, // Add the time parameter
-                    )
-                    .await;
+                if let Some((screen_frame, camera_frame)) = segment
+                    .decoders
+                    .get_frames(time as f32, !project.camera.hide)
+                    .await
+                {
+                    self.renderer
+                        .render_frame(
+                            screen_frame,
+                            camera_frame,
+                            project.background.source.clone(),
+                            ProjectUniforms::new(
+                                &self.render_constants,
+                                &project,
+                                time as f32,
+                                resolution_base,
+                                get_is_upgraded(),
+                            ),
+                            time as f32,
+                            resolution_base,
+                        )
+                        .await;
+                }
             }
         })
     }
@@ -284,7 +301,7 @@ impl Drop for EditorInstance {
     }
 }
 
-type PreviewFrameInstruction = (u32, u32);
+type PreviewFrameInstruction = (u32, u32, XY<u32>);
 
 pub struct EditorState {
     pub playhead_position: u32,

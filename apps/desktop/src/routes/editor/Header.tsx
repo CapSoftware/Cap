@@ -7,36 +7,108 @@ import {
   batch,
   createEffect,
   createResource,
+  createSignal,
   onCleanup,
   onMount,
 } from "solid-js";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { Tooltip } from "@kobalte/core";
+import { Select as KSelect } from "@kobalte/core/select";
+import { createMutation } from "@tanstack/solid-query";
+import { getRequestEvent } from "solid-js/web";
+import { save } from "@tauri-apps/plugin-dialog";
+import { Channel } from "@tauri-apps/api/core";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 
-import { type RenderProgress, commands } from "~/utils/tauri";
-
+import { type RenderProgress, commands, events } from "~/utils/tauri";
 import { FPS, useEditorContext } from "./context";
-import { Dialog, DialogContent } from "./ui";
+import { authStore } from "~/store";
+import {
+  Dialog,
+  DialogContent,
+  MenuItem,
+  MenuItemList,
+  PopperContent,
+  topLeftAnimateClasses,
+} from "./ui";
+import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
 import {
   type ProgressState,
   progressState,
   setProgressState,
 } from "~/store/progress";
-
-import { events } from "~/utils/tauri";
 import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
-import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
+
+type ResolutionOption = {
+  label: string;
+  value: string;
+  width: number;
+  height: number;
+};
+
+const RESOLUTION_OPTIONS: ResolutionOption[] = [
+  { label: "720p", value: "720p", width: 1280, height: 720 },
+  { label: "1080p", value: "1080p", width: 1920, height: 1080 },
+  { label: "4K", value: "4k", width: 3840, height: 2160 },
+];
+
+const FPS_OPTIONS = [
+  { label: "30 FPS", value: 30 },
+  { label: "60 FPS", value: 60 },
+] satisfies Array<{ label: string; value: number }>;
+
+export interface ExportEstimates {
+  duration_seconds: number;
+  estimated_time_seconds: number;
+  estimated_size_mb: number;
+}
 
 export function Header() {
   const currentWindow = getCurrentWindow();
+  const { videoId, project, prettyName } = useEditorContext();
+
+  const [showExportOptions, setShowExportOptions] = createSignal(false);
+  const [selectedFps, setSelectedFps] = createSignal(
+    Number(localStorage.getItem("cap-export-fps")) || 30
+  );
+  const [selectedResolution, setSelectedResolution] =
+    createSignal<ResolutionOption>(
+      RESOLUTION_OPTIONS.find(
+        (opt) => opt.value === localStorage.getItem("cap-export-resolution")
+      ) || RESOLUTION_OPTIONS[0]
+    );
+
+  const [exportEstimates] = createResource(
+    () => ({
+      videoId,
+      resolution: {
+        x: selectedResolution()?.width || RESOLUTION_OPTIONS[0].width,
+        y: selectedResolution()?.height || RESOLUTION_OPTIONS[0].height,
+      },
+      fps: selectedFps(),
+    }),
+    async (params) => {
+      return commands.getExportEstimates(
+        params.videoId,
+        params.resolution,
+        params.fps
+      );
+    }
+  );
 
   let unlistenTitlebar: UnlistenFn | undefined;
   onMount(async () => {
     unlistenTitlebar = await initializeTitlebar();
   });
   onCleanup(() => unlistenTitlebar?.());
+
+  // Save settings when they change
+  createEffect(() => {
+    localStorage.setItem("cap-export-fps", selectedFps().toString());
+    localStorage.setItem("cap-export-resolution", selectedResolution().value);
+  });
 
   createEffect(() => {
     const state = progressState;
@@ -60,10 +132,95 @@ export function Header() {
       currentWindow.setProgressBar({ progress: Math.round(percentage) });
   });
 
+  const exportWithSettings = async () => {
+    setShowExportOptions(false);
+
+    const path = await save({
+      filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
+      defaultPath: `~/Desktop/${prettyName()}.mp4`,
+    });
+    if (!path) return;
+
+    setProgressState({
+      type: "saving",
+      progress: 0,
+      renderProgress: 0,
+      totalFrames: 0,
+      message: "Preparing to render...",
+      mediaPath: path,
+      stage: "rendering",
+    });
+
+    const progress = new Channel<RenderProgress>();
+    progress.onmessage = (p) => {
+      if (p.type === "FrameRendered" && progressState.type === "saving") {
+        const percentComplete = Math.min(
+          Math.round(
+            (p.current_frame / (progressState.totalFrames || 1)) * 100
+          ),
+          100
+        );
+
+        setProgressState({
+          ...progressState,
+          renderProgress: p.current_frame,
+          message: `Rendering video - ${percentComplete}%`,
+        });
+
+        // If rendering is complete, update to finalizing state
+        if (percentComplete === 100) {
+          setProgressState({
+            ...progressState,
+            message: "Finalizing export...",
+          });
+        }
+      }
+      if (
+        p.type === "EstimatedTotalFrames" &&
+        progressState.type === "saving"
+      ) {
+        setProgressState({
+          ...progressState,
+          totalFrames: p.total_frames,
+          message: "Starting render...",
+        });
+      }
+    };
+
+    try {
+      const videoPath = await commands.exportVideo(
+        videoId,
+        project,
+        progress,
+        true,
+        selectedFps(),
+        {
+          x: selectedResolution()?.width || RESOLUTION_OPTIONS[0].width,
+          y: selectedResolution()?.height || RESOLUTION_OPTIONS[0].height,
+        }
+      );
+      await commands.copyFileToPath(videoPath, path);
+
+      setProgressState({
+        type: "saving",
+        progress: 100,
+        message: "Saved successfully!",
+        mediaPath: path,
+      });
+
+      setTimeout(() => {
+        setProgressState({ type: "idle" });
+      }, 1500);
+    } catch (error) {
+      setProgressState({ type: "idle" });
+      throw error;
+    }
+  };
+
   batch(() => {
     setTitlebar("border", false);
     setTitlebar("height", "4rem");
-    setTitlebar("transparent", true);
+    setTitlebar("transparent", false);
     setTitlebar(
       "items",
       <div
@@ -75,8 +232,189 @@ export function Header() {
       >
         <div class="flex flex-row items-center gap-[0.5rem] text-[0.875rem]"></div>
         <div class="flex flex-row gap-2 font-medium items-center">
-          <ShareButton />
-          <ExportButton />
+          <ShareButton
+            selectedResolution={selectedResolution}
+            selectedFps={selectedFps}
+          />
+          <div class="relative">
+            <Button
+              variant="primary"
+              onClick={() => setShowExportOptions(!showExportOptions())}
+            >
+              Export
+            </Button>
+            <Show when={showExportOptions()}>
+              <div class="absolute right-0 top-full mt-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-40 p-4 min-w-[240px]">
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
+                      Resolution
+                    </label>
+                    <KSelect<ResolutionOption>
+                      options={RESOLUTION_OPTIONS}
+                      optionValue="value"
+                      optionTextValue="label"
+                      placeholder="Select Resolution"
+                      value={selectedResolution()}
+                      onChange={setSelectedResolution}
+                      itemComponent={(props) => (
+                        <MenuItem<typeof KSelect.Item>
+                          as={KSelect.Item}
+                          item={props.item}
+                        >
+                          <KSelect.ItemLabel class="flex-1">
+                            {props.item.rawValue.label}
+                          </KSelect.ItemLabel>
+                        </MenuItem>
+                      )}
+                    >
+                      <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+                        <KSelect.Value<ResolutionOption> class="flex-1 text-sm text-left truncate text-[--gray-500]">
+                          {(state) => (
+                            <span>{state.selectedOption()?.label}</span>
+                          )}
+                        </KSelect.Value>
+                        <KSelect.Icon>
+                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+                        </KSelect.Icon>
+                      </KSelect.Trigger>
+                      <KSelect.Portal>
+                        <PopperContent<typeof KSelect.Content>
+                          as={KSelect.Content}
+                          class={cx(topLeftAnimateClasses, "z-50")}
+                        >
+                          <MenuItemList<typeof KSelect.Listbox>
+                            class="max-h-32 overflow-y-auto"
+                            as={KSelect.Listbox}
+                          />
+                        </PopperContent>
+                      </KSelect.Portal>
+                    </KSelect>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
+                      FPS
+                    </label>
+                    <KSelect
+                      options={FPS_OPTIONS}
+                      optionValue="value"
+                      optionTextValue="label"
+                      placeholder="Select FPS"
+                      value={FPS_OPTIONS.find(
+                        (opt) => opt.value === selectedFps()
+                      )}
+                      onChange={(option) => setSelectedFps(option?.value ?? 30)}
+                      itemComponent={(props) => (
+                        <MenuItem<typeof KSelect.Item>
+                          as={KSelect.Item}
+                          item={props.item}
+                        >
+                          <KSelect.ItemLabel class="flex-1">
+                            {props.item.rawValue.label}
+                          </KSelect.ItemLabel>
+                        </MenuItem>
+                      )}
+                    >
+                      <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+                        <KSelect.Value<
+                          (typeof FPS_OPTIONS)[number]
+                        > class="flex-1 text-sm text-left truncate text-[--gray-500]">
+                          {(state) => (
+                            <span>{state.selectedOption()?.label}</span>
+                          )}
+                        </KSelect.Value>
+                        <KSelect.Icon>
+                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+                        </KSelect.Icon>
+                      </KSelect.Trigger>
+                      <KSelect.Portal>
+                        <PopperContent<typeof KSelect.Content>
+                          as={KSelect.Content}
+                          class={cx(topLeftAnimateClasses, "z-50")}
+                        >
+                          <MenuItemList<typeof KSelect.Listbox>
+                            class="max-h-32 overflow-y-auto"
+                            as={KSelect.Listbox}
+                          />
+                        </PopperContent>
+                      </KSelect.Portal>
+                    </KSelect>
+                  </div>
+                  <Button
+                    variant="primary"
+                    class="w-full justify-center"
+                    onClick={exportWithSettings}
+                  >
+                    Export Video
+                  </Button>
+                  <Show when={exportEstimates()}>
+                    {(est) => (
+                      <div
+                        class={cx(
+                          "font-medium z-40 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden text-xs"
+                        )}
+                      >
+                        <p class="flex items-center gap-4">
+                          <span class="flex items-center text-[--gray-500]">
+                            <IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                            {(() => {
+                              const totalSeconds = Math.round(
+                                est().duration_seconds
+                              );
+                              const hours = Math.floor(totalSeconds / 3600);
+                              const minutes = Math.floor(
+                                (totalSeconds % 3600) / 60
+                              );
+                              const seconds = totalSeconds % 60;
+
+                              if (hours > 0) {
+                                return `${hours}:${minutes
+                                  .toString()
+                                  .padStart(2, "0")}:${seconds
+                                  .toString()
+                                  .padStart(2, "0")}`;
+                              }
+                              return `${minutes}:${seconds
+                                .toString()
+                                .padStart(2, "0")}`;
+                            })()}
+                          </span>
+                          <span class="flex items-center text-[--gray-500]">
+                            <IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                            {est().estimated_size_mb.toFixed(2)} MB
+                          </span>
+                          <span class="flex items-center text-[--gray-500]">
+                            <IconLucideClock class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                            {(() => {
+                              const totalSeconds = Math.round(
+                                est().estimated_time_seconds
+                              );
+                              const hours = Math.floor(totalSeconds / 3600);
+                              const minutes = Math.floor(
+                                (totalSeconds % 3600) / 60
+                              );
+                              const seconds = totalSeconds % 60;
+
+                              if (hours > 0) {
+                                return `~${hours}:${minutes
+                                  .toString()
+                                  .padStart(2, "0")}:${seconds
+                                  .toString()
+                                  .padStart(2, "0")}`;
+                              }
+                              return `~${minutes}:${seconds
+                                .toString()
+                                .padStart(2, "0")}`;
+                            })()}
+                          </span>
+                        </p>
+                      </div>
+                    )}
+                  </Show>
+                </div>
+              </div>
+            </Show>
+          </div>
         </div>
       </div>
     );
@@ -234,111 +572,12 @@ export function Header() {
   );
 }
 
-import { Channel } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
-import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
-import { createMutation } from "@tanstack/solid-query";
-import { getRequestEvent } from "solid-js/web";
-import { checkIsUpgradedAndUpdate } from "~/utils/plans";
+type ShareButtonProps = {
+  selectedResolution: () => ResolutionOption;
+  selectedFps: () => number;
+};
 
-function ExportButton() {
-  const { videoId, project, prettyName } = useEditorContext();
-
-  const exportVideo = createMutation(() => ({
-    mutationFn: async (useCustomMuxer: boolean) => {
-      const path = await save({
-        filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-        defaultPath: `~/Desktop/${prettyName()}.mp4`,
-      });
-      if (!path) return;
-
-      setProgressState({
-        type: "saving",
-        progress: 0,
-        renderProgress: 0,
-        totalFrames: 0,
-        message: "Preparing to render...",
-        mediaPath: path,
-        stage: "rendering",
-      });
-
-      const progress = new Channel<RenderProgress>();
-      progress.onmessage = (p) => {
-        if (p.type === "FrameRendered" && progressState.type === "saving") {
-          const percentComplete = Math.min(
-            Math.round(
-              (p.current_frame / (progressState.totalFrames || 1)) * 100
-            ),
-            100
-          );
-
-          setProgressState({
-            ...progressState,
-            renderProgress: p.current_frame,
-            message: `Rendering video - ${percentComplete}%`,
-          });
-
-          // If rendering is complete, update to finalizing state
-          if (percentComplete === 100) {
-            setProgressState({
-              ...progressState,
-              message: "Finalizing export...",
-            });
-          }
-        }
-        if (
-          p.type === "EstimatedTotalFrames" &&
-          progressState.type === "saving"
-        ) {
-          setProgressState({
-            ...progressState,
-            totalFrames: p.total_frames,
-            message: "Starting render...",
-          });
-        }
-      };
-
-      try {
-        const videoPath = await commands.exportVideo(
-          videoId,
-          project,
-          progress,
-          true,
-          FPS
-        );
-        await commands.copyFileToPath(videoPath, path);
-
-        setProgressState({
-          type: "saving",
-          progress: 100,
-          message: "Saved successfully!",
-          mediaPath: path,
-        });
-
-        setTimeout(() => {
-          setProgressState({ type: "idle" });
-        }, 1500);
-      } catch (error) {
-        setProgressState({ type: "idle" });
-        throw error;
-      }
-    },
-  }));
-
-  return (
-    <Button
-      variant="primary"
-      size="md"
-      onClick={(e) =>
-        exportVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
-      }
-    >
-      Export
-    </Button>
-  );
-}
-
-function ShareButton() {
+function ShareButton(props: ShareButtonProps) {
   const { videoId, project, presets } = useEditorContext();
   const [recordingMeta, metaActions] = createResource(() =>
     commands.getRecordingMeta(videoId, "recording")
@@ -347,22 +586,39 @@ function ShareButton() {
   const uploadVideo = createMutation(() => ({
     mutationFn: async (useCustomMuxer: boolean) => {
       console.log("Starting upload process...");
-      if (!recordingMeta()) {
+
+      // Check authentication first
+      const existingAuth = await authStore.get();
+      if (!existingAuth) {
+        await commands.showWindow("SignIn");
+        throw new Error("You need to sign in to share recordings");
+      }
+
+      const meta = recordingMeta();
+      if (!meta) {
         console.error("No recording metadata available");
         throw new Error("Recording metadata not available");
       }
 
-      // Check for pro access first before starting the export
-      const isUpgraded = await checkIsUpgradedAndUpdate();
-      if (!isUpgraded) {
-        await commands.showWindow("Upgrade");
-        throw new Error("Upgrade required to share recordings");
+      const metadata = await commands.getVideoMetadata(videoId, null);
+      const plan = await commands.checkUpgradedAndUpdate();
+      const canShare = {
+        allowed: plan || metadata.duration < 300,
+        reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
+      };
+
+      if (!canShare.allowed) {
+        if (canShare.reason === "upgrade_required") {
+          await commands.showWindow("Upgrade");
+          throw new Error(
+            "Upgrade required to share recordings longer than 5 minutes"
+          );
+        }
       }
 
       let unlisten: (() => void) | undefined;
 
       try {
-        // Set initial progress state
         setProgressState({
           type: "uploading",
           renderProgress: 0,
@@ -400,8 +656,6 @@ function ShareButton() {
         });
 
         console.log("Starting actual upload...");
-        const projectConfig =
-          project ?? presets.getDefaultConfig() ?? DEFAULT_PROJECT_CONFIG;
 
         setProgressState({
           type: "uploading",
@@ -442,7 +696,19 @@ function ShareButton() {
 
         getRequestEvent()?.nativeEvent;
 
-        await commands.exportVideo(videoId, projectConfig, progress, true, FPS);
+        await commands.exportVideo(
+          videoId,
+          project,
+          progress,
+          true,
+          props.selectedFps(),
+          {
+            x: props.selectedResolution()?.width || RESOLUTION_OPTIONS[0].width,
+            y:
+              props.selectedResolution()?.height ||
+              RESOLUTION_OPTIONS[0].height,
+          }
+        );
 
         // Now proceed with upload
         const result = recordingMeta()?.sharing
@@ -451,9 +717,8 @@ function ShareButton() {
               Initial: { pre_created_video: null },
             });
 
-        console.log("Upload result:", result);
-
         if (result === "NotAuthenticated") {
+          await commands.showWindow("SignIn");
           throw new Error("You need to sign in to share recordings");
         }
         if (result === "PlanCheckFailed") {

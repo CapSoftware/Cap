@@ -15,7 +15,7 @@ export default function Titlebar() {
     <header
       class={cx(
         "flex flex-row items-center select-none space-x-1 shrink-0 border-gray-200",
-        titlebarState.transparent ? "" : "bg-gray-50",
+        titlebarState.transparent ? "bg-transparent" : "bg-gray-50",
         titlebarState.border ? "border-b" : ""
       )}
       style={{

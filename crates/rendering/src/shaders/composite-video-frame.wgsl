@@ -100,7 +100,7 @@ fn sample_texture(_uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 
 				var cropped_uv = uv * (crop_bounds_uv.zw - crop_bounds_uv.xy) + crop_bounds_uv.xy;
 
-				return textureSample(frame_tex, sampler0, cropped_uv);
+				return vec4(textureSample(frame_tex, sampler0, cropped_uv).rgb, 1.0);
 		}
 
 		return vec4(0.0);

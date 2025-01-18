@@ -1,4 +1,5 @@
 use std::{
+    cell::LazyCell,
     collections::BTreeMap,
     path::PathBuf,
     sync::{mpsc, Arc},
@@ -7,9 +8,9 @@ use std::{
 use ffmpeg::{
     codec::{self, Capabilities},
     format::{self},
-    frame::{self, Video},
+    frame::{self},
     rescale,
-    software::{self, scaling},
+    software::{self},
     Codec, Rational, Rescale,
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
@@ -18,7 +19,7 @@ use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 pub type DecodedFrame = Arc<Vec<u8>>;
 
 enum VideoDecoderMessage {
-    GetFrame(f32, tokio::sync::oneshot::Sender<Option<Arc<Vec<u8>>>>),
+    GetFrame(f32, tokio::sync::oneshot::Sender<DecodedFrame>),
 }
 
 fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
@@ -161,7 +162,11 @@ impl AsyncVideoDecoder {
 
             let mut peekable_requests = PeekableReceiver { rx, peeked: None };
 
-            let mut packets = input.packets();
+            let mut packets = input.packets().peekable();
+
+            let width = decoder.width();
+            let height = decoder.height();
+            let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
 
             while let Ok(r) = peekable_requests.recv() {
                 match r {
@@ -170,7 +175,7 @@ impl AsyncVideoDecoder {
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                             let data = cached.process(&decoder);
 
-                            sender.send(Some(data.clone())).ok();
+                            sender.send(data.clone()).ok();
                             last_sent_frame = Some((requested_frame, data));
                             continue;
                         } else {
@@ -195,31 +200,12 @@ impl AsyncVideoDecoder {
                                     * 1_000_000.0) as i64;
                             let position = timestamp_us.rescale((1, 1_000_000), rescale::TIME_BASE);
 
-                            println!("seeking to {position} for frame {requested_frame}, last sent frame: {:?}", last_sent_frame.map(|(f, _)| f));
-
                             decoder.flush();
                             input.seek(position, ..position).unwrap();
-                            cache.clear();
                             last_decoded_frame = None;
                             last_sent_frame = None;
 
-                            packets = input.packets();
-                        }
-
-                        // handle when requested_frame == last_decoded_frame or last_decoded_frame > requested_frame.
-                        // the latter can occur when there are skips in frame numbers.
-                        // in future we should alleviate this by using time + pts values instead of frame numbers.
-                        if let Some((_, last_sent_frame)) = last_decoded_frame
-                            .zip(last_sent_frame.as_ref())
-                            .filter(|(last_decoded_frame, last_sent_frame)| {
-                                last_sent_frame.0 < requested_frame
-                                    && requested_frame < *last_decoded_frame
-                            })
-                        {
-                            if let Some(sender) = sender.take() {
-                                sender.send(Some(last_sent_frame.1.clone())).ok();
-                                continue;
-                            }
+                            packets = input.packets().peekable();
                         }
 
                         last_active_frame = Some(requested_frame);
@@ -229,9 +215,14 @@ impl AsyncVideoDecoder {
                                 break;
                             }
                             let Some((stream, packet)) = packets.next() else {
-                                sender
-                                    .take()
-                                    .map(|s| s.send(last_sent_frame.clone().map(|f| f.1)));
+                                // handles the case where the cache doesn't contain a frame so we fallback to the previously sent one
+                                if let Some(last_sent_frame) = &last_sent_frame {
+                                    if last_sent_frame.0 < requested_frame {
+                                        sender.take().map(|s| s.send(last_sent_frame.1.clone()));
+                                    }
+                                }
+
+                                sender.take().map(|s| s.send(black_frame.clone()));
                                 break;
                             };
 
@@ -249,20 +240,24 @@ impl AsyncVideoDecoder {
                                         fps,
                                     );
 
-                                    last_decoded_frame = Some(current_frame);
-
-                                    // we repeat the similar section as above to do the check per-frame instead of just per-request
-                                    if let Some((_, last_sent_frame)) = last_decoded_frame
-                                        .zip(last_sent_frame.as_ref())
-                                        .filter(|(last_decoded_frame, last_sent_frame)| {
-                                            last_sent_frame.0 <= requested_frame
-                                                && requested_frame < *last_decoded_frame
+                                    // Handles frame skips. requested_frame == last_decoded_frame should be handled by the frame cache.
+                                    if let Some((last_decoded_frame, sender)) = last_decoded_frame
+                                        .filter(|last_decoded_frame| {
+                                            requested_frame > *last_decoded_frame
+                                                && requested_frame < current_frame
                                         })
+                                        .and_then(|l| Some((l, sender.take()?)))
                                     {
-                                        if let Some(sender) = sender.take() {
-                                            sender.send(Some(last_sent_frame.1.clone())).ok();
-                                        }
+                                        let data = cache
+                                            .get_mut(&last_decoded_frame)
+                                            .map(|f| f.process(&decoder))
+                                            .unwrap_or_else(|| black_frame.clone());
+
+                                        last_sent_frame = Some((last_decoded_frame, data.clone()));
+                                        sender.send(data).ok();
                                     }
+
+                                    last_decoded_frame = Some(current_frame);
 
                                     let exceeds_cache_bounds = current_frame > cache_max;
                                     let too_small_for_cache_bounds = current_frame < cache_min;
@@ -285,7 +280,7 @@ impl AsyncVideoDecoder {
                                                 let data = cache_frame.process(&decoder);
                                                 last_sent_frame =
                                                     Some((current_frame, data.clone()));
-                                                sender.send(Some(data)).ok();
+                                                sender.send(data).ok();
 
                                                 break;
                                             }
@@ -327,8 +322,10 @@ impl AsyncVideoDecoder {
                             }
                         }
 
-                        if let Some(s) = sender.take() {
-                            s.send(None).ok();
+                        if let Some((sender, last_sent_frame)) =
+                            sender.take().zip(last_sent_frame.clone())
+                        {
+                            sender.send(last_sent_frame.1).ok();
                         }
                     }
                 }
@@ -345,14 +342,17 @@ pub struct AsyncVideoDecoderHandle {
 }
 
 impl AsyncVideoDecoderHandle {
-    pub async fn get_frame(&self, time: f32) -> Option<Arc<Vec<u8>>> {
+    pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.sender
             .send(VideoDecoderMessage::GetFrame(time, tx))
             .unwrap();
-        let res = rx.await.ok().flatten();
-        res
+        rx.await.ok()
     }
+}
+
+pub enum GetFrameError {
+    Failed,
 }
 
 struct PeekableReceiver<T> {

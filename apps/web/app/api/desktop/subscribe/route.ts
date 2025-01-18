@@ -19,6 +19,8 @@ export async function OPTIONS(req: NextRequest) {
   const origin = params.get("origin") || null;
   const originalOrigin = req.nextUrl.origin;
 
+  console.log("[OPTIONS] Handling OPTIONS request");
+
   return new Response(null, {
     status: 200,
     headers: {
@@ -37,8 +39,11 @@ export async function OPTIONS(req: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  console.log("[POST] Starting subscription request");
+
   const token = request.headers.get("authorization")?.split(" ")[1];
   if (token) {
+    console.log("[POST] Setting auth cookie");
     cookies().set({
       name: "next-auth.session-token",
       value: token,
@@ -56,7 +61,11 @@ export async function POST(request: NextRequest) {
   const origin = params.get("origin") || null;
   const originalOrigin = request.nextUrl.origin;
 
+  console.log("[POST] User:", user?.id);
+  console.log("[POST] Price ID:", priceId);
+
   if (!priceId) {
+    console.log("[POST] Error: No price ID provided");
     return Response.json(
       { error: true },
       {
@@ -75,6 +84,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (!user) {
+    console.log("[POST] Error: No authenticated user");
     return Response.json(
       { error: true, auth: false },
       {
@@ -97,6 +107,7 @@ export async function POST(request: NextRequest) {
       subscriptionStatus: user.stripeSubscriptionStatus as string,
     })
   ) {
+    console.log("[POST] Error: User already on Pro plan");
     return Response.json(
       { error: true, subscription: true },
       {
@@ -115,6 +126,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (!user.stripeCustomerId) {
+    console.log("[POST] Creating new Stripe customer");
     const customer = await stripe.customers.create({
       email: user.email,
       metadata: {
@@ -130,8 +142,10 @@ export async function POST(request: NextRequest) {
       .where(eq(users.id, user.id));
 
     customerId = customer.id;
+    console.log("[POST] Created Stripe customer:", customerId);
   }
 
+  console.log("[POST] Creating checkout session");
   const checkoutSession = await stripe.checkout.sessions.create({
     customer: customerId as string,
     line_items: [
@@ -147,6 +161,7 @@ export async function POST(request: NextRequest) {
   });
 
   if (checkoutSession.url) {
+    console.log("[POST] Checkout session created successfully");
     return Response.json(
       { url: checkoutSession.url },
       {
@@ -164,6 +179,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  console.log("[POST] Error: Failed to create checkout session");
   return Response.json(
     { error: true },
     {
