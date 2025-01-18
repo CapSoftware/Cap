@@ -31,8 +31,6 @@ impl VideoFilter {
         filter_graph.add(&filter::find("buffer").unwrap(), "in", &input_args)?;
         filter_graph.add(&filter::find("buffersink").unwrap(), "out", "")?;
 
-        dbg!(input_config.pixel_format, output_config.pixel_format);
-
         let mut input = filter_graph.get("in").unwrap();
         input.set_pixel_format(input_config.pixel_format);
 

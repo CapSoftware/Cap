@@ -8,8 +8,10 @@ use std::{
 
 use cap_media::platform::Bounds;
 use cap_project::{CursorClickEvent, CursorMoveEvent};
+use cap_utils::spawn_actor;
 use device_query::{DeviceQuery, DeviceState};
 use tokio::sync::oneshot;
+use tracing::{debug, error, info};
 
 pub type Cursors = HashMap<u64, (String, u32)>;
 
@@ -34,6 +36,7 @@ impl CursorActor {
     }
 }
 
+#[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
     screen_bounds: Bounds,
     cursors_dir: PathBuf,
@@ -43,7 +46,7 @@ pub fn spawn_cursor_recorder(
     let stop_signal = Arc::new(AtomicBool::new(false));
     let (tx, rx) = oneshot::channel();
 
-    tokio::spawn({
+    spawn_actor({
         let stop_signal = stop_signal.clone();
         async move {
             let device_state = DeviceState::new();
@@ -80,16 +83,14 @@ pub fn spawn_cursor_recorder(
                         let filename = format!("cursor_{}.png", cursor_id);
                         let cursor_path = cursors_dir.join(&filename);
 
-                        println!("Saving new cursor image to: {:?}", cursor_path);
-
                         if let Ok(image) = image::load_from_memory(&data) {
                             // Convert to RGBA
                             let rgba_image = image.into_rgba8();
 
                             if let Err(e) = rgba_image.save(&cursor_path) {
-                                eprintln!("Failed to save cursor image: {}", e);
+                                error!("Failed to save cursor image: {}", e);
                             } else {
-                                println!("Successfully saved cursor image {}", cursor_id);
+                                info!("Saved cursor {cursor_id} image to: {:?}", filename);
                                 response
                                     .cursors
                                     .insert(id, (filename.clone(), response.next_cursor_id));

@@ -9,7 +9,8 @@ use scap::{
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::ControlFlow};
+use tracing::{error, info, instrument, trace, warn};
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
@@ -130,8 +131,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         let options = this.create_options();
 
-        let [frame_width, frame_height] = get_output_frame_size(&dbg!(options));
-        dbg!(frame_width, frame_height);
+        let [frame_width, frame_height] = get_output_frame_size(&options);
         this.video_info =
             VideoInfo::from_raw(RawVideoFormat::Bgra, frame_width, frame_height, MAX_FPS);
 
@@ -224,150 +224,176 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     }
 }
 
+#[derive(Debug)]
 pub struct AVFrameCapture;
 
 impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     type Clock = RealTimeClock<RawNanoseconds>;
     type Output = FFVideo;
 
+    // #[instrument(skip_all)]
     fn run(
         &mut self,
         mut clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        mut control_signal: crate::pipeline::control::PipelineControlSignal,
+        control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        println!("Preparing screen capture source thread...");
-
-        let options = self.create_options();
-
-        let maybe_capture_window_id = match &self.target {
-            ScreenCaptureTarget::Window(window) => Some(window.id),
-            _ => None,
-        };
-        let mut capturer = match Capturer::build(dbg!(options)) {
-            Ok(capturer) => capturer,
-            Err(e) => {
-                let error = format!("Failed to build capturer: {e}");
-                eprintln!("{}", error);
-                ready_signal
-                    .send(Err(MediaError::Any("Failed to build capturer")))
-                    .unwrap();
-                return;
-            }
-        };
-        let mut capturing = false;
-        ready_signal.send(Ok(())).unwrap();
-
-        loop {
-            match control_signal.last() {
-                Some(Control::Play) => {
-                    if !capturing {
-                        if let Some(window_id) = maybe_capture_window_id {
-                            crate::platform::bring_window_to_focus(window_id);
-                        }
-                        capturer.start_capture();
-                        capturing = true;
-
-                        println!("Screen recording started.");
+        let video_info = self.video_info;
+        inner(
+            self,
+            ready_signal,
+            control_signal,
+            |capturer| match capturer.get_next_frame() {
+                Ok(Frame::BGRA(frame)) => {
+                    if frame.height == 0 || frame.width == 0 {
+                        return Some(ControlFlow::Continue(()));
                     }
 
-                    match capturer.get_next_frame() {
-                        Ok(Frame::BGRA(frame)) => {
-                            if frame.height == 0 || frame.width == 0 {
-                                continue;
+                    let raw_timestamp = RawNanoseconds(frame.display_time);
+                    match clock.timestamp_for(raw_timestamp) {
+                        None => {
+                            warn!("Clock is currently stopped. Dropping frames.");
+                            None
+                        }
+                        Some(timestamp) => {
+                            let mut buffer = FFVideo::new(
+                                video_info.pixel_format,
+                                video_info.width,
+                                video_info.height,
+                            );
+                            buffer.set_pts(Some(timestamp));
+
+                            let bytes_per_pixel = 4;
+                            let width_in_bytes = frame.width as usize * bytes_per_pixel;
+                            let height = frame.height as usize;
+
+                            let src_data = &frame.data;
+
+                            let src_stride = src_data.len() / height;
+                            let dst_stride = buffer.stride(0);
+
+                            if src_data.len() < src_stride * height {
+                                warn!("Frame data size mismatch.");
+                                return Some(ControlFlow::Continue(()));
                             }
 
-                            let raw_timestamp = RawNanoseconds(frame.display_time);
-                            match clock.timestamp_for(raw_timestamp) {
-                                None => {
-                                    eprintln!("Clock is currently stopped. Dropping frames.");
-                                }
-                                Some(timestamp) => {
-                                    let mut buffer = FFVideo::new(
-                                        self.video_info.pixel_format,
-                                        self.video_info.width,
-                                        self.video_info.height,
-                                    );
-                                    buffer.set_pts(Some(timestamp));
+                            if src_stride < width_in_bytes {
+                                warn!("Source stride is less than expected width in bytes.");
+                                return Some(ControlFlow::Continue(()));
+                            }
 
-                                    let bytes_per_pixel = 4;
-                                    let width_in_bytes = frame.width as usize * bytes_per_pixel;
-                                    let height = frame.height as usize;
+                            if buffer.data(0).len() < dst_stride * height {
+                                warn!("Destination data size mismatch.");
+                                return Some(ControlFlow::Continue(()));
+                            }
 
-                                    let src_data = &frame.data;
+                            {
+                                let dst_data = buffer.data_mut(0);
 
-                                    let src_stride = src_data.len() / height;
-                                    let dst_stride = buffer.stride(0);
-
-                                    if src_data.len() < src_stride * height {
-                                        eprintln!("Frame data size mismatch.");
-                                        continue;
-                                    }
-
-                                    if src_stride < width_in_bytes {
-                                        eprintln!(
-                                            "Source stride is less than expected width in bytes."
+                                for y in 0..height {
+                                    let src_offset = y * src_stride;
+                                    let dst_offset = y * dst_stride;
+                                    dst_data[dst_offset..dst_offset + width_in_bytes]
+                                        .copy_from_slice(
+                                            &src_data[src_offset..src_offset + width_in_bytes],
                                         );
-                                        continue;
-                                    }
-
-                                    if buffer.data(0).len() < dst_stride * height {
-                                        eprintln!("Destination data size mismatch.");
-                                        continue;
-                                    }
-
-                                    {
-                                        let dst_data = buffer.data_mut(0);
-
-                                        for y in 0..height {
-                                            let src_offset = y * src_stride;
-                                            let dst_offset = y * dst_stride;
-                                            dst_data[dst_offset..dst_offset + width_in_bytes]
-                                                .copy_from_slice(
-                                                    &src_data
-                                                        [src_offset..src_offset + width_in_bytes],
-                                                );
-                                        }
-                                    }
-
-                                    if let Err(_) = output.send(buffer) {
-                                        eprintln!(
-                                            "Pipeline is unreachable. Shutting down recording."
-                                        );
-                                        break;
-                                    }
                                 }
-                            };
-                        }
-                        Ok(_) => unreachable!(),
-                        Err(error) => {
-                            eprintln!("Capture error: {error}");
-                            break;
+                            }
+
+                            if let Err(_) = output.send(buffer) {
+                                error!("Pipeline is unreachable. Shutting down recording.");
+                                return Some(ControlFlow::Break(()));
+                            }
+
+                            None
                         }
                     }
                 }
-                Some(Control::Pause) => {
-                    println!("Received pause signal");
-                    if capturing {
-                        capturer.stop_capture();
-                        capturing = false;
-                    }
+                Ok(_) => unreachable!(),
+                Err(error) => {
+                    error!("Capture error: {error}");
+                    Some(ControlFlow::Break(()))
                 }
-                Some(Control::Shutdown) | None => {
-                    println!("Received shutdown signal");
-                    if capturing {
-                        capturer.stop_capture();
-                    }
-                    break;
-                }
-            }
-        }
-
-        println!("Shutting down screen capture source thread.");
+            },
+        )
     }
 }
 
+fn inner<T>(
+    source: &mut ScreenCaptureSource<T>,
+    ready_signal: crate::pipeline::task::PipelineReadySignal,
+    mut control_signal: crate::pipeline::control::PipelineControlSignal,
+    mut get_frame: impl FnMut(&mut Capturer) -> Option<ControlFlow<()>>,
+) {
+    trace!("Preparing screen capture source thread...");
+
+    let maybe_capture_window_id = match &source.target {
+        ScreenCaptureTarget::Window(window) => Some(window.id),
+        _ => None,
+    };
+    let mut capturer = match Capturer::build(source.create_options()) {
+        Ok(capturer) => capturer,
+        Err(e) => {
+            error!("Failed to build capturer: {e}");
+            ready_signal
+                .send(Err(MediaError::Any("Failed to build capturer")))
+                .unwrap();
+            return;
+        }
+    };
+
+    info!("Capturer built");
+
+    let mut capturing = false;
+    ready_signal.send(Ok(())).unwrap();
+
+    loop {
+        match control_signal.last() {
+            Some(Control::Pause) => {
+                trace!("Received pause signal");
+                if capturing {
+                    capturer.stop_capture();
+                    info!("Capturer stopped");
+                    capturing = false;
+                }
+            }
+            Some(Control::Shutdown) | None => {
+                trace!("Received shutdown signal");
+                if capturing {
+                    capturer.stop_capture();
+                    info!("Capturer stopped")
+                }
+                break;
+            }
+            Some(Control::Play) => {
+                if !capturing {
+                    if let Some(window_id) = maybe_capture_window_id {
+                        crate::platform::bring_window_to_focus(window_id);
+                    }
+                    capturer.start_capture();
+                    capturing = true;
+
+                    info!("Screen recording started.");
+                }
+
+                match get_frame(&mut capturer) {
+                    Some(ControlFlow::Break(_)) => {
+                        break;
+                    }
+                    Some(ControlFlow::Continue(_)) => {
+                        continue;
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+
+    info!("Shut down screen capture source thread.");
+}
+
+#[derive(Debug)]
 pub struct CMSampleBufferCapture;
 
 #[cfg(target_os = "macos")]
@@ -379,77 +405,32 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         &mut self,
         _: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        mut control_signal: crate::pipeline::control::PipelineControlSignal,
+        control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        println!("Preparing screen capture source thread...");
-
-        let maybe_capture_window_id = match &self.target {
-            ScreenCaptureTarget::Window(window) => Some(window.id),
-            _ => None,
-        };
-        let mut capturer = match Capturer::build(dbg!(self.create_options())) {
-            Ok(capturer) => capturer,
-            Err(e) => {
-                let error = format!("Failed to build capturer: {e}");
-                eprintln!("{}", error);
-                ready_signal
-                    .send(Err(MediaError::Any("Failed to build capturer")))
-                    .unwrap();
-                return;
-            }
-        };
-        let mut capturing = false;
-        ready_signal.send(Ok(())).ok();
-
-        loop {
-            match control_signal.last() {
-                Some(Control::Play) => {
-                    if !capturing {
-                        if let Some(window_id) = maybe_capture_window_id {
-                            crate::platform::bring_window_to_focus(window_id);
-                        }
-                        capturer.start_capture();
-                        capturing = true;
-
-                        println!("Screen recording started.");
+        inner(
+            self,
+            ready_signal,
+            control_signal,
+            |capturer| match capturer.raw().get_next_pixel_buffer() {
+                Ok(pixel_buffer) => {
+                    if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
+                        return Some(ControlFlow::Continue(()));
                     }
 
-                    match capturer.raw().get_next_pixel_buffer() {
-                        Ok(pixel_buffer) => {
-                            if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
-                                continue;
-                            }
-
-                            if let Err(_) = output.send(pixel_buffer.into()) {
-                                eprintln!("Pipeline is unreachable. Shutting down recording.");
-                                break;
-                            }
-                        }
-                        Err(error) => {
-                            eprintln!("Capture error: {error}");
-                            break;
-                        }
+                    if let Err(_) = output.send(pixel_buffer.into()) {
+                        eprintln!("Pipeline is unreachable. Shutting down recording.");
+                        return Some(ControlFlow::Continue(()));
                     }
+
+                    None
                 }
-                Some(Control::Pause) => {
-                    println!("Received pause signal");
-                    if capturing {
-                        capturer.stop_capture();
-                        capturing = false;
-                    }
+                Err(error) => {
+                    eprintln!("Capture error: {error}");
+                    Some(ControlFlow::Break(()))
                 }
-                Some(Control::Shutdown) | None => {
-                    println!("Received shutdown signal");
-                    if capturing {
-                        // capturer.stop_capture();
-                    }
-                    break;
-                }
-            }
-        }
-
-        println!("Shutting down screen capture source thread.");
+            },
+        )
     }
 }
 

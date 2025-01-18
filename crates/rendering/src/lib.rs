@@ -1026,7 +1026,6 @@ pub async fn produce_frame(
 
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // dbg!(constants.options.screen_size.x, screen_frame.len());
         constants.queue.write_texture(
             wgpu::ImageCopyTexture {
                 texture: &texture,

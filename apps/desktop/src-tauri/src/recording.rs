@@ -24,6 +24,7 @@ use cap_rendering::ProjectRecordings;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
+use tracing::{instrument::WithSubscriber, Level};
 
 #[tauri::command(async)]
 #[specta::specta]
@@ -99,7 +100,6 @@ pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Re
             }
         }
     }
-
     let actor = cap_recording::spawn_recording_actor(
         id,
         recording_dir,

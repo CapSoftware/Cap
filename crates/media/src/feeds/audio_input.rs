@@ -2,7 +2,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, InputCallbackInfo, SampleFormat, StreamConfig, SupportedStreamConfig};
 use flume::{Receiver, Sender, TrySendError};
 use indexmap::IndexMap;
-use tracing::{warn, error, info, debug};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     data::{ffmpeg_sample_format_for, AudioInfo},
@@ -55,12 +55,16 @@ impl AudioInputFeed {
     }
 
     pub async fn init(selected_input: &str) -> Result<Self, MediaError> {
-        info!("Initializing audio input feed with device: {}", selected_input);
-        
+        trace!("Initializing audio input feed with device");
+        debug!(selected_input);
+
         let (device, config) = Self::list_devices()
             .swap_remove_entry(selected_input)
             .map(|(device_name, (device, config))| {
-                info!("Using audio device: {} with config: {:?}", device_name, config);
+                info!(
+                    "Using audio device: {} with config: {:?}",
+                    device_name, config
+                );
                 (device, config)
             })
             .ok_or_else(|| {
@@ -72,7 +76,7 @@ impl AudioInputFeed {
             error!("Failed to create audio info from stream config: {}", e);
             e
         })?;
-        
+
         debug!("Created audio info: {:?}", audio_info);
         let (control_tx, control_rx) = flume::bounded(1);
 
@@ -94,7 +98,10 @@ impl AudioInputFeed {
             device
                 .supported_input_configs()
                 .map_err(|error| {
-                    error!("Error getting supported input configs for device: {}", error);
+                    error!(
+                        "Error getting supported input configs for device: {}",
+                        error
+                    );
                     error
                 })
                 .ok()
@@ -122,7 +129,9 @@ impl AudioInputFeed {
                 })
         };
 
-        if let Some((name, device, config)) = host.default_input_device().and_then(get_usable_device) {
+        if let Some((name, device, config)) =
+            host.default_input_device().and_then(get_usable_device)
+        {
             info!("Found default input device: {}", name);
             device_map.insert(name, (device, config));
         } else {
@@ -196,7 +205,11 @@ fn start_capturing(
     mut config: SupportedStreamConfig,
     control: Receiver<AudioInputControl>,
 ) {
-    info!("Starting audio capture with device: {:?}, config: {:?}", device.name(), config);
+    info!(
+        "Starting audio capture with device: {:?}, config: {:?}",
+        device.name(),
+        config
+    );
     let mut senders: Vec<AudioInputSamplesSender> = vec![];
 
     loop {
@@ -204,35 +217,34 @@ fn start_capturing(
         info!("Building input stream with config: {:?}", config);
 
         let stream_config: StreamConfig = config.clone().into();
-        let stream = match device
-            .build_input_stream_raw(
-                &stream_config,
-                config.sample_format(),
-                move |data, info| {
-                    if let Err(e) = tx.send(AudioInputSamples {
-                        data: data.bytes().to_vec(),
-                        format: data.sample_format(),
-                        info: info.clone(),
-                    }) {
-                        error!("Failed to send audio samples: {}", e);
-                    }
-                },
-                |e| {
-                    error!("Error in audio input stream: {}", e);
-                },
-                None,
-            ) {
-                Ok(stream) => {
-                    info!("Successfully built audio input stream");
-                    stream
+        let stream = match device.build_input_stream_raw(
+            &stream_config,
+            config.sample_format(),
+            move |data, info| {
+                if let Err(e) = tx.send(AudioInputSamples {
+                    data: data.bytes().to_vec(),
+                    format: data.sample_format(),
+                    info: info.clone(),
+                }) {
+                    error!("Failed to send audio samples: {}", e);
                 }
-                Err(err) => {
-                    error!("Failed to build audio input stream: {}", err);
-                    // Sleep briefly to avoid tight error loop
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    continue;
-                }
-            };
+            },
+            |e| {
+                error!("Error in audio input stream: {}", e);
+            },
+            None,
+        ) {
+            Ok(stream) => {
+                info!("Successfully built audio input stream");
+                stream
+            }
+            Err(err) => {
+                error!("Failed to build audio input stream: {}", err);
+                // Sleep briefly to avoid tight error loop
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                continue;
+            }
+        };
 
         // Try to play the stream
         if let Err(e) = stream.play() {
@@ -249,7 +261,10 @@ fn start_capturing(
                     drop(stream);
                     let Some(items) = AudioInputFeed::list_devices().swap_remove_entry(&name).map(
                         |(device_name, (device, config))| {
-                            info!("Switching to audio device: {} with config: {:?}", device_name, config);
+                            info!(
+                                "Switching to audio device: {} with config: {:?}",
+                                device_name, config
+                            );
                             (device, config)
                         },
                     ) else {

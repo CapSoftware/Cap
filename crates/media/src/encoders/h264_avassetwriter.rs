@@ -3,6 +3,7 @@ use crate::{data::VideoInfo, pipeline::task::PipelineSinkTask, MediaError};
 use super::Output;
 use arc::Retained;
 use cidre::{objc::Obj, *};
+use tracing::{info, trace};
 
 pub struct H264AVAssetWriterEncoder {
     tag: &'static str,
@@ -48,8 +49,8 @@ impl H264AVAssetWriterEncoder {
             ns::Number::with_u32(config.height).as_id_ref(),
         );
 
-        let bitrate = config.width as f32 * config.height as f32 / (1920.0 * 1080.0) * 10_000_000.0
-            + fps / 30.0 * 4_000_000.0;
+        let bitrate = config.width as f32 * config.height as f32 / (1920.0 * 1080.0) * 14_000_000.0
+            + fps / 30.0 * 6_000_000.0;
 
         output_settings.insert(
             av::video_settings_keys::compression_props(),
@@ -62,7 +63,7 @@ impl H264AVAssetWriterEncoder {
 
         let mut video_input = av::AssetWriterInput::with_media_type_and_output_settings(
             av::MediaType::video(),
-            Some(dbg!(output_settings.as_ref())),
+            Some(output_settings.as_ref()),
         )
         .map_err(|_| MediaError::Any("Failed to create AVAssetWriterInput"))?;
         video_input.set_expects_media_data_in_real_time(true);
@@ -124,7 +125,7 @@ impl PipelineSinkTask for H264AVAssetWriterEncoder {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         input: flume::Receiver<Self::Input>,
     ) {
-        println!("Starting {} video encoding thread", self.tag);
+        trace!("Starting {} video encoding thread", self.tag);
         ready_signal.send(Ok(())).ok();
 
         while let Ok(frame) = input.recv() {
@@ -132,10 +133,10 @@ impl PipelineSinkTask for H264AVAssetWriterEncoder {
             self.process_frame();
         }
 
-        println!("Received last {} frame. Finishing up encoding.", self.tag);
+        trace!("Received last {} frame. Finishing up encoding.", self.tag);
         self.finish();
 
-        println!("Shutting down {} video encoding thread", self.tag);
+        info!("Shut down {} video encoding thread", self.tag);
     }
 }
 
