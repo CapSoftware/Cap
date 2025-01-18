@@ -9,7 +9,7 @@ use tauri_plugin_store::StoreExt;
 use tokio::sync::RwLock;
 use web_api::ManagerExt;
 
-use crate::{web_api, MutableState};
+use crate::web_api;
 
 #[derive(Serialize, Deserialize, Type, Debug)]
 pub enum AuthState {
@@ -123,7 +123,10 @@ impl AuthStore {
         store.set("auth", json!(value));
 
         let app_state = app.state::<Arc<RwLock<crate::App>>>();
-        app_state.blocking_write().auth_state = Some(AuthState::SignedIn);
+        app_state.blocking_write().auth_state = match value {
+            Some(_) => Some(AuthState::SignedIn),
+            None => None,
+        };
 
         store.save().map_err(|e| e.to_string())
     }

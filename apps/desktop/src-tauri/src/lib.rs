@@ -1794,6 +1794,10 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
+async fn start_listening_to_oauth(app: AppHandle) -> Result<(), String> {}
+
+#[tauri::command]
+#[specta::specta]
 async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
     AuthStore::set(&app, None).map_err(|e| e.to_string())?;
 
@@ -1812,6 +1816,10 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
     ShowCapWindow::SignIn
         .show(&app)
         .map_err(|e| e.to_string())?;
+
+    let app_state = app.state::<Arc<RwLock<crate::App>>>();
+    let mut writer_guard = app_state.write().await;
+    writer_guard.auth_state = Some(auth::AuthState::Listening);
 
     Ok(())
 }
@@ -2083,7 +2091,9 @@ pub async fn run() {
             // this doesn't work in dev on mac, just a fact of life
             let app_handle = app.clone();
             app.deep_link().on_open_url(move |event| {
-                deeplink_actions::handle(&app_handle, dbg!(event.urls()));
+                if let Err(err) = deeplink_actions::handle(&app_handle, dbg!(event.urls())) {
+                    eprintln!("Deep-link error: {}", err);
+                };
             });
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {

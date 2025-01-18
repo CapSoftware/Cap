@@ -18,6 +18,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "~/utils/tauri";
 
 const signInAction = action(async () => {
+  if (import.meta.env.VITE_ENVIRONMENT !== "development") {
+    
+
+    return;
+  }
+
   let res: (url: URL) => void;
 
   try {
