@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
-use futures::TryFutureExt;
 use tauri::{AppHandle, Manager, Url};
 use tokio::sync::RwLock;
 
-use crate::auth::{AuthState, AuthStore};
+use crate::{
+    auth::{AuthState, AuthStore},
+    App,
+};
 
 #[derive(Debug)]
 enum CaptureMode {
@@ -14,11 +16,13 @@ enum CaptureMode {
 
 #[derive(Debug)]
 enum DeepLinkAction {
-    Oauth(AuthStore),
+    SignIn(AuthStore),
     StartRecording {
-        mode: Option<CaptureMode>,
-        camera: Option<String>,
-        microphone: Option<String>,
+        mode: CaptureMode,
+        camera_label: Option<String>,
+        audio_input_name: Option<String>,
+        fps: Option<u32>,
+        output_resolution: Option<cap_project::Resolution>,
     },
     StopRecording,
     OpenEditor(String),
@@ -51,7 +55,7 @@ impl TryFrom<&Url> for DeepLinkAction {
         let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
 
         match path {
-            "/oauth-signin" => Ok(DeepLinkAction::Oauth(AuthStore {
+            "/signin" => Ok(DeepLinkAction::SignIn(AuthStore {
                 token: params
                     .get("token")
                     .and_then(|t| {
@@ -75,42 +79,43 @@ impl TryFrom<&Url> for DeepLinkAction {
                     .unwrap_or(0),
                 plan: None,
             })),
-            "/start_recording" => {
-                let mode = params
+            "/start_recording" => Ok(DeepLinkAction::StartRecording {
+                mode: params
                     .get("mode")
                     .and_then(|mode| match mode.to_string().as_str() {
                         "screen" => params
+                            .get("target_native_id")
+                            .map(|id| CaptureMode::Screen(id.to_string())),
+                        "area" => params
                             .get("target_native_id")
                             .map(|id| CaptureMode::Screen(id.to_string())),
                         "window" => params
                             .get("target_native_id")
                             .map(|id| CaptureMode::Window(id.to_string())),
                         _ => None,
-                    });
-
-                Ok(DeepLinkAction::StartRecording {
-                    mode,
-                    camera: params.get("camera").map(|s| s.to_string()),
-                    microphone: params.get("mic").map(|s| s.to_string()),
-                })
-            }
+                    })
+                    .ok_or("Invalid mode")?,
+                camera_label: params.get("camera").map(|s| s.to_string()),
+                audio_input_name: params.get("mic").map(|s| s.to_string()),
+                fps: params.get("fps").and_then(|s| s.parse().ok()),
+                output_resolution: params.get("output_resolution").and_then(|v| {
+                    let mut parts = v.split('x');
+                    let width = parts.next().and_then(|s| s.parse().ok());
+                    let height = parts.next().and_then(|s| s.parse().ok());
+                    width.zip(height).map(|(w, h)| cap_project::Resolution {
+                        width: w,
+                        height: h,
+                    })
+                }),
+            }),
             "/stop_recording" => Ok(DeepLinkAction::StopRecording),
-            "/editor" => {
-                let id = params
+            "/editor" => Ok(DeepLinkAction::OpenEditor(
+                params
                     .get("id")
-                    .ok_or("Missing 'id' parameter for editor")?
-                    .to_string();
-                Ok(DeepLinkAction::OpenEditor(id))
-            }
-            _ => {
-                // if let Some(source) = params.get("from") {
-                //     Ok(DeepLinkAction::Custom {
-                //         source: source.to_string(),
-                //         action: path.trim_start_matches('/').to_string(),
-                //     })
-                // } else {
-                Err(format!("Unsupported deep-link path: {}", path).into())
-            }
+                    .ok_or("Missing \"id\" parameter for editor")?
+                    .to_string(),
+            )),
+            _ => Err(format!("Unsupported deep-link path: {}", path).into()),
         }
     }
 }
@@ -118,8 +123,8 @@ impl TryFrom<&Url> for DeepLinkAction {
 impl DeepLinkAction {
     async fn handle(self, app: &AppHandle) -> Result<(), String> {
         match self {
-            Self::Oauth(auth) => {
-                let app_state = app.state::<Arc<RwLock<crate::App>>>();
+            Self::SignIn(auth) => {
+                let app_state = app.state::<Arc<RwLock<App>>>();
                 let reader_guard = app_state.read().await;
 
                 match &reader_guard.auth_state {
@@ -130,111 +135,50 @@ impl DeepLinkAction {
                     None | Some(_) => Err("Not listening for OAuth events".into()),
                 }
             }
-            _ => Err("Not implemented".into()),
-            // DeepLinkAction::StartRecording {
-            //     mode,
-            //     camera,
-            //     microphone,
-            // } => {
-            //     let state = app.state::<Arc<RwLock<App>>>();
-            //     let capture_target = match mode {
-            //         Some(CaptureMode::Screen(name)) => {
-            //             let screens = ScreenCaptureSource::<AVFrameCapture>::list_screens();
-            //             screens
-            //                 .into_iter()
-            //                 .find(|screen| screen.name == name)
-            //                 .map(|screen| {
-            //                     ScreenCaptureTarget::Screen(CaptureScreen {
-            //                         id: screen.id,
-            //                         name: screen.name,
-            //                     })
-            //                 })
-            //                 .unwrap_or_else(|| {
-            //                     // Default to first screen if target not found
-            //                     let first = ScreenCaptureSource::<AVFrameCapture>::list_screens()
-            //                         .into_iter()
-            //                         .next()
-            //                         .expect("No screens available");
-            //                     ScreenCaptureTarget::Screen(CaptureScreen {
-            //                         id: first.id,
-            //                         name: first.name,
-            //                     })
-            //                 })
-            //         }
-            //         Some(CaptureMode::Window(name)) => {
-            //             let windows = ScreenCaptureSource::<AVFrameCapture>::list_windows();
-            //             windows
-            //                 .into_iter()
-            //                 .find(|window| window.name == name)
-            //                 .map(|window| {
-            //                     ScreenCaptureTarget::Window(CaptureWindow {
-            //                         id: window.id,
-            //                         name: window.name,
-            //                         owner_name: window.owner_name,
-            //                     })
-            //                 })
-            //                 .ok_or("Window not found")?
-            //         }
-            //         None => {
-            //             // Default to first screen
-            //             let first = ScreenCaptureSource::<AVFrameCapture>::list_screens()
-            //                 .into_iter()
-            //                 .next()
-            //                 .expect("No screens available");
-            //             ScreenCaptureTarget::Screen(CaptureScreen {
-            //                 id: first.id,
-            //                 name: first.name,
-            //             })
-            //         }
-            //     };
+            DeepLinkAction::StartRecording {
+                mode,
+                camera_label,
+                audio_input_name,
+                fps,
+                output_resolution,
+            } => {
+                use cap_media::sources::ScreenCaptureTarget;
+                let capture_target: ScreenCaptureTarget = match mode {
+                    CaptureMode::Screen(name) => cap_media::sources::list_screens()
+                        .into_iter()
+                        .find(|s| s.0.name == name)
+                        .map(|(s, _)| ScreenCaptureTarget::Screen(s))
+                        .ok_or(format!("No screen with name \"{}\"", &name))?,
+                    CaptureMode::Window(name) => cap_media::sources::list_windows()
+                        .into_iter()
+                        .find(|w| w.0.name == name)
+                        .map(|(w, _)| ScreenCaptureTarget::Window(w))
+                        .ok_or(format!("No window with name \"{}\"", &name))?,
+                };
 
-            //     set_recording_options(
-            //         state,
-            //         RecordingOptions {
-            //             capture_target,
-            //             camera_label: camera,
-            //             audio_input_name: microphone,
-            //         },
-            //     )
-            //     .await?;
+                let state = app.state::<Arc<RwLock<App>>>();
+                crate::set_recording_options(
+                    app.clone().to_owned(),
+                    state,
+                    cap_recording::RecordingOptions {
+                        capture_target,
+                        camera_label,
+                        audio_input_name,
+                        fps: fps.unwrap_or_default(),
+                        output_resolution,
+                    },
+                )
+                .await?;
 
-            //     start_recording(app.clone(), app.state()).await
-            // }
-            // DeepLinkAction::StopRecording => stop_recording(app.clone(), app.state()).await,
-            // DeepLinkAction::OpenEditor(id) => {
-            //     open_editor(app.clone(), id);
-            //     Ok(())
-            // }
-            // DeepLinkAction::Custom { source, action } => {
-            //     println!("Custom action '{}' from source '{}'", action, source);
-            //     // Handle custom actions (e.g., open Raycast extension)
-            //     Ok(())
-            // }
+                crate::recording::start_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::StopRecording => {
+                crate::recording::stop_recording(app.clone(), app.state()).await
+            }
+            DeepLinkAction::OpenEditor(id) => {
+                crate::open_editor(app.clone(), id);
+                Ok(())
+            }
         }
     }
 }
-
-// let app_handle_clone = app_handle.clone();
-// app_handle.deep_link().on_open_url(move |event| {
-//     if let Some(url) = event.urls().first() {
-//         println!("Received deeplink: {}", url);
-
-//         if let Ok(parsed_url) = url::Url::parse(url) {
-//             let app_handle = app_handle_clone.clone();
-
-//             match DeepLinkAction::from_url(&parsed_url) {
-//                 Some(action) => {
-//                     println!("Handling deep link action: {:?}", action);
-//                     tauri::async_runtime::spawn(async move {
-//                         if let Err(e) = action.handle(&app_handle).await {
-//                             eprintln!("Failed to handle deep link action: {}", e);
-//                         }
-//                     });
-//                 }
-//                 None => println!("Could not parse deep link action from URL: {}", url),
-//             }
-//         } else {
-//             println!("Invalid URL format: {}", url);
-//         }
-//     }
-// });

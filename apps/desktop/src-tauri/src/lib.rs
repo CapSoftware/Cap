@@ -1794,7 +1794,11 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
-async fn start_listening_to_oauth(app: AppHandle) -> Result<(), String> {}
+async fn start_listening_to_oauth(state: MutableState<'_, App>) -> Result<(), String> {
+    let mut writer_guard = state.write().await;
+    writer_guard.auth_state = Some(auth::AuthState::Listening);
+    Ok(())
+}
 
 #[tauri::command]
 #[specta::specta]
