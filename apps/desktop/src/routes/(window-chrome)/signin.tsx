@@ -16,16 +16,16 @@ import callbackTemplate from "./callback.template";
 import { authStore } from "~/store";
 import { clientEnv } from "~/utils/env";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { commands } from "~/utils/tauri";
+import { commands, events } from "~/utils/tauri";
 
 const signInAction = action(async () => {
   if (import.meta.env.VITE_ENVIRONMENT !== "development") {
     console.log("Starting listening to oauth signin command...");
     commands.startListeningToOauth();
-    await shell.open(`${clientEnv.VITE_SERVER_URL}/api/desktop/session/request`);
+    await shell.open(`${clientEnv.VITE_SERVER_URL}/api/desktop/session/request?platform=desktop`);
     return;
   }
-  
+
   console.log("Starting oauth listener server...");
 
   let res: (url: URL) => void;
@@ -79,11 +79,6 @@ const signInAction = action(async () => {
     });
     stopListening();
 
-    const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
-    if (!isDevMode) {
-      return;
-    }
-
     const token = url.searchParams.get("token");
     const user_id = url.searchParams.get("user_id");
     const expires = Number(url.searchParams.get("expires"));
@@ -118,71 +113,16 @@ const signInAction = action(async () => {
 export default function Page() {
   const signIn = useAction(signInAction);
   const submission = useSubmission(signInAction);
-  const navigate = useNavigate();
   const [isSignedIn, setIsSignedIn] = createSignal(false);
 
-  // Listen for auth changes and redirect to signin if auth is cleared
   onMount(async () => {
-    let unsubscribe: (() => void) | undefined;
-
-    try {
-      unsubscribe = await authStore.listen((auth) => {
-        if (!auth) {
-          // Replace the current route with signin
-          navigate("/signin", { replace: true });
-        }
-      });
-    } catch (error) {
-      console.error("Failed to set up auth listener:", error);
-    }
-
-    // Clean up OAuth server on component unmount
-    onCleanup(async () => {
-      try {
-        await invoke("plugin:oauth|stop");
-      } catch (e) {
-        // Ignore errors if no server is running
-      }
-      unsubscribe?.();
+    const unlisten = await events.authenticated.listen(async (e) => {
+      console.log(`Signed in: ${e.payload.user_id}`);
+      setIsSignedIn(true);
+      alert("Successfully signed in to Cap!");
     });
 
-    const unsubscribeDeepLink = await onOpenUrl(async (urls) => {
-      const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
-      if (isDevMode) {
-        return;
-      }
-
-      for (const url of urls) {
-        if (!url.includes("token=")) return;
-
-        const urlObject = new URL(url);
-        const token = urlObject.searchParams.get("token");
-        const user_id = urlObject.searchParams.get("user_id");
-        const expires = Number(urlObject.searchParams.get("expires"));
-
-        if (!token || !expires || !user_id) {
-          throw new Error("Invalid signin params");
-        }
-
-        const existingAuth = await authStore.get();
-        await authStore.set({
-          token,
-          user_id,
-          expires,
-          plan: {
-            upgraded: false,
-            last_checked: 0,
-            manual: existingAuth?.plan?.manual ?? false,
-          },
-        });
-        setIsSignedIn(true);
-        alert("Successfully signed in to Cap!");
-      }
-    });
-
-    onCleanup(() => {
-      unsubscribeDeepLink();
-    });
+    onCleanup(() => unlisten());
   });
 
   return (

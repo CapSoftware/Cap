@@ -19,6 +19,7 @@ mod web_api;
 mod windows;
 
 use audio::AppSounds;
+use auth::Authenticated;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
@@ -2000,6 +2001,7 @@ pub async fn run() {
             RequestOpenSettings,
             NewNotification,
             AuthenticationInvalid,
+            Authenticated,
             audio_meter::AudioInputLevelChange,
             UploadProgress,
         ])
@@ -2088,11 +2090,12 @@ pub async fn run() {
             general_settings::init(&app);
             fake_window::init(&app);
 
-            // this doesn't work in dev on mac, just a fact of deeplinks
-            app.deep_link().on_open_url(|event| {
-                // TODO: handle deep link for auth
-                dbg!(event.id());
-                dbg!(event.urls());
+            // this doesn't work in dev on mac, just a fact of life
+            let app_handle = app.clone();
+            app.deep_link().on_open_url(move |event| {
+                if let Err(err) = deeplink_actions::handle(&app_handle, dbg!(event.urls())) {
+                    eprintln!("Deep-link error: {}", err);
+                };
             });
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {

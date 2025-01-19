@@ -177,6 +177,7 @@ async getEditorTotalFrames(videoId: string, fps: number) : Promise<number> {
 
 export const events = __makeEvents__<{
 audioInputLevelChange: AudioInputLevelChange,
+authenticated: Authenticated,
 authenticationInvalid: AuthenticationInvalid,
 currentRecordingChanged: CurrentRecordingChanged,
 editorStateChanged: EditorStateChanged,
@@ -196,6 +197,7 @@ requestStopRecording: RequestStopRecording,
 uploadProgress: UploadProgress
 }>({
 audioInputLevelChange: "audio-input-level-change",
+authenticated: "authenticated",
 authenticationInvalid: "authentication-invalid",
 currentRecordingChanged: "current-recording-changed",
 editorStateChanged: "editor-state-changed",
@@ -228,6 +230,7 @@ export type AudioConfiguration = { mute: boolean; improve: boolean }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string }
 export type AuthStore = { token: string; user_id: string | null; expires: number; plan: Plan | null }
+export type Authenticated = AuthStore
 export type AuthenticationInvalid = null
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null }
 export type BackgroundSource = { type: "wallpaper"; id: number } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
