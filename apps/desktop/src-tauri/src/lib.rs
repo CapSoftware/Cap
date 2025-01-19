@@ -2264,26 +2264,29 @@ pub async fn run() {
         .run(|handle, event| match event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
-                // Check if any editor or settings window is open
-                let has_editor_or_settings = handle
-                    .webview_windows()
-                    .iter()
-                    .any(|(label, _)| label.starts_with("editor-") || label.as_str() == "settings");
+                // Check if any editor, settings or signin window is open
+                let has_window = handle.webview_windows().iter().any(|(label, _)| {
+                    label.starts_with("editor-")
+                        || label.as_str() == "settings"
+                        || label.as_str() == "signin"
+                });
 
-                if has_editor_or_settings {
-                    // Find and focus the editor or settings window
+                if has_window {
+                    // Find and focus the editor, settings or signin window
                     if let Some(window) = handle
                         .webview_windows()
                         .iter()
                         .find(|(label, _)| {
-                            label.starts_with("editor-") || label.as_str() == "settings"
+                            label.starts_with("editor-")
+                                || label.as_str() == "settings"
+                                || label.as_str() == "signin"
                         })
                         .map(|(_, window)| window.clone())
                     {
                         window.set_focus().ok();
                     }
                 } else {
-                    // No editor or settings window open, show main window
+                    // No editor, settings or signin window open, show main window
                     open_main_window(handle.clone());
                 }
             }
