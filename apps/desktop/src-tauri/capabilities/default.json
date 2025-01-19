@@ -31,6 +31,7 @@
     "oauth:allow-start",
     "updater:default",
     "notification:default",
+    "deep-link:default",
     {
       "identifier": "http:default",
       "allow": [

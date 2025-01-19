@@ -9,7 +9,8 @@ import {
   useSubmission,
   useNavigate,
 } from "@solidjs/router";
-import { onMount, onCleanup } from "solid-js";
+import { onMount, onCleanup, createSignal } from "solid-js";
+import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 
 import callbackTemplate from "./callback.template";
 import { authStore } from "~/store";
@@ -62,14 +63,26 @@ const signInAction = action(async () => {
       },
     });
 
-    await shell.open(
-      `${clientEnv.VITE_SERVER_URL}/api/desktop/session/request?port=${port}`
+    // prettier-ignore
+    const platform = import.meta.env.VITE_ENVIRONMENT === "development" ? "web" : "desktop";
+
+    const callbackUrl = new URL(
+      `${clientEnv.VITE_SERVER_URL}/api/desktop/session/request`
     );
+    callbackUrl.searchParams.set("port", port);
+    callbackUrl.searchParams.set("platform", platform);
+
+    await shell.open(callbackUrl.toString());
 
     const url = await new Promise<URL>((r) => {
       res = r;
     });
     stopListening();
+
+    const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
+    if (!isDevMode) {
+      return;
+    }
 
     const token = url.searchParams.get("token");
     const user_id = url.searchParams.get("user_id");
@@ -106,6 +119,7 @@ export default function Page() {
   const signIn = useAction(signInAction);
   const submission = useSubmission(signInAction);
   const navigate = useNavigate();
+  const [isSignedIn, setIsSignedIn] = createSignal(false);
 
   // Listen for auth changes and redirect to signin if auth is cleared
   onMount(async () => {
@@ -131,6 +145,44 @@ export default function Page() {
       }
       unsubscribe?.();
     });
+
+    const unsubscribeDeepLink = await onOpenUrl(async (urls) => {
+      const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
+      if (isDevMode) {
+        return;
+      }
+
+      for (const url of urls) {
+        if (!url.includes("token=")) return;
+
+        const urlObject = new URL(url);
+        const token = urlObject.searchParams.get("token");
+        const user_id = urlObject.searchParams.get("user_id");
+        const expires = Number(urlObject.searchParams.get("expires"));
+
+        if (!token || !expires || !user_id) {
+          throw new Error("Invalid signin params");
+        }
+
+        const existingAuth = await authStore.get();
+        await authStore.set({
+          token,
+          user_id,
+          expires,
+          plan: {
+            upgraded: false,
+            last_checked: 0,
+            manual: existingAuth?.plan?.manual ?? false,
+          },
+        });
+        setIsSignedIn(true);
+        alert("Successfully signed in to Cap!");
+      }
+    });
+
+    onCleanup(() => {
+      unsubscribeDeepLink();
+    });
   });
 
   return (
@@ -142,7 +194,17 @@ export default function Page() {
         </h1>
         <p class="text-gray-400">Beautiful screen recordings, owned by you.</p>
       </div>
-      {submission.pending ? (
+      {isSignedIn() ? (
+        <Button
+          variant="secondary"
+          onClick={async () => {
+            const currentWindow = getCurrentWindow();
+            await currentWindow.close();
+          }}
+        >
+          Close window
+        </Button>
+      ) : submission.pending ? (
         <Button variant="secondary" onClick={() => submission.clear()}>
           Cancel sign in
         </Button>
