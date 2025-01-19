@@ -2090,14 +2090,6 @@ pub async fn run() {
             general_settings::init(&app);
             fake_window::init(&app);
 
-            // this doesn't work in dev on mac, just a fact of life
-            let app_handle = app.clone();
-            app.deep_link().on_open_url(move |event| {
-                if let Err(err) = deeplink_actions::handle(&app_handle, dbg!(event.urls())) {
-                    eprintln!("Deep-link error: {}", err);
-                };
-            });
-
             if let Ok(Some(auth)) = AuthStore::load(&app) {
                 sentry::configure_scope(|scope| {
                     scope.set_user(auth.user_id.map(|id| sentry::User {
@@ -2227,6 +2219,15 @@ pub async fn run() {
             AuthenticationInvalid::listen_any_spawn(&app, |_, app| async move {
                 delete_auth_open_signin(app).await.ok();
             });
+
+            // Registering deep links at runtime is not possible on macOS,
+            // so deep links can only be tested on the bundled application,
+            // which must be installed in the /Applications directory.
+            let app_handle = app.clone();
+            app.deep_link().on_open_url(move |event| {
+                deeplink_actions::handle(&app_handle, event.urls());
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {

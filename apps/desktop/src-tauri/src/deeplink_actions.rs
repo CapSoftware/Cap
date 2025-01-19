@@ -28,23 +28,24 @@ enum DeepLinkAction {
     OpenEditor(String),
 }
 
-pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) -> Result<(), String> {
-    for url in urls {
-        if url.as_str().is_empty() {
-            continue;
-        }
+pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
+    #[cfg(debug_assertions)]
+    println!("Handling deep actions for: {:?}", &urls);
 
-        if let Ok(action) = DeepLinkAction::try_from(&url) {
-            let handle = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = action.handle(&handle).await {
-                    eprintln!("Failed to handle deep link action: {}", e);
-                }
-            });
-        }
-    }
+    let actions: Vec<_> = urls
+        .into_iter()
+        .filter(|url| !url.as_str().is_empty())
+        .filter_map(|url| DeepLinkAction::try_from(&url).ok())
+        .collect();
 
-    Ok(())
+    let handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        for action in actions {
+            if let Err(e) = action.handle(&handle).await {
+                eprintln!("Failed to handle deep link action: {}", e);
+            }
+        }
+    });
 }
 
 impl TryFrom<&Url> for DeepLinkAction {
@@ -86,6 +87,7 @@ impl TryFrom<&Url> for DeepLinkAction {
                         "screen" => params
                             .get("target_native_name")
                             .map(|name| CaptureMode::Screen(name.to_string())),
+                        // TODO(Ilya) handle once screen area support is added.
                         "area" => params
                             .get("target_native_name")
                             .map(|name| CaptureMode::Screen(name.to_string())),
@@ -128,11 +130,8 @@ impl DeepLinkAction {
                 let reader_guard = app_state.read().await;
 
                 match &reader_guard.auth_state {
-                    Some(AuthState::Listening) => {
-                        AuthStore::set(app, Some(auth))?;
-                        Ok(())
-                    }
-                    None | Some(_) => Err("Not listening for OAuth events".into()),
+                    Some(AuthState::Listening) => Ok(AuthStore::set(app, Some(auth))?),
+                    _ => Err("Not listening for OAuth events".into()),
                 }
             }
             DeepLinkAction::StartRecording {
