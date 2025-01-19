@@ -21,8 +21,11 @@ const signInAction = action(async () => {
   if (import.meta.env.VITE_ENVIRONMENT !== "development") {
     console.log("Starting listening to oauth signin command...");
     commands.startListeningToOauth();
+    await shell.open(`${clientEnv.VITE_SERVER_URL}/api/desktop/session/request`);
     return;
   }
+  
+  console.log("Starting oauth listener server...");
 
   let res: (url: URL) => void;
 

@@ -122,11 +122,12 @@ impl AuthStore {
 
         store.set("auth", json!(value));
 
-        let app_state = app.state::<Arc<RwLock<crate::App>>>();
-        app_state.blocking_write().auth_state = match value {
-            Some(_) => Some(AuthState::SignedIn),
-            None => None,
-        };
+        // tokio::runtime::Runtime::block_on(&self, future)
+        // let app_state = app.state::<Arc<RwLock<crate::App>>>();
+        // app_state.blocking_write().auth_state = match value {
+        //     Some(_) => Some(AuthState::SignedIn),
+        //     None => None,
+        // };
 
         store.save().map_err(|e| e.to_string())
     }
