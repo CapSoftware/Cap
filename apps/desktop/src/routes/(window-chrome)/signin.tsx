@@ -17,7 +17,7 @@ import { authStore } from "~/store";
 import { clientEnv } from "~/utils/env";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "~/utils/tauri";
-
+import { Window } from "@tauri-apps/api/window";
 const signInAction = action(async () => {
   let res: (url: URL) => void;
 
@@ -94,9 +94,27 @@ const signInAction = action(async () => {
       },
     });
 
-    const currentWindow = getCurrentWindow();
+    const currentWindow = await Window.getByLabel("signin");
     await commands.openMainWindow();
-    await currentWindow.close();
+
+    // Add a small delay to ensure window is ready
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const mainWindow = await Window.getByLabel("main");
+    console.log("Main window reference:", mainWindow ? "found" : "not found");
+
+    if (mainWindow) {
+      try {
+        await mainWindow.setFocus();
+        console.log("Successfully set focus on main window");
+      } catch (e) {
+        console.error("Failed to focus main window:", e);
+      }
+    }
+
+    if (currentWindow) {
+      await currentWindow.close();
+    }
 
     return redirect("/");
   } catch (error) {
@@ -167,7 +185,30 @@ export default function Page() {
           },
         });
         setIsSignedIn(true);
-        alert("Successfully signed in to Cap!");
+        const currentWindow = await Window.getByLabel("signin");
+        await commands.openMainWindow();
+
+        // Add a small delay to ensure window is ready
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        const mainWindow = await Window.getByLabel("main");
+        console.log(
+          "Main window reference:",
+          mainWindow ? "found" : "not found"
+        );
+
+        if (mainWindow) {
+          try {
+            await mainWindow.setFocus();
+            console.log("Successfully set focus on main window");
+          } catch (e) {
+            console.error("Failed to focus main window:", e);
+          }
+        }
+
+        if (currentWindow) {
+          await currentWindow.close();
+        }
       }
     });
 
