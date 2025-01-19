@@ -18,10 +18,8 @@ tokio = { version = "1.39.3", features = [
 	"rt-multi-thread",
 	"time",
 ] }
-tauri = { version = "2.2.0", features = [ "specta" ] }
+tauri = { version = "2.2.3", features = [ "specta" ] }
 specta = { version = "=2.0.0-rc.20", features = [ "derive" ] }
-# TODO(Ilya): Remove with next tauri and specta updates
-specta-util = { version = "^0.0.7", features = [ "export" ] }
 
 scap = { git = "https://github.com/CapSoftware/scap", rev = "58d4410bf52f" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "0d3d1f30a78b", features = [

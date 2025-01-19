@@ -10,8 +10,6 @@ cap-flags = { path = "../flags" }
 cap-utils = { path = "../utils" }
 
 specta.workspace = true
-# TODO(Ilya): Remove with next tauri and specta updates
-specta-util.workspace = true
 tokio.workspace = true
 flume.workspace = true
 thiserror.workspace = true

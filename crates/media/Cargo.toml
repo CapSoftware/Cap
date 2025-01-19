@@ -24,8 +24,6 @@ ringbuf = "0.4.7"
 scap.workspace = true
 serde = { version = "1", features = ["derive"] }
 specta.workspace = true
-# TODO(Ilya): Remove with next tauri and specta updates
-specta-util.workspace = true
 tempfile = "3.12.0"
 thiserror.workspace = true
 tracing = { version = "0.1", features = ["release_max_level_info"] }

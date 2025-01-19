@@ -5,7 +5,4 @@ edition = "2021"
 
 [dependencies]
 serde = "1.0.214"
-# TODO(Ilya): Remove with next tauri and specta updates
 specta.workspace = true
-
-specta-util.workspace = true
