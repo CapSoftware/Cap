@@ -84,19 +84,19 @@ impl TryFrom<&Url> for DeepLinkAction {
                     .get("mode")
                     .and_then(|mode| match mode.to_string().as_str() {
                         "screen" => params
-                            .get("target_native_id")
-                            .map(|id| CaptureMode::Screen(id.to_string())),
+                            .get("target_native_name")
+                            .map(|name| CaptureMode::Screen(name.to_string())),
                         "area" => params
-                            .get("target_native_id")
-                            .map(|id| CaptureMode::Screen(id.to_string())),
+                            .get("target_native_name")
+                            .map(|name| CaptureMode::Screen(name.to_string())),
                         "window" => params
-                            .get("target_native_id")
-                            .map(|id| CaptureMode::Window(id.to_string())),
+                            .get("target_native_name")
+                            .map(|name| CaptureMode::Window(name.to_string())),
                         _ => None,
                     })
                     .ok_or("Invalid mode")?,
-                camera_label: params.get("camera").map(|s| s.to_string()),
-                audio_input_name: params.get("mic").map(|s| s.to_string()),
+                camera_label: params.get("camera_label").map(|s| s.to_string()),
+                audio_input_name: params.get("audio_input_name").map(|s| s.to_string()),
                 fps: params.get("fps").and_then(|s| s.parse().ok()),
                 output_resolution: params.get("output_resolution").and_then(|v| {
                     let mut parts = v.split('x');
