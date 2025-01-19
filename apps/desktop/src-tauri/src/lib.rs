@@ -1821,10 +1821,6 @@ async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
         .show(&app)
         .map_err(|e| e.to_string())?;
 
-    let app_state = app.state::<Arc<RwLock<crate::App>>>();
-    let mut writer_guard = app_state.write().await;
-    writer_guard.auth_state = Some(auth::AuthState::Listening);
-
     Ok(())
 }
 
@@ -1973,6 +1969,7 @@ pub async fn run() {
             check_upgraded_and_update,
             open_external_link,
             hotkeys::set_hotkey,
+            start_listening_to_oauth,
             delete_auth_open_signin,
             reset_camera_permissions,
             reset_microphone_permissions,

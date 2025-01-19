@@ -131,6 +131,9 @@ async openExternalLink(url: string) : Promise<null> {
 async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<null> {
     return await TAURI_INVOKE("set_hotkey", { action, hotkey });
 },
+async startListeningToOauth() : Promise<null> {
+    return await TAURI_INVOKE("start_listening_to_oauth");
+},
 async deleteAuthOpenSignin() : Promise<null> {
     return await TAURI_INVOKE("delete_auth_open_signin");
 },

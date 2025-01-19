@@ -19,8 +19,8 @@ import { commands } from "~/utils/tauri";
 
 const signInAction = action(async () => {
   if (import.meta.env.VITE_ENVIRONMENT !== "development") {
-    
-
+    console.log("Starting listening to oauth signin command...");
+    commands.startListeningToOauth();
     return;
   }
 
