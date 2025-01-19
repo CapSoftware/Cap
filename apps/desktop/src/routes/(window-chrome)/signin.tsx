@@ -54,9 +54,16 @@ const signInAction = action(async () => {
       },
     });
 
-    await shell.open(
-      `${clientEnv.VITE_SERVER_URL}/api/desktop/session/request?port=${port}`
+    // prettier-ignore
+    const platform = import.meta.env.VITE_ENVIRONMENT === "development" ? "web" : "desktop";
+
+    const callbackUrl = new URL(
+      `${clientEnv.VITE_SERVER_URL}/api/desktop/session/request`
     );
+    callbackUrl.searchParams.set("port", port);
+    callbackUrl.searchParams.set("platform", platform);
+
+    await shell.open(callbackUrl.toString());
 
     const url = await new Promise<URL>((r) => {
       res = r;

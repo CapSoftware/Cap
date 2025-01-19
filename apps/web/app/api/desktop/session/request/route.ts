@@ -8,6 +8,8 @@ export async function GET(req: NextRequest) {
   const searchParams = req.nextUrl.searchParams;
   const session = await getServerSession(authOptions);
   const port = searchParams.get("port") || "";
+  const platform = searchParams.get("platform") || "web";
+
   const secret =
     process.env.NODE_ENV === "development"
       ? process.env.NEXTAUTH_SECRET_DEV
@@ -40,8 +42,12 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  const params = `token=${tokenValue}&expires=${decodedToken?.exp}&user_id=${user.id}`;
+
   const returnUrl = new URL(
-    `cap-desktop://signin?token=${tokenValue}&expires=${decodedToken?.exp}&user_id=${user.id}`
+    platform === "web"
+      ? `http://127.0.0.1:${port}?${params}`
+      : `cap-desktop://signin?${params}`
   );
 
   return Response.redirect(returnUrl.href);
