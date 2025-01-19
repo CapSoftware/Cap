@@ -2047,6 +2047,7 @@ pub async fn run() {
     }
 
     builder
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -2057,7 +2058,6 @@ pub async fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(flags::plugin::init())
-        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler({
             let handler = specta_builder.invoke_handler();
 
@@ -2075,13 +2075,6 @@ pub async fn run() {
             hotkeys::init(&app);
             general_settings::init(&app);
             fake_window::init(&app);
-
-            // this doesn't work in dev on mac, just a fact of deeplinks
-            app.deep_link().on_open_url(|event| {
-                // TODO: handle deep link for auth
-                dbg!(event.id());
-                dbg!(event.urls());
-            });
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
                 sentry::configure_scope(|scope| {
@@ -2271,26 +2264,29 @@ pub async fn run() {
         .run(|handle, event| match event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
-                // Check if any editor or settings window is open
-                let has_editor_or_settings = handle
-                    .webview_windows()
-                    .iter()
-                    .any(|(label, _)| label.starts_with("editor-") || label.as_str() == "settings");
+                // Check if any editor, settings or signin window is open
+                let has_window = handle.webview_windows().iter().any(|(label, _)| {
+                    label.starts_with("editor-")
+                        || label.as_str() == "settings"
+                        || label.as_str() == "signin"
+                });
 
-                if has_editor_or_settings {
-                    // Find and focus the editor or settings window
+                if has_window {
+                    // Find and focus the editor, settings or signin window
                     if let Some(window) = handle
                         .webview_windows()
                         .iter()
                         .find(|(label, _)| {
-                            label.starts_with("editor-") || label.as_str() == "settings"
+                            label.starts_with("editor-")
+                                || label.as_str() == "settings"
+                                || label.as_str() == "signin"
                         })
                         .map(|(_, window)| window.clone())
                     {
                         window.set_focus().ok();
                     }
                 } else {
-                    // No editor or settings window open, show main window
+                    // No editor, settings or signin window open, show main window
                     open_main_window(handle.clone());
                 }
             }
