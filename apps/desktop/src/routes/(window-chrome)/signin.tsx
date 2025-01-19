@@ -7,7 +7,6 @@ import {
   redirect,
   useAction,
   useSubmission,
-  useNavigate,
 } from "@solidjs/router";
 import { onMount, onCleanup, createSignal } from "solid-js";
 
@@ -18,6 +17,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands, events } from "~/utils/tauri";
 
 const signInAction = action(async () => {
+  // Only use deeplink action handler on production.
   if (import.meta.env.VITE_ENVIRONMENT !== "development") {
     console.log("Starting listening to oauth signin command...");
     commands.startListeningToOauth();
@@ -97,29 +97,8 @@ const signInAction = action(async () => {
       },
     });
 
-    const currentWindow = await Window.getByLabel("signin");
-    await commands.openMainWindow();
-
-    // Add a small delay to ensure window is ready
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    const mainWindow = await Window.getByLabel("main");
-    console.log("Main window reference:", mainWindow ? "found" : "not found");
-
-    if (mainWindow) {
-      try {
-        await mainWindow.setFocus();
-        console.log("Successfully set focus on main window");
-      } catch (e) {
-        console.error("Failed to focus main window:", e);
-      }
-    }
-
-    if (currentWindow) {
-      await currentWindow.close();
-    }
-
-    return redirect("/");
+    await commands.showWindow("Main");
+    getCurrentWindow().close();
   } catch (error) {
     console.error("Sign in failed:", error);
     await authStore.set();
@@ -137,6 +116,8 @@ export default function Page() {
       console.log(`Signed in: ${e.payload.user_id}`);
       setIsSignedIn(true);
       alert("Successfully signed in to Cap!");
+      await commands.showWindow("Main");
+      getCurrentWindow().close();
     });
 
     onCleanup(() => unlisten());
