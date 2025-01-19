@@ -10,7 +10,6 @@ import {
   useNavigate,
 } from "@solidjs/router";
 import { onMount, onCleanup, createSignal } from "solid-js";
-import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 
 import callbackTemplate from "./callback.template";
 import { authStore } from "~/store";
