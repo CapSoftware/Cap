@@ -35,13 +35,19 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     let actions: Vec<_> = urls
         .into_iter()
         .filter(|url| !url.as_str().is_empty())
-        .filter_map(|url| DeepLinkAction::try_from(&url).ok())
+        .filter_map(|url| {
+            DeepLinkAction::try_from(&url)
+                .map_err(|e| {
+                    eprintln!("Failed to parse deep link \"{}\": {}", &url, e);
+                })
+                .ok()
+        })
         .collect();
 
-    let handle = app_handle.clone();
+    let app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         for action in actions {
-            if let Err(e) = action.handle(&handle).await {
+            if let Err(e) = action.handle(&app_handle).await {
                 eprintln!("Failed to handle deep link action: {}", e);
             }
         }
@@ -66,12 +72,12 @@ impl TryFrom<&Url> for DeepLinkAction {
                             None
                         }
                     })
-                    .ok_or("Missing or incorrect 'token' parameter for OAuth")?
+                    .ok_or("Missing or incorrect \"token\" parameter for OAuth")?
                     .to_string(),
                 user_id: Some(
                     params
                         .get("user_id")
-                        .ok_or("Missing 'user_id' parameter for OAuth")?
+                        .ok_or("Missing \"user_id\" parameter for OAuth")?
                         .to_string(),
                 ),
                 expires: params
@@ -145,12 +151,12 @@ impl DeepLinkAction {
                 let capture_target: ScreenCaptureTarget = match mode {
                     CaptureMode::Screen(name) => cap_media::sources::list_screens()
                         .into_iter()
-                        .find(|s| s.0.name == name)
+                        .find(|(s, _)| s.name == name)
                         .map(|(s, _)| ScreenCaptureTarget::Screen(s))
                         .ok_or(format!("No screen with name \"{}\"", &name))?,
                     CaptureMode::Window(name) => cap_media::sources::list_windows()
                         .into_iter()
-                        .find(|w| w.0.name == name)
+                        .find(|(w, _)| w.name == name)
                         .map(|(w, _)| ScreenCaptureTarget::Window(w))
                         .ok_or(format!("No window with name \"{}\"", &name))?,
                 };
