@@ -1,4 +1,5 @@
 use std::{
+    fs::File,
     path::PathBuf,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -22,9 +23,9 @@ use tokio::sync::{oneshot, Mutex};
 use tracing::{
     debug, info,
     instrument::{self, WithSubscriber},
-    trace, Instrument, Level, Span,
+    trace, Instrument,
 };
-use tracing_subscriber::{layer::SubscriberExt, Layer};
+use tracing_subscriber::{fmt::FormatFields, layer::SubscriberExt, Layer};
 
 use crate::{
     cursor::{spawn_cursor_recorder, CursorActor, Cursors},
@@ -130,32 +131,45 @@ impl ActorHandle {
 
 pub async fn spawn_recording_actor(
     id: String,
-    recording_dir: impl Into<PathBuf>,
+    recording_dir: PathBuf,
     options: RecordingOptions,
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     audio_input_feed: Option<AudioInputFeed>,
 ) -> Result<ActorHandle, RecordingError> {
-    let collector = tracing_subscriber::registry().with(
-        tracing_subscriber::fmt::layer()
-            .with_ansi(true)
-            .with_target(false)
-            .with_filter(
-                tracing_subscriber::filter::EnvFilter::builder()
-                    .with_default_directive(tracing::level_filters::LevelFilter::TRACE.into())
-                    .from_env_lossy(),
-            ),
-    );
+    ensure_dir(&recording_dir)?;
+    let logfile = File::create(recording_dir.join("recording-logs.log"))?;
+
+    let collector = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_target(false)
+                .with_writer(logfile)
+                .with_filter(
+                    tracing_subscriber::filter::EnvFilter::builder()
+                        .with_default_directive(tracing::level_filters::LevelFilter::TRACE.into())
+                        .from_env_lossy(),
+                ),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_target(false)
+                .with_filter(
+                    tracing_subscriber::filter::EnvFilter::builder()
+                        .with_default_directive(tracing::level_filters::LevelFilter::INFO.into())
+                        .from_env_lossy(),
+                ),
+        );
 
     async {
         async {
             trace!("creating recording actor");
 
-            let recording_dir = recording_dir.into();
+            let content_dir = ensure_dir(&recording_dir.join("content"))?;
 
-            let content_dir = ensure_dir(recording_dir.join("content"))?;
-
-            let segments_dir = ensure_dir(content_dir.join("segments"))?;
-            let cursors_dir = ensure_dir(content_dir.join("cursors"))?;
+            let segments_dir = ensure_dir(&content_dir.join("segments"))?;
+            let cursors_dir = ensure_dir(&content_dir.join("cursors"))?;
 
             let screen_source = create_screen_capture(&options);
 
@@ -484,7 +498,7 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
     };
     let camera_feed = camera_feed.as_deref();
 
-    let dir = ensure_dir(segments_dir.join(format!("segment-{index}")))?;
+    let dir = ensure_dir(&segments_dir.join(format!("segment-{index}")))?;
 
     let clock = RealTimeClock::<()>::new();
     let mut pipeline_builder = Pipeline::builder(clock);
@@ -587,9 +601,9 @@ struct CameraPipelineInfo {
     fps: u32,
 }
 
-fn ensure_dir(path: PathBuf) -> Result<PathBuf, MediaError> {
+fn ensure_dir(path: &PathBuf) -> Result<PathBuf, MediaError> {
     std::fs::create_dir_all(&path)?;
-    Ok(path)
+    Ok(path.clone())
 }
 
 type CapturePipelineBuilder = PipelineBuilder<RealTimeClock<()>>;

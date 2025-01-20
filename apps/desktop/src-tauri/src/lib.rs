@@ -62,6 +62,9 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use web_api::ManagerExt;
 use windows::{CapWindowId, ShowCapWindow};
@@ -1914,8 +1917,42 @@ async fn check_notification_permissions(app: AppHandle) {
     }
 }
 
+fn configure_logging(folder: &PathBuf) -> tracing_appender::non_blocking::WorkerGuard {
+    let file_appender = tracing_appender::rolling::daily(folder, "cap-logs.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    let filter = || tracing_subscriber::filter::EnvFilter::builder().parse_lossy("cap-*=TRACE");
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_target(false)
+                .with_writer(non_blocking)
+                .with_filter(filter()),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_target(false)
+                .with_filter(filter()),
+        )
+        .init();
+
+    _guard
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
+    let tauri_context = tauri::generate_context!();
+
+    // let _guard = configure_logging(
+    //     &dirs::data_dir()
+    //         .unwrap()
+    //         .join(&tauri_context.config().identifier)
+    //         .join("logs"),
+    // );
+
     let specta_builder = tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
             get_recording_options,
@@ -2259,7 +2296,7 @@ pub async fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(tauri_context)
         .expect("error while running tauri application")
         .run(|handle, event| match event {
             #[cfg(target_os = "macos")]
