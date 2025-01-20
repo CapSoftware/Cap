@@ -80,6 +80,7 @@ impl ScreenCaptureTarget {
         match self {
             ScreenCaptureTarget::Window(window) => window.refresh_rate,
             ScreenCaptureTarget::Screen(screen) => screen.refresh_rate,
+            ScreenCaptureTarget::Area(area) => area.screen.refresh_rate,
         }
         .min(MAX_FPS)
     }

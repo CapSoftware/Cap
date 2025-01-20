@@ -3,24 +3,20 @@ import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
 import { useSearchParams } from "@solidjs/router";
 import {
-  For,
   Match,
   Show,
   Switch,
-  batch,
   createEffect,
   createMemo,
-  createRoot,
   createSignal,
   on,
   onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 import { createMutation } from "@tanstack/solid-query";
-import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { events } from "~/utils/tauri";
+import { type Crop, events } from "~/utils/tauri";
 import {
   EditorContextProvider,
   EditorInstanceContextProvider,
