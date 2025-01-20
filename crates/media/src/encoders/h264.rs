@@ -95,10 +95,6 @@ impl H264Encoder {
     fn queue_frame(&mut self, mut frame: FFVideo) {
         if let Some(converter) = &mut self.converter {
             let mut new_frame = FFVideo::empty();
-            // if self.tag == "camera" {
-            //     dbg!(self.config);
-            //     dbg!(frame.format(), frame.width(), frame.height());
-            // }
             converter.run(&frame, &mut new_frame).unwrap();
             frame = new_frame;
         }

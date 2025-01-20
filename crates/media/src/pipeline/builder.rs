@@ -61,14 +61,14 @@ impl<T> PipelineBuilder<T> {
 
         let (ready_sender, ready_signal) = flume::bounded(1);
 
-        // let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
-        // let span = tracing::error_span!("pipeline", task = &name);
+        let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
+        let span = tracing::error_span!("pipeline", task = &name);
         let join_handle = thread::spawn(move || {
-            // tracing::dispatcher::with_default(&dispatcher, || {
-            // span.in_scope(|| {
-            launch(ready_sender);
-            // })
-            // })
+            tracing::dispatcher::with_default(&dispatcher, || {
+                span.in_scope(|| {
+                    launch(ready_sender);
+                })
+            })
         });
         self.tasks.insert(
             name,

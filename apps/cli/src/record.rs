@@ -56,8 +56,7 @@ impl RecordStart {
             {
                 let name = camera_info.human_name();
 
-                let (tx, _) = flume::bounded(1);
-                Some(CameraFeed::init(&name, tx).await.unwrap())
+                Some(CameraFeed::init(&name).await.unwrap())
             } else {
                 None
             }
