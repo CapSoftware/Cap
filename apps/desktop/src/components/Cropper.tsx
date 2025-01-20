@@ -4,6 +4,7 @@ import {
   batch,
   createEffect,
   createMemo,
+  createResource,
   createRoot,
   createSignal,
   For,
@@ -13,8 +14,10 @@ import {
 } from "solid-js";
 import AreaOccluder from "./CropAreaRenderer";
 import Box from "~/utils/box";
-import type { XY, Crop } from "~/utils/tauri";
+import { type XY, type Crop, commands } from "~/utils/tauri";
 import { createStore } from "solid-js/store";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import { generalSettingsStore } from "~/store";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -405,6 +408,11 @@ export default function Cropper(
       });
     });
 
+    const [hapticsEnabled, hapticsEnabledOptions] = createResource(async () =>
+      (await generalSettingsStore.get())?.hapticsEnabled && ostype() === "macos"
+    );
+    generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
+
     function handleResizeMove(
       moveX: number,
       moveY: number,
@@ -446,6 +454,9 @@ export default function Cropper(
             newWidth = newHeight * matchedRatio.value;
           } else {
             newHeight = newWidth / matchedRatio.value;
+          }
+          if (!snappedToRatio() && hapticsEnabled()) {
+            commands.performHapticFeedback("Alignment", "Now");
           }
           setSnappedToRatio(true);
         } else {
