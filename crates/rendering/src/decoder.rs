@@ -172,6 +172,9 @@ impl AsyncVideoDecoder {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_time, sender) => {
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
+                        // sender.send(black_frame.clone()).ok();
+                        // continue;
+
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                             let data = cached.process(&decoder);
 

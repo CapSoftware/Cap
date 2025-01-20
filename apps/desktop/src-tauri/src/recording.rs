@@ -24,7 +24,6 @@ use cap_rendering::ProjectRecordings;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
-use tracing::{instrument::WithSubscriber, Level};
 
 #[tauri::command(async)]
 #[specta::specta]
