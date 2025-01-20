@@ -17,10 +17,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands, events } from "~/utils/tauri";
 
 const signInAction = action(async () => {
-  // Only use deeplink action handler on production.
+  // Only use deeplinks for OAuth on production.
   if (import.meta.env.VITE_ENVIRONMENT !== "development") {
     console.log("Starting listening to oauth signin command...");
-    commands.startListeningToOauth();
+    commands.setOauthListeningState("Listening");
     await shell.open(`${clientEnv.VITE_SERVER_URL}/api/desktop/session/request?platform=desktop`);
     return;
   }
@@ -114,6 +114,7 @@ export default function Page() {
   onMount(async () => {
     const unlisten = await events.authenticated.listen(async (e) => {
       console.log(`Signed in: ${e.payload.user_id}`);
+      commands.setOauthListeningState(null);
       setIsSignedIn(true);
       alert("Successfully signed in to Cap!");
       await commands.showWindow("Main");

@@ -131,8 +131,8 @@ async openExternalLink(url: string) : Promise<null> {
 async setHotkey(action: HotkeyAction, hotkey: Hotkey | null) : Promise<null> {
     return await TAURI_INVOKE("set_hotkey", { action, hotkey });
 },
-async startListeningToOauth() : Promise<null> {
-    return await TAURI_INVOKE("start_listening_to_oauth");
+async setOauthListeningState(authState: AuthState | null) : Promise<null> {
+    return await TAURI_INVOKE("set_oauth_listening_state", { authState });
 },
 async deleteAuthOpenSignin() : Promise<null> {
     return await TAURI_INVOKE("delete_auth_open_signin");
@@ -229,6 +229,7 @@ export type Audio = { duration: number; sample_rate: number; channels: number }
 export type AudioConfiguration = { mute: boolean; improve: boolean }
 export type AudioInputLevelChange = number
 export type AudioMeta = { path: string }
+export type AuthState = "Listening"
 export type AuthStore = { token: string; user_id: string | null; expires: number; plan: Plan | null }
 export type Authenticated = AuthStore
 export type AuthenticationInvalid = null

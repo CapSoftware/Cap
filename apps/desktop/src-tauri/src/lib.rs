@@ -1797,9 +1797,12 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
-async fn start_listening_to_oauth(state: MutableState<'_, App>) -> Result<(), String> {
+async fn set_oauth_listening_state(
+    state: MutableState<'_, App>,
+    auth_state: Option<auth::AuthState>,
+) -> Result<(), String> {
     let mut writer_guard = state.write().await;
-    writer_guard.auth_state = Some(auth::AuthState::Listening);
+    writer_guard.auth_state = auth_state;
     Ok(())
 }
 
@@ -1972,7 +1975,7 @@ pub async fn run() {
             check_upgraded_and_update,
             open_external_link,
             hotkeys::set_hotkey,
-            start_listening_to_oauth,
+            set_oauth_listening_state,
             delete_auth_open_signin,
             reset_camera_permissions,
             reset_microphone_permissions,
