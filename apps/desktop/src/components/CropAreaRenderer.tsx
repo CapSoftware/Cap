@@ -13,20 +13,32 @@ type DrawContext = {
   bounds: Bounds;
   radius: number;
   prefersDark: boolean;
-}
+  highlighted: boolean;
+  selected: boolean;
+  animationProgress: number;
+};
 
-function drawHandles({ ctx, bounds, radius }: DrawContext) {
+function drawHandles({
+  ctx,
+  bounds,
+  radius,
+  highlighted,
+  selected,
+}: DrawContext) {
   const { x, y, width, height } = bounds;
+  const minSizeForSideHandles = 100;
 
-  // Outline
-  ctx.strokeStyle = "rgba(255, 255, 255, 1)";
+  ctx.strokeStyle = selected
+    ? "rgba(255, 255, 255, 1)"
+    : highlighted
+      ? "rgba(59, 130, 246, 1)"
+      : "rgba(255, 255, 255, 0.8)";
+
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.roundRect(x, y, width, height, radius);
   ctx.stroke();
 
-  // Setup handle styles
-  ctx.strokeStyle = "white";
   ctx.lineWidth = 5;
   ctx.lineCap = "round";
   ctx.setLineDash([]);
@@ -63,6 +75,11 @@ function drawHandles({ ctx, bounds, radius }: DrawContext) {
 
   ctx.stroke();
 
+  // Only draw side handles if there's enough space.
+  if (!(width > minSizeForSideHandles && height > minSizeForSideHandles)) {
+    return;
+  }
+
   // Center handles
   const handleLength = 35;
   const sideHandleDistance = 0;
@@ -76,16 +93,28 @@ function drawHandles({ ctx, bounds, radius }: DrawContext) {
   ctx.lineTo(centerX + handleLength / 2, bounds.y - sideHandleDistance);
 
   // bottom center
-  ctx.moveTo(centerX - handleLength / 2, bounds.y + bounds.height + sideHandleDistance);
-  ctx.lineTo(centerX + handleLength / 2, bounds.y + bounds.height + sideHandleDistance);
+  ctx.moveTo(
+    centerX - handleLength / 2,
+    bounds.y + bounds.height + sideHandleDistance,
+  );
+  ctx.lineTo(
+    centerX + handleLength / 2,
+    bounds.y + bounds.height + sideHandleDistance,
+  );
 
   // left center
   ctx.moveTo(bounds.x - sideHandleDistance, centerY - handleLength / 2);
   ctx.lineTo(bounds.x - sideHandleDistance, centerY + handleLength / 2);
 
   // right center
-  ctx.moveTo(bounds.x + bounds.width + sideHandleDistance, centerY - handleLength / 2);
-  ctx.lineTo(bounds.x + bounds.width + sideHandleDistance, centerY + handleLength / 2);
+  ctx.moveTo(
+    bounds.x + bounds.width + sideHandleDistance,
+    centerY - handleLength / 2,
+  );
+  ctx.lineTo(
+    bounds.x + bounds.width + sideHandleDistance,
+    centerY + handleLength / 2,
+  );
 
   ctx.stroke();
 }
@@ -99,20 +128,21 @@ function drawGuideLines({ ctx, bounds, prefersDark }: DrawContext) {
   ctx.setLineDash([5, 2]);
 
   // Rule of thirds
+  ctx.beginPath();
   for (let i = 1; i < 3; i++) {
     const x = bounds.x + (bounds.width * i) / 3;
-    const y = bounds.y + (bounds.height * i) / 3;
-
-    ctx.beginPath();
     ctx.moveTo(x, bounds.y);
     ctx.lineTo(x, bounds.y + bounds.height);
-    ctx.stroke();
+  }
+  ctx.stroke();
 
-    ctx.beginPath();
+  ctx.beginPath();
+  for (let i = 1; i < 3; i++) {
+    const y = bounds.y + (bounds.height * i) / 3;
     ctx.moveTo(bounds.x, y);
     ctx.lineTo(bounds.x + bounds.width, y);
-    ctx.stroke();
   }
+  ctx.stroke();
 
   // Center crosshair
   const centerX = Math.round(bounds.x + bounds.width / 2);
@@ -140,34 +170,39 @@ function draw(
   radius: number,
   guideLines: boolean,
   showHandles: boolean,
-  prefersDark: boolean
+  highlighted: boolean,
+  selected: boolean,
+  prefersDark: boolean,
 ) {
   if (bounds.width <= 0 || bounds.height <= 0) return;
-  const drawContext: DrawContext = { ctx, bounds, radius, prefersDark };
+  const drawContext: DrawContext = {
+    ctx,
+    bounds,
+    radius,
+    prefersDark,
+    highlighted,
+    selected,
+    animationProgress: 0,
+  };
 
   ctx.save();
-
-  // Clear the entire canvas
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-  // Overlay
-  ctx.fillStyle = prefersDark ? "rgba(0, 0, 0, 0.5)" : "rgba(0, 0, 0, 0.65)";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
   // Shadow
   ctx.save();
-  ctx.shadowColor = "rgba(0, 0, 0, 1)";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
   ctx.shadowBlur = 200;
   ctx.shadowOffsetY = 25;
-  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
   ctx.beginPath();
   ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
   ctx.fill();
   ctx.restore();
 
   if (showHandles) drawHandles(drawContext);
-  
-  // Clear bounds
+
   ctx.beginPath();
   ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
   ctx.clip();
@@ -178,13 +213,15 @@ function draw(
   ctx.restore();
 }
 
-export default function AreaOccluder(
+export default function CropAreaRenderer(
   props: ParentProps<{
     bounds: Bounds;
     guideLines?: boolean;
     handles?: boolean;
     borderRadius?: number;
-  }>
+    highlighted?: boolean;
+    selected?: boolean;
+  }>,
 ) {
   let canvasRef: HTMLCanvasElement | undefined;
   const [prefersDarkScheme, setPrefersDarkScheme] = createSignal(false);
@@ -208,8 +245,10 @@ export default function AreaOccluder(
         props.borderRadius || 0,
         props.guideLines || false,
         props.handles || false,
-        prefersDarkScheme()
-      )
+        props.highlighted || false,
+        props.selected || false,
+        prefersDarkScheme(),
+      ),
     );
     const ctx = hidpiCanvas?.ctx;
     if (!ctx) return;
@@ -228,8 +267,10 @@ export default function AreaOccluder(
           props.borderRadius || 0,
           props.guideLines || false,
           props.handles || false,
-          prefersDark
-        )
+          props.highlighted || false,
+          props.selected || false,
+          prefersDark,
+        ),
       );
     });
 

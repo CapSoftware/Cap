@@ -1,6 +1,6 @@
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { Show, Suspense } from "solid-js";
-import AreaOccluder from "~/components/AreaOccluder";
+import CropAreaRenderer from "~/components/CropAreaRenderer";
 import { createCurrentRecordingQuery } from "~/utils/queries";
 
 export default function () {
@@ -16,7 +16,7 @@ export default function () {
         }
       >
         {(bounds) => (
-          <AreaOccluder
+          <CropAreaRenderer
             bounds={bounds()}
             borderRadius={ostype() === "macos" ? 9 : 7}
           />

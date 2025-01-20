@@ -1,6 +1,7 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import {
   type ParentProps,
+  batch,
   createEffect,
   createMemo,
   createRoot,
@@ -10,9 +11,10 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
-import AreaOccluder from "./AreaOccluder";
+import AreaOccluder from "./CropAreaRenderer";
 import Box from "~/utils/box";
 import type { XY, Crop } from "~/utils/tauri";
+import { createStore } from "solid-js/store";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -33,6 +35,21 @@ const HANDLES: HandleSide[] = [
   { x: "r", y: "c", direction: "e", cursor: "ew" },
 ];
 
+const COMMON_RATIOS = [
+  { name: "1:1", value: 1 },
+  { name: "4:3", value: 4 / 3 },
+  { name: "3:2", value: 3 / 2 },
+  { name: "16:9", value: 16 / 9 },
+  { name: "2:1", value: 2 },
+] as const;
+
+const KEY_MAPPINGS = new Map([
+  ["ArrowRight", "e"],
+  ["ArrowDown", "s"],
+  ["ArrowLeft", "w"],
+  ["ArrowUp", "n"],
+]);
+
 const ORIGIN_CENTER: XY<number> = { x: 0.5, y: 0.5 };
 
 function clamp(n: number, min = 0, max = 1) {
@@ -45,7 +62,7 @@ function distanceOf(firstPoint: Touch, secondPoint: Touch): number {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-export default function (
+export default function Cropper(
   props: ParentProps<{
     onCropChange: (value: Crop) => void;
     value: Crop;
@@ -56,12 +73,17 @@ export default function (
     showGuideLines?: boolean;
   }>,
 ) {
-  const minSize = props.minSize || { x: 100, y: 100 };
   const crop = props.value;
-  console.log(`value ${crop}`);
 
   const [containerSize, setContainerSize] = createSignal({ x: 0, y: 0 });
   const mappedSize = createMemo(() => props.mappedSize || containerSize());
+  const minSize = createMemo(() => {
+    const mapped = mappedSize();
+    return {
+      x: Math.min(100, mapped.x * 0.1),
+      y: Math.min(100, mapped.y * 0.1),
+    };
+  });
 
   const containerToMappedSizeScale = createMemo(() => {
     const container = containerSize();
@@ -72,7 +94,7 @@ export default function (
     };
   });
 
-  const displayCrop = createMemo(() => {
+  const displayScaledCrop = createMemo(() => {
     const mapped = mappedSize();
     const container = containerSize();
     return {
@@ -105,8 +127,8 @@ export default function (
       y: mapped.y / 2,
     };
 
-    let width = clamp(initial.x, minSize.x, mapped.x);
-    let height = clamp(initial.y, minSize.y, mapped.y);
+    let width = clamp(initial.x, minSize().x, mapped.x);
+    let height = clamp(initial.y, minSize().y, mapped.y);
 
     const box = Box.from(
       { x: (mapped.x - width) / 2, y: (mapped.y - height) / 2 },
@@ -136,18 +158,24 @@ export default function (
     ),
   );
 
-  const [isDragging, setIsDragging] = createSignal(false);
-  const [initialPinchDistance, setInitialPinchDistance] = createSignal(0);
-  const [initialSize, setInitialSize] = createSignal({ width: 0, height: 0 });
-  const [lastTouchCenter, setLastTouchCenter] = createSignal<XY<number> | null>(
-    null,
-  );
-  const [isTrackpadGesture, setIsTrackpadGesture] = createSignal(false);
+  const [snappedToRatio, setSnappedToRatio] = createSignal(false);
+  const [dragging, setDragging] = createSignal(false);
+  const [gestureState, setGestureState] = createStore<{
+    isTrackpadGesture: boolean;
+    lastTouchCenter: XY<number> | null;
+    initialPinchDistance: number;
+    initialSize: { width: number; height: number };
+  }>({
+    isTrackpadGesture: false,
+    lastTouchCenter: null,
+    initialPinchDistance: 0,
+    initialSize: { width: 0, height: 0 },
+  });
 
   function handleDragStart(event: MouseEvent) {
-    if (isTrackpadGesture()) return; // Don't start drag if we're in a trackpad gesture
+    if (gestureState.isTrackpadGesture) return; // Don't start drag if we're in a trackpad gesture
     event.stopPropagation();
-    setIsDragging(true);
+    setDragging(true);
     let lastValidPos = { x: event.clientX, y: event.clientY };
     const box = Box.from(crop.position, crop.size);
     const scaleFactors = containerToMappedSizeScale();
@@ -156,7 +184,7 @@ export default function (
       const mapped = mappedSize();
       createEventListenerMap(window, {
         mouseup: () => {
-          setIsDragging(false);
+          setDragging(false);
           dispose();
         },
         mousemove: (e) => {
@@ -186,18 +214,18 @@ export default function (
     const mapped = mappedSize();
 
     if (event.ctrlKey) {
-      setIsTrackpadGesture(true);
+      setGestureState("isTrackpadGesture", true);
 
       const velocity = Math.max(0.001, Math.abs(event.deltaY) * 0.001);
       const scale = 1 - event.deltaY * velocity;
 
       box.resize(
-        clamp(box.width * scale, minSize.x, mapped.x),
-        clamp(box.height * scale, minSize.y, mapped.y),
-        ORIGIN_CENTER
+        clamp(box.width * scale, minSize().x, mapped.x),
+        clamp(box.height * scale, minSize().y, mapped.y),
+        ORIGIN_CENTER,
       );
       box.constrainAll(box, mapped, ORIGIN_CENTER, props.aspectRatio);
-      setTimeout(() => setIsTrackpadGesture(false), 100);
+      setTimeout(() => setGestureState("isTrackpadGesture", false), 100);
     } else {
       const velocity = Math.max(1, Math.abs(event.deltaY) * 0.01);
       const scaleFactors = containerToMappedSizeScale();
@@ -210,29 +238,35 @@ export default function (
       );
     }
 
-    setCrop(box.toBounds());
+    // setCrop(box.toBounds());
+    props.onCropChange(box.toBounds());
   }
 
   function handleTouchStart(event: TouchEvent) {
     if (event.touches.length === 2) {
       // Initialize pinch zoom
       const distance = distanceOf(event.touches[0], event.touches[1]);
-      setInitialPinchDistance(distance);
-      setInitialSize({
-        width: crop.size.x,
-        height: crop.size.y,
-      });
 
       // Initialize touch center
       const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
       const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
-      setLastTouchCenter({ x: centerX, y: centerY });
+
+      batch(() => {
+        setGestureState("initialPinchDistance", distance);
+        setGestureState("initialSize", {
+          width: crop.size.x,
+          height: crop.size.y,
+        });
+        setGestureState("lastTouchCenter", { x: centerX, y: centerY });
+      });
     } else if (event.touches.length === 1) {
       // Handle single touch as drag
-      setIsDragging(true);
-      setLastTouchCenter({
-        x: event.touches[0].clientX,
-        y: event.touches[0].clientY,
+      batch(() => {
+        setDragging(true);
+        setGestureState("lastTouchCenter", {
+          x: event.touches[0].clientX,
+          y: event.touches[0].clientY,
+        });
       });
     }
   }
@@ -241,19 +275,23 @@ export default function (
     if (event.touches.length === 2) {
       // Handle pinch zoom
       const currentDistance = distanceOf(event.touches[0], event.touches[1]);
-      const scale = currentDistance / initialPinchDistance();
+      const scale = currentDistance / gestureState.initialPinchDistance;
 
       const box = Box.from(crop.position, crop.size);
       const mapped = mappedSize();
 
       // Calculate new dimensions while maintaining aspect ratio
       const currentRatio = crop.size.x / crop.size.y;
-      let newWidth = clamp(initialSize().width * scale, minSize.x, mapped.x);
+      let newWidth = clamp(
+        gestureState.initialSize.width * scale,
+        minSize().x,
+        mapped.x,
+      );
       let newHeight = newWidth / currentRatio;
 
       // Adjust if height exceeds bounds
-      if (newHeight < minSize.y || newHeight > mapped.y) {
-        newHeight = clamp(newHeight, minSize.y, mapped.y);
+      if (newHeight < minSize().y || newHeight > mapped.y) {
+        newHeight = clamp(newHeight, minSize().y, mapped.y);
         newWidth = newHeight * currentRatio;
       }
 
@@ -264,10 +302,10 @@ export default function (
       const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
       const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
 
-      if (lastTouchCenter()) {
+      if (gestureState.lastTouchCenter) {
         const scaleFactors = containerToMappedSizeScale();
-        const dx = (centerX - lastTouchCenter()!.x) / scaleFactors.x;
-        const dy = (centerY - lastTouchCenter()!.y) / scaleFactors.y;
+        const dx = (centerX - gestureState.lastTouchCenter.x) / scaleFactors.x;
+        const dy = (centerY - gestureState.lastTouchCenter.y) / scaleFactors.y;
 
         box.move(
           clamp(box.x + dx, 0, mapped.x - box.width),
@@ -275,25 +313,29 @@ export default function (
         );
       }
 
-      setLastTouchCenter({ x: centerX, y: centerY });
+      setGestureState("lastTouchCenter", { x: centerX, y: centerY });
       setCrop(box.toBounds());
-    } else if (event.touches.length === 1 && isDragging()) {
+    } else if (event.touches.length === 1 && dragging()) {
       // Handle single touch drag
       const box = Box.from(crop.position, crop.size);
       const scaleFactors = containerToMappedSizeScale();
       const mapped = mappedSize();
 
-      const dx =
-        (event.touches[0].clientX - lastTouchCenter()!.x) / scaleFactors.x;
-      const dy =
-        (event.touches[0].clientY - lastTouchCenter()!.y) / scaleFactors.y;
+      if (gestureState.lastTouchCenter) {
+        const dx =
+          (event.touches[0].clientX - gestureState.lastTouchCenter.x) /
+          scaleFactors.x;
+        const dy =
+          (event.touches[0].clientY - gestureState.lastTouchCenter.y) /
+          scaleFactors.y;
 
-      box.move(
-        clamp(box.x + dx, 0, mapped.x - box.width),
-        clamp(box.y + dy, 0, mapped.y - box.height),
-      );
+        box.move(
+          clamp(box.x + dx, 0, mapped.x - box.width),
+          clamp(box.y + dy, 0, mapped.y - box.height),
+        );
+      }
 
-      setLastTouchCenter({
+      setGestureState("lastTouchCenter", {
         x: event.touches[0].clientX,
         y: event.touches[0].clientY,
       });
@@ -303,10 +345,10 @@ export default function (
 
   function handleTouchEnd(event: TouchEvent) {
     if (event.touches.length === 0) {
-      setIsDragging(false);
-      setLastTouchCenter(null);
+      setDragging(false);
+      setGestureState("lastTouchCenter", null);
     } else if (event.touches.length === 1) {
-      setLastTouchCenter({
+      setGestureState("lastTouchCenter", {
         x: event.touches[0].clientX,
         y: event.touches[0].clientY,
       });
@@ -318,6 +360,21 @@ export default function (
     event.stopPropagation();
     const touch = event.touches[0];
     handleResizeStart(touch.clientX, touch.clientY, dir);
+  }
+
+  function findClosestRatio(
+    width: number,
+    height: number,
+    threshold = 0.008,
+  ): (typeof COMMON_RATIOS)[number] | null {
+    if (props.aspectRatio) return null;
+    const currentRatio = width / height;
+    for (const ratio of COMMON_RATIOS) {
+      if (Math.abs(currentRatio - ratio.value) < threshold) {
+        return ratio;
+      }
+    }
+    return null;
   }
 
   function handleResizeStart(clientX: number, clientY: number, dir: Direction) {
@@ -335,41 +392,65 @@ export default function (
       createEventListenerMap(window, {
         mouseup: dispose,
         touchend: dispose,
-        touchmove: (e) => requestAnimationFrame(() => {
-          if (e.touches.length !== 1) return;
-          handleResizeMove(e.touches[0].clientX, e.touches[0].clientY);
-        }),
-        mousemove: (e) => requestAnimationFrame(() => handleResizeMove(e.clientX, e.clientY, e.altKey)),
+        touchmove: (e) =>
+          requestAnimationFrame(() => {
+            if (e.touches.length !== 1) return;
+            handleResizeMove(e.touches[0].clientX, e.touches[0].clientY);
+          }),
+        mousemove: (e) =>
+          requestAnimationFrame(() =>
+            handleResizeMove(e.clientX, e.clientY, e.altKey),
+          ),
       });
     });
 
-    function handleResizeMove(moveX: number, moveY: number, centerOrigin = false) {
+    function handleResizeMove(
+      moveX: number,
+      moveY: number,
+      centerOrigin = false,
+    ) {
       const dx = (moveX - lastValidPos.x) / scaleFactors.x;
       const dy = (moveY - lastValidPos.y) / scaleFactors.y;
 
       const scaleMultiplier = centerOrigin ? 2 : 1;
       const currentBox = box.toBounds();
-      const newWidth =
+
+      let newWidth =
         dir.includes("e") || dir.includes("w")
           ? clamp(
             dir.includes("w")
               ? currentBox.size.x - dx * scaleMultiplier
               : currentBox.size.x + dx * scaleMultiplier,
-            minSize.x,
+            minSize().x,
             mapped.x,
           )
           : currentBox.size.x;
 
-      const newHeight =
+      let newHeight =
         dir.includes("n") || dir.includes("s")
           ? clamp(
             dir.includes("n")
               ? currentBox.size.y - dy * scaleMultiplier
               : currentBox.size.y + dy * scaleMultiplier,
-            minSize.y,
+            minSize().y,
             mapped.y,
           )
           : currentBox.size.y;
+
+      // Only corner handles can snap
+      if (dir.length === 2) {
+        const matchedRatio = findClosestRatio(newWidth, newHeight);
+        if (matchedRatio) {
+          if (dir.includes("n") || dir.includes("s")) {
+            newWidth = newHeight * matchedRatio.value;
+          } else {
+            newHeight = newWidth / matchedRatio.value;
+          }
+          setSnappedToRatio(true);
+        } else {
+          setSnappedToRatio(false);
+        }
+      }
 
       const newOrigin = centerOrigin ? ORIGIN_CENTER : origin;
       box.resize(newWidth, newHeight, newOrigin);
@@ -391,38 +472,20 @@ export default function (
         newBox.position.y !== crop.position.y
       ) {
         lastValidPos = { x: moveX, y: moveY };
-        setCrop(newBox);
+        props.onCropChange(newBox);
       }
     }
   }
 
   function setCrop(value: Crop) {
-    props.onCropChange({
-      size: { x: Math.round(value.size.x), y: Math.round(value.size.y) },
-      position: { x: Math.round(value.position.x), y: Math.round(value.position.y) },
-    });
-    console.log(`${JSON.stringify(crop)}`);
+    props.onCropChange(value);
   }
 
   let pressedKeys = new Set<string>([]);
-  const KEY_TO_DIR_MAP = new Map<string, Direction>([
-    ["ArrowUp", "n"],
-    ["w", "n"],
-    ["k", "n"],
-    ["ArrowRight", "e"],
-    ["d", "e"],
-    ["l", "e"],
-    ["ArrowDown", "s"],
-    ["s", "s"],
-    ["j", "s"],
-    ["ArrowLeft", "w"],
-    ["a", "w"],
-    ["h", "w"],
-  ]);
-
   let lastKeyHandleFrame: number | null = null;
   function handleKeyDown(event: KeyboardEvent) {
-    const dir = KEY_TO_DIR_MAP.has(event.key);
+    if (dragging()) return;
+    const dir = KEY_MAPPINGS.get(event.key);
     if (!dir) return;
     event.preventDefault();
     pressedKeys.add(event.key);
@@ -432,12 +495,12 @@ export default function (
       const box = Box.from(crop.position, crop.size);
       const mapped = mappedSize();
       const scaleFactors = containerToMappedSizeScale();
-      
+
       const moveDelta = event.shiftKey ? 20 : 5;
       const origin = event.altKey ? ORIGIN_CENTER : { x: 0, y: 0 };
 
       for (const key of pressedKeys) {
-        const dir = KEY_TO_DIR_MAP.get(key);
+        const dir = KEY_MAPPINGS.get(key);
         if (!dir) continue;
 
         const isUpKey = dir === "n";
@@ -448,40 +511,41 @@ export default function (
         if (event.metaKey || event.ctrlKey) {
           const scaleMultiplier = event.altKey ? 2 : 1;
           const currentBox = box.toBounds();
-          const newWidth =
-            dir.includes("e") || dir.includes("w")
-              ? clamp(
-                dir.includes("w")
-                  ? currentBox.size.x - moveDelta * scaleMultiplier
-                  : currentBox.size.x + moveDelta * scaleMultiplier,
-                minSize.x,
-                mapped.x,
-              )
-              : currentBox.size.x;
-      
-          const newHeight =
-            dir.includes("n") || dir.includes("s")
-              ? clamp(
-                dir.includes("n")
-                  ? currentBox.size.y - moveDelta * scaleMultiplier
-                  : currentBox.size.y + moveDelta * scaleMultiplier,
-                minSize.y,
-                mapped.y,
-              )
-              : currentBox.size.y;
 
-          box.resize(
-            clamp(newWidth, minSize.x, mapped.x),
-            clamp(newHeight, minSize.y, mapped.y),
-            origin
-          );
+          let newWidth = currentBox.size.x;
+          let newHeight = currentBox.size.y;
+
+          if (isLeftKey || isRightKey) {
+            newWidth = clamp(
+              isLeftKey
+                ? currentBox.size.x - moveDelta * scaleMultiplier
+                : currentBox.size.x + moveDelta * scaleMultiplier,
+              minSize().x,
+              mapped.x,
+            );
+          }
+
+          if (isUpKey || isDownKey) {
+            newHeight = clamp(
+              isUpKey
+                ? currentBox.size.y - moveDelta * scaleMultiplier
+                : currentBox.size.y + moveDelta * scaleMultiplier,
+              minSize().y,
+              mapped.y,
+            );
+          }
+
+          box.resize(newWidth, newHeight, origin);
         } else {
-          const dx = (isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0) / scaleFactors.x;
-          const dy = (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
+          const dx =
+            (isRightKey ? moveDelta : isLeftKey ? -moveDelta : 0) /
+            scaleFactors.x;
+          const dy =
+            (isDownKey ? moveDelta : isUpKey ? -moveDelta : 0) / scaleFactors.y;
 
           box.move(
             clamp(box.x + dx, 0, mapped.x - box.width),
-            clamp(box.y + dy, 0, mapped.y - box.height)
+            clamp(box.y + dy, 0, mapped.y - box.height),
           );
         }
       }
@@ -499,7 +563,7 @@ export default function (
     <div
       aria-label="Crop area"
       ref={containerRef}
-      class="relative h-full w-full overflow-hidden"
+      class="relative h-full w-full overflow-hidden overscroll-contain *:overscroll-none"
       onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
@@ -509,25 +573,26 @@ export default function (
     >
       <AreaOccluder
         bounds={{
-          x: displayCrop().x,
-          y: displayCrop().y,
-          width: displayCrop().width,
-          height: displayCrop().height,
+          x: displayScaledCrop().x,
+          y: displayScaledCrop().y,
+          width: displayScaledCrop().width,
+          height: displayScaledCrop().height,
         }}
         borderRadius={9}
         guideLines={props.showGuideLines}
         handles={true}
+        highlighted={snappedToRatio()}
       >
         {props.children}
       </AreaOccluder>
       <div
         class="absolute"
         style={{
-          top: `${displayCrop().y}px`,
-          left: `${displayCrop().x}px`,
-          width: `${displayCrop().width}px`,
-          height: `${displayCrop().height}px`,
-          cursor: isDragging() ? "grabbing" : "grab",
+          top: `${displayScaledCrop().y}px`,
+          left: `${displayScaledCrop().x}px`,
+          width: `${displayScaledCrop().width}px`,
+          height: `${displayScaledCrop().height}px`,
+          cursor: dragging() ? "grabbing" : "grab",
         }}
         onMouseDown={handleDragStart}
       >
@@ -550,7 +615,7 @@ export default function (
                     : handle.y === "b"
                       ? { bottom: "-12px" }
                       : { top: "50%", transform: "translateY(-50%)" }),
-                  cursor: `${handle.cursor}-resize`,
+                  cursor: dragging() ? "grabbing" : `${handle.cursor}-resize`,
                 }}
                 onMouseDown={(e) => {
                   e.stopPropagation();
