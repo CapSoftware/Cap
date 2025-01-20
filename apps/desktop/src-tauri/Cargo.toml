@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.3.11"
+version = "0.3.12"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2021"
@@ -33,12 +33,14 @@ tauri-plugin-notification = "2.1.0"
 tauri-plugin-os = "2.1.0"
 tauri-plugin-process = "2.0.1"
 tauri-plugin-shell = "2.1.0"
-tauri-plugin-single-instance = "2.0.1"
+[target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
+tauri-plugin-single-instance = { version = "2.2.1", features = ["deep-link"] }
 tauri-plugin-store = "2.2.0"
 tauri-plugin-updater = "2.2.0"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
 tauri-plugin-window-state = "2.2.0"
 tauri-plugin-positioner = "2.2.0"
+tauri-plugin-deep-link = "2.2.0"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -79,7 +81,6 @@ cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
 flume.workspace = true
-tauri-plugin-deep-link = "2.2.0"
 tracing-subscriber = "0.3.19"
 
 [target.'cfg(target_os = "macos")'.dependencies]
