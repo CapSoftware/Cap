@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
 use tokio::sync::RwLock;
 
@@ -8,14 +9,16 @@ use crate::{
     App,
 };
 
-#[derive(Debug)]
-enum CaptureMode {
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureMode {
     Screen(String),
     Window(String),
 }
 
-#[derive(Debug)]
-enum DeepLinkAction {
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeepLinkAction {
     SignIn(AuthStore),
     StartRecording {
         mode: CaptureMode,
@@ -44,10 +47,14 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
         })
         .collect();
 
+    if actions.is_empty() {
+        return;
+    }
+
     let app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         for action in actions {
-            if let Err(e) = action.handle(&app_handle).await {
+            if let Err(e) = action.execute(&app_handle).await {
                 eprintln!("Failed to handle deep link action: {}", e);
             }
         }
@@ -58,78 +65,26 @@ impl TryFrom<&Url> for DeepLinkAction {
     type Error = String;
 
     fn try_from(url: &Url) -> Result<Self, Self::Error> {
-        let path = url.path();
-        let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
-
-        match path {
-            "/signin" => Ok(DeepLinkAction::SignIn(AuthStore {
-                token: params
-                    .get("token")
-                    .and_then(|t| {
-                        if !t.is_empty() && t.len() >= 32 {
-                            Some(t)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or("Missing or incorrect \"token\" parameter for OAuth")?
-                    .to_string(),
-                user_id: Some(
-                    params
-                        .get("user_id")
-                        .ok_or("Missing \"user_id\" parameter for OAuth")?
-                        .to_string(),
-                ),
-                expires: params
-                    .get("expires")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0),
-                plan: None,
-            })),
-            "/start_recording" => Ok(DeepLinkAction::StartRecording {
-                mode: params
-                    .get("mode")
-                    .and_then(|mode| match mode.to_string().as_str() {
-                        "screen" => params
-                            .get("target_native_name")
-                            .map(|name| CaptureMode::Screen(name.to_string())),
-                        // TODO(Ilya) handle once screen area support is added.
-                        "area" => params
-                            .get("target_native_name")
-                            .map(|name| CaptureMode::Screen(name.to_string())),
-                        "window" => params
-                            .get("target_native_name")
-                            .map(|name| CaptureMode::Window(name.to_string())),
-                        _ => None,
-                    })
-                    .ok_or("Invalid mode")?,
-                camera_label: params.get("camera_label").map(|s| s.to_string()),
-                audio_input_name: params.get("audio_input_name").map(|s| s.to_string()),
-                fps: params.get("fps").and_then(|s| s.parse().ok()),
-                output_resolution: params.get("output_resolution").and_then(|v| {
-                    let mut parts = v.split('x');
-                    let width = parts.next().and_then(|s| s.parse().ok());
-                    let height = parts.next().and_then(|s| s.parse().ok());
-                    width.zip(height).map(|(w, h)| cap_project::Resolution {
-                        width: w,
-                        height: h,
-                    })
-                }),
-            }),
-            "/stop_recording" => Ok(DeepLinkAction::StopRecording),
-            "/editor" => Ok(DeepLinkAction::OpenEditor(
-                params
-                    .get("id")
-                    .ok_or("Missing \"id\" parameter for editor")?
-                    .to_string(),
-            )),
-            _ => Err(format!("Unsupported deep-link path: {}", path).into()),
+        if !url.domain().is_some_and(|v| v == "action") {
+            return Err("Invalid format".into());
         }
+
+        let params = url
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        let json_value = params.get("value").ok_or("No value")?;
+        let action: Self = serde_json::from_str(json_value).map_err(|e| {
+            format!(
+                "Failed to parse deep-link action json value: {}",
+                e.to_string()
+            )
+        })?;
+        Ok(action)
     }
 }
 
 impl DeepLinkAction {
-    async fn handle(self, app: &AppHandle) -> Result<(), String> {
+    pub async fn execute(self, app: &AppHandle) -> Result<(), String> {
         match self {
             Self::SignIn(auth) => {
                 let app_state = app.state::<Arc<RwLock<App>>>();
