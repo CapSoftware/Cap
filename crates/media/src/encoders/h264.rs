@@ -31,12 +31,6 @@ impl H264Encoder {
 
         let (codec, options) = get_codec_and_options(&config)?;
 
-        dbg!(codec
-            .video()
-            .unwrap()
-            .formats()
-            .unwrap()
-            .collect::<Vec<_>>());
         let (format, converter) = if !codec
             .video()
             .unwrap()
