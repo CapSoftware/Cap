@@ -1,6 +1,7 @@
 use cpal::{Device, StreamInstant, SupportedStreamConfig};
 use flume::{Receiver, Sender};
 use indexmap::IndexMap;
+use tracing::{error, info};
 
 use crate::feeds::{AudioInputConnection, AudioInputFeed, AudioInputSamples};
 use crate::{
@@ -82,7 +83,6 @@ impl PipelineSourceTask for AudioInputSource {
 
     type Clock = RealTimeClock<StreamInstant>;
 
-    // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
         mut clock: Self::Clock,
@@ -90,7 +90,7 @@ impl PipelineSourceTask for AudioInputSource {
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
         output: Sender<Self::Output>,
     ) {
-        println!("Preparing audio input source thread...");
+        info!("Preparing audio input source thread...");
 
         let mut samples_rx: Option<Receiver<AudioInputSamples>> = None;
         ready_signal.send(Ok(())).unwrap();
@@ -103,12 +103,12 @@ impl PipelineSourceTask for AudioInputSource {
                     match samples.recv() {
                         Ok(samples) => {
                             if let Err(error) = self.process_frame(&mut clock, &output, samples) {
-                                eprintln!("{error}");
+                                error!("{error}");
                                 break;
                             }
                         }
                         Err(_) => {
-                            eprintln!("Lost connection with the camera feed");
+                            error!("Lost connection with the camera feed");
                             break;
                         }
                     }
@@ -129,6 +129,6 @@ impl PipelineSourceTask for AudioInputSource {
             }
         }
 
-        println!("Shutting down audio input source thread.");
+        info!("Shut down audio input source thread.");
     }
 }

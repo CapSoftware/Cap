@@ -43,7 +43,7 @@ export const authStore = {
     await s.save();
   },
   listen: (fn: (data?: AuthStore | undefined) => void) =>
-    store().then((s) => s.onKeyChange<AuthStore>("presets", fn)),
+    store().then((s) => s.onKeyChange<AuthStore>("auth", fn)),
 };
 
 export const hotkeysStore = {

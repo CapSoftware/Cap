@@ -3,6 +3,8 @@ use std::sync::Arc;
 use flume::Receiver;
 use tokio::sync::mpsc;
 
+use crate::feeds::RawCameraFrame;
+
 pub struct WSFrame {
     pub data: Vec<u8>,
     pub width: u32,
@@ -23,6 +25,7 @@ pub async fn create_frame_ws(frame_rx: Receiver<WSFrame>) -> (u16, mpsc::Sender<
 
     type RouterState = Arc<Mutex<Receiver<WSFrame>>>;
 
+    #[axum::debug_handler]
     async fn ws_handler(
         ws: WebSocketUpgrade,
         State(state): State<RouterState>,

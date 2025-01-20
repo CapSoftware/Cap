@@ -15,10 +15,6 @@ use tauri::{
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
-#[cfg(target_os = "windows")]
-const WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE: tauri::LogicalSize<f64> =
-    tauri::LogicalSize::new(12.0, 35.0);
-
 #[derive(Clone)]
 pub enum CapWindowId {
     // Contains onboarding + permissions
@@ -32,6 +28,7 @@ pub enum CapWindowId {
     Camera,
     InProgressRecording,
     Upgrade,
+    SignIn,
 }
 
 impl FromStr for CapWindowId {
@@ -48,6 +45,7 @@ impl FromStr for CapWindowId {
             "in-progress-recording" => Self::InProgressRecording,
             "recordings-overlay" => Self::RecordingsOverlay,
             "upgrade" => Self::Upgrade,
+            "signin" => Self::SignIn,
             s if s.starts_with("editor-") => Self::Editor {
                 project_id: s.replace("editor-", ""),
             },
@@ -68,6 +66,7 @@ impl std::fmt::Display for CapWindowId {
             Self::InProgressRecording => write!(f, "in-progress-recording"),
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
+            Self::SignIn => write!(f, "signin"),
             Self::Editor { project_id } => write!(f, "editor-{}", project_id),
         }
     }
@@ -86,6 +85,7 @@ impl CapWindowId {
             Self::CaptureArea => "Cap Capture Area".to_string(),
             Self::InProgressRecording => "Cap In Progress Recording".to_string(),
             Self::Editor { .. } => "Cap Editor".to_string(),
+            Self::SignIn => "Cap Sign In".to_string(),
             _ => "Cap".to_string(),
         }
     }
@@ -93,7 +93,12 @@ impl CapWindowId {
     pub fn activates_dock(&self) -> bool {
         matches!(
             self,
-            Self::Setup | Self::Main | Self::Editor { .. } | Self::Settings | Self::Upgrade
+            Self::Setup
+                | Self::Main
+                | Self::Editor { .. }
+                | Self::Settings
+                | Self::Upgrade
+                | Self::SignIn
         )
     }
 
@@ -120,6 +125,7 @@ impl CapWindowId {
         Some(match self {
             Self::Setup => (600.0, 600.0),
             Self::Main => (300.0, 360.0),
+            Self::SignIn => (300.0, 360.0),
             Self::Editor { .. } => (900.0, 800.0),
             Self::Settings => (600.0, 450.0),
             Self::Camera => (460.0, 920.0),
@@ -140,19 +146,17 @@ pub enum ShowCapWindow {
     Camera { ws_port: u16 },
     InProgressRecording { position: Option<(f64, f64)> },
     Upgrade,
+    SignIn,
 }
 
 impl ShowCapWindow {
     pub fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
         if let Some(window) = self.id().get(app) {
-            // window.show().ok();
             window.set_focus().ok();
-
             return Ok(window);
         }
 
         let id = self.id();
-
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
@@ -167,6 +171,13 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => self
                 .window_builder(app, "/")
+                .resizable(false)
+                .maximized(false)
+                .maximizable(false)
+                .center()
+                .build()?,
+            Self::SignIn => self
+                .window_builder(app, "/signin")
                 .resizable(false)
                 .maximized(false)
                 .maximizable(false)
@@ -323,12 +334,7 @@ impl ShowCapWindow {
                 if FLAGS.pause_resume {
                     width += 32.0;
                 }
-                let mut height = 40.0;
-                #[cfg(target_os = "windows")]
-                {
-                    width -= WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.width;
-                    height -= WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.height;
-                }
+                let height = 40.0;
 
                 self.window_builder(app, "/in-progress-recording")
                     .maximized(false)
@@ -404,44 +410,6 @@ impl ShowCapWindow {
 
         window.hide().ok();
 
-        // TODO(Ilya): Remove once Tao is updated to `0.31.0`
-        #[cfg(target_os = "windows")]
-        {
-            use tauri_plugin_positioner::{Position, WindowExt};
-
-            if matches!(
-                self,
-                Self::Setup
-                    | Self::Main
-                    | Self::Editor { .. }
-                    | Self::Settings { .. }
-                    | Self::Upgrade
-            ) {
-                let _ = window.move_window(Position::Center);
-            }
-
-            if matches!(self, Self::InProgressRecording { .. }) {
-                let _ = window.move_window(Position::BottomCenter);
-
-                if let Ok(outer_size) = window.outer_size() {
-                    let screen_position = monitor.position();
-                    let window_size = tauri::PhysicalSize::<i32> {
-                        width: outer_size.width as i32,
-                        height: outer_size.height as i32,
-                    };
-                    let screen_size = tauri::PhysicalSize::<i32> {
-                        width: monitor.size().width as i32,
-                        height: monitor.size().height as i32,
-                    };
-
-                    let _ = window.set_position(tauri::PhysicalPosition {
-                        x: screen_position.x + ((screen_size.width / 2) - (window_size.width / 2)),
-                        y: screen_size.height - (window_size.height - screen_position.y) - 120,
-                    });
-                }
-            }
-        }
-
         #[cfg(target_os = "macos")]
         if let Some(position) = id.traffic_lights_position() {
             add_traffic_lights(&window, position);
@@ -464,32 +432,9 @@ impl ShowCapWindow {
             .shadow(true);
 
         if let Some(min) = id.min_size() {
-            // TODO(Ilya): Remove once Tao is updated to `0.31.0`
-            // currently, undecorated windows with shadows get the invisible bounds of the titlebar and window frame added to the inner size
-            #[cfg(target_os = "windows")]
-            let size = if matches!(
-                self,
-                Self::Setup
-                    | Self::Main
-                    | Self::Editor { .. }
-                    | Self::Settings { .. }
-                    | Self::InProgressRecording { .. }
-                    | Self::Upgrade
-            ) {
-                (
-                    min.0 - WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.width,
-                    min.1 - WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.height,
-                )
-            } else {
-                min
-            };
-
-            #[cfg(not(target_os = "windows"))]
-            let size = min;
-
             builder = builder
-                .inner_size(size.0, size.1)
-                .min_inner_size(size.0, size.1);
+                .inner_size(min.0, min.1)
+                .min_inner_size(min.0, min.1);
         }
 
         #[cfg(target_os = "macos")]
@@ -525,6 +470,7 @@ impl ShowCapWindow {
             ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
+            ShowCapWindow::SignIn => CapWindowId::SignIn,
         }
     }
 }

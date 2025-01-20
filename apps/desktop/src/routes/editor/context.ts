@@ -1,10 +1,18 @@
+// @refresh reload
 import { createContextProvider } from "@solid-primitives/context";
 import { trackStore } from "@solid-primitives/deep";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createUndoHistory } from "@solid-primitives/history";
 import { debounce } from "@solid-primitives/scheduled";
-import { Accessor, createEffect, createSignal, on } from "solid-js";
+import {
+  Accessor,
+  createEffect,
+  createResource,
+  createSignal,
+  on,
+} from "solid-js";
 import { createStore, reconcile, unwrap } from "solid-js/store";
+import { createElementBounds } from "@solid-primitives/bounds";
 
 import type { PresetsStore } from "../../store";
 import {
@@ -12,10 +20,11 @@ import {
   type SerializedEditorInstance,
   type XY,
   commands,
+  events,
 } from "~/utils/tauri";
-import { useEditorInstanceContext } from "./editorInstanceContext";
 import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
-import { createElementBounds } from "@solid-primitives/bounds";
+import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import { createPresets } from "~/utils/createPresets";
 
 export type CurrentDialog =
   | { type: "createPreset" }
@@ -24,6 +33,13 @@ export type CurrentDialog =
   | { type: "crop"; position: XY<number>; size: XY<number> };
 
 export type DialogState = { open: false } | ({ open: boolean } & CurrentDialog);
+
+export const FPS = 30;
+
+export const OUTPUT_SIZE = {
+  x: 1920,
+  y: 1080,
+};
 
 export const [EditorContextProvider, useEditorContext] = createContextProvider(
   (props: {
@@ -99,6 +115,45 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
   // biome-ignore lint/style/noNonNullAssertion: it's ok
   null!
 );
+
+export type FrameData = { width: number; height: number; data: ImageData };
+
+export const [EditorInstanceContextProvider, useEditorInstanceContext] =
+  createContextProvider((props: { videoId: string }) => {
+    const [latestFrame, setLatestFrame] = createLazySignal<{
+      width: number;
+      data: ImageData;
+    }>();
+
+    const [editorInstance] = createResource(async () => {
+      const instance = await commands.createEditorInstance(props.videoId);
+
+      const [ws, isConnected] = createImageDataWS(
+        instance.framesSocketUrl,
+        setLatestFrame
+      );
+
+      createEffect(() => {
+        if (isConnected()) {
+          events.renderFrameEvent.emit({
+            frame_number: Math.floor(0),
+            fps: FPS,
+            resolution_base: OUTPUT_SIZE,
+          });
+        }
+      });
+
+      return instance;
+    });
+
+    return {
+      editorInstance,
+      videoId: props.videoId,
+      latestFrame,
+      presets: createPresets(),
+      prettyName: () => editorInstance()?.prettyName ?? "Cap Recording",
+    };
+  }, null!);
 
 function createStoreHistory<T extends Static>(
   ...[state, setState]: ReturnType<typeof createStore<T>>
@@ -183,3 +238,8 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
   },
   null!
 );
+
+export const [SegmentContextProvider, useSegmentContext] =
+  createContextProvider((props: { width: Accessor<number> }) => {
+    return props;
+  }, null!);

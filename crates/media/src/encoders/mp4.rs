@@ -12,7 +12,7 @@ use ffmpeg::{
     threading::Config,
     Dictionary, Rescale,
 };
-use ffmpeg_sys_next as sys;
+use tracing::{debug, info, trace};
 
 use super::Output;
 
@@ -163,11 +163,11 @@ impl MP4Encoder {
     }
 
     pub fn queue_video_frame(&mut self, mut frame: FFVideo) {
-        println!(
-            "MP4Encoder: Processing frame {} (input PTS: {:?})",
-            self.video.frame_count,
-            frame.pts()
-        );
+        // println!(
+        //     "MP4Encoder: Processing frame {} (input PTS: {:?})",
+        //     self.video.frame_count,
+        //     frame.pts()
+        // );
         let mut scaler = ffmpeg::software::converter(
             (frame.width(), frame.height()),
             frame.format(),
@@ -181,10 +181,10 @@ impl MP4Encoder {
         // Set PTS in microseconds (1/1_000_000 second units)
         let pts = frame.pts().unwrap_or_else(|| self.video.frame_count);
         output.set_pts(Some(pts));
-        println!(
-            "MP4Encoder: Setting frame {} PTS to {}",
-            self.video.frame_count, pts
-        );
+        // println!(
+        //     "MP4Encoder: Setting frame {} PTS to {}",
+        //     self.video.frame_count, pts
+        // );
         self.video.frame_count += 1;
 
         self.video.encoder.send_frame(&output).unwrap();
@@ -196,11 +196,11 @@ impl MP4Encoder {
             return;
         };
 
-        println!(
-            "MP4Encoder: Queueing audio frame with PTS: {:?}, samples: {}",
-            frame.pts(),
-            frame.samples()
-        );
+        // println!(
+        //     "MP4Encoder: Queueing audio frame with PTS: {:?}, samples: {}",
+        //     frame.pts(),
+        //     frame.samples()
+        // );
 
         audio.buffer.consume(frame);
 
@@ -218,11 +218,11 @@ impl MP4Encoder {
                 output.set_pts(Some(pts));
             }
 
-            println!(
-                "MP4Encoder: Sending audio frame with PTS: {:?}, samples: {}",
-                output.pts(),
-                output.samples()
-            );
+            // println!(
+            //     "MP4Encoder: Sending audio frame with PTS: {:?}, samples: {}",
+            //     output.pts(),
+            //     output.samples()
+            // );
 
             // Send frame to encoder
             audio.encoder.send_frame(&output).unwrap();
@@ -230,11 +230,11 @@ impl MP4Encoder {
             // Process any encoded packets
             let mut encoded_packet = FFPacket::empty();
             while audio.encoder.receive_packet(&mut encoded_packet).is_ok() {
-                println!(
-                    "MP4Encoder: Writing audio packet with PTS: {:?}, size: {}",
-                    encoded_packet.pts(),
-                    encoded_packet.size()
-                );
+                // println!(
+                //     "MP4Encoder: Writing audio packet with PTS: {:?}, size: {}",
+                //     encoded_packet.pts(),
+                //     encoded_packet.size()
+                // );
 
                 encoded_packet.set_stream(1);
                 encoded_packet.rescale_ts(
@@ -257,21 +257,21 @@ impl MP4Encoder {
             .receive_packet(&mut encoded_packet)
             .is_ok()
         {
-            println!(
-                "MP4Encoder: Got encoded packet with PTS: {:?}, DTS: {:?}",
-                encoded_packet.pts(),
-                encoded_packet.dts()
-            );
+            // println!(
+            //     "MP4Encoder: Got encoded packet with PTS: {:?}, DTS: {:?}",
+            //     encoded_packet.pts(),
+            //     encoded_packet.dts()
+            // );
             encoded_packet.set_stream(0); // Video is stream 0
             encoded_packet.rescale_ts(
                 self.video.encoder.time_base(),
                 self.output_ctx.stream(0).unwrap().time_base(),
             );
-            println!(
-                "MP4Encoder: Writing packet with rescaled PTS: {:?}, DTS: {:?}",
-                encoded_packet.pts(),
-                encoded_packet.dts()
-            );
+            // println!(
+            //     "MP4Encoder: Writing packet with rescaled PTS: {:?}, DTS: {:?}",
+            //     encoded_packet.pts(),
+            //     encoded_packet.dts()
+            // );
             encoded_packet
                 .write_interleaved(&mut self.output_ctx)
                 .unwrap();
@@ -374,7 +374,6 @@ impl PipelineSinkTask for MP4Encoder {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         input: flume::Receiver<Self::Input>,
     ) {
-        println!("Starting {} MP4 encoding thread", self.tag);
         ready_signal.send(Ok(())).unwrap();
 
         while let Ok(frame) = input.recv() {
@@ -383,11 +382,10 @@ impl PipelineSinkTask for MP4Encoder {
                 self.queue_audio_frame(audio);
             }
         }
+    }
 
-        println!("Received last {} frame. Finishing up encoding.", self.tag);
+    fn finish(&mut self) {
         self.finish();
-
-        println!("Shutting down {} MP4 encoding thread", self.tag);
     }
 }
 

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
-use cap_media::frame_ws::WSFrame;
-use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta};
+use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
+use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     decoder::DecodedFrame, produce_frame, ProjectRecordings, ProjectUniforms, RenderVideoConstants,
 };
@@ -18,6 +18,7 @@ pub enum RendererMessage {
         uniforms: ProjectUniforms,
         time: f32, // Add this field
         finished: oneshot::Sender<()>,
+        resolution_base: XY<u32>,
     },
     Stop {
         finished: oneshot::Sender<()>,
@@ -80,6 +81,7 @@ impl Renderer {
                         uniforms,
                         time,
                         finished,
+                        resolution_base,
                     } => {
                         if let Some(task) = frame_task.as_ref() {
                             if task.is_finished() {
@@ -102,6 +104,7 @@ impl Renderer {
                                 &uniforms,
                                 time,
                                 total_frames,
+                                resolution_base,
                             )
                             .await
                             .unwrap();
@@ -144,7 +147,8 @@ impl RendererHandle {
         camera_frame: Option<DecodedFrame>,
         background: BackgroundSource,
         uniforms: ProjectUniforms,
-        time: f32, // Add this parameter
+        time: f32,
+        resolution_base: XY<u32>,
     ) {
         let (finished_tx, finished_rx) = oneshot::channel();
 
@@ -155,6 +159,7 @@ impl RendererHandle {
             uniforms,
             time, // Pass the time
             finished: finished_tx,
+            resolution_base,
         })
         .await;
 

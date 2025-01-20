@@ -28,7 +28,7 @@ tempfile = "3.12.0"
 thiserror.workspace = true
 tracing = { version = "0.1", features = ["release_max_level_info"] }
 futures = "0.3.31"
-axum = "0.7.9"
+axum = { version = "0.7.9", features = ["macros", "ws"] }
 tokio.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

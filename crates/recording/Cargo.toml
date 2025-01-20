@@ -7,6 +7,7 @@ edition = "2021"
 cap-project = { path = "../project" }
 cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
+cap-utils = { path = "../utils" }
 
 specta.workspace = true
 tokio.workspace = true
@@ -20,6 +21,7 @@ tracing = "0.1.40"
 device_query = "2.1.0"
 image = "0.25.2"
 either = "1.13.0"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26.0"
@@ -27,7 +29,7 @@ objc = "0.2.7"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
-  "Win32_Foundation",
-  "Win32_Graphics_Gdi",
-  "Win32_UI_WindowsAndMessaging",
+	"Win32_Foundation",
+	"Win32_Graphics_Gdi",
+	"Win32_UI_WindowsAndMessaging",
 ] }

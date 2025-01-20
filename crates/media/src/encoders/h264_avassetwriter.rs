@@ -3,6 +3,7 @@ use crate::{data::VideoInfo, pipeline::task::PipelineSinkTask, MediaError};
 use super::Output;
 use arc::Retained;
 use cidre::{objc::Obj, *};
+use tracing::{info, trace};
 
 pub struct H264AVAssetWriterEncoder {
     tag: &'static str,
@@ -16,6 +17,7 @@ pub struct H264AVAssetWriterEncoder {
 
 impl H264AVAssetWriterEncoder {
     pub fn init(tag: &'static str, config: VideoInfo, output: Output) -> Result<Self, MediaError> {
+        let fps = config.frame_rate.0 as f32 / config.frame_rate.1 as f32;
         let Output::File(destination) = output;
 
         let mut asset_writer = av::AssetWriter::with_url_and_file_type(
@@ -47,11 +49,14 @@ impl H264AVAssetWriterEncoder {
             ns::Number::with_u32(config.height).as_id_ref(),
         );
 
+        let bitrate = config.width as f32 * config.height as f32 / (1920.0 * 1080.0) * 14_000_000.0
+            + fps / 30.0 * 6_000_000.0;
+
         output_settings.insert(
             av::video_settings_keys::compression_props(),
             ns::Dictionary::with_keys_values(
                 &[unsafe { AVVideoAverageBitRateKey }],
-                &[ns::Number::with_u32(10_000_000).as_id_ref()],
+                &[ns::Number::with_f32(bitrate).as_id_ref()],
             )
             .as_id_ref(),
         );
@@ -120,18 +125,16 @@ impl PipelineSinkTask for H264AVAssetWriterEncoder {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         input: flume::Receiver<Self::Input>,
     ) {
-        println!("Starting {} video encoding thread", self.tag);
         ready_signal.send(Ok(())).ok();
 
         while let Ok(frame) = input.recv() {
             self.queue_frame(frame);
             self.process_frame();
         }
+    }
 
-        println!("Received last {} frame. Finishing up encoding.", self.tag);
+    fn finish(&mut self) {
         self.finish();
-
-        println!("Shutting down {} video encoding thread", self.tag);
     }
 }
 

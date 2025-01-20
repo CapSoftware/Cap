@@ -1,6 +1,6 @@
 [package]
-name = "desktop"
-version = "0.3.10"
+name = "cap-desktop"
+version = "0.3.12"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2021"
@@ -25,20 +25,21 @@ tauri = { workspace = true, features = [
 	"image-png",
 ] }
 tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
-tauri-plugin-dialog = "2.0.0"
+tauri-plugin-dialog = "2.2.0"
 tauri-plugin-fs = "2.2.0"
-tauri-plugin-global-shortcut = "2.1.0"
-tauri-plugin-http = "2.1.0"
-tauri-plugin-notification = "2.1.0"
-tauri-plugin-os = "2.1.0"
-tauri-plugin-process = "2.0.1"
-tauri-plugin-shell = "2.1.0"
-tauri-plugin-single-instance = "2.0.1"
+tauri-plugin-global-shortcut = "2.2.0"
+tauri-plugin-http = "2.2.0"
+tauri-plugin-notification = "2.2.0"
+tauri-plugin-os = "2.2.0"
+tauri-plugin-process = "2.2.0"
+tauri-plugin-shell = "2.2.0"
+tauri-plugin-single-instance = { version = "2.2.0", features = ["deep-link"] }
 tauri-plugin-store = "2.2.0"
-tauri-plugin-updater = "2.2.0"
+tauri-plugin-updater = "2.3.1"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
 tauri-plugin-window-state = "2.2.0"
 tauri-plugin-positioner = "2.2.0"
+tauri-plugin-deep-link = "2.2.0"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -73,14 +74,15 @@ clipboard-rs = "0.2.2"
 cap-utils = { path = "../../../crates/utils" }
 cap-project = { path = "../../../crates/project" }
 cap-rendering = { path = "../../../crates/rendering" }
-cap-ffmpeg-cli = { path = "../../../crates/ffmpeg-cli" }
 cap-editor = { path = "../../../crates/editor" }
 cap-media = { path = "../../../crates/media" }
 cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
 flume.workspace = true
-tauri-plugin-deep-link = "2.2.0"
+tracing-subscriber = "0.3.19"
+tracing-appender = "0.2.3"
+dirs = "6.0.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

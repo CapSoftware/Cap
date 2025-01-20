@@ -24,7 +24,7 @@ pub fn init() -> Result<(), MediaError> {
 
 #[derive(Error, Debug)]
 pub enum MediaError {
-    #[error("Media error: {0}")]
+    #[error("{0}")]
     Any(&'static str),
 
     #[error("Cannot build a pipeline without any tasks")]

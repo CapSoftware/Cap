@@ -5,18 +5,14 @@ use cap_media::{
     feeds::{AudioData, AudioFrameBuffer},
     MediaError,
 };
-use cap_project::{GeneralSettingsStore, ProjectConfiguration, RecordingMeta};
+use cap_project::{ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
     ProjectUniforms, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants, RenderedFrame,
     SegmentVideoPaths,
 };
-use ffmpeg::Rational;
 use futures::FutureExt;
 use image::{ImageBuffer, Rgba};
 use std::{path::PathBuf, sync::Arc};
-use tauri::AppHandle;
-
-const FPS: u32 = 30;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExportError {
@@ -46,6 +42,9 @@ pub struct Exporter<TOnProgress> {
     on_progress: TOnProgress,
     meta: RecordingMeta,
     render_constants: Arc<RenderVideoConstants>,
+    fps: u32,
+    resolution_base: XY<u32>,
+    is_upgraded: bool,
 }
 
 impl<TOnProgress> Exporter<TOnProgress>
@@ -53,7 +52,6 @@ where
     TOnProgress: Fn(u32) + Send + 'static,
 {
     pub fn new(
-        app: &AppHandle,
         project: ProjectConfiguration,
         output_path: PathBuf,
         on_progress: TOnProgress,
@@ -61,29 +59,15 @@ where
         meta: RecordingMeta,
         render_constants: Arc<RenderVideoConstants>,
         segments: &[Segment],
+        fps: u32,
+        resolution_base: XY<u32>,
+        is_upgraded: bool,
     ) -> Result<Self, ExportError> {
-        let recording_config = GeneralSettingsStore::get(app)
-            .map_err(|e| ExportError::FFmpeg(e))?
-            .and_then(|s| Some(s.recording_config))
-            .flatten()
-            .unwrap_or_default();
-
-        let display_info = match &meta.content {
-            cap_project::Content::SingleSegment { segment } => &segment.display,
-            cap_project::Content::MultipleSegments { inner } => &inner.segments[0].display,
-        };
-
-        let output_config = VideoInfo::from_raw(
-            RawVideoFormat::Rgba,
-            recording_config.resolution.width,
-            recording_config.resolution.height,
-            recording_config.fps,
-        );
-
         let output_folder = output_path.parent().unwrap();
         std::fs::create_dir_all(output_folder)?;
 
-        let output_size = ProjectUniforms::get_output_size(&render_constants.options, &project);
+        let output_size =
+            ProjectUniforms::get_output_size(&render_constants.options, &project, resolution_base);
 
         let (render_segments, audio_segments): (Vec<_>, Vec<_>) = segments
             .iter()
@@ -124,6 +108,9 @@ where
             render_segments,
             audio_segments,
             output_size,
+            fps,
+            resolution_base,
+            is_upgraded,
         })
     }
 
@@ -136,6 +123,8 @@ where
 
         let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<RenderedFrame>(4);
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
+
+        let fps = self.fps;
 
         let audio_info = match self.audio_segments.get(0).and_then(|d| d.as_ref().as_ref()) {
             Some(audio_data) => Some(
@@ -156,7 +145,7 @@ where
                     MP4Encoder::video_format(),
                     self.output_size.0,
                     self.output_size.1,
-                    30,
+                    self.fps,
                 ),
                 audio_info,
                 cap_media::encoders::Output::File(self.output_path.clone()),
@@ -211,7 +200,7 @@ where
 
                         let audio_info = audio.buffer.info();
                         let estimated_samples_per_frame =
-                            f64::from(audio_info.sample_rate) / f64::from(FPS);
+                            f64::from(audio_info.sample_rate) / f64::from(self.fps);
                         let samples = estimated_samples_per_frame.ceil() as usize;
 
                         if let Some((_, frame_data)) = audio
@@ -219,15 +208,16 @@ where
                             .next_frame_data(samples, project.timeline.as_ref().map(|t| t))
                         {
                             let mut frame = audio_info.wrap_frame(&frame_data, 0);
-                            let pts = (frame_count as f64 * f64::from(audio_info.sample_rate) / f64::from(FPS)) as i64;
+                            let pts = (frame_count as f64 * f64::from(audio_info.sample_rate)
+                                / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
-                            println!(
-                                "Export: Sending audio frame {} with PTS: {:?}, samples: {}, data size: {}",
-                                frame_count,
-                                frame.pts(),
-                                samples,
-                                frame_data.len()
-                            );
+                            // println!(
+                            //     "Export: Sending audio frame {} with PTS: {:?}, samples: {}, data size: {}",
+                            //     frame_count,
+                            //     frame.pts(),
+                            //     samples,
+                            //     frame_data.len()
+                            // );
                             Some(frame)
                         } else {
                             None
@@ -236,16 +226,16 @@ where
                         None
                     };
 
-                    println!(
-                        "Export: Processing frame {} (size: {}x{}, padded_bytes_per_row: {})",
-                        frame_count, frame.width, frame.height, frame.padded_bytes_per_row
-                    );
+                    // println!(
+                    //     "Export: Processing frame {} (size: {}x{}, padded_bytes_per_row: {})",
+                    //     frame_count, frame.width, frame.height, frame.padded_bytes_per_row
+                    // );
 
                     let mut video_frame = VideoInfo::from_raw(
                         RawVideoFormat::Rgba,
                         self.output_size.0,
                         self.output_size.1,
-                        30,
+                        self.fps,
                     )
                     .wrap_frame(
                         &frame.data,
@@ -254,11 +244,11 @@ where
                     );
                     video_frame.set_pts(Some(frame_count as i64));
 
-                    println!(
-                        "Export: Sending frame {} to encoder (PTS: {:?})",
-                        frame_count,
-                        video_frame.pts()
-                    );
+                    // println!(
+                    //     "Export: Sending frame {} to encoder (PTS: {:?})",
+                    //     frame_count,
+                    //     video_frame.pts()
+                    // );
 
                     frame_tx
                         .send(MP4Input {
@@ -272,16 +262,20 @@ where
 
                 // Save the first frame as a screenshot and thumbnail
                 if let Some(frame) = first_frame {
-                    let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-                        ImageBuffer::from_raw(frame.width, frame.height, frame.data)
-                            .expect("Failed to create image from frame data");
-
-                    // Convert RGBA to RGB
-                    let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
-                        ImageBuffer::from_fn(frame.width, frame.height, |x, y| {
-                            let rgba = rgba_img.get_pixel(x, y);
-                            image::Rgb([rgba[0], rgba[1], rgba[2]])
-                        });
+                    let rgb_img = ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(
+                        frame.width,
+                        frame.height,
+                        frame
+                            .data
+                            .chunks(frame.padded_bytes_per_row as usize)
+                            .flat_map(|row| {
+                                row[0..(frame.width * 4) as usize]
+                                    .chunks(4)
+                                    .flat_map(|chunk| [chunk[0], chunk[1], chunk[2]])
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .expect("Failed to create image from frame data");
 
                     let screenshots_dir = project_path.join("screenshots");
                     std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
@@ -310,189 +304,13 @@ where
             tx_image_data,
             &self.meta,
             self.render_segments,
+            self.fps,
+            self.resolution_base,
+            self.is_upgraded,
         )
         .then(|f| async { f.map_err(Into::into) });
 
         let (output_path, _, _) = tokio::try_join!(encoder_thread, render_video_task, render_task)?;
-
-        Ok(output_path)
-    }
-
-    pub async fn export_with_mp4_encoder(self) -> Result<PathBuf, ExportError> {
-        struct AudioRender {
-            buffer: AudioFrameBuffer,
-        }
-
-        let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<RenderedFrame>(4);
-
-        let encoder_handle = tokio::spawn({
-            let project = self.project.clone();
-            let project_path = self.project_path.clone();
-            async move {
-                println!("Starting MP4 encoding process...");
-
-                let audio_info = if let Some(audio_data) =
-                    self.audio_segments.get(0).and_then(|d| d.as_ref().as_ref())
-                {
-                    Some(
-                        AudioInfo::new(
-                            audio_data.info.sample_format,
-                            audio_data.info.sample_rate,
-                            audio_data.info.channels as u16,
-                        )
-                        .map_err(Into::<MediaError>::into)?,
-                    )
-                } else {
-                    None
-                };
-
-                let mut encoder = cap_media::encoders::MP4Encoder::init(
-                    "output",
-                    VideoInfo::from_raw(
-                        MP4Encoder::video_format(),
-                        self.output_size.0,
-                        self.output_size.1,
-                        30,
-                    ),
-                    audio_info,
-                    cap_media::encoders::Output::File(self.output_path.clone()),
-                )?;
-
-                let mut audio =
-                    if let Some(_) = self.audio_segments.get(0).and_then(|d| d.as_ref().as_ref()) {
-                        Some(AudioRender {
-                            buffer: AudioFrameBuffer::new(
-                                self.audio_segments
-                                    .iter()
-                                    .map(|s| s.as_ref().as_ref().unwrap().clone())
-                                    .collect(),
-                            ),
-                        })
-                    } else {
-                        None
-                    };
-
-                let mut frame_count = 0;
-                let mut first_frame = None;
-
-                while let Some(frame) = rx_image_data.recv().await {
-                    (self.on_progress)(frame_count);
-
-                    if frame_count == 0 {
-                        first_frame = Some(frame.clone());
-                    }
-
-                    if let Some(audio) = &mut audio {
-                        if frame_count == 0 {
-                            audio.buffer.set_playhead(0., project.timeline());
-                        }
-
-                        let audio_info = audio.buffer.info();
-                        let estimated_samples_per_frame =
-                            f64::from(audio_info.sample_rate) / f64::from(FPS);
-                        let samples = estimated_samples_per_frame.ceil() as usize;
-
-                        if let Some((_, frame_data)) =
-                            audio.buffer.next_frame_data(samples, project.timeline())
-                        {
-                            let mut frame = audio_info.wrap_frame(
-                                &frame_data
-                                    .to_vec()
-                                    .chunks(8)
-                                    .flat_map(|v| {
-                                        (f64::from_le_bytes([
-                                            v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7],
-                                        ]) as f32)
-                                            .to_le_bytes()
-                                    })
-                                    .collect::<Vec<_>>(),
-                                0,
-                            );
-                            let pts = i64::from(frame_count) * i64::try_from(samples).unwrap();
-                            frame.set_pts(Some(pts));
-                            println!(
-                                "Export: Sending audio frame {} with PTS: {:?}, samples: {}",
-                                frame_count,
-                                frame.pts(),
-                                samples
-                            );
-                            encoder.queue_audio_frame(frame);
-                        }
-                    }
-
-                    println!(
-                        "Export: Processing frame {} (size: {}x{}, padded_bytes_per_row: {})",
-                        frame_count, frame.width, frame.height, frame.padded_bytes_per_row
-                    );
-
-                    let mut video_frame = VideoInfo::from_raw(
-                        RawVideoFormat::Rgba,
-                        self.output_size.0,
-                        self.output_size.1,
-                        30,
-                    )
-                    .wrap_frame(
-                        &frame.data,
-                        0,
-                        frame.padded_bytes_per_row as usize,
-                    );
-                    video_frame.set_pts(Some(frame_count as i64));
-
-                    println!(
-                        "Export: Sending frame {} to encoder (PTS: {:?})",
-                        frame_count,
-                        video_frame.pts()
-                    );
-
-                    encoder.queue_video_frame(video_frame);
-                    frame_count += 1;
-                }
-
-                encoder.finish();
-
-                // Save the first frame as a screenshot and thumbnail
-                if let Some(frame) = first_frame {
-                    let rgba_img: ImageBuffer<Rgba<u8>, Vec<u8>> =
-                        ImageBuffer::from_raw(frame.width, frame.height, frame.data)
-                            .expect("Failed to create image from frame data");
-
-                    // Convert RGBA to RGB
-                    let rgb_img: ImageBuffer<image::Rgb<u8>, Vec<u8>> =
-                        ImageBuffer::from_fn(frame.width, frame.height, |x, y| {
-                            let rgba = rgba_img.get_pixel(x, y);
-                            image::Rgb([rgba[0], rgba[1], rgba[2]])
-                        });
-
-                    let screenshots_dir = project_path.join("screenshots");
-                    std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
-                        eprintln!("Failed to create screenshots directory: {:?}", e);
-                    });
-
-                    // Save full-size screenshot
-                    let screenshot_path = screenshots_dir.join("display.jpg");
-                    rgb_img.save(&screenshot_path).unwrap_or_else(|e| {
-                        eprintln!("Failed to save screenshot: {:?}", e);
-                    });
-                } else {
-                    eprintln!("No frames were processed, cannot save screenshot or thumbnail");
-                }
-
-                Ok::<_, ExportError>(self.output_path)
-            }
-        });
-
-        println!("Rendering video to channel");
-
-        cap_rendering::render_video_to_channel(
-            self.render_constants.options,
-            self.project,
-            tx_image_data,
-            &self.meta,
-            self.render_segments,
-        )
-        .await?;
-
-        let output_path = encoder_handle.await??;
 
         Ok(output_path)
     }

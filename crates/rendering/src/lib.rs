@@ -8,9 +8,8 @@ use cap_project::{
     REGULAR_SMOOTHING_SAMPLES, REGULAR_VELOCITY_THRESHOLD, SLOW_SMOOTHING_SAMPLES,
     SLOW_VELOCITY_THRESHOLD, XY,
 };
-use cap_recording::segmented_actor::RecordingSegment;
 use core::f64;
-use decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle};
+use decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle, GetFrameError};
 use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
@@ -21,7 +20,7 @@ use tokio::sync::mpsc;
 use wgpu::util::DeviceExt;
 use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
-use image::GenericImageView;
+use image::{GenericImageView, ImageDecoderRect};
 use std::path::Path;
 use std::time::Instant;
 
@@ -29,7 +28,7 @@ pub mod decoder;
 mod project_recordings;
 mod zoom;
 pub use decoder::DecodedFrame;
-pub use project_recordings::{ProjectRecordings, SegmentRecordings};
+pub use project_recordings::{ProjectRecordings, SegmentRecordings, Video};
 
 use zoom::*;
 
@@ -101,36 +100,43 @@ pub struct SegmentVideoPaths<'a> {
 
 impl RecordingSegmentDecoders {
     pub fn new(meta: &RecordingMeta, segment: SegmentVideoPaths) -> Self {
-        let screen = AsyncVideoDecoder::spawn(meta.project_path.join(segment.display));
-        let camera = segment
-            .camera
-            .map(|camera| AsyncVideoDecoder::spawn(meta.project_path.join(camera)));
+        let screen = AsyncVideoDecoder::spawn(
+            meta.project_path.join(segment.display),
+            match &meta.content {
+                Content::SingleSegment { segment } => segment.display.fps,
+                Content::MultipleSegments { inner } => inner.segments[0].display.fps,
+            },
+        );
+        let camera = segment.camera.map(|camera| {
+            AsyncVideoDecoder::spawn(
+                meta.project_path.join(camera),
+                match &meta.content {
+                    Content::SingleSegment { segment } => segment.camera.as_ref().unwrap().fps,
+                    Content::MultipleSegments { inner } => {
+                        inner.segments[0].camera.as_ref().unwrap().fps
+                    }
+                },
+            )
+        });
 
         Self { screen, camera }
     }
 
     pub async fn get_frames(
         &self,
-        frame_number: u32,
+        frame_time: f32,
+        needs_camera: bool,
     ) -> Option<(DecodedFrame, Option<DecodedFrame>)> {
-        let (screen_frame, camera_frame) = tokio::join!(
-            self.screen.get_frame(frame_number),
-            OptionFuture::from(self.camera.as_ref().map(|d| d.get_frame(frame_number)))
+        let (screen, camera) = tokio::join!(
+            self.screen.get_frame(frame_time),
+            OptionFuture::from(
+                needs_camera
+                    .then(|| self.camera.as_ref().map(|d| d.get_frame(frame_time)))
+                    .flatten()
+            )
         );
 
-        // Create black frames with the correct dimensions
-        let black_screen = vec![0; (1920 * 804 * 4) as usize];
-        let black_camera = vec![0; (1920 * 1080 * 4) as usize];
-
-        // Return frames or black frames as needed
-        Some((
-            screen_frame.unwrap_or_else(|| Arc::new(black_screen)),
-            self.camera.as_ref().map(|_| {
-                camera_frame
-                    .flatten()
-                    .unwrap_or_else(|| Arc::new(black_camera))
-            }),
-        ))
+        Some((screen?, camera.flatten()))
     }
 }
 
@@ -155,10 +161,13 @@ pub struct RenderSegment {
 
 pub async fn render_video_to_channel(
     options: RenderOptions,
-    mut project: ProjectConfiguration,
+    project: ProjectConfiguration,
     sender: mpsc::Sender<RenderedFrame>,
     meta: &RecordingMeta,
     segments: Vec<RenderSegment>,
+    fps: u32,
+    resolution_base: XY<u32>,
+    is_upgraded: bool,
 ) -> Result<(), RenderingError> {
     let constants = RenderVideoConstants::new(options, meta).await?;
     let recordings = ProjectRecordings::new(meta);
@@ -168,48 +177,12 @@ pub async fn render_video_to_channel(
     let start_time = Instant::now();
 
     // Get the duration from the timeline if it exists, otherwise use the longest source duration
-    let duration = {
-        let mut max_duration = recordings.duration();
-        println!("Initial screen recording duration: {}", max_duration);
+    let duration = get_duration(&recordings, meta, &project);
 
-        // Check camera duration if it exists
-        if let Some(camera_path) = meta.content.camera_path() {
-            if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
-                println!("Camera recording duration: {}", camera_duration);
-                max_duration = max_duration.max(camera_duration);
-                println!("New max duration after camera check: {}", max_duration);
-            }
-        }
-
-        // If there's a timeline, ensure all segments extend to the max duration
-        if let Some(timeline) = &mut project.timeline {
-            println!("Found timeline with {} segments", timeline.segments.len());
-            for (i, segment) in timeline.segments.iter_mut().enumerate() {
-                println!(
-                    "Segment {} - current end: {}, max_duration: {}",
-                    i, segment.end, max_duration
-                );
-                if segment.end < max_duration {
-                    segment.end = max_duration;
-                    println!("Extended segment {} to new end: {}", i, segment.end);
-                }
-            }
-            let final_duration = timeline.duration();
-            println!(
-                "Final timeline duration after adjustments: {}",
-                final_duration
-            );
-            final_duration
-        } else {
-            println!("No timeline found, using max_duration: {}", max_duration);
-            max_duration
-        }
-    };
-
-    let total_frames = (30_f64 * duration).ceil() as u32;
+    let total_frames = (fps as f64 * duration).ceil() as u32;
     println!(
-        "Final export duration: {} seconds ({} frames at 30fps)",
-        duration, total_frames
+        "Final export duration: {} seconds ({} frames at {}fps)",
+        duration, total_frames, fps
     );
 
     let mut frame_number = 0;
@@ -220,40 +193,59 @@ pub async fn render_video_to_channel(
             break;
         }
 
-        let (time, segment_i) = if let Some(timeline) = &project.timeline {
-            match timeline.get_recording_time(frame_number as f64 / 30_f64) {
-                Some(value) => (value.0, value.1),
-                None => (frame_number as f64 / 30_f64, Some(0u32)),
+        let source_time = if let Some(timeline) = &project.timeline {
+            match timeline.get_recording_time(frame_number as f64 / fps as f64) {
+                Some(value) => value.0,
+                None => frame_number as f64 / fps as f64,
             }
         } else {
-            (frame_number as f64 / 30_f64, Some(0u32))
+            frame_number as f64 / fps as f64
         };
 
-        let segment = &segments[segment_i.unwrap() as usize];
-        let frame_time = frame_number;
-        let Some((screen_frame, camera_frame)) = segment.decoders.get_frames(frame_time).await
-        else {
-            break;
+        let segment_i = if let Some(timeline) = &project.timeline {
+            timeline
+                .get_recording_time(frame_number as f64 / fps as f64)
+                .map(|value| value.1)
+                .flatten()
+                .unwrap_or(0u32)
+        } else {
+            0u32
         };
 
-        let uniforms = ProjectUniforms::new(&constants, &project, time as f32);
+        let segment = &segments[segment_i as usize];
 
-        let frame = produce_frame(
-            &constants,
-            &screen_frame,
-            &camera_frame,
-            background,
-            &uniforms,
-            time as f32,
-            total_frames,
-        )
-        .await?;
+        if let Some((screen_frame, camera_frame)) = segment
+            .decoders
+            .get_frames(source_time as f32, !project.camera.hide)
+            .await
+        {
+            let uniforms = ProjectUniforms::new(
+                &constants,
+                &project,
+                source_time as f32,
+                resolution_base,
+                is_upgraded,
+            );
 
-        if frame.width == 0 || frame.height == 0 {
-            continue;
+            let frame = produce_frame(
+                &constants,
+                &screen_frame,
+                &camera_frame,
+                background,
+                &uniforms,
+                source_time as f32,
+                total_frames,
+                resolution_base,
+            )
+            .await?;
+
+            if frame.width == 0 || frame.height == 0 {
+                continue;
+            }
+
+            sender.send(frame).await?;
         }
 
-        sender.send(frame).await?;
         frame_number += 1;
     }
 
@@ -264,6 +256,48 @@ pub async fn render_video_to_channel(
     );
 
     Ok(())
+}
+
+pub fn get_duration(
+    recordings: &ProjectRecordings,
+    meta: &RecordingMeta,
+    project: &ProjectConfiguration,
+) -> f64 {
+    let mut max_duration = recordings.duration();
+    println!("Initial screen recording duration: {}", max_duration);
+
+    // Check camera duration if it exists
+    if let Some(camera_path) = meta.content.camera_path() {
+        if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
+            println!("Camera recording duration: {}", camera_duration);
+            max_duration = max_duration.max(camera_duration);
+            println!("New max duration after camera check: {}", max_duration);
+        }
+    }
+
+    // If there's a timeline, ensure all segments extend to the max duration
+    if let Some(timeline) = &project.timeline {
+        println!("Found timeline with {} segments", timeline.segments.len());
+        // for (i, segment) in timeline.segments.iter().enumerate() {
+        //     println!(
+        //         "Segment {} - current end: {}, max_duration: {}",
+        //         i, segment.end, max_duration
+        //     );
+        //     if segment.end < max_duration {
+        //         segment.end = max_duration;
+        //         println!("Extended segment {} to new end: {}", i, segment.end);
+        //     }
+        // }
+        let final_duration = timeline.duration();
+        println!(
+            "Final timeline duration after adjustments: {}",
+            final_duration
+        );
+        final_duration
+    } else {
+        println!("No timeline found, using max_duration: {}", max_duration);
+        max_duration
+    }
 }
 
 pub struct RenderVideoConstants {
@@ -279,7 +313,7 @@ pub struct RenderVideoConstants {
     watermark_pipeline: WatermarkPipeline,
     watermark_texture: wgpu::Texture,
     watermark_bind_group: wgpu::BindGroup,
-    watermark_dimensions: (u32, u32), // Add watermark dimensions
+    watermark_dimensions: (u32, u32),
 }
 
 impl RenderVideoConstants {
@@ -356,7 +390,6 @@ impl RenderVideoConstants {
                 depth_or_array_layers: 1,
             },
         );
-        println!("Watermark texture created and written to GPU");
 
         let watermark_view = watermark_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let watermark_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -516,6 +549,7 @@ pub struct ProjectUniforms {
     camera: Option<CompositeVideoFrameUniforms>,
     pub zoom: Zoom,
     pub project: ProjectConfiguration,
+    pub is_upgraded: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -554,43 +588,76 @@ impl ProjectUniforms {
         basis as f64 * padding_factor
     }
 
-    pub fn get_output_size(options: &RenderOptions, project: &ProjectConfiguration) -> (u32, u32) {
+    pub fn get_output_size(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
+    ) -> (u32, u32) {
         let crop = Self::get_crop(options, project);
-
         let crop_aspect = crop.aspect_ratio();
-
         let padding = Self::get_padding(options, project) * 2.0;
 
-        let aspect = match &project.aspect_ratio {
+        let (base_width, base_height) = match &project.aspect_ratio {
             None => {
                 let width = ((crop.size.x as f64 + padding) as u32 + 1) & !1;
                 let height = ((crop.size.y as f64 + padding) as u32 + 1) & !1;
-                return (width, height);
+                (width, height)
             }
-            Some(AspectRatio::Square) => 1.0,
-            Some(AspectRatio::Wide) => 16.0 / 9.0,
-            Some(AspectRatio::Vertical) => 9.0 / 16.0,
-            Some(AspectRatio::Classic) => 4.0 / 3.0,
-            Some(AspectRatio::Tall) => 3.0 / 4.0,
+            Some(AspectRatio::Square) => {
+                let size = if crop_aspect > 1.0 {
+                    crop.size.y
+                } else {
+                    crop.size.x
+                };
+                (size, size)
+            }
+            Some(AspectRatio::Wide) => {
+                if crop_aspect > 16.0 / 9.0 {
+                    (((crop.size.y as f32 * 16.0 / 9.0) as u32), crop.size.y)
+                } else {
+                    (crop.size.x, ((crop.size.x as f32 * 9.0 / 16.0) as u32))
+                }
+            }
+            Some(AspectRatio::Vertical) => {
+                if crop_aspect > 9.0 / 16.0 {
+                    ((crop.size.y as f32 * 9.0 / 16.0) as u32, crop.size.y)
+                } else {
+                    (crop.size.x, ((crop.size.x as f32 * 16.0 / 9.0) as u32))
+                }
+            }
+            Some(AspectRatio::Classic) => {
+                if crop_aspect > 4.0 / 3.0 {
+                    ((crop.size.y as f32 * 4.0 / 3.0) as u32, crop.size.y)
+                } else {
+                    (crop.size.x, ((crop.size.x as f32 * 3.0 / 4.0) as u32))
+                }
+            }
+            Some(AspectRatio::Tall) => {
+                if crop_aspect > 3.0 / 4.0 {
+                    ((crop.size.y as f32 * 3.0 / 4.0) as u32, crop.size.y)
+                } else {
+                    (crop.size.x, ((crop.size.x as f32 * 4.0 / 3.0) as u32))
+                }
+            }
         };
 
-        let (width, height) = if crop_aspect > aspect {
-            (crop.size.x, (crop.size.x as f32 / aspect) as u32)
-        } else if crop_aspect < aspect {
-            ((crop.size.y as f32 * aspect) as u32, crop.size.y)
-        } else {
-            (crop.size.x, crop.size.y)
-        };
+        let width_scale = resolution_base.x as f32 / base_width as f32;
+        let height_scale = resolution_base.y as f32 / base_height as f32;
+        let scale = width_scale.min(height_scale);
 
-        // Ensure width and height are divisible by 2
-        ((width + 1) & !1, (height + 1) & !1)
+        let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
+        let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
+        return (scaled_width, scaled_height);
+
+        // ((base_width + 1) & !1, (base_height + 1) & !1)
     }
 
     pub fn get_display_offset(
         options: &RenderOptions,
         project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        let output_size = Self::get_output_size(options, project);
+        let output_size = Self::get_output_size(options, project, resolution_base);
         let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
 
         let output_aspect = output_size.x / output_size.y;
@@ -632,9 +699,11 @@ impl ProjectUniforms {
         constants: &RenderVideoConstants,
         project: &ProjectConfiguration,
         time: f32,
+        resolution_base: XY<u32>,
+        is_upgraded: bool,
     ) -> Self {
         let options = &constants.options;
-        let output_size = Self::get_output_size(options, project);
+        let output_size = Self::get_output_size(options, project, resolution_base);
 
         let cursor_position = interpolate_cursor_position(
             &Default::default(), /*constants.cursor*/
@@ -667,7 +736,7 @@ impl ProjectUniforms {
 
         let interpolated_zoom = zoom_keyframes.interpolate(time as f64);
 
-        let (zoom_amount, zoom_origin) = {
+        let (zoom_amount, zoom_origin, lowered_zoom) = {
             let origin = match interpolated_zoom.position {
                 ZoomPosition::Manual { x, y } => Coord::<RawDisplayUVSpace>::new(XY {
                     x: x as f64,
@@ -691,7 +760,7 @@ impl ProjectUniforms {
                 }
             };
 
-            (interpolated_zoom.amount, origin)
+            (interpolated_zoom.amount, origin, interpolated_zoom.lowered)
         };
 
         let (display, zoom) = {
@@ -707,12 +776,12 @@ impl ProjectUniforms {
                 (crop.position.y + crop.size.y) as f64,
             ));
 
-            let display_offset = Self::get_display_offset(options, project);
+            let display_offset = Self::get_display_offset(options, project, resolution_base);
 
             let end = Coord::new(output_size) - display_offset;
 
             let screen_scale_origin = zoom_origin
-                .to_frame_space(options, project)
+                .to_frame_space(options, project, resolution_base)
                 .clamp(display_offset.coord, end.coord);
 
             let zoom = Zoom {
@@ -721,8 +790,21 @@ impl ProjectUniforms {
                 // padding: screen_scale_origin,
             };
 
-            let start = zoom.apply_scale(display_offset);
-            let end = zoom.apply_scale(end);
+            let target_size = end - display_offset;
+
+            let (zoom_start, zoom_end) = (
+                Coord::new(XY::new(
+                    lowered_zoom.top_left.0 as f64 * target_size.x,
+                    lowered_zoom.top_left.1 as f64 * target_size.y,
+                )),
+                Coord::new(XY::new(
+                    (lowered_zoom.bottom_right.0 as f64 - 1.0) * target_size.x,
+                    (lowered_zoom.bottom_right.1 as f64 - 1.0) * target_size.y,
+                )),
+            );
+
+            let start = display_offset + zoom_start;
+            let end = end + zoom_end;
 
             let target_size = end - start;
             let min_target_axis = target_size.x.min(target_size.y);
@@ -761,7 +843,7 @@ impl ProjectUniforms {
 
                 // Calculate camera size based on zoom
                 let base_size = project.camera.size / 100.0;
-                let zoom_size = project.camera.zoom_size.unwrap_or(20.0) / 100.0;
+                let zoom_size = project.camera.zoom_size.unwrap_or(60.0) / 100.0;
 
                 let zoomed_size = (interpolated_zoom.t as f32) * zoom_size * base_size
                     + (1.0 - interpolated_zoom.t as f32) * base_size;
@@ -835,6 +917,7 @@ impl ProjectUniforms {
             camera,
             zoom,
             project: project.clone(),
+            is_upgraded,
         }
     }
 }
@@ -845,7 +928,6 @@ pub struct RenderedFrame {
     pub width: u32,
     pub height: u32,
     pub padded_bytes_per_row: u32,
-    pub total_frames: Option<u32>,
 }
 
 pub async fn produce_frame(
@@ -856,6 +938,7 @@ pub async fn produce_frame(
     uniforms: &ProjectUniforms,
     time: f32,
     total_frames: u32,
+    resolution_base: XY<u32>,
 ) -> Result<RenderedFrame, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
@@ -987,6 +1070,7 @@ pub async fn produce_frame(
             time,
             &mut encoder,
             get_either(texture_views, !output_is_left),
+            resolution_base,
         );
     }
 
@@ -1060,7 +1144,7 @@ pub async fn produce_frame(
     if uniforms.project.background.inset <= 0 {
         // Calculate watermark width as 10% of frame width, but no larger than 200px
         let frame_width = uniforms.output_size.0 as f32;
-        let target_width = (frame_width * 0.10).min(200.0);
+        let target_width = (frame_width * 0.15).min(280.0);
         let aspect_ratio =
             constants.watermark_dimensions.1 as f32 / constants.watermark_dimensions.0 as f32;
 
@@ -1074,16 +1158,16 @@ pub async fn produce_frame(
                 padding,
                 uniforms.output_size.1 as f32 - (target_width * aspect_ratio) - padding,
             ],
-            opacity: 0.5, // Reduced opacity from 0.8 to 0.5
-            is_upgraded: 0.0,
+            opacity: if uniforms.is_upgraded { 0.0 } else { 0.5 },
+            is_upgraded: if uniforms.is_upgraded { 1.0 } else { 0.0 },
         };
 
-        println!(
-            "Rendering watermark at position: {:?}, size: {:?}, output_size: {:?}",
-            watermark_uniforms.position,
-            watermark_uniforms.watermark_size,
-            watermark_uniforms.output_size
-        );
+        // println!(
+        //     "Rendering watermark at position: {:?}, size: {:?}, output_size: {:?}",
+        //     watermark_uniforms.position,
+        //     watermark_uniforms.watermark_size,
+        //     watermark_uniforms.output_size
+        // );
 
         let watermark_buffer =
             constants
@@ -1157,7 +1241,7 @@ pub async fn produce_frame(
             render_pass.set_pipeline(&constants.watermark_pipeline.render_pipeline);
             render_pass.set_bind_group(0, &watermark_bind_group, &[]);
             render_pass.draw(0..6, 0..1); // Using 6 vertices for two triangles
-            println!("Drew watermark with 6 vertices");
+                                          // println!("Drew watermark with 6 vertices");
         }
 
         constants.queue.submit(Some(watermark_encoder.finish()));
@@ -1239,7 +1323,6 @@ pub async fn produce_frame(
         padded_bytes_per_row,
         width: uniforms.output_size.0,
         height: uniforms.output_size.1,
-        total_frames: Some(total_frames),
     })
 }
 
@@ -1249,6 +1332,7 @@ fn draw_cursor(
     time: f32,
     encoder: &mut CommandEncoder,
     view: &wgpu::TextureView,
+    resolution_base: XY<u32>,
 ) {
     let Some(cursor_position) = interpolate_cursor_position(
         &Default::default(), // constants.cursor,
@@ -1267,8 +1351,10 @@ fn draw_cursor(
 
     // Calculate velocity in screen space
     let velocity = if let Some(prev_pos) = prev_position {
-        let curr_frame_pos = cursor_position.to_frame_space(&constants.options, &uniforms.project);
-        let prev_frame_pos = prev_pos.to_frame_space(&constants.options, &uniforms.project);
+        let curr_frame_pos =
+            cursor_position.to_frame_space(&constants.options, &uniforms.project, resolution_base);
+        let prev_frame_pos =
+            prev_pos.to_frame_space(&constants.options, &uniforms.project, resolution_base);
         let frame_velocity = curr_frame_pos.coord - prev_frame_pos.coord;
 
         // Convert to pixels per frame
@@ -1311,7 +1397,8 @@ fn draw_cursor(
         STANDARD_CURSOR_HEIGHT * cursor_size_percentage,
     ];
 
-    let frame_position = cursor_position.to_frame_space(&constants.options, &uniforms.project);
+    let frame_position =
+        cursor_position.to_frame_space(&constants.options, &uniforms.project, resolution_base);
     let position = uniforms.zoom.apply_scale(frame_position);
     let relative_position = [position.x as f32, position.y as f32];
 
@@ -2050,10 +2137,11 @@ impl Coord<RawDisplayUVSpace> {
         &self,
         options: &RenderOptions,
         project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
         self.to_raw_display_space(options)
             .to_cropped_display_space(options, project)
-            .to_frame_space(options, project)
+            .to_frame_space(options, project, resolution_base)
     }
 }
 
@@ -2073,8 +2161,9 @@ impl Coord<CroppedDisplaySpace> {
         &self,
         options: &RenderOptions,
         project: &ProjectConfiguration,
+        resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        let padding = ProjectUniforms::get_display_offset(options, project);
+        let padding = ProjectUniforms::get_display_offset(options, project, resolution_base);
         Coord::new(self.coord + *padding)
     }
 }

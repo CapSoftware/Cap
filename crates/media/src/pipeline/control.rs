@@ -1,5 +1,6 @@
 use flume::{Receiver, Sender, TryRecvError};
 use indexmap::IndexMap;
+use tracing::{debug, error};
 
 use crate::pipeline::MediaError;
 
@@ -30,7 +31,7 @@ impl PipelineControlSignal {
                 // Only peek for a new signal, else relinquish control to the caller
                 match self.receiver.try_recv() {
                     Ok(control) => {
-                        println!("Received new signal: {control:?}");
+                        debug!("Received new signal: {control:?}");
                         self.last_value = Some(control)
                     }
                     Err(TryRecvError::Empty) => {}
@@ -42,7 +43,6 @@ impl PipelineControlSignal {
             _ => {
                 // For all else, block until a signal is sent.
                 // TODO: Maybe also spin down until the signal is different from the last value we have?
-                println!("Waiting for play signal...");
                 self.last_value = self.receiver.recv().ok();
 
                 self.last_value
@@ -76,9 +76,8 @@ impl ControlBroadcast {
         }
 
         for (name, listener) in self.listeners.iter() {
-            println!("Sending signal {value:?} to {name}");
             if let Err(_) = listener.send_async(value).await {
-                eprintln!("{name} is unreachable!");
+                error!("{name} is unreachable!");
                 any_dropped = true;
             }
         }

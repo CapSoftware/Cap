@@ -17,9 +17,12 @@ import { createMemo } from "solid-js";
 
 import { commands, TimelineSegment } from "~/utils/tauri";
 import {
+  FPS,
+  SegmentContextProvider,
   TimelineContextProvider,
   TrackContextProvider,
   useEditorContext,
+  useSegmentContext,
   useTimelineContext,
   useTrackContext,
 } from "./context";
@@ -79,6 +82,7 @@ export function Timeline() {
                 recordingSegment: null,
               },
             ],
+            zoomSegments: [],
           };
         })
       );
@@ -97,7 +101,7 @@ export function Timeline() {
           commands.setPlayheadPosition(
             videoId,
             Math.round(
-              30 *
+              FPS *
                 editorInstance.recordingDuration *
                 ((e.clientX - left!) / width!)
             )
@@ -459,7 +463,7 @@ export function Timeline() {
 
                       return (
                         <SegmentRoot
-                          class="border-red-300 group"
+                          class="border-red-300 group bg-red-50 hover:bg-opacity-80 transition-colors"
                           innerClass="ring-red-300"
                           segment={segment}
                           onMouseEnter={() => {
@@ -470,7 +474,7 @@ export function Timeline() {
                           }}
                         >
                           <SegmentHandle
-                            class="bg-red-300 group-hover:bg-opacity-80 transition-colors"
+                            class="bg-red-300 hover:opacity-80 transition-colors"
                             onMouseDown={(downEvent) => {
                               const start = segment.start;
 
@@ -531,7 +535,7 @@ export function Timeline() {
                             }}
                           />
                           <SegmentContent
-                            class="bg-red-50 cursor-pointer group-hover:bg-opacity-80 transition-colors flex items-center justify-center"
+                            class="cursor-pointer flex items-center justify-center"
                             onClick={(e) => {
                               setState("timelineSelection", {
                                 type: "zoom",
@@ -540,15 +544,23 @@ export function Timeline() {
                               e.stopPropagation();
                             }}
                           >
-                            <div class="text-xs text-gray-500 whitespace-nowrap flex flex-col justify-center items-center gap-1">
-                              <div class="flex items-center gap-1 text-red-300">
-                                <IconLucideSearch class="size-3" />{" "}
-                                {zoomPercentage()}
-                              </div>
-                            </div>
+                            {(() => {
+                              const ctx = useSegmentContext();
+
+                              return (
+                                <Show when={ctx.width() > 100}>
+                                  <div class="text-xs text-gray-500 whitespace-nowrap flex flex-col justify-center items-center gap-1">
+                                    <div class="flex items-center gap-1 text-red-300">
+                                      <IconLucideSearch class="size-3" />{" "}
+                                      {zoomPercentage()}
+                                    </div>
+                                  </div>
+                                </Show>
+                              );
+                            })()}
                           </SegmentContent>
                           <SegmentHandle
-                            class="bg-red-300 group-hover:bg-opacity-80 transition-colors"
+                            class="bg-red-300 hover:opacity-80 transition-colors"
                             onMouseDown={(downEvent) => {
                               const end = segment.end;
 
@@ -669,34 +681,38 @@ function SegmentRoot(
     return (props.segment.start / duration()) * (trackBounds.width ?? 0);
   });
 
+  const width = () =>
+    ((trackBounds.width ?? 0) * (props.segment.end - props.segment.start)) /
+    duration();
+
   return (
-    <div
-      {...props}
-      class={cx(
-        "border rounded-[calc(0.75rem+1px)] h-[3rem] w-full",
-        props.class,
-        isSelected() && "wobble-wrapper",
-        isFreeForm() && "absolute"
-      )}
-      style={{
-        "--segment-x": `${translateX()}px`,
-        transform: isFreeForm() ? "translateX(var(--segment-x))" : undefined,
-        width: `${
-          (100 * (props.segment.end - props.segment.start)) / duration()
-        }%`,
-      }}
-      onMouseDown={props.onMouseDown}
-      ref={props.ref}
-    >
+    <SegmentContextProvider width={width}>
       <div
+        {...props}
         class={cx(
-          "h-full border border-white ring-1 flex flex-row rounded-xl overflow-hidden group",
-          props.innerClass
+          "border rounded-[calc(0.75rem+1px)] h-[3rem] w-full",
+          props.class,
+          isSelected() && "wobble-wrapper",
+          isFreeForm() && "absolute"
         )}
+        style={{
+          "--segment-x": `${translateX()}px`,
+          transform: isFreeForm() ? "translateX(var(--segment-x))" : undefined,
+          width: `${width()}px`,
+        }}
+        onMouseDown={props.onMouseDown}
+        ref={props.ref}
       >
-        {props.children}
+        <div
+          class={cx(
+            "h-full border border-white ring-1 flex flex-row rounded-xl overflow-hidden group",
+            props.innerClass
+          )}
+        >
+          {props.children}
+        </div>
       </div>
-    </div>
+    </SegmentContextProvider>
   );
 }
 
@@ -713,7 +729,15 @@ function SegmentContent(props: ComponentProps<"div">) {
 }
 
 function SegmentHandle(props: ComponentProps<"div">) {
+  const ctx = useSegmentContext();
   return (
-    <div {...props} class={cx("w-[0.5rem] cursor-col-resize", props.class)} />
+    <div
+      {...props}
+      class={cx(
+        "w-[0.5rem] cursor-col-resize shrink-0 data-[hidden='true']:opacity-0 transition-opacity",
+        props.class
+      )}
+      data-hidden={ctx.width() < 50}
+    />
   );
 }
