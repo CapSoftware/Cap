@@ -33,7 +33,7 @@ tauri-plugin-notification = "2.2.0"
 tauri-plugin-os = "2.2.0"
 tauri-plugin-process = "2.2.0"
 tauri-plugin-shell = "2.2.0"
-tauri-plugin-single-instance = "2.2.0"
+tauri-plugin-single-instance = { version = "2.2.0", features = ["deep-link"] }
 tauri-plugin-store = "2.2.0"
 tauri-plugin-updater = "2.3.1"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
