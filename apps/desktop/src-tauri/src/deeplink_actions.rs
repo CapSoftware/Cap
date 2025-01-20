@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 
 use crate::{
     auth::{AuthState, AuthStore},
+    windows::ShowCapWindow,
     App,
 };
 
@@ -29,6 +30,7 @@ pub enum DeepLinkAction {
     },
     StopRecording,
     OpenEditor(String),
+    OpenSettings,
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
@@ -137,6 +139,12 @@ impl DeepLinkAction {
             }
             DeepLinkAction::OpenEditor(id) => {
                 crate::open_editor(app.clone(), id);
+                Ok(())
+            }
+            DeepLinkAction::OpenSettings => {
+                _ = ShowCapWindow::Settings { page: None }
+                    .show(app)
+                    .map_err(|e| format!("Failed to open settings window: {}", e))?;
                 Ok(())
             }
         }
