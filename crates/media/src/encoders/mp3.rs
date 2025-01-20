@@ -107,16 +107,14 @@ impl PipelineSinkTask for MP3Encoder {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         input: flume::Receiver<Self::Input>,
     ) {
-        trace!("Starting {} audio encoding thread", self.tag);
         ready_signal.send(Ok(())).unwrap();
 
         while let Ok(frame) = input.recv() {
             self.queue_frame(frame);
         }
+    }
 
-        trace!("Received last {} sample. Finishing up encoding.", self.tag);
+    fn finish(&mut self) {
         self.finish();
-
-        info!("Shut down {} audio encoding thread", self.tag);
     }
 }

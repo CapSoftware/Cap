@@ -129,6 +129,6 @@ impl PipelineSourceTask for AudioInputSource {
             }
         }
 
-        info!("Shutting down audio input source thread.");
+        info!("Shut down audio input source thread.");
     }
 }

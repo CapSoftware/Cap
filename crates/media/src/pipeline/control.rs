@@ -1,6 +1,6 @@
 use flume::{Receiver, Sender, TryRecvError};
 use indexmap::IndexMap;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::pipeline::MediaError;
 
@@ -77,7 +77,7 @@ impl ControlBroadcast {
 
         for (name, listener) in self.listeners.iter() {
             if let Err(_) = listener.send_async(value).await {
-                eprintln!("{name} is unreachable!");
+                error!("{name} is unreachable!");
                 any_dropped = true;
             }
         }

@@ -19,8 +19,10 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
+use camera::create_camera_preview_ws;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
+use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
@@ -69,7 +71,7 @@ use windows::{CapWindowId, ShowCapWindow};
 pub struct App {
     start_recording_options: RecordingOptions,
     #[serde(skip)]
-    camera_tx: flume::Sender<WSFrame>,
+    camera_tx: flume::Sender<RawCameraFrame>,
     camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
@@ -194,13 +196,13 @@ impl App {
                         .await
                         .map_err(|e| e.to_string())?;
                 } else {
-                    self.camera_feed = Some(
-                        CameraFeed::init(camera_label, self.camera_tx.clone())
-                            .await
-                            .map(Mutex::new)
-                            .map(Arc::new)
-                            .map_err(|e| e.to_string())?,
-                    );
+                    let feed = CameraFeed::init(camera_label)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    feed.attach(self.camera_tx.clone());
+
+                    self.camera_feed = Some(Arc::new(Mutex::new(feed)));
                 }
             }
             None => {
@@ -2006,9 +2008,7 @@ pub async fn run() {
         )
         .expect("Failed to export typescript bindings");
 
-    let (camera_tx, camera_rx) = CameraFeed::create_channel();
-    // _shutdown needs to be kept alive to keep the camera ws running
-    let (camera_ws_port, _shutdown) = cap_media::frame_ws::create_frame_ws(camera_rx.clone()).await;
+    let (camera_tx, camera_ws_port, _shutdown) = create_camera_preview_ws().await;
 
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 

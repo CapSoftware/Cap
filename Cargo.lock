@@ -841,6 +841,9 @@ dependencies = [
  "core-graphics 0.24.0",
  "editor",
  "ffmpeg-next",
+ "flume 0.11.0",
+ "nokhwa",
+ "nokhwa-bindings-macos",
  "scap",
  "serde",
  "serde_json",
@@ -4299,7 +4302,7 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 [[package]]
 name = "nokhwa"
 version = "0.10.3"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "flume 0.10.14",
  "image 0.24.9",
@@ -4315,7 +4318,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-linux"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "nokhwa-core",
  "v4l",
@@ -4325,7 +4328,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-macos"
 version = "0.2.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "block",
  "cocoa-foundation 0.1.2",
@@ -4340,7 +4343,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-windows"
 version = "0.4.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "nokhwa-core",
  "once_cell",
@@ -4350,7 +4353,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-core"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "bytes",
  "image 0.24.9",
