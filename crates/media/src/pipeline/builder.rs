@@ -1,7 +1,7 @@
 use flume::Receiver;
 use indexmap::IndexMap;
 use std::thread::{self, JoinHandle};
-use tracing::Instrument;
+use tracing::{info, trace, Instrument};
 
 use crate::pipeline::{
     clock::CloneFrom,
@@ -133,7 +133,9 @@ impl<Clock, PreviousOutput: Send + 'static> PipelinePathBuilder<Clock, PreviousO
         let (output, next_input) = flume::bounded(task.queue_size());
 
         pipeline.spawn_task(name.into(), move |ready_signal| {
+            trace!("Pipe starting");
             task.run(ready_signal, input, output);
+            info!("Pipe stopped");
         });
 
         PipelinePathBuilder {
@@ -153,7 +155,11 @@ impl<Clock, PreviousOutput: Send + 'static> PipelinePathBuilder<Clock, PreviousO
         } = self;
 
         pipeline.spawn_task(name.into(), move |ready_signal| {
+            trace!("Sink starting");
             task.run(ready_signal, input);
+            info!("Sink stopped running");
+            task.finish();
+            info!("Sink stopped");
         });
 
         pipeline

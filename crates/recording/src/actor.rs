@@ -141,15 +141,10 @@ pub async fn spawn_recording_actor(
             .with_target(false)
             .with_filter(
                 tracing_subscriber::filter::EnvFilter::builder()
-                    .with_default_directive(tracing::level_filters::LevelFilter::DEBUG.into())
+                    .with_default_directive(tracing::level_filters::LevelFilter::TRACE.into())
                     .from_env_lossy(),
             ),
     );
-    // let collector = tracing_subscriber::fmt()
-    //     .with_ansi(true)
-    //     .with_max_level(tracing::Level::TRACE)
-    //     .with_target(false)
-    //     .finish();
 
     async {
         async {
@@ -505,9 +500,12 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
         &display_output_path,
     )?;
 
-    trace!(
+    info!(
         r#"screen pipeline prepared, will output to "{}""#,
-        display_output_path.strip_prefix(&dir).unwrap().display()
+        display_output_path
+            .strip_prefix(&segments_dir)
+            .unwrap()
+            .display()
     );
 
     let audio_output_path = if let Some(mic_source) = audio_input_feed.map(AudioInputSource::init) {
@@ -521,9 +519,9 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
             .source("microphone_capture", mic_source)
             .sink("microphone_encoder", mic_encoder);
 
-        debug!(
+        info!(
             "mic pipeline prepared, will output to {}",
-            output_path.display()
+            output_path.strip_prefix(&segments_dir).unwrap().display()
         );
 
         Some(output_path)
@@ -533,21 +531,18 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
     let camera = if let Some(camera_source) = camera_feed.map(CameraSource::init) {
         let camera_config = camera_source.info();
-        let output_config = camera_config.scaled(1280_u32, 30_u32);
         let output_path = dir.join("camera.mp4");
 
-        let camera_filter = VideoFilter::init("camera", camera_config, output_config)?;
         let camera_encoder =
-            H264Encoder::init("camera", output_config, Output::File(output_path.clone()))?;
+            H264Encoder::init("camera", camera_config, Output::File(output_path.clone()))?;
 
         pipeline_builder = pipeline_builder
             .source("camera_capture", camera_source)
-            .pipe("camera_filter", camera_filter)
             .sink("camera_encoder", camera_encoder);
 
-        debug!(
-            "mic pipeline prepared, will output to {}",
-            output_path.display()
+        info!(
+            "camera pipeline prepared, will output to {}",
+            output_path.strip_prefix(&segments_dir).unwrap().display()
         );
 
         Some(CameraPipelineInfo {
@@ -639,15 +634,15 @@ impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
         Self: Sized,
     {
         let mut screen_config = source.info();
-        let screen_filter = VideoFilter::init("screen", screen_config, {
-            screen_config.pixel_format = Pixel::NV12;
-            screen_config
-        })?;
+        // let screen_filter = VideoFilter::init("screen", screen_config, {
+        //     screen_config.pixel_format = Pixel::NV12;
+        //     screen_config
+        // })?;
         let screen_encoder =
             H264Encoder::init("screen", screen_config, Output::File(output_path.into()))?;
         Ok(builder
             .source("screen_capture", source)
-            .pipe("screen_capture_filter", screen_filter)
+            // .pipe("screen_capture_filter", screen_filter)
             .sink("screen_capture_encoder", screen_encoder))
     }
 }

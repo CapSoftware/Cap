@@ -329,3 +329,44 @@ pub fn monitor_bounds(id: u32) -> Bounds {
         }
     }
 }
+
+pub fn get_display_refresh_rate(
+    display_id: core_graphics::display::CGDirectDisplayID,
+) -> Option<u32> {
+    use core_graphics::display::CGDisplay;
+
+    Some(
+        CGDisplay::new(display_id)
+            .display_mode()?
+            .refresh_rate()
+            .round() as u32,
+    )
+}
+
+pub fn display_for_window(
+    window: core_graphics::window::CGWindowID,
+) -> Option<core_graphics::display::CGDisplay> {
+    use core_foundation::array::CFArray;
+    use core_graphics::{
+        display::{CFDictionary, CGDisplay, CGRect},
+        window::{create_description_from_array, kCGWindowBounds},
+    };
+
+    let descriptions = create_description_from_array(CFArray::from_copyable(&[window]))?;
+
+    let window_bounds = CGRect::from_dict_representation(
+        &descriptions
+            .get(0)?
+            .get(unsafe { kCGWindowBounds })
+            .downcast::<CFDictionary>()?,
+    )?;
+
+    for id in CGDisplay::active_displays().ok()? {
+        let display = CGDisplay::new(id);
+        if window_bounds.is_intersects(&display.bounds()) {
+            return Some(display);
+        }
+    }
+
+    None
+}
