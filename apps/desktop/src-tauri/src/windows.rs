@@ -13,10 +13,6 @@ use tauri::{
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
-#[cfg(target_os = "windows")]
-const WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE: tauri::LogicalSize<f64> =
-    tauri::LogicalSize::new(12.0, 35.0);
-
 #[derive(Clone)]
 pub enum CapWindowId {
     // Contains onboarding + permissions
@@ -270,12 +266,7 @@ impl ShowCapWindow {
                 if FLAGS.pause_resume {
                     width += 32.0;
                 }
-                let mut height = 40.0;
-                #[cfg(target_os = "windows")]
-                {
-                    width -= WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.width;
-                    height -= WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.height;
-                }
+                let height = 40.0;
 
                 self.window_builder(app, "/in-progress-recording")
                     .maximized(false)
@@ -351,44 +342,6 @@ impl ShowCapWindow {
 
         window.hide().ok();
 
-        // TODO(Ilya): Remove once Tao is updated to `0.31.0`
-        #[cfg(target_os = "windows")]
-        {
-            use tauri_plugin_positioner::{Position, WindowExt};
-
-            if matches!(
-                self,
-                Self::Setup
-                    | Self::Main
-                    | Self::Editor { .. }
-                    | Self::Settings { .. }
-                    | Self::Upgrade
-            ) {
-                let _ = window.move_window(Position::Center);
-            }
-
-            if matches!(self, Self::InProgressRecording { .. }) {
-                let _ = window.move_window(Position::BottomCenter);
-
-                if let Ok(outer_size) = window.outer_size() {
-                    let screen_position = monitor.position();
-                    let window_size = tauri::PhysicalSize::<i32> {
-                        width: outer_size.width as i32,
-                        height: outer_size.height as i32,
-                    };
-                    let screen_size = tauri::PhysicalSize::<i32> {
-                        width: monitor.size().width as i32,
-                        height: monitor.size().height as i32,
-                    };
-
-                    let _ = window.set_position(tauri::PhysicalPosition {
-                        x: screen_position.x + ((screen_size.width / 2) - (window_size.width / 2)),
-                        y: screen_size.height - (window_size.height - screen_position.y) - 120,
-                    });
-                }
-            }
-        }
-
         #[cfg(target_os = "macos")]
         if let Some(position) = id.traffic_lights_position() {
             add_traffic_lights(&window, position);
@@ -411,32 +364,9 @@ impl ShowCapWindow {
             .shadow(true);
 
         if let Some(min) = id.min_size() {
-            // TODO(Ilya): Remove once Tao is updated to `0.31.0`
-            // currently, undecorated windows with shadows get the invisible bounds of the titlebar and window frame added to the inner size
-            #[cfg(target_os = "windows")]
-            let size = if matches!(
-                self,
-                Self::Setup
-                    | Self::Main
-                    | Self::Editor { .. }
-                    | Self::Settings { .. }
-                    | Self::InProgressRecording { .. }
-                    | Self::Upgrade
-            ) {
-                (
-                    min.0 - WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.width,
-                    min.1 - WIN_WSCAPTION_WSTHICKFRAME_LOGICAL_SIZE.height,
-                )
-            } else {
-                min
-            };
-
-            #[cfg(not(target_os = "windows"))]
-            let size = min;
-
             builder = builder
-                .inner_size(size.0, size.1)
-                .min_inner_size(size.0, size.1);
+                .inner_size(min.0, min.1)
+                .min_inner_size(min.0, min.1);
         }
 
         #[cfg(target_os = "macos")]

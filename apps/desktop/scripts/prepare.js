@@ -156,8 +156,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("--- Preparation Failed");
+  console.error("\n--- Preparation Failed");
   console.error(err);
   console.error("---");
-  process.exit(1);
 });
