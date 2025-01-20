@@ -104,6 +104,7 @@ export default function CaptureArea() {
         showGuideLines={true}
         aspectRatio={aspectRatio()}
         mappedSize={{ x: window.innerWidth, y: window.innerHeight }}
+        snapToRatio={true}
       />
     </div>
   );

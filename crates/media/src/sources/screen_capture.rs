@@ -527,7 +527,7 @@ pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
                             owner_name: platform_window.owner_name.clone(),
                             name: platform_window.name.clone(),
                             bounds: platform_window.bounds,
-                            refresh_rate: get_target_fps(&target).unwrap(),
+                            refresh_rate: get_target_fps(&target).unwrap_or_default(),
                         },
                         target,
                     )

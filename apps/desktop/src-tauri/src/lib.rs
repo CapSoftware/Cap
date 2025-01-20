@@ -2010,6 +2010,7 @@ pub async fn run() {
             show_window,
             write_clipboard_string,
             get_editor_total_frames,
+            platform::perform_haptic_feedback
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,

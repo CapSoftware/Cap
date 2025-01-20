@@ -71,6 +71,7 @@ export default function Cropper(
     initialSize?: XY<number>;
     aspectRatio?: number;
     showGuideLines?: boolean;
+    snapToRatio?: boolean;
   }>,
 ) {
   const crop = props.value;
@@ -438,7 +439,7 @@ export default function Cropper(
           : currentBox.size.y;
 
       // Only corner handles can snap
-      if (dir.length === 2) {
+      if (props.snapToRatio && dir.length === 2) {
         const matchedRatio = findClosestRatio(newWidth, newHeight);
         if (matchedRatio) {
           if (dir.includes("n") || dir.includes("s")) {
