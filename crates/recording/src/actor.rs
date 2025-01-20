@@ -141,15 +141,10 @@ pub async fn spawn_recording_actor(
             .with_target(false)
             .with_filter(
                 tracing_subscriber::filter::EnvFilter::builder()
-                    .with_default_directive(tracing::level_filters::LevelFilter::DEBUG.into())
+                    .with_default_directive(tracing::level_filters::LevelFilter::TRACE.into())
                     .from_env_lossy(),
             ),
     );
-    // let collector = tracing_subscriber::fmt()
-    //     .with_ansi(true)
-    //     .with_max_level(tracing::Level::TRACE)
-    //     .with_target(false)
-    //     .finish();
 
     async {
         async {
@@ -536,27 +531,13 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
     let camera = if let Some(camera_source) = camera_feed.map(CameraSource::init) {
         let camera_config = camera_source.info();
-        // <<<<<<< Updated upstream
-        let output_config = camera_config.scaled(1280_u32, 30_u32);
         let output_path = dir.join("camera.mp4");
 
-        let camera_filter = VideoFilter::init("camera", camera_config, output_config)?;
         let camera_encoder =
-            H264Encoder::init("camera", output_config, Output::File(output_path.clone()))?;
-        // =======
-        // camera_output_path = Some(dir.join("camera.mp4"));
-
-        // // let camera_filter = VideoFilter::init("camera", camera_config, camera_config)?;
-        // let camera_encoder = H264Encoder::init(
-        //     "camera",
-        //     camera_config,
-        //     Output::File(camera_output_path.clone().unwrap()),
-        // )?;
-        // >>>>>>> Stashed changes
+            H264Encoder::init("camera", camera_config, Output::File(output_path.clone()))?;
 
         pipeline_builder = pipeline_builder
             .source("camera_capture", camera_source)
-            .pipe("camera_filter", camera_filter)
             .sink("camera_encoder", camera_encoder);
 
         info!(

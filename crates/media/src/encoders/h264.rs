@@ -31,6 +31,12 @@ impl H264Encoder {
 
         let (codec, options) = get_codec_and_options(&config)?;
 
+        dbg!(codec
+            .video()
+            .unwrap()
+            .formats()
+            .unwrap()
+            .collect::<Vec<_>>());
         let (format, converter) = if !codec
             .video()
             .unwrap()
@@ -93,16 +99,12 @@ impl H264Encoder {
     }
 
     fn queue_frame(&mut self, mut frame: FFVideo) {
-        // if self.tag == "camera" {
-        //     dbg!(frame.width(), frame.planes(), frame.stride(0));
-        // }
-
         if let Some(converter) = &mut self.converter {
             let mut new_frame = FFVideo::empty();
-            if self.tag == "camera" {
-                dbg!(self.config);
-                dbg!(frame.format(), frame.width(), frame.height());
-            }
+            // if self.tag == "camera" {
+            //     dbg!(self.config);
+            //     dbg!(frame.format(), frame.width(), frame.height());
+            // }
             converter.run(&frame, &mut new_frame).unwrap();
             frame = new_frame;
         }

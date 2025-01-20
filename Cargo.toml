@@ -25,7 +25,12 @@ nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "d37141b1883d", 
 	"input-native",
 	"serialize",
 ] }
+# nokhwa = { path = "../../l1npengtul/nokhwa", features = [
+# 	"input-native",
+# 	"serialize",
+# ] }
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "d37141b1883d" }
+# nokhwa-bindings-macos = { path = "../../l1npengtul/nokhwa/nokhwa-bindings-macos" }
 wgpu = "22.1.0"
 flume = "0.11.0"
 thiserror = "1.0"
