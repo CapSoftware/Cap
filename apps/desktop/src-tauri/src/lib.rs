@@ -19,8 +19,10 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
+use camera::create_camera_preview_ws;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
+use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::frame_ws::WSFrame;
 use cap_media::sources::CaptureScreen;
@@ -69,7 +71,7 @@ use windows::{CapWindowId, ShowCapWindow};
 pub struct App {
     start_recording_options: RecordingOptions,
     #[serde(skip)]
-    camera_tx: flume::Sender<WSFrame>,
+    camera_tx: flume::Sender<RawCameraFrame>,
     camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
@@ -194,13 +196,13 @@ impl App {
                         .await
                         .map_err(|e| e.to_string())?;
                 } else {
-                    self.camera_feed = Some(
-                        CameraFeed::init(camera_label, self.camera_tx.clone())
-                            .await
-                            .map(Mutex::new)
-                            .map(Arc::new)
-                            .map_err(|e| e.to_string())?,
-                    );
+                    let feed = CameraFeed::init(camera_label)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    feed.attach(self.camera_tx.clone());
+
+                    self.camera_feed = Some(Arc::new(Mutex::new(feed)));
                 }
             }
             None => {
@@ -2006,9 +2008,7 @@ pub async fn run() {
         )
         .expect("Failed to export typescript bindings");
 
-    let (camera_tx, camera_rx) = CameraFeed::create_channel();
-    // _shutdown needs to be kept alive to keep the camera ws running
-    let (camera_ws_port, _shutdown) = cap_media::frame_ws::create_frame_ws(camera_rx.clone()).await;
+    let (camera_tx, camera_ws_port, _shutdown) = create_camera_preview_ws().await;
 
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 
@@ -2075,13 +2075,6 @@ pub async fn run() {
             hotkeys::init(&app);
             general_settings::init(&app);
             fake_window::init(&app);
-
-            // this doesn't work in dev on mac, just a fact of deeplinks
-            app.deep_link().on_open_url(|event| {
-                // TODO: handle deep link for auth
-                dbg!(event.id());
-                dbg!(event.urls());
-            });
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
                 sentry::configure_scope(|scope| {
@@ -2271,26 +2264,29 @@ pub async fn run() {
         .run(|handle, event| match event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
-                // Check if any editor or settings window is open
-                let has_editor_or_settings = handle
-                    .webview_windows()
-                    .iter()
-                    .any(|(label, _)| label.starts_with("editor-") || label.as_str() == "settings");
+                // Check if any editor, settings or signin window is open
+                let has_window = handle.webview_windows().iter().any(|(label, _)| {
+                    label.starts_with("editor-")
+                        || label.as_str() == "settings"
+                        || label.as_str() == "signin"
+                });
 
-                if has_editor_or_settings {
-                    // Find and focus the editor or settings window
+                if has_window {
+                    // Find and focus the editor, settings or signin window
                     if let Some(window) = handle
                         .webview_windows()
                         .iter()
                         .find(|(label, _)| {
-                            label.starts_with("editor-") || label.as_str() == "settings"
+                            label.starts_with("editor-")
+                                || label.as_str() == "settings"
+                                || label.as_str() == "signin"
                         })
                         .map(|(_, window)| window.clone())
                     {
                         window.set_focus().ok();
                     }
                 } else {
-                    // No editor or settings window open, show main window
+                    // No editor, settings or signin window open, show main window
                     open_main_window(handle.clone());
                 }
             }

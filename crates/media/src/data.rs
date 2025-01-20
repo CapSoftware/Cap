@@ -233,6 +233,16 @@ impl VideoInfo {
         }
     }
 
+    pub fn from_raw_ffmpeg(pixel_format: Pixel, width: u32, height: u32, fps: u32) -> Self {
+        Self {
+            pixel_format,
+            width,
+            height,
+            time_base: FFRational(1, 1_000_000),
+            frame_rate: FFRational(fps.try_into().unwrap(), 1),
+        }
+    }
+
     pub fn scaled(&self, width: u32, fps: u32) -> Self {
         let (width, height) = match self.width <= width {
             true => (self.width, self.height),
@@ -246,7 +256,7 @@ impl VideoInfo {
         };
 
         Self {
-            pixel_format: Pixel::NV12,
+            pixel_format: self.pixel_format,
             width,
             height,
             time_base: self.time_base,
@@ -268,7 +278,7 @@ impl VideoInfo {
 
         let frame_stride = frame.stride(0) as usize;
         let frame_height = self.height as usize;
-        
+
         // Ensure we don't try to copy more data than we have
         if frame.stride(0) == self.width as usize {
             let copy_len = std::cmp::min(data.len(), frame.data_mut(0).len());
@@ -278,16 +288,16 @@ impl VideoInfo {
                 if line * stride >= data.len() {
                     break; // Stop if we run out of source data
                 }
-                
+
                 let src_start = line * stride;
                 let src_end = std::cmp::min(src_start + frame_stride, data.len());
                 if src_end <= src_start {
                     break; // Stop if we can't get any more source data
                 }
-                
+
                 let dst_start = line * frame_stride;
                 let dst_end = dst_start + (src_end - src_start);
-                
+
                 // Only copy if we have enough destination space
                 if dst_end <= frame.data_mut(0).len() {
                     frame.data_mut(0)[dst_start..dst_end]

@@ -244,7 +244,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
- "zbus",
+ "zbus 4.4.0",
 ]
 
 [[package]]
@@ -841,6 +841,9 @@ dependencies = [
  "core-graphics 0.24.0",
  "editor",
  "ffmpeg-next",
+ "flume 0.11.0",
+ "nokhwa",
+ "nokhwa-bindings-macos",
  "scap",
  "serde",
  "serde_json",
@@ -852,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.11"
+version = "0.3.12"
 dependencies = [
  "anyhow",
  "axum",
@@ -4290,7 +4293,7 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 [[package]]
 name = "nokhwa"
 version = "0.10.3"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "flume 0.10.14",
  "image 0.24.9",
@@ -4306,7 +4309,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-linux"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "nokhwa-core",
  "v4l",
@@ -4316,7 +4319,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-macos"
 version = "0.2.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "block",
  "cocoa-foundation 0.1.2",
@@ -4331,7 +4334,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-bindings-windows"
 version = "0.4.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "nokhwa-core",
  "once_cell",
@@ -4341,7 +4344,7 @@ dependencies = [
 [[package]]
 name = "nokhwa-core"
 version = "0.1.0"
-source = "git+https://github.com/CapSoftware/nokhwa?rev=0d3d1f30a78b#0d3d1f30a78bb4616b4a4d0939a29ad0c1a8e14f"
+source = "git+https://github.com/CapSoftware/nokhwa?rev=d37141b1883d#d37141b1883d7250f7d2ccc9bc199ecaee48d51b"
 dependencies = [
  "bytes",
  "image 0.24.9",
@@ -4386,7 +4389,7 @@ dependencies = [
  "mac-notification-sys",
  "serde",
  "tauri-winrt-notification",
- "zbus",
+ "zbus 4.4.0",
 ]
 
 [[package]]
@@ -7270,9 +7273,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-single-instance"
-version = "2.2.0"
+version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f36019ee9832dc99e4450bb55a21cfad8633b19c2c18bd17c7741939b070ede"
+checksum = "47c387d4d96690131dc46d1d2827df5c222b896a2bfeb15a16267229a55c50b5"
 dependencies = [
  "serde",
  "serde_json",
@@ -7280,7 +7283,7 @@ dependencies = [
  "thiserror 2.0.6",
  "tracing",
  "windows-sys 0.59.0",
- "zbus",
+ "zbus 5.3.0",
 ]
 
 [[package]]
@@ -9288,9 +9291,45 @@ dependencies = [
  "uds_windows",
  "windows-sys 0.52.0",
  "xdg-home",
- "zbus_macros",
- "zbus_names",
- "zvariant",
+ "zbus_macros 4.4.0",
+ "zbus_names 3.0.0",
+ "zvariant 4.2.0",
+]
+
+[[package]]
+name = "zbus"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "192a0d989036cd60a1e91a54c9851fb9ad5bd96125d41803eed79d2e2ef74bd7"
+dependencies = [
+ "async-broadcast",
+ "async-executor",
+ "async-fs",
+ "async-io",
+ "async-lock",
+ "async-process",
+ "async-recursion",
+ "async-task",
+ "async-trait",
+ "blocking",
+ "enumflags2",
+ "event-listener",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "nix 0.29.0",
+ "ordered-stream",
+ "serde",
+ "serde_repr",
+ "static_assertions",
+ "tracing",
+ "uds_windows",
+ "windows-sys 0.59.0",
+ "winnow 0.6.20",
+ "xdg-home",
+ "zbus_macros 5.3.0",
+ "zbus_names 4.1.1",
+ "zvariant 5.2.0",
 ]
 
 [[package]]
@@ -9303,7 +9342,22 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.90",
- "zvariant_utils",
+ "zvariant_utils 2.1.0",
+]
+
+[[package]]
+name = "zbus_macros"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3685b5c81fce630efc3e143a4ded235b107f1b1cdf186c3f115529e5e5ae4265"
+dependencies = [
+ "proc-macro-crate 3.2.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.90",
+ "zbus_names 4.1.1",
+ "zvariant 5.2.0",
+ "zvariant_utils 3.1.0",
 ]
 
 [[package]]
@@ -9314,7 +9368,19 @@ checksum = "4b9b1fef7d021261cc16cba64c351d291b715febe0fa10dc3a443ac5a5022e6c"
 dependencies = [
  "serde",
  "static_assertions",
- "zvariant",
+ "zvariant 4.2.0",
+]
+
+[[package]]
+name = "zbus_names"
+version = "4.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "519629a3f80976d89c575895b05677cbc45eaf9f70d62a364d819ba646409cc8"
+dependencies = [
+ "serde",
+ "static_assertions",
+ "winnow 0.6.20",
+ "zvariant 5.2.0",
 ]
 
 [[package]]
@@ -9394,7 +9460,22 @@ dependencies = [
  "serde",
  "static_assertions",
  "url",
- "zvariant_derive",
+ "zvariant_derive 4.2.0",
+]
+
+[[package]]
+name = "zvariant"
+version = "5.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55e6b9b5f1361de2d5e7d9fd1ee5f6f7fcb6060618a1f82f3472f58f2b8d4be9"
+dependencies = [
+ "endi",
+ "enumflags2",
+ "serde",
+ "static_assertions",
+ "winnow 0.6.20",
+ "zvariant_derive 5.2.0",
+ "zvariant_utils 3.1.0",
 ]
 
 [[package]]
@@ -9407,7 +9488,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.90",
- "zvariant_utils",
+ "zvariant_utils 2.1.0",
+]
+
+[[package]]
+name = "zvariant_derive"
+version = "5.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "573a8dd76961957108b10f7a45bac6ab1ea3e9b7fe01aff88325dc57bb8f5c8b"
+dependencies = [
+ "proc-macro-crate 3.2.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.90",
+ "zvariant_utils 3.1.0",
 ]
 
 [[package]]
@@ -9419,4 +9513,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.90",
+]
+
+[[package]]
+name = "zvariant_utils"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddd46446ea2a1f353bfda53e35f17633afa79f4fe290a611c94645c69fe96a50"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "static_assertions",
+ "syn 2.0.90",
+ "winnow 0.6.20",
 ]

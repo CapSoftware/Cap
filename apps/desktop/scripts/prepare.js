@@ -20,22 +20,6 @@ const rustInfo = execSync("rustc -vV");
 const rsTargetTriple =
   process.env.TARGET_TRIPLE || /host: (\S+)/.exec(rustInfo.toString())?.[1];
 
-const FFMPEG_BINARIES = {
-  "aarch64-apple-darwin": {
-    url: "https://cap-ffmpeg.s3.amazonaws.com/ffmpegarm.zip",
-    path: "./ffmpeg",
-  },
-  "x86_64-apple-darwin": {
-    url: "https://cap-ffmpeg.s3.amazonaws.com/ffmpeg-7.0.1.zip",
-    path: "./ffmpeg",
-  },
-  "x86_64-pc-windows-msvc": {
-    // TODO: Select a stable version, use Cap's own ffmpeg build to also support aarch64.
-    url: "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip",
-    path: "bin/ffmpeg.exe",
-  },
-};
-
 /**
  * @param {string} filePath
  * @returns {Promise<boolean>}
@@ -58,96 +42,6 @@ async function unzip(targetPath, outputPath) {
   } else {
     await exec(`unzip -o ${targetPath} -d ${outputPath}`);
   }
-}
-
-async function prepareFfmpegSidecar() {
-  const binaries = FFMPEG_BINARIES[rsTargetTriple];
-  const ffmpegDownloadPath = path.join(binariesDir, "ffmpeg-download.zip");
-  const ffmpegBinaryPath = path.join(ffmpegUnzippedPath, binaries.path);
-  const ffmpegSidecarName = `ffmpeg-${rsTargetTriple}${fileExtension}`;
-  const finalDestinationPath = path.join(binariesDir, ffmpegSidecarName);
-
-  if (await exists(finalDestinationPath)) {
-    console.log(`Using ffmpeg sidecar: ${ffmpegSidecarName}`);
-    return;
-  }
-
-  // Skip downloading if the archive already exists
-  if (!(await exists(ffmpegBinaryPath))) {
-    if (await exists(ffmpegUnzippedPath)) return;
-    console.log(
-      `Couldn't locate "${ffmpegSidecarName}" or "ffmpeg-download.zip"  in "${ffmpegDownloadPath}"`
-    );
-    console.log(`Downloading from: ${binaries.url}`);
-    await fs.mkdir(binariesDir, { recursive: true });
-
-    const response = await fetch(binaries.url);
-    if (!response.ok || !response.body)
-      throw new Error(`Failed to download: ${response.statusText}`);
-
-    const contentLength = response.headers.get("content-length");
-    if (!contentLength)
-      throw new Error("Unable to determine file size for progress reporting.");
-
-    const totalBytes = parseInt(contentLength, 10);
-    let downloadedBytes = 0;
-
-    const archiveBuffer = [];
-    const reader = response.body.getReader();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      downloadedBytes += value.length;
-      archiveBuffer.push(value);
-
-      const progress = ((downloadedBytes / totalBytes) * 100).toFixed(2);
-      process.stdout.write(`\rDownloading: ${progress}%`);
-    }
-    console.log("\nDownload complete.");
-    const archive = Buffer.concat(archiveBuffer);
-    await fs.writeFile(ffmpegDownloadPath, archive);
-  }
-
-  // Skip unzipping if the directory already exists
-  if (!(await exists(ffmpegUnzippedPath))) {
-    console.log("Extracting ffmpeg archive...");
-    await fs.mkdir(ffmpegUnzippedPath, { recursive: true });
-    await unzip(ffmpegDownloadPath, ffmpegUnzippedPath);
-  }
-
-  // Check if there's a single nested folder and move its contents to the root
-  const unzippedContents = await fs.readdir(ffmpegUnzippedPath);
-  if (unzippedContents.length === 1) {
-    const nestedPath = path.join(ffmpegUnzippedPath, unzippedContents[0]);
-    const stat = await fs.stat(nestedPath);
-
-    if (stat.isDirectory()) {
-      console.log(
-        `Detected nested folder '${unzippedContents[0]}'. Moving contents to root.`
-      );
-      const nestedContents = await fs.readdir(nestedPath);
-
-      for (const entry of nestedContents) {
-        const srcPath = path.join(nestedPath, entry);
-        const destPath = path.join(ffmpegUnzippedPath, entry);
-        await fs.rename(srcPath, destPath);
-      }
-
-      // Remove the now-empty nested folder
-      await fs.rmdir(nestedPath);
-    }
-  }
-
-  console.log(`Copying ffmpeg binary to '${ffmpegSidecarName}'...`);
-
-  await fs.rename(
-    ffmpegBinaryPath,
-    path.join(binariesDir, ffmpegSidecarName)
-  );
-
-  console.log("Removing unzipped ffmpeg folder");
-  await fs.rm(ffmpegUnzippedPath, { recursive: true, force: true });
 }
 
 /**
@@ -176,7 +70,9 @@ async function semverToWIXCompatibleVersion(cargoFilePath) {
     const numMatch = buildOrPrerelease.match(/\d+$/);
     build = numMatch ? parseInt(numMatch[0]) : 0;
   }
-  const wixVersion = `${major}.${minor}.${patch}${build === 0 ? "" : `.${build}`}`;
+  const wixVersion = `${major}.${minor}.${patch}${
+    build === 0 ? "" : `.${build}`
+  }`;
   if (wixVersion !== ver)
     console.log(`Using wix-compatible version ${ver} --> ${wixVersion}`);
   return wixVersion;
@@ -221,9 +117,6 @@ export async function createTauriPlatformConfigs(
     baseConfig = {
       ...baseConfig,
       bundle: {
-        resources: {
-          "../../../target/binaries/ffmpeg-unzipped/bin/*.dll": "",
-        },
         windows: {
           wix: {
             version: await semverToWIXCompatibleVersion(
@@ -256,14 +149,8 @@ export async function createTauriPlatformConfigs(
 async function main() {
   console.log("--- Preparing sidecars and configs...");
   const targetTripleEnv = process.env.TARGET_TRIPLE || rsTargetTriple;
-  const binaries = FFMPEG_BINARIES[targetTripleEnv];
-  if (!binaries) {
-    console.error(`Unsupported target: ${targetTripleEnv}`);
-    return;
-  }
   console.log(`Target is ${targetTripleEnv}`);
 
-  await prepareFfmpegSidecar();
   await createTauriPlatformConfigs(process.platform);
   console.log("--- Preparation finished");
 }

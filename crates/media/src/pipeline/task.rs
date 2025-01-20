@@ -43,4 +43,6 @@ pub trait PipelineSinkTask: Send {
     type Input;
 
     fn run(&mut self, ready_signal: PipelineReadySignal, input: Receiver<Self::Input>);
+
+    fn finish(&mut self);
 }

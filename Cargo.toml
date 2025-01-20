@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [ "apps/cli","apps/desktop/src-tauri", "crates/*"]
+members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
 
 [workspace.dependencies]
 anyhow = "1.0.86"
@@ -22,11 +22,11 @@ tauri = { version = "2.2.3", features = [ "specta" ] }
 specta = { version = "=2.0.0-rc.20", features = [ "derive" ] }
 
 scap = { git = "https://github.com/CapSoftware/scap", rev = "58d4410bf52f" }
-nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "0d3d1f30a78b", features = [
+nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "d37141b1883d", features = [
 	"input-native",
 	"serialize",
 ] }
-nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "0d3d1f30a78b" }
+nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "d37141b1883d" }
 wgpu = "22.1.0"
 flume = "0.11.0"
 thiserror = "1.0"

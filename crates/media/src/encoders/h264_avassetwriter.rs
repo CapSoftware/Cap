@@ -125,18 +125,16 @@ impl PipelineSinkTask for H264AVAssetWriterEncoder {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         input: flume::Receiver<Self::Input>,
     ) {
-        trace!("Starting {} video encoding thread", self.tag);
         ready_signal.send(Ok(())).ok();
 
         while let Ok(frame) = input.recv() {
             self.queue_frame(frame);
             self.process_frame();
         }
+    }
 
-        trace!("Received last {} frame. Finishing up encoding.", self.tag);
+    fn finish(&mut self) {
         self.finish();
-
-        info!("Shut down {} video encoding thread", self.tag);
     }
 }
 
