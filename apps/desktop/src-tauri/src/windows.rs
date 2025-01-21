@@ -275,11 +275,11 @@ impl ShowCapWindow {
                     .maximized(false)
                     .fullscreen(false)
                     .shadow(false)
-                    // .always_on_top(true)
-                    // .content_protected(true)
+                    .always_on_top(true)
+                    .content_protected(true)
                     .skip_taskbar(true)
                     .closable(true)
-                    .decorations(true)
+                    .decorations(false)
                     .transparent(true);
 
                 let screen_bounds = cap_media::platform::monitor_bounds(screen.id);
@@ -308,11 +308,11 @@ impl ShowCapWindow {
 
                 let window = window_builder.build()?;
 
-                // #[cfg(target_os = "macos")]
-                // crate::platform::set_window_level(
-                //     window.as_ref().window(),
-                //     objc2_app_kit::NSScreenSaverWindowLevel,
-                // );
+                #[cfg(target_os = "macos")]
+                crate::platform::set_window_level(
+                    window.as_ref().window(),
+                    objc2_app_kit::NSScreenSaverWindowLevel,
+                );
 
                 // Hide the main window if the target monitor is the same
                 if let Some(main_window) = CapWindowId::Main.get(&app) {

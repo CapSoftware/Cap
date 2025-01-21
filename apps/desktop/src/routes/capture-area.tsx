@@ -1,9 +1,9 @@
 import { createSignal, onCleanup, onMount } from "solid-js";
 import { createOptionsQuery } from "~/utils/queries";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Cropper from "~/components/Cropper";
 import { createStore } from "solid-js/store";
-import type { Crop } from "~/utils/tauri";
+import { type Crop } from "~/utils/tauri";
 import { makePersisted } from "@solid-primitives/storage";
 import { Tooltip } from "@kobalte/core";
 
@@ -43,7 +43,7 @@ export default function CaptureArea() {
     position: { x: 0, y: 0 },
   });
 
-  function handleConfirm() {
+  async function handleConfirm() {
     const target = options.data?.captureTarget;
     if (!options.data || !target || target.variant !== "screen") return;
     setPendingState(false);
@@ -61,10 +61,18 @@ export default function CaptureArea() {
         },
       },
     });
+
+    setPendingState(false);
+    await close();
   }
 
-  function handleDiscard() {
+  async function handleDiscard() {
     setPendingState(false);
+    await close();
+  }
+
+  async function close() {
+    (await WebviewWindow.getByLabel("main"))?.unminimize();
     webview.close();
   }
 
@@ -79,7 +87,7 @@ export default function CaptureArea() {
           >
             <IconCapCircleX class="size-5" />
           </button>
-          <Tooltip.Root openDelay={500}> 
+          <Tooltip.Root openDelay={500}>
             <Tooltip.Trigger tabIndex={-1}>
               <button
                 class={`py-[0.25rem] px-[0.5rem] gap-[0.25rem] hover:bg-gray-200 flex flex-row items-center rounded-[8px] ${state.showGrid ? "bg-gray-200 text-blue-300" : "text-gray-500 opacity-50"}`}
@@ -113,7 +121,7 @@ export default function CaptureArea() {
         value={crop}
         onCropChange={setCrop}
         showGuideLines={state.showGrid}
-        mappedSize={{ x: window.innerWidth, y: window.innerHeight }}
+        mappedSize={{ x: windowSize().x, y: windowSize().y }}
       />
     </div>
   );
