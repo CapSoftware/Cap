@@ -11,6 +11,7 @@ import {
   on,
   onCleanup,
   onMount,
+  Show,
 } from "solid-js";
 import CropAreaRenderer from "./CropAreaRenderer";
 import Box from "~/utils/box";
@@ -20,6 +21,7 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { generalSettingsStore } from "~/store";
 import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
 import { makePersisted } from "@solid-primitives/storage";
+import { Transition } from "solid-transition-group";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -40,13 +42,17 @@ const HANDLES: HandleSide[] = [
   { x: "r", y: "c", direction: "e", cursor: "ew" },
 ];
 
-const COMMON_RATIOS = [
-  { name: "1:1", value: 1 },
-  { name: "4:3", value: 4 / 3 },
-  { name: "3:2", value: 3 / 2 },
-  { name: "16:9", value: 16 / 9 },
-  { name: "2:1", value: 2 },
-] as const;
+type Ratio = [number, number];
+const COMMON_RATIOS: Ratio[] = [
+  [1, 1], [4, 3], [3, 2], [16, 9], [2, 1], [21, 9]
+];
+// const COMMON_RATIOS = [
+//   { name: "1:1", value: 1 },
+//   { name: "4:3", value: 4 / 3 },
+//   { name: "3:2", value: 3 / 2 },
+//   { name: "16:9", value: 16 / 9 },
+//   { name: "2:1", value: 2 },
+// ] as const;
 
 const KEY_MAPPINGS = new Map([
   ["ArrowRight", "e"],
@@ -89,7 +95,6 @@ export default function Cropper(
     initialSize?: XY<number>;
     aspectRatio?: number;
     showGuideLines?: boolean;
-    snapToRatio?: boolean;
   }>,
 ) {
   const crop = props.value;
@@ -178,10 +183,10 @@ export default function Cropper(
   );
 
   const [snapToRatioEnabled, setSnapToRatioEnabled] = makePersisted(
-    createSignal(props.snapToRatio),
+    createSignal(true),
     { name: "cropSnapsToRatio" }
   );
-  const [snappedToRatio, setSnappedToRatio] = createSignal(false);
+  const [snappedRatio, setSnappedRatio] = createSignal<Ratio | null>(null);
   const [dragging, setDragging] = createSignal(false);
   const [gestureState, setGestureState] = createStore<{
     isTrackpadGesture: boolean;
@@ -389,12 +394,15 @@ export default function Cropper(
     width: number,
     height: number,
     threshold = 0.01,
-  ): (typeof COMMON_RATIOS)[number] | null {
+  ): Ratio | null {
     if (props.aspectRatio) return null;
     const currentRatio = width / height;
     for (const ratio of COMMON_RATIOS) {
-      if (Math.abs(currentRatio - ratio.value) < threshold) {
-        return ratio;
+      if (Math.abs(currentRatio - ratio[0] / ratio[1]) < threshold) {
+        return [ratio[0], ratio[1]];
+      }
+      if (Math.abs(currentRatio - ratio[1] / ratio[0]) < threshold) {
+        return [ratio[1], ratio[0]];
       }
     }
     return null;
@@ -465,22 +473,20 @@ export default function Cropper(
           )
           : currentBox.size.y;
 
-      // Only corner handles can snap
-      if (dir.length === 2) {
-        const matchedRatio = findClosestRatio(newWidth, newHeight);
-        if (snapToRatioEnabled() && matchedRatio) {
-          if (dir.includes("n") || dir.includes("s")) {
-            newWidth = newHeight * matchedRatio.value;
-          } else {
-            newHeight = newWidth / matchedRatio.value;
-          }
-          if (!snappedToRatio() && hapticsEnabled()) {
-            commands.performHapticFeedback("Alignment", "Now");
-          }
-          setSnappedToRatio(true);
+      const closest = findClosestRatio(newWidth, newHeight);
+      if (dir.length === 2 && snapToRatioEnabled() && closest) {
+        const ratio = closest[0] / closest[1];
+        if (dir.includes("n") || dir.includes("s")) {
+          newWidth = newHeight * ratio;
         } else {
-          setSnappedToRatio(false);
+          newHeight = newWidth / ratio;
         }
+        if (!snappedRatio() && hapticsEnabled()) {
+          commands.performHapticFeedback("Alignment", "Now");
+        }
+        setSnappedRatio(closest);
+      } else {
+        setSnappedRatio(null);
       }
 
       const newOrigin = centerOrigin ? ORIGIN_CENTER : origin;
@@ -629,7 +635,7 @@ export default function Cropper(
         borderRadius={9}
         guideLines={props.showGuideLines}
         handles={true}
-        highlighted={snappedToRatio()}
+        highlighted={snappedRatio() !== null}
       >
         {props.children}
       </CropAreaRenderer>
@@ -644,6 +650,43 @@ export default function Cropper(
         }}
         onMouseDown={handleDragStart}
       >
+        <div class="relative w-full">
+          <Transition
+            name="slide"
+            onEnter={(el, done) => {
+              const animation = el.animate(
+                [
+                  { opacity: 0, transform: 'translateY(-8px)' },
+                  { opacity: 1, transform: 'translateY(0)' }
+                ],
+                {
+                  duration: 100,
+                  easing: 'ease-out',
+                }
+              );
+              animation.finished.then(done);
+            }}
+            onExit={(el, done) => {
+              const animation = el.animate(
+                [
+                  { opacity: 1, transform: 'translateY(0)' },
+                  { opacity: 0, transform: 'translateY(-8px)' }
+                ],
+                {
+                  duration: 100,
+                  easing: 'ease-in',
+                }
+              );
+              animation.finished.then(done);
+            }}
+          >
+            <Show when={snappedRatio() !== null}>
+              <div class="absolute left-0 right-0 mx-auto top-2 bg-blue-200 opacity-65 border border-blue-300 h-6 w-12 rounded-md text-center text-gray-500">
+                {snappedRatio()![0]}:{snappedRatio()![1]}
+              </div>
+            </Show>
+          </Transition>
+        </div>
         <For each={HANDLES}>
           {(handle) => {
             const isCorner = handle.x !== "c" && handle.y !== "c";

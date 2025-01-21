@@ -167,11 +167,10 @@ export default function () {
                 await commands.showWindow("Upgrade");
               }
             }}
-            class={`text-[0.6rem] ${
-              isUpgraded()
+            class={`text-[0.6rem] ${isUpgraded()
                 ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
                 : "bg-gray-200 cursor-pointer hover:bg-gray-300"
-            } rounded-lg px-1.5 py-0.5`}
+              } rounded-lg px-1.5 py-0.5`}
           >
             {isUpgraded() ? "Pro" : "Upgrade to Pro"}
           </span>
@@ -451,29 +450,30 @@ function TargetSelects(props: {
                 .finished.then(done)
             }
           >
-            {isTargetScreenOrArea() && (
-              <button
-                type="button"
-                disabled={!isTargetScreenOrArea()}
-                onClick={handleAreaSelectButtonClick}
-                class={cx(
-                  "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
-                  "hover:bg-gray-200 disabled:bg-gray-100 disabled:text-gray-400",
-                  "focus-visible:outline font-[200] text-[0.875rem]",
-                  isTargetCaptureArea()
-                    ? "bg-gray-100 text-blue-400 border border-blue-200"
-                    : "bg-gray-100 text-gray-400"
-                )}
-              >
-                <IconCapCrop
-                  class={`w-[1rem] h-[1rem] ${
-                    areaSelection.pending
-                      ? "animate-gentle-bounce duration-1000 text-gray-500 mt-1"
-                      : ""
-                  }`}
-                />
-              </button>
-            )}
+            <Show when={isTargetScreenOrArea()}>
+              {(targetScreenOrArea) =>
+                <button
+                  type="button"
+                  disabled={!targetScreenOrArea}
+                  onClick={handleAreaSelectButtonClick}
+                  class={cx(
+                    "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
+                    "hover:bg-gray-200 disabled:bg-gray-100 disabled:text-gray-400",
+                    "focus-visible:outline font-[200] text-[0.875rem]",
+                    isTargetCaptureArea()
+                      ? "bg-gray-100 text-blue-400 border border-blue-200"
+                      : "bg-gray-100 text-gray-400"
+                  )}
+                >
+                  <IconCapCrop
+                    class={`w-[1rem] h-[1rem] ${areaSelection.pending
+                        ? "animate-gentle-bounce duration-1000 text-gray-500 mt-1"
+                        : ""
+                      }`}
+                  />
+                </button>
+              }
+            </Show>
           </Transition>
         </Tooltip.Trigger>
         <Tooltip.Portal>
@@ -481,17 +481,16 @@ function TargetSelects(props: {
             {isTargetCaptureArea()
               ? "Remove selection"
               : areaSelection.pending
-              ? "Selecting area..."
-              : "Select area"}
+                ? "Selecting area..."
+                : "Select area"}
             <Tooltip.Arrow class="fill-gray-500" />
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>
 
       <div
-        class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${
-          isTargetScreenOrArea() ? "ml-[2.4rem]" : ""
-        }`}
+        class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${isTargetScreenOrArea() ? "ml-[2.4rem]" : ""
+          }`}
         style={{
           "transition-timing-function":
             "cubic-bezier(0.785, 0.135, 0.15, 0.86)",
@@ -874,16 +873,16 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
         as={
           props.options.length <= 1
             ? (p) => (
-                <button
-                  onClick={() => {
-                    props.onChange(props.options[0]);
-                  }}
-                  data-selected={props.selected}
-                  class={p.class}
-                >
-                  <span class="truncate">{props.placeholder}</span>
-                </button>
-              )
+              <button
+                onClick={() => {
+                  props.onChange(props.options[0]);
+                }}
+                data-selected={props.selected}
+                class={p.class}
+              >
+                <span class="truncate">{props.placeholder}</span>
+              </button>
+            )
             : undefined
         }
         class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
@@ -957,8 +956,8 @@ function TargetSelectInfoPill<T>(props: {
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-        ? "On"
-        : "Off"}
+          ? "On"
+          : "Off"}
     </button>
   );
 }

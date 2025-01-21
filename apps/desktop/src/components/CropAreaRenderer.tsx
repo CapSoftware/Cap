@@ -31,7 +31,7 @@ function drawHandles({
   ctx.strokeStyle = selected
     ? "rgba(255, 255, 255, 1)"
     : highlighted
-      ? "rgba(59, 130, 246, 1)"
+      ? "rgba(60, 150, 280, 1)"
       : "rgba(255, 255, 255, 0.8)";
 
   ctx.lineWidth = 1;
@@ -192,14 +192,14 @@ function draw(
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
   // Shadow
-  // ctx.save();
-  // ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
-  // ctx.shadowBlur = 200;
-  // ctx.shadowOffsetY = 25;
-  // ctx.beginPath();
-  // ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
-  // ctx.fill();
-  // ctx.restore();
+  ctx.save();
+  ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
+  ctx.shadowBlur = 200;
+  ctx.shadowOffsetY = 25;
+  ctx.beginPath();
+  ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
+  ctx.fill();
+  ctx.restore();
 
   if (showHandles) drawHandles(drawContext);
 
