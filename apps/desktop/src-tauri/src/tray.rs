@@ -109,7 +109,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             "../icons/tray-default-icon.png"
         ))?)
         .menu(&menu)
-        .menu_on_left_click(true)
+        .show_menu_on_left_click(true)
         .on_menu_event({
             let app_handle = app.clone();
             move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
