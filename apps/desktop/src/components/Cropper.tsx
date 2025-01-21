@@ -12,7 +12,7 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
-import AreaOccluder from "./CropAreaRenderer";
+import CropAreaRenderer from "./CropAreaRenderer";
 import Box from "~/utils/box";
 import { type XY, type Crop, commands } from "~/utils/tauri";
 import { createStore } from "solid-js/store";
@@ -63,6 +63,19 @@ function distanceOf(firstPoint: Touch, secondPoint: Touch): number {
   const dx = firstPoint.clientX - secondPoint.clientX;
   const dy = firstPoint.clientY - secondPoint.clientY;
   return Math.sqrt(dx * dx + dy * dy);
+}
+
+export function cropToFloor(value: Crop): Crop {
+  return {
+    size: {
+      x: Math.floor(value.size.x),
+      y: Math.floor(value.size.y),
+    },
+    position: {
+      x: Math.floor(value.position.x),
+      y: Math.floor(value.position.y),
+    },
+  };
 }
 
 export default function Cropper(
@@ -369,7 +382,7 @@ export default function Cropper(
   function findClosestRatio(
     width: number,
     height: number,
-    threshold = 0.008,
+    threshold = 0.01,
   ): (typeof COMMON_RATIOS)[number] | null {
     if (props.aspectRatio) return null;
     const currentRatio = width / height;
@@ -583,7 +596,7 @@ export default function Cropper(
       onKeyDown={handleKeyDown}
       tabIndex={0}
     >
-      <AreaOccluder
+      <CropAreaRenderer
         bounds={{
           x: displayScaledCrop().x,
           y: displayScaledCrop().y,
@@ -596,7 +609,7 @@ export default function Cropper(
         highlighted={snappedToRatio()}
       >
         {props.children}
-      </AreaOccluder>
+      </CropAreaRenderer>
       <div
         class="absolute"
         style={{

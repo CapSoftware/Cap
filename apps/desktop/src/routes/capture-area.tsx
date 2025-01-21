@@ -5,12 +5,14 @@ import Cropper from "~/components/Cropper";
 import { createStore } from "solid-js/store";
 import type { Crop } from "~/utils/tauri";
 
+export const PENDING_STATE_SET_EVENT = "cap-window://capture-area/state/pending";
+
 export default function CaptureArea() {
   const { options, setOptions } = createOptionsQuery();
   const webview = getCurrentWebviewWindow();
 
   const setPendingState = (pending: boolean) =>
-    webview.emitTo("main", "cap-window://capture-area/state/pending", pending);
+    webview.emitTo("main", PENDING_STATE_SET_EVENT, pending);
 
   let unlisten: () => void | undefined;
   onMount(async () => {
@@ -72,7 +74,7 @@ export default function CaptureArea() {
             <button
               class="py-[0.25rem] px-[0.5rem] text-red-300 dark:red-blue-300 gap-[0.25rem] hover:bg-red-50 flex flex-row items-center rounded-lg"
               type="button"
-              onClick={() => setAspectRatio(1/1)}
+              onClick={() => setAspectRatio(1 / 1)}
             >
               <IconCapCircleX class="size-5" />
               <span class="font-[500] text-[0.875rem]">1/1</span>

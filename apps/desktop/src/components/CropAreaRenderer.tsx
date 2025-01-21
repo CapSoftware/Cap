@@ -192,14 +192,14 @@ function draw(
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
   // Shadow
-  ctx.save();
-  ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
-  ctx.shadowBlur = 200;
-  ctx.shadowOffsetY = 25;
-  ctx.beginPath();
-  ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
-  ctx.fill();
-  ctx.restore();
+  // ctx.save();
+  // ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
+  // ctx.shadowBlur = 200;
+  // ctx.shadowOffsetY = 25;
+  // ctx.beginPath();
+  // ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
+  // ctx.fill();
+  // ctx.restore();
 
   if (showHandles) drawHandles(drawContext);
 
@@ -258,17 +258,18 @@ export default function CropAreaRenderer(
       if (lastAnimationFrameId) cancelAnimationFrame(lastAnimationFrameId);
 
       const { x, y, width, height } = props.bounds;
+      const { guideLines, handles, borderRadius, highlighted, selected } = props;
 
       const prefersDark = prefersDarkScheme();
       lastAnimationFrameId = requestAnimationFrame(() =>
         draw(
           ctx,
           { x, y, width, height },
-          props.borderRadius || 0,
-          props.guideLines || false,
-          props.handles || false,
-          props.highlighted || false,
-          props.selected || false,
+          borderRadius || 0,
+          guideLines || false,
+          handles || false,
+          highlighted || false,
+          selected || false,
           prefersDark,
         ),
       );

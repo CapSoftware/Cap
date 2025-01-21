@@ -37,7 +37,9 @@ import { Header } from "./Header";
 import { Player } from "./Player";
 import { ConfigSidebar } from "./ConfigSidebar";
 import { Timeline } from "./Timeline";
-import Cropper from "~/components/Cropper";
+import Cropper, { cropToFloor } from "~/components/Cropper";
+import { makePersisted } from "@solid-primitives/storage";
+import { Tooltip } from "@kobalte/core";
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -286,54 +288,60 @@ function Dialogs() {
                   position: dialog().position,
                   size: dialog().size,
                 });
+                const [cropOptions, setCropOptions] = makePersisted(createStore({
+                  showGrid: false
+                }), { name: "cropOptionsState" });
 
                 const display = editorInstance.recordings.segments[0].display;
 
-                const styles = createMemo(() => {
-                  return {
-                    left: `${(crop.position.x / display.width) * 100}%`,
-                    top: `${(crop.position.y / display.height) * 100}%`,
-                    right: `calc(${
-                      ((display.width - crop.size.x - crop.position.x) /
-                        display.width) *
-                      100
-                    }%)`,
-                    bottom: `calc(${
-                      ((display.height - crop.size.y - crop.position.y) /
-                        display.height) *
-                      100
-                    }%)`,
-                  };
-                });
+                const adjustedCrop = createMemo(() => cropToFloor(crop));
 
                 return (
                   <>
                     <Dialog.Header>
                       <div class="flex flex-row space-x-[0.75rem]">
-                        {/*<AspectRatioSelect />*/}
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
                           <span>Size</span>
                           <div class="w-[3.25rem]">
-                            <Input value={crop.size.x} disabled />
+                            <Input class="bg-transparent dark:!text-[#ababab]" value={adjustedCrop().size.x} disabled />
                           </div>
                           <span>x</span>
                           <div class="w-[3.25rem]">
-                            <Input value={crop.size.y} disabled />
+                            <Input class="bg-transparent dark:!text-[#ababab]" value={adjustedCrop().size.y} disabled />
                           </div>
                         </div>
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
                           <span>Position</span>
                           <div class="w-[3.25rem]">
-                            <Input value={crop.position.x} disabled />
+                            <Input class="bg-transparent dark:!text-[#ababab]" value={adjustedCrop().position.x} disabled />
                           </div>
                           <span>x</span>
                           <div class="w-[3.25rem]">
                             <Input
-                              class="w-[3.25rem]"
-                              value={crop.position.y}
+                              class="w-[3.25rem] bg-transparent dark:!text-[#ababab]"
+                              value={adjustedCrop().position.y}
                               disabled
                             />
                           </div>
+                        </div>
+                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
+                          <Tooltip.Root openDelay={500}>
+                            <Tooltip.Trigger class="fixed flex flex-row items-center w-8 h-8" tabIndex={-1}>
+                              <button
+                                type="button"
+                                class={`flex items-center justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-300 outline-none transition-colors duration-200 ${cropOptions.showGrid ? "bg-gray-200 text-blue-300" : "text-gray-500"}`}
+                                onClick={() => setCropOptions("showGrid", (s) => !s)}
+                              >
+                                <IconCapPadding class="w-4" />
+                              </button>
+                            </Tooltip.Trigger>
+                            <Tooltip.Portal>
+                              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+                                Rule of Thirds
+                                <Tooltip.Arrow class="fill-gray-500" />
+                              </Tooltip.Content>
+                            </Tooltip.Portal>
+                          </Tooltip.Root>
                         </div>
                       </div>
                       <EditorButton
@@ -354,31 +362,32 @@ function Dialogs() {
                     </Dialog.Header>
                     <Dialog.Content>
                       <div class="flex flex-row justify-center">
-                          <div class="divide-black-transparent-10 overflow-hidden rounded-xl">
-                            <Cropper
-                              value={crop}
-                              onCropChange={setCrop}
-                              mappedSize={{
-                                x: display.width,
-                                y: display.height,
-                              }}
-                              aspectRatio={1/1}
-                            >
-                              <img
-                                class="shadow pointer-events-none max-h-[70vh]"
-                                alt="screenshot"
-                                src={convertFileSrc(
-                                  `${editorInstance.path}/screenshots/display.jpg`
-                                )}
-                              />
-                            </Cropper>
-                          </div>
+                        <div class="divide-black-transparent-10 overflow-hidden rounded">
+                          <Cropper
+                            value={crop}
+                            onCropChange={setCrop}
+                            mappedSize={{
+                              x: display.width,
+                              y: display.height,
+                            }}
+                            showGuideLines={cropOptions.showGrid}
+                            snapToRatio={true}
+                          >
+                            <img
+                              class="shadow pointer-events-none max-h-[70vh]"
+                              alt="screenshot"
+                              src={convertFileSrc(
+                                `${editorInstance.path}/screenshots/display.jpg`
+                              )}
+                            />
+                          </Cropper>
+                        </div>
                       </div>
                     </Dialog.Content>
                     <Dialog.Footer>
                       <Button
                         onClick={() => {
-                          setState("background", "crop", crop);
+                          setState("background", "crop", adjustedCrop());
                           setDialog((d) => ({ ...d, open: false }));
                         }}
                       >
