@@ -3,8 +3,10 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     sync::{mpsc, Arc},
+    time::Instant,
 };
 
+use cidre::cv::pixel_buffer::LockFlags;
 use ffmpeg::{
     codec::{self, Capabilities},
     format::{self},
@@ -14,7 +16,7 @@ use ffmpeg::{
     Codec, Rational, Rescale,
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
-use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
+use ffmpeg_sys_next::{av_frame_side_data_remove, avcodec_find_decoder, AVHWDeviceType};
 
 pub type DecodedFrame = Arc<Vec<u8>>;
 
@@ -413,5 +415,160 @@ fn ff_find_decoder(
             return None;
         }
         Some(Codec::wrap(found))
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl AsyncVideoDecoder {
+    pub fn spawn_avfoundation(path: PathBuf, fps: u32) -> AsyncVideoDecoderHandle {
+        let (tx, rx) = mpsc::channel();
+
+        let handle = tokio::runtime::Handle::current();
+        std::thread::spawn(move || {
+            use cidre::{arc, av, cm, cv, ns};
+
+            let asset = av::UrlAsset::with_url(
+                &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
+                None,
+            )
+            .unwrap();
+
+            let get_reader_track_output = |time: f32| {
+                let mut reader = av::AssetReader::with_asset(&asset).unwrap();
+
+                reader.set_time_range(cm::TimeRange {
+                    start: cm::Time::with_secs(time as f64, 100),
+                    duration: asset.duration(),
+                });
+
+                let tracks = handle
+                    .block_on(asset.load_tracks_with_media_type(av::MediaType::video()))
+                    .unwrap();
+
+                let track = tracks.get(0).unwrap();
+
+                let mut reader_track_output = av::AssetReaderTrackOutput::with_track(
+                    &track,
+                    Some(&ns::Dictionary::with_keys_values(
+                        &[cv::pixel_buffer::keys::pixel_format().as_ns()],
+                        &[cv::PixelFormat::_420V.to_cf_number().as_ns().as_id_ref()],
+                    )),
+                )
+                .unwrap();
+
+                reader_track_output.set_always_copies_sample_data(false);
+
+                reader.add_output(&reader_track_output).unwrap();
+
+                reader.start_reading().ok();
+
+                reader_track_output
+            };
+
+            let mut reader_track_output = get_reader_track_output(0.0);
+
+            let mut last_frame: Option<(u32, Arc<Vec<u8>>)> = None;
+
+            while let Ok(r) = rx.recv() {
+                match r {
+                    VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                        let requested_frame = (requested_time * fps as f32).floor() as u32;
+
+                        if let Some((last_frame_i, last_sample_buf)) = &last_frame {
+                            if requested_frame == *last_frame_i {
+                                sender.send(last_sample_buf.clone()).ok();
+                                continue;
+                            } else if requested_frame < *last_frame_i
+                                || requested_frame - last_frame_i > fps * 3
+                            {
+                                reader_track_output = get_reader_track_output(requested_time);
+                                last_frame = None;
+                            }
+                        }
+
+                        let mut sender = Some(sender);
+
+                        while let Some(sample_buf) = reader_track_output.next_sample_buf().unwrap()
+                        {
+                            let image_buf = sample_buf.image_buf().unwrap();
+
+                            let current_frame = pts_to_frame(
+                                sample_buf.pts().value,
+                                Rational::new(1, sample_buf.pts().scale),
+                                fps,
+                            );
+
+                            let mut ffmpeg_frame = ffmpeg::frame::Video::new(
+                                format::Pixel::NV12,
+                                image_buf.width() as u32,
+                                image_buf.height() as u32,
+                            );
+
+                            {
+                                let _lock =
+                                    image_buf.base_address_lock(LockFlags::READ_ONLY).unwrap();
+
+                                for plane_i in 0..image_buf.plane_count() {
+                                    let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
+                                    let height = image_buf.plane_height(plane_i);
+
+                                    let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
+                                    let row_length = bytes_per_row.min(ffmpeg_stride);
+
+                                    let slice = unsafe {
+                                        std::slice::from_raw_parts::<'static, _>(
+                                            image_buf.plane_base_address(plane_i),
+                                            bytes_per_row * height,
+                                        )
+                                    };
+
+                                    for i in 0..height {
+                                        ffmpeg_frame.data_mut(plane_i)
+                                            [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
+                                            .copy_from_slice(
+                                                &slice[i * bytes_per_row
+                                                    ..(i * bytes_per_row + row_length)],
+                                            )
+                                    }
+                                }
+                            }
+
+                            let mut converter = ffmpeg::software::converter(
+                                (ffmpeg_frame.width(), ffmpeg_frame.height()),
+                                ffmpeg_frame.format(),
+                                format::Pixel::RGBA,
+                            )
+                            .unwrap();
+
+                            let mut rgb_frame = frame::Video::empty();
+                            converter.run(&ffmpeg_frame, &mut rgb_frame).unwrap();
+
+                            let frame_data = Arc::new(rgb_frame.data(0).to_vec());
+
+                            if current_frame == requested_frame {
+                                if let Some(sender) = sender.take() {
+                                    sender.send(frame_data.clone()).ok();
+                                }
+                                last_frame = Some((requested_frame, frame_data.clone()));
+                                break;
+                            } else if current_frame > requested_frame {
+                                if let Some((sender, last_frame)) =
+                                    sender.take().zip(last_frame.as_ref())
+                                {
+                                    sender.send(last_frame.1.clone()).ok();
+                                }
+                                break;
+                            }
+                        }
+
+                        if let Some((sender, last_frame)) = sender.take().zip(last_frame.as_ref()) {
+                            sender.send(last_frame.1.clone()).ok();
+                        }
+                    }
+                }
+            }
+        });
+
+        AsyncVideoDecoderHandle { sender: tx }
     }
 }

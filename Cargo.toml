@@ -18,8 +18,8 @@ tokio = { version = "1.39.3", features = [
 	"rt-multi-thread",
 	"time",
 ] }
-tauri = { version = "2.2.3", features = [ "specta" ] }
-specta = { version = "=2.0.0-rc.20", features = [ "derive" ] }
+tauri = { version = "2.2.3", features = ["specta"] }
+specta = { version = "=2.0.0-rc.20", features = ["derive"] }
 
 scap = { git = "https://github.com/CapSoftware/scap", rev = "58d4410bf52f" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "d37141b1883d", features = [
@@ -35,6 +35,8 @@ sentry = { version = "0.34.0", features = [
 	"backtrace",
 	"debug-images",
 ] }
+
+cidre = { git = "https://github.com/yury/cidre", rev = "3479c18b9ac81dbb15d0acb3a75edd6b42d044b1" }
 
 windows = "0.58.0"
 windows-sys = "0.59.0"

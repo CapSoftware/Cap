@@ -100,7 +100,7 @@ pub struct SegmentVideoPaths<'a> {
 
 impl RecordingSegmentDecoders {
     pub fn new(meta: &RecordingMeta, segment: SegmentVideoPaths) -> Self {
-        let screen = AsyncVideoDecoder::spawn(
+        let screen = AsyncVideoDecoder::spawn_avfoundation(
             meta.project_path.join(segment.display),
             match &meta.content {
                 Content::SingleSegment { segment } => segment.display.fps,
@@ -108,7 +108,7 @@ impl RecordingSegmentDecoders {
             },
         );
         let camera = segment.camera.map(|camera| {
-            AsyncVideoDecoder::spawn(
+            AsyncVideoDecoder::spawn_avfoundation(
                 meta.project_path.join(camera),
                 match &meta.content {
                     Content::SingleSegment { segment } => segment.camera.as_ref().unwrap().fps,
