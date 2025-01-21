@@ -84,7 +84,7 @@ export default function CaptureArea() {
 
   return (
     <div class="w-screen h-screen overflow-hidden bg-black bg-opacity-25">
-      <div class="fixed w-full z-50 flex items-center justify-center">
+      <div class="fixed w-full z-50 flex items-center justify-center animate-in slide-in-from-top-4 duration-300 ease-out">
         <div class="absolute w-[16rem] h-10 bg-gray-50 rounded-[12px] drop-shadow-2xl border border-gray-50 dark:border-gray-300 outline outline-1 outline-[#dedede] dark:outline-[#000] flex justify-around p-1 *:transition-all *:duration-200 top-10">
           <button
             class="py-[0.25rem] px-[0.5rem] text-gray-400 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"

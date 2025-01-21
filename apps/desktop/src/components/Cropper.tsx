@@ -46,13 +46,6 @@ type Ratio = [number, number];
 const COMMON_RATIOS: Ratio[] = [
   [1, 1], [4, 3], [3, 2], [16, 9], [2, 1], [21, 9]
 ];
-// const COMMON_RATIOS = [
-//   { name: "1:1", value: 1 },
-//   { name: "4:3", value: 4 / 3 },
-//   { name: "3:2", value: 3 / 2 },
-//   { name: "16:9", value: 16 / 9 },
-//   { name: "2:1", value: 2 },
-// ] as const;
 
 const KEY_MAPPINGS = new Map([
   ["ArrowRight", "e"],
