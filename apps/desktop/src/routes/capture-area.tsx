@@ -5,14 +5,12 @@ import Cropper from "~/components/Cropper";
 import { createStore } from "solid-js/store";
 import type { Crop } from "~/utils/tauri";
 
-export const PENDING_STATE_SET_EVENT = "cap-window://capture-area/state/pending";
-
 export default function CaptureArea() {
   const { options, setOptions } = createOptionsQuery();
   const webview = getCurrentWebviewWindow();
 
   const setPendingState = (pending: boolean) =>
-    webview.emitTo("main", PENDING_STATE_SET_EVENT, pending);
+    webview.emitTo("main", "cap-window://capture-area/state/pending", pending);
 
   let unlisten: () => void | undefined;
   onMount(async () => {

@@ -18,6 +18,8 @@ import { type XY, type Crop, commands } from "~/utils/tauri";
 import { createStore } from "solid-js/store";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { generalSettingsStore } from "~/store";
+import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
+import { makePersisted } from "@solid-primitives/storage";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -175,6 +177,10 @@ export default function Cropper(
     ),
   );
 
+  const [snapToRatioEnabled, setSnapToRatioEnabled] = makePersisted(
+    createSignal(props.snapToRatio),
+    { name: "cropSnapsToRatio" }
+  );
   const [snappedToRatio, setSnappedToRatio] = createSignal(false);
   const [dragging, setDragging] = createSignal(false);
   const [gestureState, setGestureState] = createStore<{
@@ -460,9 +466,9 @@ export default function Cropper(
           : currentBox.size.y;
 
       // Only corner handles can snap
-      if (props.snapToRatio && dir.length === 2) {
+      if (dir.length === 2) {
         const matchedRatio = findClosestRatio(newWidth, newHeight);
-        if (matchedRatio) {
+        if (snapToRatioEnabled() && matchedRatio) {
           if (dir.includes("n") || dir.includes("s")) {
             newWidth = newHeight * matchedRatio.value;
           } else {
@@ -595,6 +601,23 @@ export default function Cropper(
       onTouchEnd={handleTouchEnd}
       onKeyDown={handleKeyDown}
       tabIndex={0}
+      onContextMenu={async (e) => {
+        e.preventDefault();
+        const menu = await Menu.new({
+          id: "crop-options",
+          items: [
+            {
+              id: "enableRatioSnap",
+              text: "Snap to aspect ratios",
+              checked: snapToRatioEnabled(),
+              action: () => {
+                setSnapToRatioEnabled((v) => !v);
+              },
+            } satisfies CheckMenuItemOptions
+          ]
+        });
+        menu.popup();
+      }}
     >
       <CropAreaRenderer
         bounds={{

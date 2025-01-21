@@ -300,7 +300,6 @@ import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import { PENDING_STATE_SET_EVENT } from "../capture-area";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -357,7 +356,7 @@ function TargetSelects(props: {
   onMount(async () => {
     const unlistenCaptureAreaWindow =
       await getCurrentWebviewWindow().listen<boolean>(
-        PENDING_STATE_SET_EVENT,
+        "cap-window://capture-area/state/pending",
         (event) => setAreaSelection("pending", event.payload)
       );
     onCleanup(unlistenCaptureAreaWindow);
