@@ -6,6 +6,7 @@ import { createStore } from "solid-js/store";
 import { type Crop } from "~/utils/tauri";
 import { makePersisted } from "@solid-primitives/storage";
 import { Tooltip } from "@kobalte/core";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
 
 export default function CaptureArea() {
   const { options, setOptions } = createOptionsQuery();
@@ -34,8 +35,13 @@ export default function CaptureArea() {
   onMount(() => {
     const handleResize = () =>
       setWindowSize({ x: window.innerWidth, y: window.innerHeight });
-    window.addEventListener("resize", handleResize);
-    onCleanup(() => window.removeEventListener("resize", handleResize));
+
+    createEventListenerMap(window, {
+      resize: handleResize,
+      keydown: (e) => {
+        if (e.key === "Escape") handleDiscard();
+      },
+    });
   });
 
   const [crop, setCrop] = createStore<Crop>({

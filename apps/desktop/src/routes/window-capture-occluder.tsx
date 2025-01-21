@@ -11,7 +11,7 @@ export default function () {
       <Show
         when={
           currentRecording.data &&
-          currentRecording.data.captureTarget.variant === "window" &&
+          (currentRecording.data.captureTarget.variant !== "screen") &&
           currentRecording.data.captureTarget.bounds
         }
       >
