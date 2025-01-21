@@ -4,10 +4,16 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Cropper from "~/components/Cropper";
 import { createStore } from "solid-js/store";
 import type { Crop } from "~/utils/tauri";
+import { makePersisted } from "@solid-primitives/storage";
+import { Tooltip } from "@kobalte/core";
 
 export default function CaptureArea() {
   const { options, setOptions } = createOptionsQuery();
   const webview = getCurrentWebviewWindow();
+
+  const [state, setState] = makePersisted(createStore({
+    showGrid: true,
+  }), { name: "captureArea" });
 
   const setPendingState = (pending: boolean) =>
     webview.emitTo("main", "cap-window://capture-area/state/pending", pending);
@@ -65,18 +71,34 @@ export default function CaptureArea() {
   return (
     <div class="w-screen h-screen overflow-hidden bg-black bg-opacity-25">
       <div class="fixed w-full z-50 flex items-center justify-center">
-        <div class="absolute w-[30rem] h-12 bg-gray-50 rounded-lg drop-shadow-2xl border border-1 border-gray-100 flex flex-row-reverse justify-around gap-3 p-1 *:transition-all *:duration-200 top-10">
-          <div class="flex flex-row">
+        <div class="absolute w-[16rem] h-10 bg-gray-50 rounded-[12px] drop-shadow-2xl border border-gray-50 dark:border-gray-300 outline outline-1 outline-[#dedede] dark:outline-[#000] flex justify-around p-1 *:transition-all *:duration-200 top-10">
+          <button
+            class="py-[0.25rem] px-[0.5rem] text-gray-400 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
+            type="button"
+            onClick={handleDiscard}
+          >
+            <IconCapCircleX class="size-5" />
+          </button>
+          <Tooltip.Root openDelay={500}> 
+            <Tooltip.Trigger tabIndex={-1}>
+              <button
+                class={`py-[0.25rem] px-[0.5rem] gap-[0.25rem] hover:bg-gray-200 flex flex-row items-center rounded-[8px] ${state.showGrid ? "bg-gray-200 text-blue-300" : "text-gray-500 opacity-50"}`}
+                type="button"
+                onClick={() => setState("showGrid", (v) => !v)}
+              >
+                <IconCapPadding class="size-5" />
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Portal>
+              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+                Rule of Thirds
+                <Tooltip.Arrow class="fill-gray-500" />
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+          <div class="flex flex-row flex-grow justify-center gap-2">
             <button
-              class="py-[0.25rem] px-[0.5rem] text-red-300 dark:red-blue-300 gap-[0.25rem] hover:bg-red-50 flex flex-row items-center rounded-lg"
-              type="button"
-              onClick={handleDiscard}
-            >
-              <IconCapCircleX class="size-5" />
-              <span class="font-[500] text-[0.875rem]">Discard</span>
-            </button>
-            <button
-              class="py-[0.25rem] px-[0.5rem] text-blue-300 dark:text-blue-300 gap-[0.25rem] hover:bg-blue-50 flex flex-row items-center rounded-lg"
+              class="px-[0.5rem] text-blue-300 dark:text-blue-300 gap-[0.25rem] hover:bg-green-50 flex flex-row items-center rounded-[8px] grow justify-center"
               type="button"
               onClick={handleConfirm}
             >
@@ -90,7 +112,7 @@ export default function CaptureArea() {
       <Cropper
         value={crop}
         onCropChange={setCrop}
-        showGuideLines={true}
+        showGuideLines={state.showGrid}
         mappedSize={{ x: window.innerWidth, y: window.innerHeight }}
       />
     </div>

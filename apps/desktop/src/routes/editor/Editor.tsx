@@ -371,7 +371,6 @@ function Dialogs() {
                               y: display.height,
                             }}
                             showGuideLines={cropOptions.showGrid}
-                            snapToRatio={true}
                           >
                             <img
                               class="shadow pointer-events-none max-h-[70vh]"
