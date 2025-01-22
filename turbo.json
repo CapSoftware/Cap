@@ -1,31 +1,54 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": ["**/.env.*local"],
-  "globalDotEnv": [".env"],
+  "globalDependencies": [
+    ".env"
+  ],
+  "globalDotEnv": [
+    ".env"
+  ],
   "pipeline": {
     "build": {
-      "inputs": ["**/*.ts", "**/*.tsx", "!src-tauri/**", "!node_modules/**"],
-      "dependsOn": ["^build"],
-      "outputs": [".next/**", "!.next/cache/**"],
-      "dotEnv": [
-        ".env.production.local",
-        ".env.local",
-        ".env.production",
-        ".env"
+      "inputs": [
+        "**/*.ts",
+        "**/*.tsx",
+        "!src-tauri/**",
+        "!node_modules/**"
+      ],
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        ".next/**",
+        "!.next/cache/**"
       ]
     },
     "lint": {
       "cache": false
     },
-    "dev": {
+    "docker:up": {
+      "cache": false
+    },
+    "db:generate": {
       "cache": false,
-      "persistent": true,
-      "dotEnv": [
-        ".env.development.local",
-        ".env.local",
-        ".env.development",
-        ".env"
+      "dependsOn": [
+        "docker:up"
       ]
+    },
+    "db:push": {
+      "cache": false,
+      "dependsOn": [
+        "docker:up",
+        "db:generate"
+      ]
+    },
+    "dev": {
+      "dependsOn": [
+        "docker:up",
+        "db:push",
+        "db:generate"
+      ],
+      "cache": false,
+      "persistent": true
     }
   }
 }

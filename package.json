@@ -2,13 +2,14 @@
   "type": "module",
   "scripts": {
     "build": "dotenv -e .env -- turbo run build",
-    "dev": "(cd apps/web && docker compose up -d && cd ../..) && dotenv -e .env -- pnpm --dir packages/database db:generate && dotenv -e .env -- pnpm --dir packages/database db:push && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 12",
+    "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
+    "dev": "dotenv -e .env -- turbo run dev",
     "dev:manual": "dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "db:push": "dotenv -e .env -- pnpm --dir packages/database db:push",
-    "db:generate": "dotenv -e .env -- pnpm --dir packages/database db:generate",
-    "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
+    "db:push": "dotenv -e .env -- turbo run db:push",
+    "db:generate": "dotenv -e .env -- turbo run db:generate",
+    "docker:up": "dotenv -e .env -- turbo run docker:up",
     "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
     "typecheck": "pnpm tsc -b"
   },
