@@ -659,11 +659,14 @@ function SegmentRoot(
   props: ComponentProps<"div"> & {
     innerClass: string;
     segment: { start: number; end: number };
+    onMouseDown?: (
+      e: MouseEvent & { currentTarget: HTMLDivElement; target: Element }
+    ) => void;
   }
 ) {
   const { duration } = useTimelineContext();
-  const { trackBounds, isFreeForm } = useTrackContext();
-  const { state, project } = useEditorContext();
+  const { trackBounds, isFreeForm, setTrackState } = useTrackContext();
+  const { state, project, history, setProject } = useEditorContext();
 
   const isSelected = createMemo(() => {
     const selection = state.timelineSelection;
@@ -700,7 +703,79 @@ function SegmentRoot(
           transform: isFreeForm() ? "translateX(var(--segment-x))" : undefined,
           width: `${width()}px`,
         }}
-        onMouseDown={props.onMouseDown}
+        onMouseDown={(e) => {
+          if (props.onMouseDown) {
+            props.onMouseDown(e);
+          } else if (isFreeForm()) {
+            e.stopPropagation();
+            const originalStart = props.segment.start;
+            const originalEnd = props.segment.end;
+            const segmentLength = originalEnd - originalStart;
+            const initialMouseX = e.clientX;
+            const { width } = trackBounds;
+            if (!width) return;
+
+            let minValue = 0;
+            let maxValue = duration() - segmentLength;
+
+            const zoomSegments = project.timeline?.zoomSegments;
+            if (zoomSegments) {
+              for (let i = 0; i < zoomSegments.length; i++) {
+                const otherSegment = zoomSegments[i];
+                if (otherSegment.end <= originalStart) {
+                  minValue = Math.max(minValue, otherSegment.end);
+                }
+                if (otherSegment.start >= originalEnd) {
+                  maxValue = Math.min(
+                    maxValue,
+                    otherSegment.start - segmentLength
+                  );
+                }
+              }
+            }
+
+            setTrackState("draggingHandle", true);
+            const resumeHistory = history.pause();
+
+            createRoot((dispose) => {
+              createEventListenerMap(window, {
+                mousemove: (moveEvent) => {
+                  const totalDeltaPixels = moveEvent.clientX - initialMouseX;
+                  const totalDeltaTime =
+                    (totalDeltaPixels / width) * duration();
+                  const newStart = Math.min(
+                    Math.max(originalStart + totalDeltaTime, minValue),
+                    maxValue
+                  );
+
+                  const segmentIndex =
+                    project.timeline?.zoomSegments?.findIndex(
+                      (s) =>
+                        s.start === props.segment.start &&
+                        s.end === props.segment.end
+                    );
+
+                  if (segmentIndex !== undefined && segmentIndex >= 0) {
+                    setProject(
+                      "timeline",
+                      "zoomSegments",
+                      segmentIndex,
+                      produce((seg) => {
+                        seg.start = newStart;
+                        seg.end = newStart + segmentLength;
+                      })
+                    );
+                  }
+                },
+                mouseup: () => {
+                  dispose();
+                  resumeHistory();
+                  setTrackState("draggingHandle", false);
+                },
+              });
+            });
+          }
+        }}
         ref={props.ref}
       >
         <div
