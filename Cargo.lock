@@ -1064,6 +1064,7 @@ dependencies = [
  "cap-flags",
  "cap-project",
  "cap-recording",
+ "cidre",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
@@ -1071,7 +1072,6 @@ dependencies = [
  "futures-intrusive",
  "image 0.25.5",
  "log",
- "nix 0.29.0",
  "pretty_assertions",
  "serde",
  "specta",
@@ -1226,17 +1226,18 @@ dependencies = [
 
 [[package]]
 name = "cidre"
-version = "0.4.0"
-source = "git+https://github.com/yury/cidre?rev=1e008bec49a0f97aeaaea6130a0ba20fe00aa03b#1e008bec49a0f97aeaaea6130a0ba20fe00aa03b"
+version = "0.5.0"
+source = "git+https://github.com/yury/cidre?rev=3479c18b9ac81dbb15d0acb3a75edd6b42d044b1#3479c18b9ac81dbb15d0acb3a75edd6b42d044b1"
 dependencies = [
  "cidre-macros",
  "parking_lot",
+ "tokio",
 ]
 
 [[package]]
 name = "cidre-macros"
 version = "0.1.0"
-source = "git+https://github.com/yury/cidre?rev=1e008bec49a0f97aeaaea6130a0ba20fe00aa03b#1e008bec49a0f97aeaaea6130a0ba20fe00aa03b"
+source = "git+https://github.com/yury/cidre?rev=3479c18b9ac81dbb15d0acb3a75edd6b42d044b1#3479c18b9ac81dbb15d0acb3a75edd6b42d044b1"
 
 [[package]]
 name = "clang-sys"
