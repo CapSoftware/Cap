@@ -472,7 +472,7 @@ mod macos {
                             )
                         };
 
-                        let bytes = Vec::with_capacity(width * height * 4);
+                        let mut bytes = Vec::with_capacity(width * height * 4);
 
                         let row_length = width * 4;
 
