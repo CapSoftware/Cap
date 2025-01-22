@@ -1,10 +1,12 @@
 use cap_flags::FLAGS;
 use cap_project::{ProjectConfiguration, ZoomSegment};
+use cidre::{am::device::discovery::matching::mode::key, vdsp::semg_f64};
 
 #[derive(Debug, PartialEq)]
 pub struct ZoomKeyframe {
     pub time: f64,
     pub scale: f64,
+    pub scale_t: f64,
     pub position: ZoomPosition,
     pub has_segment: bool,
     pub lowered: LoweredKeyframe,
@@ -44,106 +46,126 @@ impl ZoomKeyframes {
 
         let mut keyframes = vec![];
 
+        let Some(first) = segments.first() else {
+            return Self(keyframes);
+        };
+
+        if first.start == 0.0 {
+            let lowered_position = match first.mode {
+                cap_project::ZoomMode::Auto => (0.0, 0.0),
+                cap_project::ZoomMode::Manual { x, y } => (x, y),
+            };
+
+            keyframes.push(ZoomKeyframe {
+                time: 0.0,
+                scale: first.amount,
+                scale_t: 0.0,
+                position: match first.mode {
+                    cap_project::ZoomMode::Auto => ZoomPosition::Cursor,
+                    cap_project::ZoomMode::Manual { x, y } => ZoomPosition::Manual { x, y },
+                },
+                has_segment: true,
+                lowered: LoweredKeyframe::new(lowered_position, first.amount as f32),
+            })
+        }
+
         for (i, segment) in segments.iter().enumerate() {
             let position = match segment.mode {
                 cap_project::ZoomMode::Auto => ZoomPosition::Cursor,
                 cap_project::ZoomMode::Manual { x, y } => ZoomPosition::Manual { x, y },
             };
 
-            let prev = if i > 0 { segments.get(i - 1) } else { None };
-            let next = segments.get(i + 1);
-
             let lowered_position = match segment.mode {
                 cap_project::ZoomMode::Auto => (0.0, 0.0),
                 cap_project::ZoomMode::Manual { x, y } => (x, y),
             };
 
-            if let Some(prev) = prev {
-                if prev.end + ZOOM_DURATION < segment.start {
-                    // keyframes.push(ZoomKeyframe {
-                    //     time: segment.start,
-                    //     scale: 1.0,
-                    //     position,
-                    // });
-                }
+            let prev = if i > 0 { segments.get(i - 1) } else { None };
 
+            match prev {
+                None => {
+                    if segment.start != 0.0 {
+                        keyframes.push(ZoomKeyframe {
+                            time: 0.0,
+                            scale: 1.0,
+                            scale_t: 0.0,
+                            position,
+                            has_segment: false,
+                            lowered: LoweredKeyframe::new(lowered_position, 1.0),
+                        });
+                        keyframes.push(ZoomKeyframe {
+                            time: segment.start,
+                            scale: 1.0,
+                            scale_t: segment.start,
+                            position,
+                            has_segment: true,
+                            lowered: LoweredKeyframe::new(lowered_position, 1.0),
+                        });
+                    }
+                }
+                Some(prev) => {
+                    if segment.start > prev.end {
+                        if segment.start - prev.end <= ZOOM_DURATION {
+                            keyframes.push(ZoomKeyframe {
+                                time: segment.start,
+                                scale: 1.0,
+                                scale_t: prev.end + ZOOM_DURATION,
+                                position,
+                                has_segment: true,
+                                lowered: LoweredKeyframe::new(lowered_position, 1.0),
+                            });
+                        } else {
+                            keyframes.push(ZoomKeyframe {
+                                time: prev.end + ZOOM_DURATION,
+                                scale: 1.0,
+                                scale_t: prev.end + ZOOM_DURATION,
+                                position,
+                                has_segment: false,
+                                lowered: LoweredKeyframe::new(lowered_position, 1.0),
+                            });
+                            keyframes.push(ZoomKeyframe {
+                                time: segment.start,
+                                scale: 1.0,
+                                scale_t: segment.start,
+                                position,
+                                has_segment: true,
+                                lowered: LoweredKeyframe::new(lowered_position, 1.0),
+                            });
+                        }
+                    }
+                }
+            }
+
+            if segment.start != 0.0 {
                 keyframes.push(ZoomKeyframe {
                     time: segment.start + ZOOM_DURATION,
                     scale: segment.amount,
+                    scale_t: segment.start + ZOOM_DURATION,
                     position,
                     has_segment: true,
                     lowered: LoweredKeyframe::new(lowered_position, segment.amount as f32),
                 });
-            } else {
-                if segment.start != 0.0 {
-                    keyframes.extend([
-                        ZoomKeyframe {
-                            time: 0.0,
-                            scale: 1.0,
-                            position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
-                            has_segment: false,
-                            lowered: LoweredKeyframe::new((0.0, 0.0), 1.0),
-                        },
-                        ZoomKeyframe {
-                            time: segment.start,
-                            scale: 1.0,
-                            position,
-                            has_segment: true,
-                            lowered: LoweredKeyframe::new(lowered_position, 1.0),
-                        },
-                        ZoomKeyframe {
-                            time: segment.start + ZOOM_DURATION,
-                            scale: segment.amount,
-                            position,
-                            has_segment: true,
-                            lowered: LoweredKeyframe::new(lowered_position, segment.amount as f32),
-                        },
-                    ]);
-                } else {
-                    keyframes.push(ZoomKeyframe {
-                        time: segment.start,
-                        scale: segment.amount,
-                        position,
-                        has_segment: true,
-                        lowered: LoweredKeyframe::new(lowered_position, segment.amount as f32),
-                    });
-                }
             }
 
             keyframes.push(ZoomKeyframe {
                 time: segment.end,
                 scale: segment.amount,
+                scale_t: segment.end,
                 position,
                 has_segment: true,
                 lowered: LoweredKeyframe::new(lowered_position, segment.amount as f32),
             });
-
-            if let Some(next) = next {
-                if segment.end + ZOOM_DURATION > next.start && next.start > segment.end {
-                    let time = next.start - segment.end;
-                    let t = time / ZOOM_DURATION;
-
-                    keyframes.push(ZoomKeyframe {
-                        time: segment.end + time,
-                        scale: 1.0 * t + (1.0 - t) * segment.amount,
-                        position,
-                        has_segment: false,
-                        lowered: LoweredKeyframe::new(
-                            lowered_position,
-                            (1.0 * t + (1.0 - t) * segment.amount) as f32,
-                        ),
-                    });
-                }
-            } else {
-                keyframes.push(ZoomKeyframe {
-                    time: segment.end + ZOOM_DURATION,
-                    scale: 1.0,
-                    position,
-                    has_segment: false,
-                    lowered: LoweredKeyframe::new(lowered_position, 1.0),
-                });
-            }
         }
+
+        let last_segment = segments.last().unwrap();
+        keyframes.push(ZoomKeyframe {
+            time: last_segment.end + ZOOM_DURATION,
+            scale: 1.0,
+            scale_t: last_segment.end + ZOOM_DURATION,
+            position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
+            lowered: LoweredKeyframe::new((0.0, 0.0), 1.0),
+            has_segment: false,
+        });
 
         Self(keyframes)
     }
@@ -178,7 +200,9 @@ impl ZoomKeyframes {
             return default;
         };
 
-        let keyframe_length = next.time - prev.time;
+        // dbg!(&prev, &next);
+
+        let keyframe_length = next.scale_t - prev.time;
         let delta_time = time - prev.time;
 
         let ease = if next.scale >= prev.scale {
@@ -294,6 +318,7 @@ mod test {
             ZoomKeyframes(vec![
                 ZoomKeyframe {
                     time: 0.0,
+                    scale_t: 0.0,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
                     has_segment: false,
@@ -301,6 +326,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 0.5,
+                    scale_t: 0.5,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -308,6 +334,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 0.5 + ZOOM_DURATION,
+                    scale_t: 0.5 + ZOOM_DURATION,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -315,6 +342,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 1.5,
+                    scale_t: 1.5,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -322,6 +350,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 1.5 + ZOOM_DURATION,
+                    scale_t: 1.5 + ZOOM_DURATION,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: false,
@@ -355,6 +384,7 @@ mod test {
             ZoomKeyframes(vec![
                 ZoomKeyframe {
                     time: 0.0,
+                    scale_t: 0.0,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
                     has_segment: false,
@@ -362,6 +392,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 0.5,
+                    scale_t: 0.5,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -369,6 +400,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 0.5 + ZOOM_DURATION,
+                    scale_t: 0.5 + ZOOM_DURATION,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -376,6 +408,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 1.5,
+                    scale_t: 1.5,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -383,6 +416,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 1.5 + ZOOM_DURATION,
+                    scale_t: 1.5 + ZOOM_DURATION,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.8, y: 0.8 },
                     has_segment: true,
@@ -390,6 +424,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 2.5,
+                    scale_t: 2.5,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.8, y: 0.8 },
                     has_segment: true,
@@ -397,6 +432,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 2.5 + ZOOM_DURATION,
+                    scale_t: 2.5 + ZOOM_DURATION,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.8, y: 0.8 },
                     has_segment: false,
@@ -430,6 +466,7 @@ mod test {
             ZoomKeyframes(vec![
                 ZoomKeyframe {
                     time: 0.0,
+                    scale_t: 0.0,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.0, y: 0.0 },
                     has_segment: false,
@@ -437,6 +474,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 0.5,
+                    scale_t: 0.5,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -444,6 +482,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 0.5 + ZOOM_DURATION,
+                    scale_t: 0.5 + ZOOM_DURATION,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -451,6 +490,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 1.5,
+                    scale_t: 1.5,
                     scale: 1.5,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -458,6 +498,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 1.5 + ZOOM_DURATION,
+                    scale_t: 1.5 + ZOOM_DURATION,
                     scale: 2.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -465,6 +506,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 2.5,
+                    scale_t: 2.5,
                     scale: 2.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: true,
@@ -472,6 +514,7 @@ mod test {
                 },
                 ZoomKeyframe {
                     time: 2.5 + ZOOM_DURATION,
+                    scale_t: 2.5 + ZOOM_DURATION,
                     scale: 1.0,
                     position: ZoomPosition::Manual { x: 0.2, y: 0.2 },
                     has_segment: false,
@@ -503,6 +546,7 @@ mod test {
         let position = ZoomPosition::Manual { x: 0.0, y: 0.0 };
         let base = ZoomKeyframe {
             time: 0.0,
+            scale_t: 0.0,
             scale: 1.0,
             position,
             has_segment: true,
@@ -584,6 +628,7 @@ mod test {
         let position = ZoomPosition::Manual { x: 0.0, y: 0.0 };
         let base = ZoomKeyframe {
             time: 0.0,
+            scale_t: 0.0,
             scale: 1.0,
             position,
             has_segment: true,
@@ -680,6 +725,40 @@ mod test {
             assert_eq!(keyframes.interpolate(1.0).t, 1.0);
             assert_eq!(keyframes.interpolate(2.0).t, 1.0);
             assert_eq!(keyframes.interpolate(2.0 + ZOOM_DURATION).t, 0.0);
+        }
+
+        #[test]
+        fn another_test() {
+            let keyframes = ZoomKeyframes::from_zoom_segments(&[
+                ZoomSegment {
+                    start: 2.9212563176895308,
+                    end: 14.621588447653428,
+                    amount: 2.177,
+                    mode: ZoomMode::Manual {
+                        x: 0.34666666,
+                        y: 0.0,
+                    },
+                },
+                ZoomSegment {
+                    start: 14.621588447653428,
+                    end: 21.186209386281583,
+                    amount: 1.853,
+                    mode: ZoomMode::Manual {
+                        x: 0.39466667,
+                        y: 1.0,
+                    },
+                },
+                ZoomSegment {
+                    start: 31.050657039711194,
+                    end: 40.2564332129964,
+                    amount: 1.5,
+                    mode: ZoomMode::Manual { x: 0.0, y: 0.245 },
+                },
+            ]);
+
+            // dbg!(&keyframes);
+            // dbg!(keyframes.interpolate(0.0));
+            // dbg!(keyframes.interpolate(28.0));
         }
     }
 
