@@ -191,7 +191,7 @@ function draw(
 
   // Shadow
   ctx.save();
-  ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
   ctx.shadowBlur = 200;
   ctx.shadowOffsetY = 25;
   ctx.beginPath();

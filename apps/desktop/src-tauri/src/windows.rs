@@ -289,13 +289,6 @@ impl ShowCapWindow {
                     .flatten()
                     .unwrap_or(monitor);
 
-                #[cfg(debug_assertions)]
-                {
-                    println!("Target bounds: {:?}", screen_bounds);
-                    println!("found monitor: {:?}", &target_monitor);
-                    println!("All monitors: {:?}", &app.available_monitors());
-                }
-
                 let size = target_monitor.size();
                 let scale_factor = target_monitor.scale_factor();
                 let pos = target_monitor.position();
@@ -311,7 +304,7 @@ impl ShowCapWindow {
                 #[cfg(target_os = "macos")]
                 crate::platform::set_window_level(
                     window.as_ref().window(),
-                    objc2_app_kit::NSModalPanelWindowLevel,
+                    objc2_app_kit::NSScreenSaverWindowLevel,
                 );
 
                 // Hide the main window if the target monitor is the same

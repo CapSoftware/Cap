@@ -38,6 +38,7 @@ export default function CaptureArea() {
         setWindowSize({ x: window.innerWidth, y: window.innerHeight }),
       keydown: (e) => {
         if (e.key === "Escape") close();
+        else if (e.key === "Enter") handleConfirm();
       },
     });
   });
@@ -73,8 +74,8 @@ export default function CaptureArea() {
   function close() {
     setVisible(false);
     setTimeout(async () => {
-      setPendingState(false);
       (await WebviewWindow.getByLabel("main"))?.unminimize();
+      setPendingState(false);
       webview.close();
     }, 250);
   }
@@ -84,13 +85,13 @@ export default function CaptureArea() {
       <div class="fixed w-full z-50 flex items-center justify-center">
         <Transition
           appear
-          enterActiveClass="fade-in animate-in slide-in-from-top-4"
-          exitActiveClass="fade-out animate-out slide-out-to-top-4"
+          enterActiveClass="fade-in animate-in slide-in-from-top-6"
+          exitActiveClass="fade-out animate-out slide-out-to-top-6"
         >
           <Show when={visible()}>
-            <div class="transition-all ease-out duration-300 absolute w-[16rem] h-10 bg-gray-50 rounded-[12px] drop-shadow-2xl border border-gray-50 dark:border-gray-300 outline outline-1 outline-[#dedede] dark:outline-[#000] flex justify-around p-1 top-10">
+            <div class="transition-all ease-out duration-300 absolute w-auto h-10 bg-gray-50 rounded-[12px] drop-shadow-2xl overflow-visible border border-gray-50 dark:border-gray-300 outline outline-1 outline-[#dedede] dark:outline-[#000] flex justify-around p-1 top-11">
               <button
-                class="py-[0.25rem] px-[0.5rem] text-gray-400 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
+                class="py-[0.25rem] px-2 text-gray-400 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
                 type="button"
                 onClick={close}
               >
@@ -99,7 +100,7 @@ export default function CaptureArea() {
               <Tooltip.Root openDelay={500}>
                 <Tooltip.Trigger tabIndex={-1}>
                   <button
-                    class={`py-[0.25rem] px-[0.5rem] gap-[0.25rem] hover:bg-gray-200 flex flex-row items-center rounded-[8px] ${state.showGrid ? "bg-gray-200 text-blue-300" : "text-gray-500 opacity-50"}`}
+                    class={`py-[0.25rem] px-2 gap-[0.25rem] mr-2 hover:bg-gray-200 flex flex-row items-center rounded-[8px] transition-colors duration-200 ${state.showGrid ? "bg-gray-200 text-blue-300" : "text-gray-500 opacity-50"}`}
                     type="button"
                     onClick={() => setState("showGrid", (v) => !v)}
                   >
@@ -115,7 +116,7 @@ export default function CaptureArea() {
               </Tooltip.Root>
               <div class="flex flex-row flex-grow justify-center gap-2">
                 <button
-                  class="px-[0.5rem] text-blue-300 dark:text-blue-300 gap-[0.25rem] hover:bg-green-50 flex flex-row items-center rounded-[8px] grow justify-center"
+                  class="text-blue-300 px-2 dark:text-blue-300 gap-[0.25rem] hover:bg-blue-50 flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
                   type="button"
                   onClick={handleConfirm}
                 >

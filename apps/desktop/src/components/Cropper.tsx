@@ -248,6 +248,7 @@ export default function Cropper(
       );
       box.constrainAll(box, mapped, ORIGIN_CENTER, props.aspectRatio);
       setTimeout(() => setGestureState("isTrackpadGesture", false), 100);
+      setSnappedRatio(null);
     } else {
       const velocity = Math.max(1, Math.abs(event.deltaY) * 0.01);
       const scaleFactors = containerToMappedSizeScale();
@@ -260,8 +261,7 @@ export default function Cropper(
       );
     }
 
-    // setCrop(box.toBounds());
-    props.onCropChange(box.toBounds());
+    setCrop(box.toBounds());
   }
 
   function handleTouchStart(event: TouchEvent) {
