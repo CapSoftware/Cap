@@ -93,7 +93,7 @@ export async function GET(request: NextRequest) {
       const fileName = key.split("/").pop();
       return {
         fileName,
-        url: `https://v.cap.so/${key}`,
+        url: `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${key}`,
       };
     });
 

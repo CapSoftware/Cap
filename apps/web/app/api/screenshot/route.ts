@@ -2,7 +2,11 @@ import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { S3Client, ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  ListObjectsV2Command,
+  GetObjectCommand,
+} from "@aws-sdk/client-s3";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { getHeaders } from "@/utils/helpers";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
@@ -99,13 +103,13 @@ export async function GET(request: NextRequest) {
       screenshotUrl = await getSignedUrl(
         s3Client,
         new GetObjectCommand({
-          Bucket, 
-          Key: screenshot.Key 
+          Bucket,
+          Key: screenshot.Key,
         }),
         { expiresIn: 3600 }
       );
     } else {
-      screenshotUrl = `https://v.cap.so/${screenshot.Key}`;
+      screenshotUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${screenshot.Key}`;
     }
 
     return new Response(JSON.stringify({ url: screenshotUrl }), {

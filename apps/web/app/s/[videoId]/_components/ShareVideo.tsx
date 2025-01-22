@@ -393,7 +393,7 @@ export const ShareVideo = forwardRef<
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
         // For default Cap storage
-        transcriptionUrl = `https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`;
+        transcriptionUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
       try {
@@ -473,9 +473,9 @@ export const ShareVideo = forwardRef<
   ) {
     videoSrc = `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
   } else if (data.source.type === "MediaConvert") {
-    videoSrc = `https://v.cap.so/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
+    videoSrc = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
   } else {
-    videoSrc = `https://v.cap.so/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
+    videoSrc = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
   }
 
   return (

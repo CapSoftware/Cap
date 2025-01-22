@@ -87,7 +87,7 @@ export async function GET(request: NextRequest) {
         status: 302,
         headers: {
           ...getHeaders(origin),
-          Location: `https://v.cap.so/${userId}/${videoId}/result.mp4`,
+          Location: `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${userId}/${videoId}/result.mp4`,
           ...CACHE_CONTROL_HEADERS,
         },
       });
@@ -98,13 +98,13 @@ export async function GET(request: NextRequest) {
         status: 302,
         headers: {
           ...getHeaders(origin),
-          Location: `https://v.cap.so/${userId}/${videoId}/output/video_recording_000.m3u8`,
+          Location: `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${userId}/${videoId}/output/video_recording_000.m3u8`,
           ...CACHE_CONTROL_HEADERS,
         },
       });
     }
 
-    const playlistUrl = `https://v.cap.so/${userId}/${videoId}/combined-source/stream.m3u8`;
+    const playlistUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${userId}/${videoId}/combined-source/stream.m3u8`;
     return new Response(null, {
       status: 302,
       headers: {
@@ -141,7 +141,10 @@ export async function GET(request: NextRequest) {
     } catch (error) {
       console.error("Error fetching transcription file:", error);
       return new Response(
-        JSON.stringify({ error: true, message: "Transcription file not found" }),
+        JSON.stringify({
+          error: true,
+          message: "Transcription file not found",
+        }),
         {
           status: 404,
           headers: getHeaders(origin),

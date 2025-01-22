@@ -297,7 +297,7 @@ export const ShareVideo = ({
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
         // For default Cap storage
-        transcriptionUrl = `https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`;
+        transcriptionUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
       try {
@@ -443,8 +443,8 @@ export const ShareVideo = ({
               data.source.type === "MediaConvert")
               ? `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`
               : data.source.type === "MediaConvert"
-              ? `https://v.cap.so/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`
-              : `https://v.cap.so/${data.ownerId}/${data.id}/combined-source/stream.m3u8`
+              ? `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`
+              : `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`
           }
         />
       </div>

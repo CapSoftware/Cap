@@ -63,8 +63,11 @@ export async function GET(request: NextRequest) {
 
   let thumbnailUrl: string;
 
-  if (!result.bucket || video.awsBucket === process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) {
-    thumbnailUrl = `https://v.cap.so/${prefix}screenshot/screen-capture.jpg`;
+  if (
+    !result.bucket ||
+    video.awsBucket === process.env.NEXT_PUBLIC_CAP_AWS_BUCKET
+  ) {
+    thumbnailUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${prefix}screenshot/screen-capture.jpg`;
     return new Response(JSON.stringify({ screen: thumbnailUrl }), {
       status: 200,
       headers: getHeaders(origin),
@@ -83,7 +86,7 @@ export async function GET(request: NextRequest) {
     const listResponse = await s3Client.send(listCommand);
     const contents = listResponse.Contents || [];
 
-    const thumbnailKey = contents.find((item) => 
+    const thumbnailKey = contents.find((item) =>
       item.Key?.endsWith("screen-capture.jpg")
     )?.Key;
 
@@ -104,7 +107,7 @@ export async function GET(request: NextRequest) {
       s3Client,
       new GetObjectCommand({
         Bucket,
-        Key: thumbnailKey
+        Key: thumbnailKey,
       }),
       { expiresIn: 3600 }
     );

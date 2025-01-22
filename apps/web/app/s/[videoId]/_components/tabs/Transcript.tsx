@@ -129,7 +129,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
         // For default Cap storage
-        transcriptionUrl = `https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`;
+        transcriptionUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
       try {
@@ -188,7 +188,7 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
       const transcriptionUrl =
         data.bucket && data.awsBucket !== process.env.NEXT_PUBLIC_CAP_AWS_BUCKET
           ? `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`
-          : `https://v.cap.so/${data.ownerId}/${data.id}/transcription.vtt`;
+          : `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
 
       try {
         const response = await fetch(transcriptionUrl);
