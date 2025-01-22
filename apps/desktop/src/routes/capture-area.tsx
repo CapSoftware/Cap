@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onMount } from "solid-js";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createOptionsQuery } from "~/utils/queries";
 import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import Cropper from "~/components/Cropper";
@@ -7,6 +7,7 @@ import { type Crop } from "~/utils/tauri";
 import { makePersisted } from "@solid-primitives/storage";
 import { Tooltip } from "@kobalte/core";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { Transition } from "solid-transition-group";
 
 export default function CaptureArea() {
   const { options, setOptions } = createOptionsQuery();
@@ -31,15 +32,12 @@ export default function CaptureArea() {
     y: window.innerHeight,
   });
 
-  // Update window size on resize
   onMount(() => {
-    const handleResize = () =>
-      setWindowSize({ x: window.innerWidth, y: window.innerHeight });
-
     createEventListenerMap(window, {
-      resize: handleResize,
+      resize: () =>
+        setWindowSize({ x: window.innerWidth, y: window.innerHeight }),
       keydown: (e) => {
-        if (e.key === "Escape") handleDiscard();
+        if (e.key === "Escape") close();
       },
     });
   });
@@ -68,67 +66,83 @@ export default function CaptureArea() {
       },
     });
 
-    setPendingState(false);
-    await close();
+    close();
   }
 
-  async function handleDiscard() {
-    setPendingState(false);
-    await close();
-  }
-
-  async function close() {
-    (await WebviewWindow.getByLabel("main"))?.unminimize();
-    webview.close();
+  const [visible, setVisible] = createSignal(true);
+  function close() {
+    setVisible(false);
+    setTimeout(async () => {
+      setPendingState(false);
+      (await WebviewWindow.getByLabel("main"))?.unminimize();
+      webview.close();
+    }, 250);
   }
 
   return (
     <div class="w-screen h-screen overflow-hidden bg-black bg-opacity-25">
-      <div class="fixed w-full z-50 flex items-center justify-center animate-in slide-in-from-top-4 duration-300 ease-out">
-        <div class="absolute w-[16rem] h-10 bg-gray-50 rounded-[12px] drop-shadow-2xl border border-gray-50 dark:border-gray-300 outline outline-1 outline-[#dedede] dark:outline-[#000] flex justify-around p-1 *:transition-all *:duration-200 top-10">
-          <button
-            class="py-[0.25rem] px-[0.5rem] text-gray-400 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
-            type="button"
-            onClick={handleDiscard}
-          >
-            <IconCapCircleX class="size-5" />
-          </button>
-          <Tooltip.Root openDelay={500}>
-            <Tooltip.Trigger tabIndex={-1}>
+      <div class="fixed w-full z-50 flex items-center justify-center">
+        <Transition
+          appear
+          enterActiveClass="fade-in animate-in slide-in-from-top-4"
+          exitActiveClass="fade-out animate-out slide-out-to-top-4"
+        >
+          <Show when={visible()}>
+            <div class="transition-all ease-out duration-300 absolute w-[16rem] h-10 bg-gray-50 rounded-[12px] drop-shadow-2xl border border-gray-50 dark:border-gray-300 outline outline-1 outline-[#dedede] dark:outline-[#000] flex justify-around p-1 top-10">
               <button
-                class={`py-[0.25rem] px-[0.5rem] gap-[0.25rem] hover:bg-gray-200 flex flex-row items-center rounded-[8px] ${state.showGrid ? "bg-gray-200 text-blue-300" : "text-gray-500 opacity-50"}`}
+                class="py-[0.25rem] px-[0.5rem] text-gray-400 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
                 type="button"
-                onClick={() => setState("showGrid", (v) => !v)}
+                onClick={close}
               >
-                <IconCapPadding class="size-5" />
+                <IconCapCircleX class="size-5" />
               </button>
-            </Tooltip.Trigger>
-            <Tooltip.Portal>
-              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
-                Rule of Thirds
-                <Tooltip.Arrow class="fill-gray-500" />
-              </Tooltip.Content>
-            </Tooltip.Portal>
-          </Tooltip.Root>
-          <div class="flex flex-row flex-grow justify-center gap-2">
-            <button
-              class="px-[0.5rem] text-blue-300 dark:text-blue-300 gap-[0.25rem] hover:bg-green-50 flex flex-row items-center rounded-[8px] grow justify-center"
-              type="button"
-              onClick={handleConfirm}
-            >
-              <IconCapCircleCheck class="size-5" />
-              <span class="font-[500] text-[0.875rem]">Confirm selection</span>
-            </button>
-          </div>
-        </div>
+              <Tooltip.Root openDelay={500}>
+                <Tooltip.Trigger tabIndex={-1}>
+                  <button
+                    class={`py-[0.25rem] px-[0.5rem] gap-[0.25rem] hover:bg-gray-200 flex flex-row items-center rounded-[8px] ${state.showGrid ? "bg-gray-200 text-blue-300" : "text-gray-500 opacity-50"}`}
+                    type="button"
+                    onClick={() => setState("showGrid", (v) => !v)}
+                  >
+                    <IconCapPadding class="size-5" />
+                  </button>
+                </Tooltip.Trigger>
+                <Tooltip.Portal>
+                  <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in delay-1000 duration-500">
+                    Rule of Thirds
+                    <Tooltip.Arrow class="fill-gray-500" />
+                  </Tooltip.Content>
+                </Tooltip.Portal>
+              </Tooltip.Root>
+              <div class="flex flex-row flex-grow justify-center gap-2">
+                <button
+                  class="px-[0.5rem] text-blue-300 dark:text-blue-300 gap-[0.25rem] hover:bg-green-50 flex flex-row items-center rounded-[8px] grow justify-center"
+                  type="button"
+                  onClick={handleConfirm}
+                >
+                  <IconCapCircleCheck class="size-5" />
+                  <span class="font-[500] text-[0.875rem]">Confirm selection</span>
+                </button>
+              </div>
+            </div>
+          </Show>
+        </Transition>
       </div>
 
-      <Cropper
-        value={crop}
-        onCropChange={setCrop}
-        showGuideLines={state.showGrid}
-        mappedSize={{ x: windowSize().x, y: windowSize().y }}
-      />
+      <Transition
+        appear
+        enterActiveClass="fade-in animate-in"
+        exitActiveClass="fade-out animate-out"
+      >
+        <Show when={visible()}>
+          <Cropper
+            class="transition-all duration-300"
+            value={crop}
+            onCropChange={setCrop}
+            showGuideLines={state.showGrid}
+            mappedSize={{ x: windowSize().x, y: windowSize().y }}
+          />
+        </Show>
+      </Transition>
     </div>
   );
 }
