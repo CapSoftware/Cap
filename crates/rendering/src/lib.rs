@@ -9,7 +9,7 @@ use cap_project::{
     SLOW_VELOCITY_THRESHOLD, XY,
 };
 use core::f64;
-use decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle, GetFrameError};
+use decoder::{AsyncVideoDecoder, AsyncVideoDecoderHandle, Decoder, GetFrameError};
 use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,8 @@ pub struct SegmentVideoPaths<'a> {
 
 impl RecordingSegmentDecoders {
     pub fn new(meta: &RecordingMeta, segment: SegmentVideoPaths) -> Self {
-        let screen = AsyncVideoDecoder::spawn(
+        let screen = Decoder::spawn(
+            "screen",
             meta.project_path.join(segment.display),
             match &meta.content {
                 Content::SingleSegment { segment } => segment.display.fps,
@@ -108,7 +109,8 @@ impl RecordingSegmentDecoders {
             },
         );
         let camera = segment.camera.map(|camera| {
-            AsyncVideoDecoder::spawn(
+            Decoder::spawn(
+                "camera",
                 meta.project_path.join(camera),
                 match &meta.content {
                     Content::SingleSegment { segment } => segment.camera.as_ref().unwrap().fps,
