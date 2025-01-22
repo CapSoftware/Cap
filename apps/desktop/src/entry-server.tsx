@@ -14,7 +14,6 @@ export default createHandler(() => (
             data-spa="auto"
             data-site="IYNNVDNT"
             defer
-            async
           ></script>
           {assets}
         </head>
