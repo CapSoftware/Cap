@@ -39,9 +39,10 @@ export function LoginForm() {
 
   useEffect(() => {
     const pendingPriceId = localStorage.getItem("pendingPriceId");
+    const pendingQuantity = localStorage.getItem("pendingQuantity") ?? "1";
     if (emailSent && pendingPriceId) {
-      // Clear the pending price ID
       localStorage.removeItem("pendingPriceId");
+      localStorage.removeItem("pendingQuantity");
 
       // Wait a bit to ensure the user is created
       setTimeout(async () => {
@@ -50,9 +51,14 @@ export function LoginForm() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ priceId: pendingPriceId }),
+          body: JSON.stringify({
+            priceId: pendingPriceId,
+            quantity: parseInt(pendingQuantity),
+          }),
         });
         const data = await response.json();
+
+        console.log(data);
 
         if (data.url) {
           window.location.href = data.url;
