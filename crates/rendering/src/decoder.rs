@@ -522,6 +522,27 @@ mod macos {
             let handle = tokio::runtime::Handle::current();
 
             std::thread::spawn(move || {
+                let pixel_format = {
+                    let input = ffmpeg::format::input(&path).unwrap();
+
+                    let input_stream = input
+                        .streams()
+                        .best(ffmpeg::media::Type::Video)
+                        .ok_or("Could not find a video stream")
+                        .unwrap();
+
+                    let decoder_codec =
+                        ff_find_decoder(&input, &input_stream, input_stream.parameters().id())
+                            .unwrap();
+
+                    let mut context = codec::context::Context::new_with_codec(decoder_codec);
+                    context.set_parameters(input_stream.parameters()).unwrap();
+
+                    pixel_to_pixel_format(context.decoder().video().unwrap().format())
+                };
+
+                dbg!(pixel_format);
+
                 let asset = av::UrlAsset::with_url(
                     &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
                     None,
@@ -532,6 +553,7 @@ mod macos {
                     asset: &av::UrlAsset,
                     time: f32,
                     handle: &TokioHandle,
+                    pixel_format: cv::PixelFormat,
                 ) -> R<av::AssetReaderTrackOutput> {
                     let mut reader = av::AssetReader::with_asset(&asset).unwrap();
 
@@ -552,7 +574,7 @@ mod macos {
                         &track,
                         Some(&ns::Dictionary::with_keys_values(
                             &[cv::pixel_buffer::keys::pixel_format().as_ns()],
-                            &[cv::PixelFormat::_420V.to_cf_number().as_ns().as_id_ref()],
+                            &[pixel_format.to_cf_number().as_ns().as_id_ref()],
                         )),
                     )
                     .unwrap();
@@ -566,7 +588,7 @@ mod macos {
                     reader_track_output
                 }
 
-                let mut track_output = get_reader_track_output(&asset, 0.0, &handle);
+                let mut track_output = get_reader_track_output(&asset, 0.0, &handle, pixel_format);
 
                 let mut cache = BTreeMap::<u32, CachedFrame>::new();
 
@@ -604,8 +626,12 @@ mod macos {
                                     })
                                     .unwrap_or(true)
                             {
-                                track_output =
-                                    get_reader_track_output(&asset, requested_time, &handle);
+                                track_output = get_reader_track_output(
+                                    &asset,
+                                    requested_time,
+                                    &handle,
+                                    pixel_format,
+                                );
                                 last_decoded_frame = None;
                             }
 
@@ -708,15 +734,21 @@ mod macos {
         }
     }
 
-    struct SampleBufIter<'a> {
-        reader_track_output: &'a mut R<av::AssetReaderTrackOutput>,
+    fn pixel_to_pixel_format(pixel: format::Pixel) -> cv::PixelFormat {
+        match pixel {
+            format::Pixel::NV12 => cv::PixelFormat::_420V,
+            format::Pixel::YUV420P => cv::PixelFormat::_420_YP_CB_CR_8_PLANAR_FULL_RANGE,
+            format::Pixel::RGBA => cv::PixelFormat::_32_RGBA,
+            _ => todo!(),
+        }
     }
 
-    impl<'a> Iterator for SampleBufIter<'a> {
-        type Item = R<cm::SampleBuf>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            self.reader_track_output.next_sample_buf().ok().flatten()
+    fn pixel_format_to_pixel(format: cv::PixelFormat) -> format::Pixel {
+        match format {
+            cv::PixelFormat::_420V => format::Pixel::NV12,
+            cv::PixelFormat::_420_YP_CB_CR_8_PLANAR_FULL_RANGE => format::Pixel::YUV420P,
+            cv::PixelFormat::_32_RGBA => format::Pixel::RGBA,
+            _ => todo!(),
         }
     }
 }
