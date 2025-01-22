@@ -456,50 +456,115 @@ mod macos {
         fn process(&mut self) -> Arc<Vec<u8>> {
             match self {
                 CachedFrame::Raw(image_buf) => {
-                    let mut ffmpeg_frame = ffmpeg::frame::Video::new(
-                        format::Pixel::NV12,
-                        image_buf.width() as u32,
-                        image_buf.height() as u32,
-                    );
+                    let format = pixel_format_to_pixel(image_buf.pixel_format());
 
-                    {
+                    let data = if matches!(format, format::Pixel::RGBA) {
                         let _lock = image_buf.base_address_lock(LockFlags::READ_ONLY).unwrap();
 
-                        for plane_i in 0..image_buf.plane_count() {
-                            let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
-                            let height = image_buf.plane_height(plane_i);
+                        let bytes_per_row = image_buf.plane_bytes_per_row(0);
+                        let width = image_buf.width() as usize;
+                        let height = image_buf.height();
 
-                            let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
-                            let row_length = bytes_per_row.min(ffmpeg_stride);
+                        let slice = unsafe {
+                            std::slice::from_raw_parts::<'static, _>(
+                                image_buf.plane_base_address(0),
+                                bytes_per_row * height,
+                            )
+                        };
 
-                            let slice = unsafe {
-                                std::slice::from_raw_parts::<'static, _>(
-                                    image_buf.plane_base_address(plane_i),
-                                    bytes_per_row * height,
+                        let bytes = Vec::with_capacity(width * height * 4);
+
+                        let row_length = width * 4;
+
+                        for i in 0..height {
+                            bytes.as_mut_slice()[i * row_length..((i + 1) * row_length)]
+                                .copy_from_slice(
+                                    &slice[i * bytes_per_row..(i * bytes_per_row + row_length)],
                                 )
-                            };
-
-                            for i in 0..height {
-                                ffmpeg_frame.data_mut(plane_i)
-                                    [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
-                                    .copy_from_slice(
-                                        &slice[i * bytes_per_row..(i * bytes_per_row + row_length)],
-                                    )
-                            }
                         }
-                    }
 
-                    let mut converter = ffmpeg::software::converter(
-                        (ffmpeg_frame.width(), ffmpeg_frame.height()),
-                        ffmpeg_frame.format(),
-                        format::Pixel::RGBA,
-                    )
-                    .unwrap();
+                        bytes
+                    } else {
+                        let mut ffmpeg_frame = ffmpeg::frame::Video::new(
+                            format,
+                            image_buf.width() as u32,
+                            image_buf.height() as u32,
+                        );
 
-                    let mut rgb_frame = frame::Video::empty();
-                    converter.run(&ffmpeg_frame, &mut rgb_frame).unwrap();
+                        match ffmpeg_frame.format() {
+                            format::Pixel::NV12 => {
+                                let _lock =
+                                    image_buf.base_address_lock(LockFlags::READ_ONLY).unwrap();
 
-                    let data = Arc::new(rgb_frame.data(0).to_vec());
+                                for plane_i in 0..image_buf.plane_count() {
+                                    let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
+                                    let height = image_buf.plane_height(plane_i);
+
+                                    let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
+                                    let row_length = bytes_per_row.min(ffmpeg_stride);
+
+                                    let slice = unsafe {
+                                        std::slice::from_raw_parts::<'static, _>(
+                                            image_buf.plane_base_address(plane_i),
+                                            bytes_per_row * height,
+                                        )
+                                    };
+
+                                    for i in 0..height {
+                                        ffmpeg_frame.data_mut(plane_i)
+                                            [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
+                                            .copy_from_slice(
+                                                &slice[i * bytes_per_row
+                                                    ..(i * bytes_per_row + row_length)],
+                                            )
+                                    }
+                                }
+                            }
+                            format::Pixel::YUV420P => {
+                                let _lock =
+                                    image_buf.base_address_lock(LockFlags::READ_ONLY).unwrap();
+
+                                for plane_i in 0..image_buf.plane_count() {
+                                    let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
+                                    let height = image_buf.plane_height(plane_i);
+
+                                    let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
+                                    let row_length = bytes_per_row.min(ffmpeg_stride);
+
+                                    let slice = unsafe {
+                                        std::slice::from_raw_parts::<'static, _>(
+                                            image_buf.plane_base_address(plane_i),
+                                            bytes_per_row * height,
+                                        )
+                                    };
+
+                                    for i in 0..height {
+                                        ffmpeg_frame.data_mut(plane_i)
+                                            [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
+                                            .copy_from_slice(
+                                                &slice[i * bytes_per_row
+                                                    ..(i * bytes_per_row + row_length)],
+                                            )
+                                    }
+                                }
+                            }
+                            format => todo!("implement {:?}", format),
+                        }
+
+                        let mut converter = ffmpeg::software::converter(
+                            (ffmpeg_frame.width(), ffmpeg_frame.height()),
+                            ffmpeg_frame.format(),
+                            format::Pixel::RGBA,
+                        )
+                        .unwrap();
+
+                        let mut rgb_frame = frame::Video::empty();
+                        converter.run(&ffmpeg_frame, &mut rgb_frame).unwrap();
+
+                        rgb_frame.data(0).to_vec()
+                    };
+
+                    let data = Arc::new(data);
 
                     *self = Self::Processed(data.clone());
 
@@ -522,7 +587,7 @@ mod macos {
             let handle = tokio::runtime::Handle::current();
 
             std::thread::spawn(move || {
-                let pixel_format = {
+                let (pixel_format, width, height) = {
                     let input = ffmpeg::format::input(&path).unwrap();
 
                     let input_stream = input
@@ -538,10 +603,13 @@ mod macos {
                     let mut context = codec::context::Context::new_with_codec(decoder_codec);
                     context.set_parameters(input_stream.parameters()).unwrap();
 
-                    pixel_to_pixel_format(context.decoder().video().unwrap().format())
+                    let decoder = context.decoder().video().unwrap();
+                    (
+                        pixel_to_pixel_format(decoder.format()),
+                        decoder.width(),
+                        decoder.height(),
+                    )
                 };
-
-                dbg!(pixel_format);
 
                 let asset = av::UrlAsset::with_url(
                     &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
@@ -590,6 +658,9 @@ mod macos {
 
                 let mut track_output = get_reader_track_output(&asset, 0.0, &handle, pixel_format);
 
+                let black_frame =
+                    LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
+
                 let mut cache = BTreeMap::<u32, CachedFrame>::new();
 
                 let mut last_active_frame = None::<u32>;
@@ -637,29 +708,40 @@ mod macos {
 
                             last_active_frame = Some(requested_frame);
 
-                            fn get_next_rgba_frame(
-                                name: &'static str,
-                                track_output: &mut R<av::AssetReaderTrackOutput>,
-                                fps: u32,
-                            ) -> Option<(u32, CachedFrame)> {
-                                let sample_buf = track_output.next_sample_buf().unwrap()?;
-
-                                let current_frame = pts_to_frame(
-                                    sample_buf.pts().value,
-                                    Rational::new(1, sample_buf.pts().scale),
-                                    fps,
-                                );
-
-                                let image_buf = sample_buf.image_buf()?;
-
-                                Some((current_frame, CachedFrame::Raw(image_buf.retained())))
-                            }
-
                             let mut exit = false;
 
-                            while let Some((current_frame, mut cache_frame)) =
-                                get_next_rgba_frame(name, &mut track_output, fps)
+                            while let Some((current_frame, mut cache_frame)) = track_output
+                                .next_sample_buf()
+                                .unwrap()
+                                .and_then(|sample_buf| {
+                                    let current_frame = pts_to_frame(
+                                        sample_buf.pts().value,
+                                        Rational::new(1, sample_buf.pts().scale),
+                                        fps,
+                                    );
+
+                                    let image_buf = sample_buf.image_buf()?;
+
+                                    Some((current_frame, CachedFrame::Raw(image_buf.retained())))
+                                })
                             {
+                                // Handles frame skips. requested_frame == last_decoded_frame should be handled by the frame cache.
+                                if let Some((last_decoded_frame, sender)) = last_decoded_frame
+                                    .filter(|last_decoded_frame| {
+                                        requested_frame > *last_decoded_frame
+                                            && requested_frame < current_frame
+                                    })
+                                    .and_then(|l| Some((l, sender.take()?)))
+                                {
+                                    let data = cache
+                                        .get_mut(&last_decoded_frame)
+                                        .map(|f| f.process())
+                                        .unwrap_or_else(|| black_frame.clone());
+
+                                    last_sent_frame = Some((last_decoded_frame, data.clone()));
+                                    sender.send(data).ok();
+                                }
+
                                 last_decoded_frame = Some(current_frame);
 
                                 let exceeds_cache_bounds = current_frame > cache_max;
@@ -737,7 +819,8 @@ mod macos {
     fn pixel_to_pixel_format(pixel: format::Pixel) -> cv::PixelFormat {
         match pixel {
             format::Pixel::NV12 => cv::PixelFormat::_420V,
-            format::Pixel::YUV420P => cv::PixelFormat::_420_YP_CB_CR_8_PLANAR_FULL_RANGE,
+            // this is intentional, it works and is faster /shrug
+            format::Pixel::YUV420P => cv::PixelFormat::_420V,
             format::Pixel::RGBA => cv::PixelFormat::_32_RGBA,
             _ => todo!(),
         }
@@ -746,7 +829,6 @@ mod macos {
     fn pixel_format_to_pixel(format: cv::PixelFormat) -> format::Pixel {
         match format {
             cv::PixelFormat::_420V => format::Pixel::NV12,
-            cv::PixelFormat::_420_YP_CB_CR_8_PLANAR_FULL_RANGE => format::Pixel::YUV420P,
             cv::PixelFormat::_32_RGBA => format::Pixel::RGBA,
             _ => todo!(),
         }
