@@ -15,7 +15,6 @@ type DrawContext = {
   prefersDark: boolean;
   highlighted: boolean;
   selected: boolean;
-  animationProgress: number;
 };
 
 function drawHandles({
@@ -182,7 +181,6 @@ function draw(
     prefersDark,
     highlighted,
     selected,
-    animationProgress: 0,
   };
 
   ctx.save();
