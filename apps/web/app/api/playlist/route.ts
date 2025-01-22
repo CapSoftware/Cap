@@ -15,6 +15,7 @@ import {
 } from "@/utils/video/ffmpeg/helpers";
 import { getHeaders, CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { S3_BUCKET_URL } from "@cap/utils";
 
 export const revalidate = 3599;
 
@@ -87,7 +88,7 @@ export async function GET(request: NextRequest) {
         status: 302,
         headers: {
           ...getHeaders(origin),
-          Location: `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${userId}/${videoId}/result.mp4`,
+          Location: `${S3_BUCKET_URL}/${userId}/${videoId}/result.mp4`,
           ...CACHE_CONTROL_HEADERS,
         },
       });
@@ -98,13 +99,13 @@ export async function GET(request: NextRequest) {
         status: 302,
         headers: {
           ...getHeaders(origin),
-          Location: `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${userId}/${videoId}/output/video_recording_000.m3u8`,
+          Location: `${S3_BUCKET_URL}/${userId}/${videoId}/output/video_recording_000.m3u8`,
           ...CACHE_CONTROL_HEADERS,
         },
       });
     }
 
-    const playlistUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${userId}/${videoId}/combined-source/stream.m3u8`;
+    const playlistUrl = `${S3_BUCKET_URL}/${userId}/${videoId}/combined-source/stream.m3u8`;
     return new Response(null, {
       status: 302,
       headers: {

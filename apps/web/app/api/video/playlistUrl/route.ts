@@ -4,6 +4,7 @@ import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { getHeaders } from "@/utils/helpers";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
+import { S3_BUCKET_URL } from "@cap/utils";
 
 export const revalidate = 0;
 
@@ -59,7 +60,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (video.jobStatus === "COMPLETE") {
-    const playlistUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${video.ownerId}/${video.id}/output/video_recording_000_output.m3u8`;
+    const playlistUrl = `${S3_BUCKET_URL}/${video.ownerId}/${video.id}/output/video_recording_000_output.m3u8`;
     return new Response(
       JSON.stringify({ playlistOne: playlistUrl, playlistTwo: null }),
       {

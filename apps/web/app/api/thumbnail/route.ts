@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { S3_BUCKET_URL } from "@cap/utils";
 
 export const revalidate = 0;
 
@@ -67,7 +68,7 @@ export async function GET(request: NextRequest) {
     !result.bucket ||
     video.awsBucket === process.env.NEXT_PUBLIC_CAP_AWS_BUCKET
   ) {
-    thumbnailUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${prefix}screenshot/screen-capture.jpg`;
+    thumbnailUrl = `${S3_BUCKET_URL}/${prefix}screenshot/screen-capture.jpg`;
     return new Response(JSON.stringify({ screen: thumbnailUrl }), {
       status: 200,
       headers: getHeaders(origin),

@@ -11,6 +11,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { getHeaders } from "@/utils/helpers";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { S3_BUCKET_URL } from "@cap/utils";
 
 export const revalidate = 0;
 
@@ -109,7 +110,7 @@ export async function GET(request: NextRequest) {
         { expiresIn: 3600 }
       );
     } else {
-      screenshotUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${screenshot.Key}`;
+      screenshotUrl = `${S3_BUCKET_URL}/${screenshot.Key}`;
     }
 
     return new Response(JSON.stringify({ url: screenshotUrl }), {

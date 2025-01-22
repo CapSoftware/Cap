@@ -16,6 +16,7 @@ import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import toast from "react-hot-toast";
 import { Tooltip } from "react-tooltip";
 import { apiClient } from "@/utils/web-api";
+import { S3_BUCKET_URL } from "@cap/utils";
 
 declare global {
   interface Window {
@@ -393,7 +394,7 @@ export const ShareVideo = forwardRef<
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
         // For default Cap storage
-        transcriptionUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
+        transcriptionUrl = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
       try {
@@ -473,9 +474,9 @@ export const ShareVideo = forwardRef<
   ) {
     videoSrc = `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
   } else if (data.source.type === "MediaConvert") {
-    videoSrc = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
+    videoSrc = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
   } else {
-    videoSrc = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
+    videoSrc = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
   }
 
   return (

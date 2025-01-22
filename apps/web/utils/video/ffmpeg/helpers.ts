@@ -1,3 +1,4 @@
+import { S3_BUCKET_URL } from "@cap/utils";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 
 export const playlistToMp4 = async (
@@ -37,7 +38,7 @@ export const playlistToMp4 = async (
   for (const [index, url] of videoUrls.entries()) {
     const fullUrl = url.startsWith("https")
       ? url
-      : `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${userId}/${videoId}/output/${url}`;
+      : `${S3_BUCKET_URL}/${userId}/${videoId}/output/${url}`;
     const segmentResponse = await fetch(fullUrl);
     const segmentData = new Uint8Array(await segmentResponse.arrayBuffer());
     await ffmpeg.writeFile(`video${index}.ts`, segmentData);
@@ -61,7 +62,7 @@ export const playlistToMp4 = async (
     for (const [index, url] of audioUrls.entries()) {
       const fullUrl = url.startsWith("https")
         ? url
-        : `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/tzv973qb6ghnznf/z3ha0dv61q5hrdw/output/${url}`;
+        : `${S3_BUCKET_URL}/tzv973qb6ghnznf/z3ha0dv61q5hrdw/output/${url}`;
       const segmentResponse = await fetch(fullUrl);
       const segmentData = new Uint8Array(await segmentResponse.arrayBuffer());
       await ffmpeg.writeFile(`audio${index}.ts`, segmentData);

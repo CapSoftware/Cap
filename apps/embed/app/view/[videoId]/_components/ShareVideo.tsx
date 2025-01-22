@@ -19,6 +19,7 @@ import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import moment from "moment";
 import { Toolbar } from "./Toolbar";
+import { S3_BUCKET_URL } from "@cap/utils";
 
 declare global {
   interface Window {
@@ -297,7 +298,7 @@ export const ShareVideo = ({
         transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
       } else {
         // For default Cap storage
-        transcriptionUrl = `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
+        transcriptionUrl = `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/transcription.vtt`;
       }
 
       try {
@@ -443,8 +444,8 @@ export const ShareVideo = ({
               data.source.type === "MediaConvert")
               ? `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`
               : data.source.type === "MediaConvert"
-              ? `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`
-              : `${process.env.NEXT_PUBLIC_CAP_AWS_BUCKET_URL}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`
+              ? `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`
+              : `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`
           }
         />
       </div>
