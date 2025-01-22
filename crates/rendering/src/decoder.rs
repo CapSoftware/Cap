@@ -3,24 +3,19 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     sync::{mpsc, Arc},
-    time::Instant,
 };
 
 use cidre::cv::pixel_buffer::LockFlags;
 use ffmpeg::{
     codec::{self, Capabilities},
-    format::{self},
-    frame::{self},
-    rescale,
-    software::{self},
-    Codec, Rational, Rescale,
+    format, frame, rescale, software, Codec, Rational, Rescale,
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
-use ffmpeg_sys_next::{av_frame_side_data_remove, avcodec_find_decoder, AVHWDeviceType};
+use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 
 pub type DecodedFrame = Arc<Vec<u8>>;
 
-enum VideoDecoderMessage {
+pub enum VideoDecoderMessage {
     GetFrame(f32, tokio::sync::oneshot::Sender<DecodedFrame>),
 }
 
@@ -89,10 +84,113 @@ enum CachedFrameData {
 
 pub struct AsyncVideoDecoder;
 
-impl AsyncVideoDecoder {
-    pub fn spawn(path: PathBuf, fps: u32) -> AsyncVideoDecoderHandle {
+#[derive(Clone)]
+pub struct AsyncVideoDecoderHandle {
+    sender: mpsc::Sender<VideoDecoderMessage>,
+}
+
+impl AsyncVideoDecoderHandle {
+    pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.sender
+            .send(VideoDecoderMessage::GetFrame(time, tx))
+            .unwrap();
+        rx.await.ok()
+    }
+}
+
+pub enum GetFrameError {
+    Failed,
+}
+
+struct PeekableReceiver<T> {
+    rx: mpsc::Receiver<T>,
+    peeked: Option<T>,
+}
+
+impl<T> PeekableReceiver<T> {
+    fn peek(&mut self) -> Option<&T> {
+        if self.peeked.is_some() {
+            self.peeked.as_ref()
+        } else {
+            match self.rx.try_recv() {
+                Ok(value) => {
+                    self.peeked = Some(value);
+                    self.peeked.as_ref()
+                }
+                Err(_) => None,
+            }
+        }
+    }
+
+    fn recv(&mut self) -> Result<T, mpsc::RecvError> {
+        if let Some(value) = self.peeked.take() {
+            Ok(value)
+        } else {
+            self.rx.recv()
+        }
+    }
+}
+
+fn ff_find_decoder(
+    s: &format::context::Input,
+    st: &format::stream::Stream,
+    codec_id: codec::Id,
+) -> Option<Codec> {
+    unsafe {
+        use ffmpeg::media::Type;
+        let codec = match st.parameters().medium() {
+            Type::Video => Some((*s.as_ptr()).video_codec),
+            Type::Audio => Some((*s.as_ptr()).audio_codec),
+            Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
+            _ => None,
+        };
+
+        if let Some(codec) = codec {
+            if !codec.is_null() {
+                return Some(Codec::wrap(codec));
+            }
+        }
+
+        let found = avcodec_find_decoder(codec_id.into());
+
+        if found.is_null() {
+            return None;
+        }
+        Some(Codec::wrap(found))
+    }
+}
+
+pub enum Decoder {
+    Ffmpeg(FfmpegDecoder),
+    #[cfg(target_os = "macos")]
+    AVAssetReader(AVAssetReaderDecoder),
+}
+
+impl Decoder {
+    pub fn spawn(name: &'static str, path: PathBuf, fps: u32) -> AsyncVideoDecoderHandle {
         let (tx, rx) = mpsc::channel();
 
+        let handle = AsyncVideoDecoderHandle { sender: tx };
+
+        #[cfg(target_os = "macos")]
+        {
+            AVAssetReaderDecoder::spawn(name, path, fps, rx);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            FfmpegDecoder::spawn(name, path, fps, rx);
+        }
+
+        handle
+    }
+}
+
+struct FfmpegDecoder;
+
+impl FfmpegDecoder {
+    fn spawn(name: &'static str, path: PathBuf, fps: u32, rx: mpsc::Receiver<VideoDecoderMessage>) {
         std::thread::spawn(move || {
             let mut input = ffmpeg::format::input(&path).unwrap();
 
@@ -154,6 +252,12 @@ impl AsyncVideoDecoder {
 
             let mut temp_frame = ffmpeg::frame::Video::empty();
 
+            // let mut packets = input.packets().peekable();
+
+            let width = decoder.width();
+            let height = decoder.height();
+            let black_frame = LazyCell::new((|| Arc::new(vec![0; (width * height * 4) as usize])));
+
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             // active frame is a frame that triggered decode.
             // frames that are within render_more_margin of this frame won't trigger decode.
@@ -165,10 +269,6 @@ impl AsyncVideoDecoder {
             let mut peekable_requests = PeekableReceiver { rx, peeked: None };
 
             let mut packets = input.packets().peekable();
-
-            let width = decoder.width();
-            let height = decoder.height();
-            let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
 
             while let Ok(r) = peekable_requests.recv() {
                 match r {
@@ -195,8 +295,8 @@ impl AsyncVideoDecoder {
                                 .as_ref()
                                 .map(|last| {
                                     requested_frame < last.0 ||
-                                    // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-                                    requested_frame - last.0 > FRAME_CACHE_SIZE as u32
+                                // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
+                                requested_frame - last.0 > FRAME_CACHE_SIZE as u32
                                 })
                                 .unwrap_or(true)
                         {
@@ -208,7 +308,6 @@ impl AsyncVideoDecoder {
                             decoder.flush();
                             input.seek(position, ..position).unwrap();
                             last_decoded_frame = None;
-                            last_sent_frame = None;
 
                             packets = input.packets().peekable();
                         }
@@ -336,239 +435,291 @@ impl AsyncVideoDecoder {
                 }
             }
         });
-
-        AsyncVideoDecoderHandle { sender: tx }
     }
 }
 
-#[derive(Clone)]
-pub struct AsyncVideoDecoderHandle {
-    sender: mpsc::Sender<VideoDecoderMessage>,
-}
+use tokio::runtime::Handle as TokioHandle;
 
-impl AsyncVideoDecoderHandle {
-    pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.sender
-            .send(VideoDecoderMessage::GetFrame(time, tx))
-            .unwrap();
-        rx.await.ok()
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::*;
+    use cidre::{arc::R, av, cm, cv, ns};
+    use format::context::input::PacketIter;
+
+    #[derive(Clone)]
+    enum CachedFrame {
+        Raw(R<cv::ImageBuf>),
+        Processed(Arc<Vec<u8>>),
     }
-}
 
-pub enum GetFrameError {
-    Failed,
-}
+    impl CachedFrame {
+        fn process(&mut self) -> Arc<Vec<u8>> {
+            match self {
+                CachedFrame::Raw(image_buf) => {
+                    let mut ffmpeg_frame = ffmpeg::frame::Video::new(
+                        format::Pixel::NV12,
+                        image_buf.width() as u32,
+                        image_buf.height() as u32,
+                    );
 
-struct PeekableReceiver<T> {
-    rx: mpsc::Receiver<T>,
-    peeked: Option<T>,
-}
+                    {
+                        let _lock = image_buf.base_address_lock(LockFlags::READ_ONLY).unwrap();
 
-impl<T> PeekableReceiver<T> {
-    fn peek(&mut self) -> Option<&T> {
-        if self.peeked.is_some() {
-            self.peeked.as_ref()
-        } else {
-            match self.rx.try_recv() {
-                Ok(value) => {
-                    self.peeked = Some(value);
-                    self.peeked.as_ref()
+                        for plane_i in 0..image_buf.plane_count() {
+                            let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
+                            let height = image_buf.plane_height(plane_i);
+
+                            let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
+                            let row_length = bytes_per_row.min(ffmpeg_stride);
+
+                            let slice = unsafe {
+                                std::slice::from_raw_parts::<'static, _>(
+                                    image_buf.plane_base_address(plane_i),
+                                    bytes_per_row * height,
+                                )
+                            };
+
+                            for i in 0..height {
+                                ffmpeg_frame.data_mut(plane_i)
+                                    [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
+                                    .copy_from_slice(
+                                        &slice[i * bytes_per_row..(i * bytes_per_row + row_length)],
+                                    )
+                            }
+                        }
+                    }
+
+                    let mut converter = ffmpeg::software::converter(
+                        (ffmpeg_frame.width(), ffmpeg_frame.height()),
+                        ffmpeg_frame.format(),
+                        format::Pixel::RGBA,
+                    )
+                    .unwrap();
+
+                    let mut rgb_frame = frame::Video::empty();
+                    converter.run(&ffmpeg_frame, &mut rgb_frame).unwrap();
+
+                    let data = Arc::new(rgb_frame.data(0).to_vec());
+
+                    *self = Self::Processed(data.clone());
+
+                    data
                 }
-                Err(_) => None,
+                CachedFrame::Processed(data) => data.clone(),
             }
         }
     }
 
-    fn recv(&mut self) -> Result<T, mpsc::RecvError> {
-        if let Some(value) = self.peeked.take() {
-            Ok(value)
-        } else {
-            self.rx.recv()
+    pub struct AVAssetReaderDecoder;
+
+    impl AVAssetReaderDecoder {
+        pub fn spawn(
+            name: &'static str,
+            path: PathBuf,
+            fps: u32,
+            rx: mpsc::Receiver<VideoDecoderMessage>,
+        ) {
+            let handle = tokio::runtime::Handle::current();
+
+            std::thread::spawn(move || {
+                let asset = av::UrlAsset::with_url(
+                    &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
+                    None,
+                )
+                .unwrap();
+
+                fn get_reader_track_output(
+                    asset: &av::UrlAsset,
+                    time: f32,
+                    handle: &TokioHandle,
+                ) -> R<av::AssetReaderTrackOutput> {
+                    let mut reader = av::AssetReader::with_asset(&asset).unwrap();
+
+                    let time_range = cm::TimeRange {
+                        start: cm::Time::with_secs(time as f64, 100),
+                        duration: asset.duration(),
+                    };
+
+                    reader.set_time_range(time_range);
+
+                    let tracks = handle
+                        .block_on(asset.load_tracks_with_media_type(av::MediaType::video()))
+                        .unwrap();
+
+                    let track = tracks.get(0).unwrap();
+
+                    let mut reader_track_output = av::AssetReaderTrackOutput::with_track(
+                        &track,
+                        Some(&ns::Dictionary::with_keys_values(
+                            &[cv::pixel_buffer::keys::pixel_format().as_ns()],
+                            &[cv::PixelFormat::_420V.to_cf_number().as_ns().as_id_ref()],
+                        )),
+                    )
+                    .unwrap();
+
+                    reader_track_output.set_always_copies_sample_data(false);
+
+                    reader.add_output(&reader_track_output).unwrap();
+
+                    reader.start_reading().ok();
+
+                    reader_track_output
+                }
+
+                let mut track_output = get_reader_track_output(&asset, 0.0, &handle);
+
+                let mut cache = BTreeMap::<u32, CachedFrame>::new();
+
+                let mut last_active_frame = None::<u32>;
+
+                let mut last_decoded_frame = None::<u32>;
+                let mut last_sent_frame = None::<(u32, DecodedFrame)>;
+
+                while let Ok(r) = rx.recv() {
+                    match r {
+                        VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                            let requested_frame = (requested_time * fps as f32).floor() as u32;
+
+                            let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
+                                let data = cached.process();
+
+                                sender.send(data.clone()).ok();
+                                last_sent_frame = Some((requested_frame, data));
+                                continue;
+                            } else {
+                                Some(sender)
+                            };
+
+                            let cache_min =
+                                requested_frame.saturating_sub(FRAME_CACHE_SIZE as u32 / 2);
+                            let cache_max = requested_frame + FRAME_CACHE_SIZE as u32 / 2;
+
+                            if requested_frame <= 0
+                                || last_sent_frame
+                                    .as_ref()
+                                    .map(|last| {
+                                        requested_frame < last.0 ||
+                                    // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
+                                    requested_frame - last.0 > FRAME_CACHE_SIZE as u32
+                                    })
+                                    .unwrap_or(true)
+                            {
+                                track_output =
+                                    get_reader_track_output(&asset, requested_time, &handle);
+                                last_decoded_frame = None;
+                            }
+
+                            last_active_frame = Some(requested_frame);
+
+                            fn get_next_rgba_frame(
+                                name: &'static str,
+                                track_output: &mut R<av::AssetReaderTrackOutput>,
+                                fps: u32,
+                            ) -> Option<(u32, CachedFrame)> {
+                                let sample_buf = track_output.next_sample_buf().unwrap()?;
+
+                                let current_frame = pts_to_frame(
+                                    sample_buf.pts().value,
+                                    Rational::new(1, sample_buf.pts().scale),
+                                    fps,
+                                );
+
+                                let image_buf = sample_buf.image_buf()?;
+
+                                Some((current_frame, CachedFrame::Raw(image_buf.retained())))
+                            }
+
+                            let mut exit = false;
+
+                            while let Some((current_frame, mut cache_frame)) =
+                                get_next_rgba_frame(name, &mut track_output, fps)
+                            {
+                                last_decoded_frame = Some(current_frame);
+
+                                let exceeds_cache_bounds = current_frame > cache_max;
+                                let too_small_for_cache_bounds = current_frame < cache_min;
+
+                                if !too_small_for_cache_bounds {
+                                    if current_frame == requested_frame {
+                                        if let Some(sender) = sender.take() {
+                                            let data = cache_frame.process();
+                                            last_sent_frame = Some((current_frame, data.clone()));
+                                            sender.send(data).ok();
+
+                                            break;
+                                        }
+                                    }
+
+                                    if cache.len() >= FRAME_CACHE_SIZE {
+                                        if let Some(last_active_frame) = &last_active_frame {
+                                            let frame = if requested_frame > *last_active_frame {
+                                                *cache.keys().next().unwrap()
+                                            } else if requested_frame < *last_active_frame {
+                                                *cache.keys().next_back().unwrap()
+                                            } else {
+                                                let min = *cache.keys().min().unwrap();
+                                                let max = *cache.keys().max().unwrap();
+
+                                                if current_frame > max {
+                                                    min
+                                                } else {
+                                                    max
+                                                }
+                                            };
+
+                                            cache.remove(&frame);
+                                        } else {
+                                            cache.clear()
+                                        }
+                                    }
+
+                                    cache.insert(current_frame, cache_frame.clone());
+                                }
+
+                                if current_frame > requested_frame && sender.is_some() {
+                                    if let Some((sender, last_sent_frame)) = last_sent_frame
+                                        .as_ref()
+                                        .and_then(|l| Some((sender.take()?, l)))
+                                    {
+                                        sender.send(last_sent_frame.1.clone()).ok();
+                                    } else if let Some(sender) = sender.take() {
+                                        sender.send(cache_frame.process()).ok();
+                                    }
+                                }
+
+                                exit = exit || exceeds_cache_bounds;
+
+                                if exit {
+                                    break;
+                                }
+                            }
+
+                            if let Some((sender, last_sent_frame)) =
+                                sender.take().zip(last_sent_frame.as_ref())
+                            {
+                                sender.send(last_sent_frame.1.clone()).ok();
+                            }
+                        }
+                    }
+                }
+
+                println!("Decoder thread ended");
+            });
         }
     }
-}
 
-fn ff_find_decoder(
-    s: &format::context::Input,
-    st: &format::stream::Stream,
-    codec_id: codec::Id,
-) -> Option<Codec> {
-    unsafe {
-        use ffmpeg::media::Type;
-        let codec = match st.parameters().medium() {
-            Type::Video => Some((*s.as_ptr()).video_codec),
-            Type::Audio => Some((*s.as_ptr()).audio_codec),
-            Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
-            _ => None,
-        };
+    struct SampleBufIter<'a> {
+        reader_track_output: &'a mut R<av::AssetReaderTrackOutput>,
+    }
 
-        if let Some(codec) = codec {
-            if !codec.is_null() {
-                return Some(Codec::wrap(codec));
-            }
+    impl<'a> Iterator for SampleBufIter<'a> {
+        type Item = R<cm::SampleBuf>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.reader_track_output.next_sample_buf().ok().flatten()
         }
-
-        let found = avcodec_find_decoder(codec_id.into());
-
-        if found.is_null() {
-            return None;
-        }
-        Some(Codec::wrap(found))
     }
 }
 
 #[cfg(target_os = "macos")]
-impl AsyncVideoDecoder {
-    pub fn spawn_avfoundation(path: PathBuf, fps: u32) -> AsyncVideoDecoderHandle {
-        let (tx, rx) = mpsc::channel();
-
-        let handle = tokio::runtime::Handle::current();
-        std::thread::spawn(move || {
-            use cidre::{arc, av, cm, cv, ns};
-
-            let asset = av::UrlAsset::with_url(
-                &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
-                None,
-            )
-            .unwrap();
-
-            let get_reader_track_output = |time: f32| {
-                let mut reader = av::AssetReader::with_asset(&asset).unwrap();
-
-                reader.set_time_range(cm::TimeRange {
-                    start: cm::Time::with_secs(time as f64, 100),
-                    duration: asset.duration(),
-                });
-
-                let tracks = handle
-                    .block_on(asset.load_tracks_with_media_type(av::MediaType::video()))
-                    .unwrap();
-
-                let track = tracks.get(0).unwrap();
-
-                let mut reader_track_output = av::AssetReaderTrackOutput::with_track(
-                    &track,
-                    Some(&ns::Dictionary::with_keys_values(
-                        &[cv::pixel_buffer::keys::pixel_format().as_ns()],
-                        &[cv::PixelFormat::_420V.to_cf_number().as_ns().as_id_ref()],
-                    )),
-                )
-                .unwrap();
-
-                reader_track_output.set_always_copies_sample_data(false);
-
-                reader.add_output(&reader_track_output).unwrap();
-
-                reader.start_reading().ok();
-
-                reader_track_output
-            };
-
-            let mut reader_track_output = get_reader_track_output(0.0);
-
-            let mut last_frame: Option<(u32, Arc<Vec<u8>>)> = None;
-
-            while let Ok(r) = rx.recv() {
-                match r {
-                    VideoDecoderMessage::GetFrame(requested_time, sender) => {
-                        let requested_frame = (requested_time * fps as f32).floor() as u32;
-
-                        if let Some((last_frame_i, last_sample_buf)) = &last_frame {
-                            if requested_frame == *last_frame_i {
-                                sender.send(last_sample_buf.clone()).ok();
-                                continue;
-                            } else if requested_frame < *last_frame_i
-                                || requested_frame - last_frame_i > fps * 3
-                            {
-                                reader_track_output = get_reader_track_output(requested_time);
-                                last_frame = None;
-                            }
-                        }
-
-                        let mut sender = Some(sender);
-
-                        while let Some(sample_buf) = reader_track_output.next_sample_buf().unwrap()
-                        {
-                            let image_buf = sample_buf.image_buf().unwrap();
-
-                            let current_frame = pts_to_frame(
-                                sample_buf.pts().value,
-                                Rational::new(1, sample_buf.pts().scale),
-                                fps,
-                            );
-
-                            let mut ffmpeg_frame = ffmpeg::frame::Video::new(
-                                format::Pixel::NV12,
-                                image_buf.width() as u32,
-                                image_buf.height() as u32,
-                            );
-
-                            {
-                                let _lock =
-                                    image_buf.base_address_lock(LockFlags::READ_ONLY).unwrap();
-
-                                for plane_i in 0..image_buf.plane_count() {
-                                    let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
-                                    let height = image_buf.plane_height(plane_i);
-
-                                    let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
-                                    let row_length = bytes_per_row.min(ffmpeg_stride);
-
-                                    let slice = unsafe {
-                                        std::slice::from_raw_parts::<'static, _>(
-                                            image_buf.plane_base_address(plane_i),
-                                            bytes_per_row * height,
-                                        )
-                                    };
-
-                                    for i in 0..height {
-                                        ffmpeg_frame.data_mut(plane_i)
-                                            [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
-                                            .copy_from_slice(
-                                                &slice[i * bytes_per_row
-                                                    ..(i * bytes_per_row + row_length)],
-                                            )
-                                    }
-                                }
-                            }
-
-                            let mut converter = ffmpeg::software::converter(
-                                (ffmpeg_frame.width(), ffmpeg_frame.height()),
-                                ffmpeg_frame.format(),
-                                format::Pixel::RGBA,
-                            )
-                            .unwrap();
-
-                            let mut rgb_frame = frame::Video::empty();
-                            converter.run(&ffmpeg_frame, &mut rgb_frame).unwrap();
-
-                            let frame_data = Arc::new(rgb_frame.data(0).to_vec());
-
-                            if current_frame == requested_frame {
-                                if let Some(sender) = sender.take() {
-                                    sender.send(frame_data.clone()).ok();
-                                }
-                                last_frame = Some((requested_frame, frame_data.clone()));
-                                break;
-                            } else if current_frame > requested_frame {
-                                if let Some((sender, last_frame)) =
-                                    sender.take().zip(last_frame.as_ref())
-                                {
-                                    sender.send(last_frame.1.clone()).ok();
-                                }
-                                break;
-                            }
-                        }
-
-                        if let Some((sender, last_frame)) = sender.take().zip(last_frame.as_ref()) {
-                            sender.send(last_frame.1.clone()).ok();
-                        }
-                    }
-                }
-            }
-        });
-
-        AsyncVideoDecoderHandle { sender: tx }
-    }
-}
+use macos::*;
