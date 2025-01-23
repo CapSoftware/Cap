@@ -29,6 +29,12 @@
       "cache": false,
       "persistent": true
     },
+    "docker:down": {
+      "cache": false
+    },
+    "docker:clean": {
+      "cache": false
+    },
     "db:generate": {
       "cache": false
     },
