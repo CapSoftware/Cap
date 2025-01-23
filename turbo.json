@@ -26,24 +26,17 @@
       "cache": false
     },
     "docker:up": {
-      "cache": false
+      "cache": false,
+      "persistent": true
     },
     "db:generate": {
-      "cache": false,
-      "dependsOn": [
-        "docker:up"
-      ]
+      "cache": false
     },
     "db:push": {
-      "cache": false,
-      "dependsOn": [
-        "docker:up",
-        "db:generate"
-      ]
+      "cache": false
     },
     "dev": {
       "dependsOn": [
-        "docker:up",
         "db:push",
         "db:generate"
       ],

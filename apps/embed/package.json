@@ -1,5 +1,5 @@
 {
-  "name": "embed",
+  "name": "@cap/embed",
   "version": "0.3.1",
   "private": true,
   "scripts": {

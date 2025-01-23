@@ -786,6 +786,8 @@ importers:
         specifier: ^5.7.2
         version: 5.7.2
 
+  packages/local-docker: {}
+
   packages/tsconfig: {}
 
   packages/ui:

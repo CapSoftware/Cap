@@ -1,10 +1,9 @@
 {
-  "name": "web",
+  "name": "@cap/web",
   "version": "0.3.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "docker:up": "docker compose up",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

@@ -9,9 +9,11 @@
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "db:push": "dotenv -e .env -- turbo run db:push",
     "db:generate": "dotenv -e .env -- turbo run db:generate",
-    "docker:up": "dotenv -e .env -- turbo run docker:up",
     "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
-    "typecheck": "pnpm tsc -b"
+    "typecheck": "pnpm tsc -b",
+    "docker:up": "turbo run docker:up",
+    "docker:down": "turbo run docker:down",
+    "docker:clean": "turbo run docker:clean"
   },
   "devDependencies": {
     "@turbo/gen": "^1.9.7",
