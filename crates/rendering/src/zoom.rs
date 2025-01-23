@@ -1,6 +1,5 @@
 use cap_flags::FLAGS;
 use cap_project::{ProjectConfiguration, ZoomSegment};
-use cidre::{am::device::discovery::matching::mode::key, vdsp::semg_f64};
 
 #[derive(Debug, PartialEq)]
 pub struct ZoomKeyframe {
@@ -121,7 +120,13 @@ impl ZoomKeyframes {
                                 scale_t: prev.end + ZOOM_DURATION,
                                 position,
                                 has_segment: false,
-                                lowered: LoweredKeyframe::new(lowered_position, 1.0),
+                                lowered: LoweredKeyframe::new(
+                                    match prev.mode {
+                                        cap_project::ZoomMode::Auto => (0.0, 0.0),
+                                        cap_project::ZoomMode::Manual { x, y } => (x, y),
+                                    },
+                                    1.0,
+                                ),
                             });
                             keyframes.push(ZoomKeyframe {
                                 time: segment.start,
@@ -187,7 +192,7 @@ impl ZoomKeyframes {
             .0
             .iter()
             .rev()
-            .position(|k| time >= k.time)
+            .position(|k| time > k.time)
             .map(|p| self.0.len() - 1 - p);
 
         let Some(prev_index) = prev_index else {
@@ -200,8 +205,6 @@ impl ZoomKeyframes {
             return default;
         };
 
-        // dbg!(&prev, &next);
-
         let keyframe_length = next.scale_t - prev.time;
         let delta_time = time - prev.time;
 
@@ -212,6 +215,13 @@ impl ZoomKeyframes {
         };
 
         let time_t_raw = delta_time / keyframe_length;
+
+        let (prev_lowered, prev_scale) = if prev.scale_t != prev.time {
+            let i = self.interpolate(prev.time);
+            (i.lowered, i.amount)
+        } else {
+            (prev.lowered, prev.scale)
+        };
 
         let keyframe_diff = next.scale - prev.scale;
 
@@ -256,7 +266,7 @@ impl ZoomKeyframes {
             t: ease(t as f32) as f64,
             lowered: LoweredKeyframe {
                 top_left: {
-                    let prev = prev.lowered.top_left;
+                    let prev = prev_lowered.top_left;
                     let next = next.lowered.top_left;
 
                     (
@@ -265,7 +275,7 @@ impl ZoomKeyframes {
                     )
                 },
                 bottom_right: {
-                    let prev = prev.lowered.bottom_right;
+                    let prev = prev_lowered.bottom_right;
                     let next = next.lowered.bottom_right;
 
                     (
@@ -755,10 +765,6 @@ mod test {
                     mode: ZoomMode::Manual { x: 0.0, y: 0.245 },
                 },
             ]);
-
-            // dbg!(&keyframes);
-            // dbg!(keyframes.interpolate(0.0));
-            // dbg!(keyframes.interpolate(28.0));
         }
     }
 
