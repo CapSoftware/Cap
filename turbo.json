@@ -29,7 +29,7 @@
       "cache": false,
       "persistent": true
     },
-    "docker:down": {
+    "docker:stop": {
       "cache": false
     },
     "docker:clean": {

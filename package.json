@@ -3,16 +3,16 @@
   "scripts": {
     "build": "dotenv -e .env -- turbo run build",
     "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
-    "dev": "(pnpm run docker:up &) && sleep 5 && trap 'pnpm run docker:down' EXIT && dotenv -e .env -- turbo run dev",
-    "dev:manual": "pnpm run docker:up && trap 'pnpm run docker:down' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
+    "dev": "(pnpm run docker:up &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev",
+    "dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "db:push": "turbo run docker:up && dotenv -e .env -- turbo run db:push",
-    "db:generate": "turbo run docker:up && dotenv -e .env -- turbo run db:generate",
+    "db:push": "(pnpm run docker:up &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run db:push",
+    "db:generate": "dotenv -e .env -- turbo run db:generate",
     "tauri:build": "dotenv -e .env -- pnpm --dir apps/desktop tauri build --verbose",
     "typecheck": "pnpm tsc -b",
     "docker:up": "turbo run docker:up",
-    "docker:down": "turbo run docker:down",
+    "docker:stop": "turbo run docker:stop",
     "docker:clean": "turbo run docker:clean"
   },
   "devDependencies": {
