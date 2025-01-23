@@ -1,7 +1,7 @@
 use cap_gpu_converters::{NV12Input, NV12ToRGBA, UYVYToRGBA};
 use ffmpeg::{format::Pixel, software::scaling};
 use flume::{Receiver, Sender, TryRecvError, TrySendError};
-use nokhwa::{utils::*, Camera};
+use nokhwa::{pixel_format::RgbAFormat, utils::*, Camera};
 use std::{
     thread::{self, JoinHandle},
     time::Instant,
@@ -142,10 +142,7 @@ fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
     #[cfg(feature = "debug-logging")]
     debug!("Creating camera with info: {:?}", info);
 
-    let format = RequestedFormat::with_formats(
-        RequestedFormatType::AbsoluteHighestFrameRate,
-        &[FrameFormat::YUYV],
-    );
+    let format = RequestedFormat::new::<RgbAFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
 
     #[cfg(feature = "debug-logging")]
     trace!("Requested camera format: {:?}", format);
