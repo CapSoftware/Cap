@@ -2,7 +2,7 @@ use cap_project::{ZoomSegment, XY};
 
 pub const ZOOM_DURATION: f64 = 1.0;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct SegmentsCursor<'a> {
     time: f64,
     segment: Option<&'a ZoomSegment>,
@@ -73,9 +73,7 @@ impl SegmentBounds {
             ),
         )
     }
-}
 
-impl SegmentBounds {
     pub fn new(top_left: XY<f64>, bottom_right: XY<f64>) -> Self {
         Self {
             top_left,
@@ -88,6 +86,7 @@ impl SegmentBounds {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct InterpolatedZoom {
     // the ratio of current zoom to the maximum amount for the current segment
     pub t: f64,
@@ -95,10 +94,18 @@ pub struct InterpolatedZoom {
 }
 
 impl InterpolatedZoom {
-    pub fn new(cursor: &SegmentsCursor) -> Self {
+    pub fn new(cursor: SegmentsCursor) -> Self {
         let ease_in = bezier_easing::bezier_easing(0.1, 0.0, 0.3, 1.0).unwrap();
         let ease_out = bezier_easing::bezier_easing(0.5, 0.0, 0.5, 1.0).unwrap();
 
+        Self::new_with_easing(cursor, ease_in, ease_out)
+    }
+
+    pub(self) fn new_with_easing(
+        cursor: SegmentsCursor,
+        ease_in: impl Fn(f32) -> f32,
+        ease_out: impl Fn(f32) -> f32,
+    ) -> InterpolatedZoom {
         let default = SegmentBounds::default();
         match (cursor.prev_segment, cursor.segment) {
             (Some(prev_segment), None) => {
@@ -160,8 +167,11 @@ impl InterpolatedZoom {
                     // handling this is a bit funny, since we're not zooming in from 0 but rather
                     // from the previous value that the zoom out got interrupted at by the current segment
 
-                    let min =
-                        InterpolatedZoom::new(&SegmentsCursor::new(segment.start, cursor.segments));
+                    let min = InterpolatedZoom::new_with_easing(
+                        SegmentsCursor::new(segment.start, cursor.segments),
+                        ease_in,
+                        ease_out,
+                    );
 
                     Self {
                         t: (min.t * (1.0 - zoom_t)) + zoom_t,
@@ -201,286 +211,280 @@ fn t_clamp(v: f64) -> f64 {
 }
 
 #[cfg(test)]
-mod segmentising {
+mod test {
     use cap_project::ZoomMode;
 
     use super::*;
 
     // Custom macro for floating-point near equality
     macro_rules! assert_f64_near {
-        ($left:expr, $right:expr) => {
+        ($left:expr, $right:expr, $label:literal) => {
             let left = $left;
             let right = $right;
             assert!(
                 (left - right).abs() < 1e-6,
-                "assertion failed: `(left ~ right)` \n left: `{:?}`, \n right: `{:?}`",
+                "{}: `(left ~ right)` \n left: `{:?}`, \n right: `{:?}`",
+                $label,
                 left,
                 right
             )
         };
+        ($left:expr, $right:expr) => {
+            assert_f64_near!($left, $right, "assertion failed");
+        };
     }
 
-    mod lerp_t {
-        use super::*;
+    fn c(time: f64, segments: &[ZoomSegment]) -> SegmentsCursor {
+        SegmentsCursor::new(time, segments)
+    }
 
-        fn lerp_test(cursor: SegmentsCursor, right: f64) {
-            assert_f64_near!(interpolate_segment_t(&cursor), right);
-        }
+    fn test_interp((time, segments): (f64, &[ZoomSegment]), expected: InterpolatedZoom) {
+        let actual = InterpolatedZoom::new_with_easing(c(time, segments), |t| t, |t| t);
 
-        #[test]
-        fn one_segment() {
-            let segments = vec![ZoomSegment {
+        assert_f64_near!(actual.t, expected.t, "t");
+
+        let a = &actual.bounds;
+        let e = &expected.bounds;
+
+        assert_f64_near!(a.top_left.x, e.top_left.x, "bounds.top_left.x");
+        assert_f64_near!(a.top_left.y, e.top_left.y, "bounds.top_left.y");
+        assert_f64_near!(a.bottom_right.x, e.bottom_right.x, "bounds.bottom_right.x");
+        assert_f64_near!(a.bottom_right.y, e.bottom_right.y, "bounds.bottom_right.y");
+    }
+
+    #[test]
+    fn one_segment() {
+        let segments = vec![ZoomSegment {
+            start: 2.0,
+            end: 4.0,
+            amount: 2.0,
+            mode: ZoomMode::Manual { x: 0.5, y: 0.5 },
+        }];
+
+        test_interp(
+            (0.0, &segments),
+            InterpolatedZoom {
+                t: 0.0,
+                bounds: SegmentBounds::default(),
+            },
+        );
+        test_interp(
+            (2.0, &segments),
+            InterpolatedZoom {
+                t: 0.0,
+                bounds: SegmentBounds::default(),
+            },
+        );
+        test_interp(
+            (2.0 + ZOOM_DURATION * 0.1, &segments),
+            InterpolatedZoom {
+                t: 0.1,
+                bounds: SegmentBounds::new(XY::new(-0.05, -0.05), XY::new(1.05, 1.05)),
+            },
+        );
+        test_interp(
+            (2.0 + ZOOM_DURATION * 0.9, &segments),
+            InterpolatedZoom {
+                t: 0.9,
+                bounds: SegmentBounds::new(XY::new(-0.45, -0.45), XY::new(1.45, 1.45)),
+            },
+        );
+        test_interp(
+            (2.0 + ZOOM_DURATION, &segments),
+            InterpolatedZoom {
+                t: 1.0,
+                bounds: SegmentBounds::new(XY::new(-0.5, -0.5), XY::new(1.5, 1.5)),
+            },
+        );
+        test_interp(
+            (4.0, &segments),
+            InterpolatedZoom {
+                t: 1.0,
+                bounds: SegmentBounds::new(XY::new(-0.5, -0.5), XY::new(1.5, 1.5)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION * 0.2, &segments),
+            InterpolatedZoom {
+                t: 0.8,
+                bounds: SegmentBounds::new(XY::new(-0.4, -0.4), XY::new(1.4, 1.4)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION * 0.8, &segments),
+            InterpolatedZoom {
+                t: 0.2,
+                bounds: SegmentBounds::new(XY::new(-0.1, -0.1), XY::new(1.1, 1.1)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION, &segments),
+            InterpolatedZoom {
+                t: 0.0,
+                bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.0, 1.0)),
+            },
+        );
+    }
+
+    #[test]
+    fn two_segments_no_gap() {
+        let segments = vec![
+            ZoomSegment {
                 start: 2.0,
                 end: 4.0,
-                amount: 2.5,
+                amount: 2.0,
                 mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
-            }];
+            },
+            ZoomSegment {
+                start: 4.0,
+                end: 6.0,
+                amount: 4.0,
+                mode: ZoomMode::Manual { x: 0.5, y: 0.5 },
+            },
+        ];
 
-            lerp_test(SegmentsCursor::new(0.0, &segments), 0.0);
-            lerp_test(SegmentsCursor::new(2.0, &segments), 0.0);
-            lerp_test(
-                SegmentsCursor::new(2.0 + ZOOM_DURATION * 0.1, &segments),
-                0.1,
-            );
-            lerp_test(
-                SegmentsCursor::new(2.0 + ZOOM_DURATION * 0.9, &segments),
-                0.9,
-            );
-            lerp_test(SegmentsCursor::new(2.0 + ZOOM_DURATION, &segments), 1.0);
-            lerp_test(SegmentsCursor::new(4.0, &segments), 1.0);
-            lerp_test(
-                SegmentsCursor::new(4.0 + ZOOM_DURATION * 0.2, &segments),
-                0.8,
-            );
-            lerp_test(
-                SegmentsCursor::new(4.0 + ZOOM_DURATION * 0.8, &segments),
-                0.2,
-            );
-            lerp_test(SegmentsCursor::new(4.0 + ZOOM_DURATION, &segments), 0.0);
-        }
-
-        #[test]
-        fn two_segments_no_gap() {
-            let segments = vec![
-                ZoomSegment {
-                    start: 2.0,
-                    end: 4.0,
-                    amount: 2.5,
-                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
-                },
-                ZoomSegment {
-                    start: 4.0,
-                    end: 6.0,
-                    amount: 4.0,
-                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
-                },
-            ];
-
-            lerp_test(SegmentsCursor::new(4.0, &segments), 1.0);
-            lerp_test(
-                SegmentsCursor::new(4.0 + ZOOM_DURATION * 0.8, &segments),
-                1.0,
-            );
-            lerp_test(
-                SegmentsCursor::new(4.0 + ZOOM_DURATION * 0.8, &segments),
-                1.0,
-            );
-            lerp_test(SegmentsCursor::new(4.0 + ZOOM_DURATION, &segments), 1.0);
-            lerp_test(SegmentsCursor::new(6.0, &segments), 1.0);
-            lerp_test(
-                SegmentsCursor::new(6.0 + ZOOM_DURATION * 0.2, &segments),
-                0.8,
-            );
-            lerp_test(
-                SegmentsCursor::new(6.0 + ZOOM_DURATION * 0.8, &segments),
-                0.2,
-            );
-            lerp_test(SegmentsCursor::new(7.0, &segments), 0.0);
-        }
-
-        #[test]
-        fn two_segments_small_gap() {
-            let segments = vec![
-                ZoomSegment {
-                    start: 2.0,
-                    end: 4.0,
-                    amount: 2.5,
-                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
-                },
-                ZoomSegment {
-                    start: 4.0 + ZOOM_DURATION * 0.75,
-                    end: 6.0,
-                    amount: 2.5,
-                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
-                },
-            ];
-
-            lerp_test(SegmentsCursor::new(4.0, &segments), 1.0);
-            lerp_test(
-                SegmentsCursor::new(4.0 + ZOOM_DURATION * 0.25, &segments),
-                0.75,
-            );
-            lerp_test(
-                SegmentsCursor::new(4.0 + ZOOM_DURATION * 0.5, &segments),
-                0.5,
-            );
-            lerp_test(
-                SegmentsCursor::new(4.0 + ZOOM_DURATION * 0.75, &segments),
-                0.25,
-            );
-            lerp_test(
-                SegmentsCursor::new(4.0 + ZOOM_DURATION * 0.75 + ZOOM_DURATION / 2.0, &segments),
-                0.625,
-            );
-            lerp_test(
-                SegmentsCursor::new(4.0 + ZOOM_DURATION * 0.75 + ZOOM_DURATION, &segments),
-                1.0,
-            );
-            lerp_test(SegmentsCursor::new(6.0, &segments), 1.0);
-            lerp_test(SegmentsCursor::new(6.0 + ZOOM_DURATION, &segments), 0.0);
-        }
-
-        #[test]
-        fn two_segments_large_gap() {
-            let segments = vec![
-                ZoomSegment {
-                    start: 2.0,
-                    end: 4.0,
-                    amount: 2.5,
-                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
-                },
-                ZoomSegment {
-                    start: 7.0,
-                    end: 9.0,
-                    amount: 2.5,
-                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
-                },
-            ];
-
-            lerp_test(SegmentsCursor::new(2.0, &segments), 0.0);
-            lerp_test(SegmentsCursor::new(2.0 + ZOOM_DURATION, &segments), 1.0);
-            lerp_test(SegmentsCursor::new(4.0, &segments), 1.0);
-            lerp_test(SegmentsCursor::new(4.0 + ZOOM_DURATION, &segments), 0.0);
-            lerp_test(SegmentsCursor::new(5.0, &segments), 0.0);
-            lerp_test(SegmentsCursor::new(7.0, &segments), 0.0);
-            lerp_test(SegmentsCursor::new(7.0 + ZOOM_DURATION, &segments), 1.0);
-            lerp_test(SegmentsCursor::new(9.0, &segments), 1.0);
-            lerp_test(SegmentsCursor::new(9.0 + ZOOM_DURATION, &segments), 0.0);
-        }
+        test_interp(
+            (4.0, &segments),
+            InterpolatedZoom {
+                t: 1.0,
+                bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(2.0, 2.0)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION * 0.2, &segments),
+            InterpolatedZoom {
+                t: 1.0,
+                bounds: SegmentBounds::new(XY::new(-0.3, -0.3), XY::new(2.1, 2.1)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION * 0.8, &segments),
+            InterpolatedZoom {
+                t: 1.0,
+                bounds: SegmentBounds::new(XY::new(-1.2, -1.2), XY::new(2.4, 2.4)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION, &segments),
+            InterpolatedZoom {
+                t: 1.0,
+                bounds: SegmentBounds::new(XY::new(-1.5, -1.5), XY::new(2.5, 2.5)),
+            },
+        );
     }
 
-    mod lerp_bounds {
-        use super::*;
-
-        fn bounds_approx_eq(l: SegmentBounds, r: SegmentBounds) {
-            assert_f64_near!(l.top_left.x, r.top_left.x);
-            assert_f64_near!(l.top_left.y, r.top_left.y);
-            assert_f64_near!(l.bottom_right.x, r.bottom_right.x);
-            assert_f64_near!(l.bottom_right.y, r.bottom_right.y);
-        }
-
-        #[test]
-        fn one_segment() {
-            let segments = vec![ZoomSegment {
+    #[test]
+    fn two_segments_small_gap() {
+        let segments = vec![
+            ZoomSegment {
                 start: 2.0,
                 end: 4.0,
-                amount: 2.5,
+                amount: 2.0,
                 mode: ZoomMode::Manual { x: 0.5, y: 0.5 },
-            }];
+            },
+            ZoomSegment {
+                start: 4.0 + ZOOM_DURATION * 0.75,
+                end: 6.0,
+                amount: 4.0,
+                mode: ZoomMode::Manual { x: 0.5, y: 0.5 },
+            },
+        ];
 
-            assert_eq!(
-                interpolate_segment_bounds(&SegmentsCursor::new(2.0, &segments)),
-                SegmentBounds::default()
-            );
-            assert_eq!(
-                interpolate_segment_bounds(&SegmentsCursor::new(2.0 + ZOOM_DURATION, &segments)),
-                SegmentBounds::new(XY::new(-0.75, -0.75), XY::new(1.75, 1.75))
-            );
-            assert_eq!(
-                interpolate_segment_bounds(&SegmentsCursor::new(4.0, &segments)),
-                SegmentBounds::new(XY::new(-0.75, -0.75), XY::new(1.75, 1.75))
-            );
-            assert_eq!(
-                interpolate_segment_bounds(&SegmentsCursor::new(
-                    4.0 + ZOOM_DURATION / 2.0,
-                    &segments
-                )),
-                SegmentBounds::new(XY::new(-0.375, -0.375), XY::new(1.375, 1.375))
-            );
-        }
+        test_interp(
+            (4.0, &segments),
+            InterpolatedZoom {
+                t: 1.0,
+                bounds: SegmentBounds::new(XY::new(-0.5, -0.5), XY::new(1.5, 1.5)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION * 0.5, &segments),
+            InterpolatedZoom {
+                t: 0.5,
+                bounds: SegmentBounds::new(XY::new(-0.25, -0.25), XY::new(1.25, 1.25)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION * 0.75, &segments),
+            InterpolatedZoom {
+                t: 0.25,
+                bounds: SegmentBounds::new(XY::new(-0.125, -0.125), XY::new(1.125, 1.125)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION * (0.75 + 0.5), &segments),
+            InterpolatedZoom {
+                t: 0.625,
+                bounds: SegmentBounds::new(XY::new(-0.8125, -0.8125), XY::new(1.8125, 1.8125)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION * (0.75 + 1.0), &segments),
+            InterpolatedZoom {
+                t: 1.0,
+                bounds: SegmentBounds::new(XY::new(-1.5, -1.5), XY::new(2.5, 2.5)),
+            },
+        );
+    }
 
-        #[test]
-        fn two_segments_no_gap() {
-            let segments = vec![
-                ZoomSegment {
-                    start: 2.0,
-                    end: 4.0,
-                    amount: 2.0,
-                    mode: ZoomMode::Manual { x: 0.2, y: 0.2 },
-                },
-                ZoomSegment {
-                    start: 4.0,
-                    end: 6.0,
-                    amount: 2.0,
-                    mode: ZoomMode::Manual { x: 0.8, y: 0.8 },
-                },
-            ];
+    #[test]
+    fn two_segments_large_gap() {
+        let segments = vec![
+            ZoomSegment {
+                start: 2.0,
+                end: 4.0,
+                amount: 2.0,
+                mode: ZoomMode::Manual { x: 0.5, y: 0.5 },
+            },
+            ZoomSegment {
+                start: 7.0,
+                end: 9.0,
+                amount: 4.0,
+                mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
+            },
+        ];
 
-            bounds_approx_eq(
-                interpolate_segment_bounds(&SegmentsCursor::new(4.0, &segments)),
-                SegmentBounds::new(XY::new(-0.2, -0.2), XY::new(1.8, 1.8)),
-            );
-        }
-
-        #[test]
-        fn two_segments_with_gap() {
-            let segments = vec![
-                ZoomSegment {
-                    start: 2.0,
-                    end: 4.0,
-                    amount: 2.0,
-                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
-                },
-                ZoomSegment {
-                    start: 4.0 + ZOOM_DURATION * 0.5,
-                    end: 6.0,
-                    amount: 2.0,
-                    mode: ZoomMode::Manual { x: 0.0, y: 0.0 },
-                },
-            ];
-
-            bounds_approx_eq(
-                interpolate_segment_bounds(&SegmentsCursor::new(4.0, &segments)),
-                SegmentBounds::new(XY::new(0.0, 0.0), XY::new(2.0, 2.0)),
-            );
-            bounds_approx_eq(
-                interpolate_segment_bounds(&SegmentsCursor::new(
-                    4.0 + ZOOM_DURATION * 0.25,
-                    &segments,
-                )),
-                SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.75, 1.75)),
-            );
-            bounds_approx_eq(
-                interpolate_segment_bounds(&SegmentsCursor::new(
-                    4.0 + ZOOM_DURATION * 0.5,
-                    &segments,
-                )),
-                SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.5, 1.5)),
-            );
-            bounds_approx_eq(
-                interpolate_segment_bounds(&SegmentsCursor::new(
-                    4.0 + ZOOM_DURATION * 1.0,
-                    &segments,
-                )),
-                SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.75, 1.75)),
-            );
-            bounds_approx_eq(
-                interpolate_segment_bounds(&SegmentsCursor::new(
-                    4.0 + ZOOM_DURATION * 1.5,
-                    &segments,
-                )),
-                SegmentBounds::new(XY::new(0.0, 0.0), XY::new(2.0, 2.0)),
-            );
-        }
+        test_interp(
+            (4.0, &segments),
+            InterpolatedZoom {
+                t: 1.0,
+                bounds: SegmentBounds::new(XY::new(-0.5, -0.5), XY::new(1.5, 1.5)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION * 0.5, &segments),
+            InterpolatedZoom {
+                t: 0.5,
+                bounds: SegmentBounds::new(XY::new(-0.25, -0.25), XY::new(1.25, 1.25)),
+            },
+        );
+        test_interp(
+            (4.0 + ZOOM_DURATION, &segments),
+            InterpolatedZoom {
+                t: 0.0,
+                bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.0, 1.0)),
+            },
+        );
+        test_interp(
+            (7.0, &segments),
+            InterpolatedZoom {
+                t: 0.0,
+                bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.0, 1.0)),
+            },
+        );
+        test_interp(
+            (7.0 + ZOOM_DURATION * 0.5, &segments),
+            InterpolatedZoom {
+                t: 0.5,
+                bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(2.5, 2.5)),
+            },
+        );
+        test_interp(
+            (7.0 + ZOOM_DURATION * 1.0, &segments),
+            InterpolatedZoom {
+                t: 1.0,
+                bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(4.0, 4.0)),
+            },
+        );
     }
 }

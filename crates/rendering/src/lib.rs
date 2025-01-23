@@ -9,7 +9,7 @@ use cap_project::{
     SLOW_VELOCITY_THRESHOLD, XY,
 };
 use core::f64;
-use decoder::{AsyncVideoDecoderHandle, Decoder};
+use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
 use futures::future::OptionFuture;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,7 @@ pub struct SegmentVideoPaths<'a> {
 
 impl RecordingSegmentDecoders {
     pub fn new(meta: &RecordingMeta, segment: SegmentVideoPaths) -> Self {
-        let screen = Decoder::spawn(
+        let screen = spawn_decoder(
             "screen",
             meta.project_path.join(segment.display),
             match &meta.content {
@@ -109,7 +109,7 @@ impl RecordingSegmentDecoders {
             },
         );
         let camera = segment.camera.map(|camera| {
-            Decoder::spawn(
+            spawn_decoder(
                 "camera",
                 meta.project_path.join(camera),
                 match &meta.content {
@@ -746,7 +746,7 @@ impl ProjectUniforms {
                 .unwrap_or(&[]),
         );
 
-        let zoom = InterpolatedZoom::new(&segment_cursor);
+        let zoom = InterpolatedZoom::new(segment_cursor);
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
