@@ -114,8 +114,8 @@ impl S3UploadMeta {
                 std::env::var("NEXT_PUBLIC_CAP_AWS_BUCKET").unwrap_or_else(|_| "capso".to_string());
         }
         if self.aws_endpoint.is_empty() {
-            self.aws_endpoint =
-                std::env::var("NEXT_PUBLIC_CAP_AWS_ENDPOINT").unwrap_or_else(|_| "https://s3.amazonaws.com".to_string());
+            self.aws_endpoint = std::env::var("NEXT_PUBLIC_CAP_AWS_ENDPOINT")
+                .unwrap_or_else(|_| "https://s3.amazonaws.com".to_string());
         }
     }
 }
