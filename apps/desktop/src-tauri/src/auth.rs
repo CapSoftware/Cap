@@ -1,14 +1,22 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
 
+use tauri_specta::Event;
 use web_api::ManagerExt;
 
 use crate::web_api;
 
 #[derive(Serialize, Deserialize, Type, Debug)]
+pub enum AuthState {
+    Listening,
+}
+
+#[derive(Serialize, Deserialize, Type, Clone, Debug)]
 pub struct AuthStore {
     pub token: String,
     pub user_id: Option<String>,
@@ -16,7 +24,7 @@ pub struct AuthStore {
     pub plan: Option<Plan>,
 }
 
-#[derive(Serialize, Deserialize, Type, Debug)]
+#[derive(Serialize, Deserialize, Type, Clone, Debug)]
 pub struct Plan {
     pub upgraded: bool,
     pub manual: bool,
@@ -112,9 +120,18 @@ impl AuthStore {
         });
 
         store.set("auth", json!(value));
+        if let Some(auth) = value {
+            if let Err(e) = Authenticated::emit(&Authenticated(auth), app) {
+                eprintln!("Error while emitting Authenticated: {}", e.to_string());
+            };
+        }
+
         store.save().map_err(|e| e.to_string())
     }
 }
 
 #[derive(specta::Type, serde::Serialize, tauri_specta::Event, Debug, Clone, serde::Deserialize)]
 pub struct AuthenticationInvalid;
+
+#[derive(specta::Type, serde::Serialize, tauri_specta::Event, Debug, Clone, serde::Deserialize)]
+pub struct Authenticated(AuthStore);

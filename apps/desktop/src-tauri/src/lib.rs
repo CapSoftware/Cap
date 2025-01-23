@@ -10,6 +10,7 @@ mod platform;
 mod recording;
 // mod resource;
 mod audio_meter;
+mod deeplink_actions;
 mod export;
 mod fake_window;
 mod tray;
@@ -18,6 +19,7 @@ mod web_api;
 mod windows;
 
 use audio::AppSounds;
+use auth::Authenticated;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::create_camera_preview_ws;
 use cap_editor::EditorInstance;
@@ -55,7 +57,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tauri::{AppHandle, Emitter, Manager, Runtime, State, WindowEvent};
+use tauri::{AppHandle, Manager, Runtime, State, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
@@ -88,6 +90,8 @@ pub struct App {
     current_recording: Option<cap_recording::ActorHandle>,
     #[serde(skip)]
     pre_created_video: Option<PreCreatedVideo>,
+    #[serde(skip)]
+    auth_state: Option<auth::AuthState>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
@@ -1796,6 +1800,17 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
+async fn set_oauth_listening_state(
+    state: MutableState<'_, App>,
+    auth_state: Option<auth::AuthState>,
+) -> Result<(), String> {
+    let mut writer_guard = state.write().await;
+    writer_guard.auth_state = auth_state;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn delete_auth_open_signin(app: AppHandle) -> Result<(), String> {
     AuthStore::set(&app, None).map_err(|e| e.to_string())?;
 
@@ -1997,6 +2012,7 @@ pub async fn run() {
             check_upgraded_and_update,
             open_external_link,
             hotkeys::set_hotkey,
+            set_oauth_listening_state,
             delete_auth_open_signin,
             reset_camera_permissions,
             reset_microphone_permissions,
@@ -2027,6 +2043,7 @@ pub async fn run() {
             RequestOpenSettings,
             NewNotification,
             AuthenticationInvalid,
+            Authenticated,
             audio_meter::AudioInputLevelChange,
             UploadProgress,
         ])
@@ -2144,6 +2161,7 @@ pub async fn run() {
                     },
                     current_recording: None,
                     pre_created_video: None,
+                    auth_state: None,
                 })));
 
                 app.manage(Arc::new(RwLock::new(
@@ -2240,6 +2258,14 @@ pub async fn run() {
 
             AuthenticationInvalid::listen_any_spawn(&app, |_, app| async move {
                 delete_auth_open_signin(app).await.ok();
+            });
+
+            // Registering deep links at runtime is not possible on macOS,
+            // so deep links can only be tested on the bundled application,
+            // which must be installed in the /Applications directory.
+            let app_handle = app.clone();
+            app.deep_link().on_open_url(move |event| {
+                deeplink_actions::handle(&app_handle, event.urls());
             });
 
             Ok(())

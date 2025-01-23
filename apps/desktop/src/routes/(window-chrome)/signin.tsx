@@ -7,18 +7,26 @@ import {
   redirect,
   useAction,
   useSubmission,
-  useNavigate,
 } from "@solidjs/router";
 import { onMount, onCleanup, createSignal } from "solid-js";
-import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 
 import callbackTemplate from "./callback.template";
 import { authStore } from "~/store";
 import { clientEnv } from "~/utils/env";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { commands } from "~/utils/tauri";
-import { Window } from "@tauri-apps/api/window";
+import { commands, events } from "~/utils/tauri";
+
 const signInAction = action(async () => {
+  // Only use deeplinks for OAuth on production.
+  if (import.meta.env.VITE_ENVIRONMENT !== "development") {
+    console.log("Starting listening to oauth signin command...");
+    commands.setOauthListeningState("Listening");
+    await shell.open(`${clientEnv.VITE_SERVER_URL}/api/desktop/session/request?platform=desktop`);
+    return;
+  }
+
+  console.log("Starting oauth listener server...");
+
   let res: (url: URL) => void;
 
   try {
@@ -70,11 +78,6 @@ const signInAction = action(async () => {
     });
     stopListening();
 
-    const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
-    if (!isDevMode) {
-      return;
-    }
-
     const token = url.searchParams.get("token");
     const user_id = url.searchParams.get("user_id");
     const expires = Number(url.searchParams.get("expires"));
@@ -94,29 +97,8 @@ const signInAction = action(async () => {
       },
     });
 
-    const currentWindow = await Window.getByLabel("signin");
-    await commands.openMainWindow();
-
-    // Add a small delay to ensure window is ready
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    const mainWindow = await Window.getByLabel("main");
-    console.log("Main window reference:", mainWindow ? "found" : "not found");
-
-    if (mainWindow) {
-      try {
-        await mainWindow.setFocus();
-        console.log("Successfully set focus on main window");
-      } catch (e) {
-        console.error("Failed to focus main window:", e);
-      }
-    }
-
-    if (currentWindow) {
-      await currentWindow.close();
-    }
-
-    return redirect("/");
+    await commands.showWindow("Main");
+    getCurrentWindow().close();
   } catch (error) {
     console.error("Sign in failed:", error);
     await authStore.set();
@@ -127,94 +109,19 @@ const signInAction = action(async () => {
 export default function Page() {
   const signIn = useAction(signInAction);
   const submission = useSubmission(signInAction);
-  const navigate = useNavigate();
   const [isSignedIn, setIsSignedIn] = createSignal(false);
 
-  // Listen for auth changes and redirect to signin if auth is cleared
   onMount(async () => {
-    let unsubscribe: (() => void) | undefined;
-
-    try {
-      unsubscribe = await authStore.listen((auth) => {
-        if (!auth) {
-          // Replace the current route with signin
-          navigate("/signin", { replace: true });
-        }
-      });
-    } catch (error) {
-      console.error("Failed to set up auth listener:", error);
-    }
-
-    // Clean up OAuth server on component unmount
-    onCleanup(async () => {
-      try {
-        await invoke("plugin:oauth|stop");
-      } catch (e) {
-        // Ignore errors if no server is running
-      }
-      unsubscribe?.();
+    const unlisten = await events.authenticated.listen(async (e) => {
+      console.log(`Signed in: ${e.payload.user_id}`);
+      commands.setOauthListeningState(null);
+      setIsSignedIn(true);
+      alert("Successfully signed in to Cap!");
+      await commands.showWindow("Main");
+      getCurrentWindow().close();
     });
 
-    const unsubscribeDeepLink = await onOpenUrl(async (urls) => {
-      const isDevMode = import.meta.env.VITE_ENVIRONMENT === "development";
-      if (isDevMode) {
-        return;
-      }
-
-      for (const url of urls) {
-        if (!url.includes("token=")) return;
-
-        const urlObject = new URL(url);
-        const token = urlObject.searchParams.get("token");
-        const user_id = urlObject.searchParams.get("user_id");
-        const expires = Number(urlObject.searchParams.get("expires"));
-
-        if (!token || !expires || !user_id) {
-          throw new Error("Invalid signin params");
-        }
-
-        const existingAuth = await authStore.get();
-        await authStore.set({
-          token,
-          user_id,
-          expires,
-          plan: {
-            upgraded: false,
-            last_checked: 0,
-            manual: existingAuth?.plan?.manual ?? false,
-          },
-        });
-        setIsSignedIn(true);
-        const currentWindow = await Window.getByLabel("signin");
-        await commands.openMainWindow();
-
-        // Add a small delay to ensure window is ready
-        await new Promise((resolve) => setTimeout(resolve, 500));
-
-        const mainWindow = await Window.getByLabel("main");
-        console.log(
-          "Main window reference:",
-          mainWindow ? "found" : "not found"
-        );
-
-        if (mainWindow) {
-          try {
-            await mainWindow.setFocus();
-            console.log("Successfully set focus on main window");
-          } catch (e) {
-            console.error("Failed to focus main window:", e);
-          }
-        }
-
-        if (currentWindow) {
-          await currentWindow.close();
-        }
-      }
-    });
-
-    onCleanup(() => {
-      unsubscribeDeepLink();
-    });
+    onCleanup(() => unlisten());
   });
 
   return (
