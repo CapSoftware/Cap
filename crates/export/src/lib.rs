@@ -186,6 +186,8 @@ where
                 let mut frame_count = 0;
                 let mut first_frame = None;
 
+                let mut audio_sample_count = 0;
+
                 while let Some(frame) = rx_image_data.recv().await {
                     (self.on_progress)(frame_count);
 
@@ -212,13 +214,7 @@ where
                             let pts = (frame_count as f64 * f64::from(audio_info.sample_rate)
                                 / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
-                            // println!(
-                            //     "Export: Sending audio frame {} with PTS: {:?}, samples: {}, data size: {}",
-                            //     frame_count,
-                            //     frame.pts(),
-                            //     samples,
-                            //     frame_data.len()
-                            // );
+                            audio_sample_count += frame.samples();
                             Some(frame)
                         } else {
                             None
@@ -226,11 +222,6 @@ where
                     } else {
                         None
                     };
-
-                    // println!(
-                    //     "Export: Processing frame {} (size: {}x{}, padded_bytes_per_row: {})",
-                    //     frame_count, frame.width, frame.height, frame.padded_bytes_per_row
-                    // );
 
                     let mut video_frame = VideoInfo::from_raw(
                         RawVideoFormat::Rgba,
@@ -245,12 +236,6 @@ where
                     );
                     video_frame.set_pts(Some(frame_count as i64));
 
-                    // println!(
-                    //     "Export: Sending frame {} to encoder (PTS: {:?})",
-                    //     frame_count,
-                    //     video_frame.pts()
-                    // );
-
                     frame_tx
                         .send(MP4Input {
                             audio: audio_frame,
@@ -260,6 +245,9 @@ where
 
                     frame_count += 1;
                 }
+
+                println!("sent {frame_count} video frames");
+                println!("sent {audio_sample_count} audio samples");
 
                 // Save the first frame as a screenshot and thumbnail
                 if let Some(frame) = first_frame {

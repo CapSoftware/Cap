@@ -46,13 +46,17 @@ impl AudioData {
         let mut decoder_frame = frame::Audio::empty();
         let mut decode_packets = |decoder: &mut decoder::Audio| {
             while decoder.receive_frame(&mut decoder_frame).is_ok() {
+                let ts = decoder_frame.timestamp();
+                decoder_frame.set_pts(ts);
+
                 resampler.ingest_frame(&decoder_frame);
             }
         };
 
         let stream_index = input_stream.index();
-        for (stream, packet) in input_ctx.packets() {
+        for (stream, mut packet) in input_ctx.packets() {
             if stream.index() == stream_index {
+                packet.rescale_ts(stream.time_base(), input_info.time_base);
                 decoder.send_packet(&packet).unwrap();
                 decode_packets(&mut decoder);
             }
@@ -70,9 +74,15 @@ impl AudioData {
 
 pub struct AudioFrameBuffer {
     data: Vec<AudioData>,
-    cursor: (usize, usize),
+    cursor: AudioFrameBufferCursor,
     elapsed_samples: usize,
     sample_size: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AudioFrameBufferCursor {
+    segment_index: usize,
+    samples: usize,
 }
 
 impl AudioFrameBuffer {
@@ -82,7 +92,10 @@ impl AudioFrameBuffer {
 
         Self {
             data,
-            cursor: (0, 0),
+            cursor: AudioFrameBufferCursor {
+                segment_index: 0,
+                samples: 0,
+            },
             elapsed_samples: 0,
             sample_size,
         }
@@ -100,11 +113,20 @@ impl AudioFrameBuffer {
             Some(timeline) => match timeline.get_recording_time(playhead) {
                 Some((time, segment)) => {
                     let index = segment.unwrap_or(0) as usize;
-                    (index, self.playhead_to_samples(time) * self.sample_size)
+                    AudioFrameBufferCursor {
+                        segment_index: index,
+                        samples: self.playhead_to_samples(time),
+                    }
                 }
-                None => (0, self.data[0].buffer.len()),
+                None => AudioFrameBufferCursor {
+                    segment_index: 0,
+                    samples: self.data[0].buffer.len(),
+                },
             },
-            None => (0, self.elapsed_samples * self.sample_size),
+            None => AudioFrameBufferCursor {
+                segment_index: 0,
+                samples: self.elapsed_samples,
+            },
         };
     }
 
@@ -116,15 +138,18 @@ impl AudioFrameBuffer {
         // (corresponding to a trim or split point). Currently this change is at least 0.2 seconds
         // - not sure we offer that much precision in the editor even!
         let new_cursor = match timeline.get_recording_time(playhead) {
-            Some((time, segment)) => (
-                segment.unwrap_or(0) as usize,
-                self.playhead_to_samples(time) * self.sample_size,
-            ),
-            None => (0, self.data[0].buffer.len()),
+            Some((time, segment)) => AudioFrameBufferCursor {
+                segment_index: segment.unwrap_or(0) as usize,
+                samples: self.playhead_to_samples(time),
+            },
+            None => AudioFrameBufferCursor {
+                segment_index: 0,
+                samples: self.data[0].buffer.len(),
+            },
         };
 
-        let cursor_diff = new_cursor.1 as isize - self.cursor.1 as isize;
-        if new_cursor.0 != self.cursor.0
+        let cursor_diff = new_cursor.samples as isize - self.cursor.samples as isize;
+        if new_cursor.segment_index != self.cursor.segment_index
             || cursor_diff.unsigned_abs() > (self.info().sample_rate as usize) / 5
         {
             self.cursor = new_cursor;
@@ -153,7 +178,7 @@ impl AudioFrameBuffer {
             .map(move |(samples, data)| {
                 let mut raw_frame = FFAudio::new(format, samples, channels);
                 raw_frame.set_rate(sample_rate);
-                raw_frame.data_mut(0)[0..data.len()]
+                raw_frame.data_mut(0)[0..data.len() * f32::BYTE_SIZE]
                     .copy_from_slice(unsafe { cast_f32_slice_to_bytes(data) });
 
                 raw_frame
@@ -162,31 +187,23 @@ impl AudioFrameBuffer {
 
     pub fn next_frame_data<'a>(
         &'a mut self,
-        mut samples: usize,
+        samples: usize,
         maybe_timeline: Option<&TimelineConfiguration>,
     ) -> Option<(usize, &'a [f32])> {
         if let Some(timeline) = maybe_timeline {
             self.adjust_cursor(timeline);
         }
 
-        let buffer = &self.data[self.cursor.0].buffer;
-        if self.cursor.1 >= buffer.len() {
+        let buffer = &self.data[self.cursor.segment_index].buffer;
+        if self.cursor.segment_index >= buffer.len() {
             self.elapsed_samples += samples;
             return None;
         }
 
-        let mut bytes_size = self.sample_size * samples;
-
-        let remaining_data = buffer.len() - self.cursor.1;
-        if remaining_data < bytes_size {
-            bytes_size = remaining_data;
-            samples = remaining_data / self.sample_size;
-        }
-
         let start = self.cursor;
         self.elapsed_samples += samples;
-        self.cursor.1 += bytes_size;
-        Some((samples, &buffer[start.1..self.cursor.1]))
+        self.cursor.samples += samples;
+        Some((samples, &buffer[start.samples..self.cursor.samples]))
     }
 }
 

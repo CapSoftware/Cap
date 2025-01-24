@@ -223,9 +223,9 @@ impl MP4Encoder {
             audio.resampler.run(&buffered_frame, &mut output).unwrap();
 
             // Preserve PTS from input frame
-            if let Some(pts) = buffered_frame.pts() {
-                output.set_pts(Some(pts));
-            }
+            // if let Some(pts) = buffered_frame.pts() {
+            //     output.set_pts(Some(pts));
+            // }
 
             // println!(
             //     "MP4Encoder: Sending audio frame with PTS: {:?}, samples: {}",
@@ -245,11 +245,13 @@ impl MP4Encoder {
                 //     encoded_packet.size()
                 // );
 
+                // dbg!(encoded_packet.dts());
+                // dbg!(encoded_packet.pts());
                 encoded_packet.set_stream(1);
-                encoded_packet.rescale_ts(
-                    audio.encoder.time_base(),
-                    self.output_ctx.stream(1).unwrap().time_base(),
-                );
+                // encoded_packet.rescale_ts(
+                //     audio.encoder.time_base(),
+                //     self.output_ctx.stream(1).unwrap().time_base(),
+                // );
                 encoded_packet
                     .write_interleaved(&mut self.output_ctx)
                     .unwrap();
