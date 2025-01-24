@@ -1,6 +1,6 @@
 use cap_editor::Segment;
 use cap_media::{
-    data::{AudioInfo, RawVideoFormat, VideoInfo},
+    data::{cast_f32_slice_to_bytes, AudioInfo, RawVideoFormat, VideoInfo},
     encoders::{MP4Encoder, MP4Input},
     feeds::{AudioData, AudioFrameBuffer},
     MediaError,
@@ -207,7 +207,8 @@ where
                             .buffer
                             .next_frame_data(samples, project.timeline.as_ref().map(|t| t))
                         {
-                            let mut frame = audio_info.wrap_frame(&frame_data, 0);
+                            let mut frame = audio_info
+                                .wrap_frame(unsafe { cast_f32_slice_to_bytes(&frame_data) }, 0);
                             let pts = (frame_count as f64 * f64::from(audio_info.sample_rate)
                                 / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));

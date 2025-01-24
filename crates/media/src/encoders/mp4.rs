@@ -2,6 +2,7 @@ use crate::{
     data::{
         AudioInfo, FFAudio, FFPacket, FFRational, FFVideo, PlanarData, RawVideoFormat, VideoInfo,
     },
+    feeds::AudioData,
     pipeline::{audio_buffer::AudioBuffer, task::PipelineSinkTask},
     MediaError,
 };
@@ -86,6 +87,13 @@ impl MP4Encoder {
             audio_ctx.set_threading(Config::count(4));
             let mut audio_enc = audio_ctx.encoder().audio()?;
 
+            dbg!(audio_codec
+                .audio()
+                .unwrap()
+                .rates()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>());
             if !audio_codec
                 .audio()
                 .unwrap()
@@ -110,7 +118,7 @@ impl MP4Encoder {
 
             let resampler = software::resampler(
                 (
-                    Sample::F64(format::sample::Type::Packed),
+                    AudioData::FORMAT,
                     audio_config.channel_layout(),
                     audio_config.sample_rate,
                 ),
@@ -211,6 +219,7 @@ impl MP4Encoder {
             };
 
             let mut output = ffmpeg::util::frame::Audio::empty();
+
             audio.resampler.run(&buffered_frame, &mut output).unwrap();
 
             // Preserve PTS from input frame
