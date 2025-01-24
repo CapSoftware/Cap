@@ -1,6 +1,6 @@
 use cap_editor::Segment;
 use cap_media::{
-    data::{AudioInfo, RawVideoFormat, VideoInfo},
+    data::{cast_f32_slice_to_bytes, AudioInfo, RawVideoFormat, VideoInfo},
     encoders::{MP4Encoder, MP4Input},
     feeds::{AudioData, AudioFrameBuffer},
     MediaError,
@@ -207,17 +207,11 @@ where
                             .buffer
                             .next_frame_data(samples, project.timeline.as_ref().map(|t| t))
                         {
-                            let mut frame = audio_info.wrap_frame(&frame_data, 0);
+                            let mut frame = audio_info
+                                .wrap_frame(unsafe { cast_f32_slice_to_bytes(&frame_data) }, 0);
                             let pts = (frame_count as f64 * f64::from(audio_info.sample_rate)
                                 / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
-                            // println!(
-                            //     "Export: Sending audio frame {} with PTS: {:?}, samples: {}, data size: {}",
-                            //     frame_count,
-                            //     frame.pts(),
-                            //     samples,
-                            //     frame_data.len()
-                            // );
                             Some(frame)
                         } else {
                             None
@@ -225,11 +219,6 @@ where
                     } else {
                         None
                     };
-
-                    // println!(
-                    //     "Export: Processing frame {} (size: {}x{}, padded_bytes_per_row: {})",
-                    //     frame_count, frame.width, frame.height, frame.padded_bytes_per_row
-                    // );
 
                     let mut video_frame = VideoInfo::from_raw(
                         RawVideoFormat::Rgba,
@@ -243,12 +232,6 @@ where
                         frame.padded_bytes_per_row as usize,
                     );
                     video_frame.set_pts(Some(frame_count as i64));
-
-                    // println!(
-                    //     "Export: Sending frame {} to encoder (PTS: {:?})",
-                    //     frame_count,
-                    //     video_frame.pts()
-                    // );
 
                     frame_tx
                         .send(MP4Input {
