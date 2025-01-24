@@ -186,8 +186,6 @@ where
                 let mut frame_count = 0;
                 let mut first_frame = None;
 
-                let mut audio_sample_count = 0;
-
                 while let Some(frame) = rx_image_data.recv().await {
                     (self.on_progress)(frame_count);
 
@@ -214,7 +212,6 @@ where
                             let pts = (frame_count as f64 * f64::from(audio_info.sample_rate)
                                 / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
-                            audio_sample_count += frame.samples();
                             Some(frame)
                         } else {
                             None
