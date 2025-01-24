@@ -1,7 +1,10 @@
 use cap_project::TimelineConfiguration;
 use ffmpeg::{
     codec::{context, decoder},
-    format::sample::{Sample, Type},
+    format::{
+        self,
+        sample::{Sample, Type},
+    },
     frame,
     software::resampling,
 };
@@ -37,39 +40,69 @@ impl AudioData {
         decoder.set_parameters(input_stream.parameters())?;
         decoder.set_packet_time_base(input_stream.time_base());
 
-        let input_info = AudioInfo::from_decoder(&decoder)?;
-        let mut output_info = input_info;
-        output_info.sample_format = Self::FORMAT;
-
-        let mut resampler = F32Resampler::new(&decoder);
-
-        let mut decoder_frame = frame::Audio::empty();
-        let mut decode_packets = |decoder: &mut decoder::Audio| {
-            while decoder.receive_frame(&mut decoder_frame).is_ok() {
-                let ts = decoder_frame.timestamp();
-                decoder_frame.set_pts(ts);
-
-                resampler.ingest_frame(&decoder_frame);
-            }
-        };
+        let mut info = AudioInfo::from_decoder(&decoder)?;
+        info.sample_format = Self::FORMAT;
 
         let stream_index = input_stream.index();
-        for (stream, mut packet) in input_ctx.packets() {
-            if stream.index() == stream_index {
-                packet.rescale_ts(stream.time_base(), input_info.time_base);
-                decoder.send_packet(&packet).unwrap();
-                decode_packets(&mut decoder);
-            }
-        }
-
-        decoder.send_eof().unwrap();
-        decode_packets(&mut decoder);
-
         Ok(Self {
-            buffer: Arc::new(resampler.finish().0),
-            info: output_info,
+            buffer: Arc::new(decode_audio_to_f32(
+                &mut decoder,
+                &mut input_ctx,
+                stream_index,
+            )),
+            info,
         })
     }
+}
+
+fn decode_audio_to_f32(
+    decoder: &mut decoder::Audio,
+    input_ctx: &mut format::context::Input,
+    stream_index: usize,
+) -> Vec<f32> {
+    let mut resampler = F32Resampler::new(&decoder);
+
+    let decoder_time_base = decoder.time_base();
+    run_audio_decoder(
+        decoder,
+        input_ctx.packets().filter_map(|(s, mut p)| {
+            if s.index() == stream_index {
+                p.rescale_ts(s.time_base(), decoder_time_base);
+                Some(p)
+            } else {
+                None
+            }
+        }),
+        |frame| {
+            let ts = frame.timestamp();
+            frame.set_pts(ts);
+
+            resampler.ingest_frame(&frame);
+        },
+    );
+
+    resampler.finish().0
+}
+
+fn run_audio_decoder(
+    decoder: &mut decoder::Audio,
+    packets: impl Iterator<Item = ffmpeg::codec::packet::Packet>,
+    mut on_frame: impl FnMut(&mut frame::Audio),
+) {
+    let mut decoder_frame = frame::Audio::empty();
+    let mut decode_packets = |decoder: &mut decoder::Audio| {
+        while decoder.receive_frame(&mut decoder_frame).is_ok() {
+            on_frame(&mut decoder_frame);
+        }
+    };
+
+    for packet in packets {
+        decoder.send_packet(&packet).unwrap();
+        decode_packets(decoder);
+    }
+
+    decoder.send_eof().unwrap();
+    decode_packets(decoder);
 }
 
 pub struct AudioFrameBuffer {

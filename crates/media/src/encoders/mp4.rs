@@ -87,13 +87,6 @@ impl MP4Encoder {
             audio_ctx.set_threading(Config::count(4));
             let mut audio_enc = audio_ctx.encoder().audio()?;
 
-            dbg!(audio_codec
-                .audio()
-                .unwrap()
-                .rates()
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>());
             if !audio_codec
                 .audio()
                 .unwrap()

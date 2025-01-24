@@ -246,9 +246,6 @@ where
                     frame_count += 1;
                 }
 
-                println!("sent {frame_count} video frames");
-                println!("sent {audio_sample_count} audio samples");
-
                 // Save the first frame as a screenshot and thumbnail
                 if let Some(frame) = first_frame {
                     let rgb_img = ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(
