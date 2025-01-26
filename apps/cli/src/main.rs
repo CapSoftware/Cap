@@ -103,7 +103,9 @@ window {}:
                         RequestedFormatType::AbsoluteHighestFrameRate,
                     );
 
-                    let mut camera = Camera::new(camera_info.index().clone(), format).unwrap();
+                    let Ok(mut camera) = Camera::new(camera_info.index().clone(), format) else {
+                        continue;
+                    };
 
                     info.push(json!({
                         "index": camera_info.index().to_string(),

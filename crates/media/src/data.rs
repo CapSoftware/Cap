@@ -173,6 +173,7 @@ impl AudioInfo {
         let interleaved_chunk_size = sample_size * self.channels;
         let samples = data.len() / interleaved_chunk_size;
 
+        dbg!(samples);
         let mut frame = FFAudio::new(self.sample_format, samples, self.channel_layout());
         frame.set_pts(Some(timestamp));
         frame.set_rate(self.sample_rate);
@@ -202,6 +203,10 @@ impl AudioInfo {
 
         frame
     }
+}
+
+pub unsafe fn cast_f32_slice_to_bytes(slice: &[f32]) -> &[u8] {
+    std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * f32::BYTE_SIZE)
 }
 
 #[derive(Debug, Copy, Clone)]

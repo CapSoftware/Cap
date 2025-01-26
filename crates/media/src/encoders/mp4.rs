@@ -2,6 +2,7 @@ use crate::{
     data::{
         AudioInfo, FFAudio, FFPacket, FFRational, FFVideo, PlanarData, RawVideoFormat, VideoInfo,
     },
+    feeds::AudioData,
     pipeline::{audio_buffer::AudioBuffer, task::PipelineSinkTask},
     MediaError,
 };
@@ -110,7 +111,7 @@ impl MP4Encoder {
 
             let resampler = software::resampler(
                 (
-                    Sample::F64(format::sample::Type::Packed),
+                    AudioData::FORMAT,
                     audio_config.channel_layout(),
                     audio_config.sample_rate,
                 ),
@@ -202,6 +203,7 @@ impl MP4Encoder {
         //     frame.samples()
         // );
 
+        dbg!(audio.encoder.frame_size());
         audio.buffer.consume(frame);
 
         // Process all buffered frames
@@ -211,6 +213,7 @@ impl MP4Encoder {
             };
 
             let mut output = ffmpeg::util::frame::Audio::empty();
+
             audio.resampler.run(&buffered_frame, &mut output).unwrap();
 
             // Preserve PTS from input frame
@@ -218,11 +221,9 @@ impl MP4Encoder {
                 output.set_pts(Some(pts));
             }
 
-            // println!(
-            //     "MP4Encoder: Sending audio frame with PTS: {:?}, samples: {}",
-            //     output.pts(),
-            //     output.samples()
-            // );
+            let data = output.data(0);
+            let data_f32 =
+                unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() / 4) };
 
             // Send frame to encoder
             audio.encoder.send_frame(&output).unwrap();
@@ -230,12 +231,6 @@ impl MP4Encoder {
             // Process any encoded packets
             let mut encoded_packet = FFPacket::empty();
             while audio.encoder.receive_packet(&mut encoded_packet).is_ok() {
-                // println!(
-                //     "MP4Encoder: Writing audio packet with PTS: {:?}, size: {}",
-                //     encoded_packet.pts(),
-                //     encoded_packet.size()
-                // );
-
                 encoded_packet.set_stream(1);
                 encoded_packet.rescale_ts(
                     audio.encoder.time_base(),
@@ -257,21 +252,11 @@ impl MP4Encoder {
             .receive_packet(&mut encoded_packet)
             .is_ok()
         {
-            // println!(
-            //     "MP4Encoder: Got encoded packet with PTS: {:?}, DTS: {:?}",
-            //     encoded_packet.pts(),
-            //     encoded_packet.dts()
-            // );
             encoded_packet.set_stream(0); // Video is stream 0
             encoded_packet.rescale_ts(
                 self.video.encoder.time_base(),
                 self.output_ctx.stream(0).unwrap().time_base(),
             );
-            // println!(
-            //     "MP4Encoder: Writing packet with rescaled PTS: {:?}, DTS: {:?}",
-            //     encoded_packet.pts(),
-            //     encoded_packet.dts()
-            // );
             encoded_packet
                 .write_interleaved(&mut self.output_ctx)
                 .unwrap();

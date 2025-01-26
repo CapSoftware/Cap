@@ -18,7 +18,8 @@
     "eslint": "^7.32.0",
     "extract-zip": "^2.0.1",
     "prettier": "^2.5.1",
-    "turbo": "^1.10.16"
+    "turbo": "^1.10.16",
+    "typescript": "^5.7.2"
   },
   "packageManager": "pnpm@9.8.0",
   "name": "cap",

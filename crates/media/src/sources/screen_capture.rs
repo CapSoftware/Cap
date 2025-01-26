@@ -250,7 +250,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             show_highlight: true,
             target: Some(target),
             crop_area,
-            output_type: self.output_type.unwrap_or(FrameType::YUVFrame),
+            output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
             output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
             excluded_targets: Some(excluded_targets),
         }
