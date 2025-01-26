@@ -123,7 +123,7 @@ impl FfmpegDecoder {
                 #[cfg(target_os = "windows")]
                 {
                     decoder
-                        .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA, Pixel::NV12)
+                        .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2, Pixel::DXVA2_VLD)
                         .ok()
                 }
 

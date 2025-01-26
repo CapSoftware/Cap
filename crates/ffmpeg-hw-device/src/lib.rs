@@ -93,9 +93,7 @@ impl CodecContextExt for codec::decoder::decoder::Decoder {
                     return Err("no hw config");
                 }
 
-                if (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1
-                    && (*config).device_type == AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX
-                {
+                if (*config).methods & (AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) == 1 {
                     HW_PIX_FMT.set((*config).pix_fmt);
                     break;
                 }
