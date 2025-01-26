@@ -223,7 +223,8 @@ fn run_camera_feed(
             match camera_format.format() {
                 FrameFormat::BGRA => Pixel::BGRA,
                 FrameFormat::MJPEG => {
-                    todo!("handle mjpeg for camera")
+                    Pixel::RGB24
+                    // todo!("handle mjpeg for camera")
                 }
                 FrameFormat::RAWRGB => Pixel::RGB24,
                 FrameFormat::NV12 => Pixel::NV12,
@@ -265,7 +266,8 @@ fn run_camera_feed(
                                 match camera_format.format() {
                                     FrameFormat::BGRA => Pixel::BGRA,
                                     FrameFormat::MJPEG => {
-                                        todo!("handle mjpeg for camera")
+                                        Pixel::RGB24
+                                        // todo!("handle mjpeg for camera")
                                     }
                                     FrameFormat::RAWRGB => Pixel::RGB24,
                                     FrameFormat::NV12 => Pixel::NV12,
@@ -384,6 +386,24 @@ fn buffer_to_ffvideo(buffer: nokhwa::Buffer) -> FFVideo {
                     }
                 })
             }
+            FrameFormat::MJPEG => (Pixel::RGB24, |frame, buffer| {
+                let decoded = buffer
+                    .decode_image::<nokhwa::pixel_format::RgbFormat>()
+                    .unwrap();
+
+                let bytes = decoded.into_raw();
+
+                let width = frame.width() as usize;
+                let height = frame.height() as usize;
+                let stride = frame.stride(0) as usize;
+
+                for y in 0..height {
+                    let row_length = width * 3;
+
+                    frame.data_mut(0)[y * stride..(y * stride + row_length)]
+                        .copy_from_slice(&bytes[y * width * 3..y * width * 3 + row_length]);
+                }
+            }),
             _ => todo!("implement more camera formats"),
         }
     };
