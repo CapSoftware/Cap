@@ -744,6 +744,7 @@ impl ProjectUniforms {
                 .as_ref()
                 .map(|t| t.zoom_segments.as_slice())
                 .unwrap_or(&[]),
+            cursor_position.unwrap_or(XY::new(0.5, 0.5)),
         );
 
         let zoom = InterpolatedZoom::new(segment_cursor);
@@ -1867,7 +1868,7 @@ fn interpolate_cursor_position(
         // Velocity-based weight
         let velocity_weight = if i < velocities.len() {
             let vel = velocities[i];
-            if vel > velocity_threshold {
+            if (vel > velocity_threshold) {
                 (velocity_threshold / vel).powf(match animation_style {
                     CursorAnimationStyle::Slow => 1.5,
                     CursorAnimationStyle::Regular => 1.0,

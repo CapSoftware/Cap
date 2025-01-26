@@ -8,10 +8,11 @@ pub struct SegmentsCursor<'a> {
     segment: Option<&'a ZoomSegment>,
     prev_segment: Option<&'a ZoomSegment>,
     segments: &'a [ZoomSegment],
+    cursor_position: XY<f64>,
 }
 
 impl<'a> SegmentsCursor<'a> {
-    pub fn new(time: f64, segments: &'a [ZoomSegment]) -> Self {
+    pub fn new(time: f64, segments: &'a [ZoomSegment], cursor_position: XY<f64>) -> Self {
         match segments
             .iter()
             .position(|s| time > s.start && time <= s.end)
@@ -25,6 +26,7 @@ impl<'a> SegmentsCursor<'a> {
                     None
                 },
                 segments,
+                cursor_position,
             },
             None => {
                 let prev = segments
@@ -37,6 +39,7 @@ impl<'a> SegmentsCursor<'a> {
                     segment: None,
                     prev_segment: prev.map(|(_, s)| s),
                     segments,
+                    cursor_position,
                 }
             }
         }
@@ -50,9 +53,9 @@ pub struct SegmentBounds {
 }
 
 impl SegmentBounds {
-    fn from_segment(segment: &ZoomSegment) -> Self {
+    fn from_segment(segment: &ZoomSegment, cursor_position: XY<f64>) -> Self {
         let position = match segment.mode {
-            cap_project::ZoomMode::Auto => (0.0, 0.0),
+            cap_project::ZoomMode::Auto => (cursor_position.x, cursor_position.y),
             cap_project::ZoomMode::Manual { x, y } => (x, y),
         };
 
@@ -116,7 +119,7 @@ impl InterpolatedZoom {
                 Self {
                     t: 1.0 - zoom_t,
                     bounds: {
-                        let prev_segment_bounds = SegmentBounds::from_segment(prev_segment);
+                        let prev_segment_bounds = SegmentBounds::from_segment(prev_segment, cursor.cursor_position);
 
                         SegmentBounds::new(
                             prev_segment_bounds.top_left * (1.0 - zoom_t)
@@ -134,7 +137,7 @@ impl InterpolatedZoom {
                 Self {
                     t,
                     bounds: {
-                        let segment_bounds = SegmentBounds::from_segment(segment);
+                        let segment_bounds = SegmentBounds::from_segment(segment, cursor.cursor_position);
 
                         SegmentBounds::new(
                             default.top_left * (1.0 - t) + segment_bounds.top_left * t,
@@ -144,8 +147,8 @@ impl InterpolatedZoom {
                 }
             }
             (Some(prev_segment), Some(segment)) => {
-                let prev_segment_bounds = SegmentBounds::from_segment(prev_segment);
-                let segment_bounds = SegmentBounds::from_segment(segment);
+                let prev_segment_bounds = SegmentBounds::from_segment(prev_segment, cursor.cursor_position);
+                let segment_bounds = SegmentBounds::from_segment(segment, cursor.cursor_position);
 
                 let zoom_t =
                     ease_in(t_clamp((cursor.time - segment.start) / ZOOM_DURATION) as f32) as f64;
@@ -168,7 +171,7 @@ impl InterpolatedZoom {
                     // from the previous value that the zoom out got interrupted at by the current segment
 
                     let min = InterpolatedZoom::new_with_easing(
-                        SegmentsCursor::new(segment.start, cursor.segments),
+                        SegmentsCursor::new(segment.start, cursor.segments, cursor.cursor_position),
                         ease_in,
                         ease_out,
                     );
@@ -234,12 +237,12 @@ mod test {
         };
     }
 
-    fn c(time: f64, segments: &[ZoomSegment]) -> SegmentsCursor {
-        SegmentsCursor::new(time, segments)
+    fn c(time: f64, segments: &[ZoomSegment], cursor_position: XY<f64>) -> SegmentsCursor {
+        SegmentsCursor::new(time, segments, cursor_position)
     }
 
-    fn test_interp((time, segments): (f64, &[ZoomSegment]), expected: InterpolatedZoom) {
-        let actual = InterpolatedZoom::new_with_easing(c(time, segments), |t| t, |t| t);
+    fn test_interp((time, segments): (f64, &[ZoomSegment]), cursor_position: XY<f64>, expected: InterpolatedZoom) {
+        let actual = InterpolatedZoom::new_with_easing(c(time, segments, cursor_position), |t| t, |t| t);
 
         assert_f64_near!(actual.t, expected.t, "t");
 
@@ -263,6 +266,7 @@ mod test {
 
         test_interp(
             (0.0, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.0,
                 bounds: SegmentBounds::default(),
@@ -270,6 +274,7 @@ mod test {
         );
         test_interp(
             (2.0, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.0,
                 bounds: SegmentBounds::default(),
@@ -277,6 +282,7 @@ mod test {
         );
         test_interp(
             (2.0 + ZOOM_DURATION * 0.1, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.1,
                 bounds: SegmentBounds::new(XY::new(-0.05, -0.05), XY::new(1.05, 1.05)),
@@ -284,6 +290,7 @@ mod test {
         );
         test_interp(
             (2.0 + ZOOM_DURATION * 0.9, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.9,
                 bounds: SegmentBounds::new(XY::new(-0.45, -0.45), XY::new(1.45, 1.45)),
@@ -291,6 +298,7 @@ mod test {
         );
         test_interp(
             (2.0 + ZOOM_DURATION, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 1.0,
                 bounds: SegmentBounds::new(XY::new(-0.5, -0.5), XY::new(1.5, 1.5)),
@@ -298,6 +306,7 @@ mod test {
         );
         test_interp(
             (4.0, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 1.0,
                 bounds: SegmentBounds::new(XY::new(-0.5, -0.5), XY::new(1.5, 1.5)),
@@ -305,6 +314,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION * 0.2, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.8,
                 bounds: SegmentBounds::new(XY::new(-0.4, -0.4), XY::new(1.4, 1.4)),
@@ -312,6 +322,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION * 0.8, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.2,
                 bounds: SegmentBounds::new(XY::new(-0.1, -0.1), XY::new(1.1, 1.1)),
@@ -319,6 +330,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.0,
                 bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.0, 1.0)),
@@ -345,6 +357,7 @@ mod test {
 
         test_interp(
             (4.0, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 1.0,
                 bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(2.0, 2.0)),
@@ -352,6 +365,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION * 0.2, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 1.0,
                 bounds: SegmentBounds::new(XY::new(-0.3, -0.3), XY::new(2.1, 2.1)),
@@ -359,6 +373,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION * 0.8, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 1.0,
                 bounds: SegmentBounds::new(XY::new(-1.2, -1.2), XY::new(2.4, 2.4)),
@@ -366,6 +381,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 1.0,
                 bounds: SegmentBounds::new(XY::new(-1.5, -1.5), XY::new(2.5, 2.5)),
@@ -392,6 +408,7 @@ mod test {
 
         test_interp(
             (4.0, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 1.0,
                 bounds: SegmentBounds::new(XY::new(-0.5, -0.5), XY::new(1.5, 1.5)),
@@ -399,6 +416,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION * 0.5, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.5,
                 bounds: SegmentBounds::new(XY::new(-0.25, -0.25), XY::new(1.25, 1.25)),
@@ -406,6 +424,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION * 0.75, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.25,
                 bounds: SegmentBounds::new(XY::new(-0.125, -0.125), XY::new(1.125, 1.125)),
@@ -413,6 +432,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION * (0.75 + 0.5), &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.625,
                 bounds: SegmentBounds::new(XY::new(-0.8125, -0.8125), XY::new(1.8125, 1.8125)),
@@ -420,6 +440,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION * (0.75 + 1.0), &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 1.0,
                 bounds: SegmentBounds::new(XY::new(-1.5, -1.5), XY::new(2.5, 2.5)),
@@ -446,6 +467,7 @@ mod test {
 
         test_interp(
             (4.0, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 1.0,
                 bounds: SegmentBounds::new(XY::new(-0.5, -0.5), XY::new(1.5, 1.5)),
@@ -453,6 +475,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION * 0.5, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.5,
                 bounds: SegmentBounds::new(XY::new(-0.25, -0.25), XY::new(1.25, 1.25)),
@@ -460,6 +483,7 @@ mod test {
         );
         test_interp(
             (4.0 + ZOOM_DURATION, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.0,
                 bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.0, 1.0)),
@@ -467,6 +491,7 @@ mod test {
         );
         test_interp(
             (7.0, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.0,
                 bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(1.0, 1.0)),
@@ -474,6 +499,7 @@ mod test {
         );
         test_interp(
             (7.0 + ZOOM_DURATION * 0.5, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 0.5,
                 bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(2.5, 2.5)),
@@ -481,6 +507,7 @@ mod test {
         );
         test_interp(
             (7.0 + ZOOM_DURATION * 1.0, &segments),
+            XY::new(0.5, 0.5),
             InterpolatedZoom {
                 t: 1.0,
                 bounds: SegmentBounds::new(XY::new(0.0, 0.0), XY::new(4.0, 4.0)),
