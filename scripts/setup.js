@@ -1,0 +1,181 @@
+// @ts-check
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { exec as execCb } from "node:child_process";
+import { env } from "node:process";
+import { promisify } from "node:util";
+
+const exec = promisify(execCb);
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const __root = path.resolve(path.join(__dirname, ".."));
+const targetDir = `${__root}/target`;
+
+async function main() {
+  if (process.platform === "darwin") {
+    const NATIVE_DEPS_URL =
+      "https://github.com/spacedriveapp/native-deps/releases/latest/download";
+
+    const NATIVE_DEPS_ASSETS = {
+      darwin: {
+        x86_64: "native-deps-x86_64-darwin-apple.tar.xz",
+        aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
+      },
+    };
+
+    const nativeDepsTar = `${targetDir}/native-deps.tar.xz`;
+    if (!(await fileExists(nativeDepsTar))) {
+      const nativeDepsBytes = await fetch(
+        `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS.darwin.aarch64}`
+      )
+        .then((r) => r.blob())
+        .then((b) => b.arrayBuffer());
+      await fs.writeFile(nativeDepsTar, Buffer.from(nativeDepsBytes));
+      console.log("Downloaded native deps");
+    } else console.log("Using cached native-deps.tar.xz");
+
+    const nativeDepsDir = `${targetDir}/native-deps`;
+    if (!(await fileExists(nativeDepsDir))) {
+      await fs.mkdir(nativeDepsDir, { recursive: true });
+      await exec(`tar xf ${targetDir}/native-deps.tar.xz -C ${nativeDepsDir}`);
+      console.log("Extracted native-deps");
+    } else console.log("Using cached native-deps");
+
+    const frameworkDir = path.join(nativeDepsDir, "Spacedrive.framework");
+    await trimMacOSFramework(frameworkDir);
+    console.log("Trimmed .framework");
+
+    console.log("Signing .framework libraries");
+    await signMacOSFrameworkLibs(frameworkDir);
+    console.log("Signed .framework libraries");
+
+    // alternative to specifying dylibs as linker args
+    for (const name of await fs.readdir(`${nativeDepsDir}/lib`)) {
+      await fs.copyFile(
+        `${nativeDepsDir}/lib/${name}`,
+        `${targetDir}/debug/${name}`
+      );
+    }
+    console.log("Copied ffmepg dylibs to target/debug");
+  } else if (process.platform === "win32") {
+    const FFMPEG_ZIP_NAME = "ffmpeg-7.1-full_build-shared";
+    const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/7.1/${FFMPEG_ZIP_NAME}.zip`;
+
+    const ffmpegZip = `${targetDir}/ffmpeg.zip`;
+    if (!(await fileExists(ffmpegZip))) {
+      const ffmpegZipBytes = await fetch(FFMPEG_ZIP_URL)
+        .then((r) => r.blob())
+        .then((b) => b.arrayBuffer());
+      await fs.writeFile(ffmpegZip, Buffer.from(ffmpegZipBytes));
+      console.log("Downloaded ffmpeg.zip");
+    } else console.log("Using cached ffmpeg.zip");
+
+    const ffmpegDir = `${targetDir}/ffmepg`;
+    if (!(await fileExists(ffmpegDir))) {
+      await exec(`tar xf ${ffmpegZip} -C ${targetDir}`);
+      await fs.rename(`${targetDir}/${FFMPEG_ZIP_NAME}`, ffmpegDir);
+      console.log("Extracted ffmpeg");
+    } else console.log("Using cached ffmpeg");
+
+    // alternative to adding ffmpeg/bin to PATH
+    for (const name of await fs.readdir(`${ffmpegDir}/bin`)) {
+      await fs.copyFile(
+        `${ffmpegDir}/bin/${name}`,
+        `${targetDir}/debug/${name}`
+      );
+    }
+    console.log("Copied ffmepg dylibs to target/debug");
+
+    if (!(await fileExists(`${targetDir}/native-deps`)))
+      await fs.mkdir(`${targetDir}/native-deps`, { recursive: true });
+
+    await fs.cp(`${ffmpegDir}/lib`, `${targetDir}/native-deps/lib`, {
+      recursive: true,
+      force: true,
+    });
+    await fs.cp(`${ffmpegDir}/include`, `${targetDir}/native-deps/include`, {
+      recursive: true,
+      force: true,
+    });
+    console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
+  }
+}
+
+main();
+
+async function trimMacOSFramework(frameworkDir) {
+  const headersDir = path.join(frameworkDir, "Headers");
+  const librariesDir = path.join(frameworkDir, "Libraries");
+
+  const libraries = await fs.readdir(librariesDir);
+
+  const unnecessaryLibraries = libraries.filter(
+    (v) =>
+      !(
+        v.startsWith("libav") ||
+        v.startsWith("libsw") ||
+        v.startsWith("libpostproc")
+      )
+  );
+
+  for (const lib of unnecessaryLibraries) {
+    await fs.rm(path.join(librariesDir, lib), { recursive: true });
+  }
+
+  const headers = await fs.readdir(headersDir);
+
+  const unnecessaryHeaders = headers.filter(
+    (v) =>
+      !(
+        v.startsWith("libav") ||
+        v.startsWith("libsw") ||
+        v.startsWith("libpostproc")
+      )
+  );
+
+  for (const header of unnecessaryHeaders) {
+    await fs.rm(path.join(headersDir, header), { recursive: true });
+  }
+
+  const modelsPath = path.join(frameworkDir, "Resources", "Models");
+  if (await fileExists(modelsPath))
+    await fs.rm(modelsPath, {
+      recursive: true,
+    });
+}
+
+async function signMacOSFrameworkLibs(frameworkDir) {
+  const signId = env.APPLE_SIGNING_IDENTITY || "-";
+  const keychain = env.APPLE_KEYCHAIN ? `--keychain ${env.APPLE_KEYCHAIN}` : "";
+
+  // Sign dylibs (Required for them to work on macOS 13+)
+  await fs
+    .readdir(path.join(frameworkDir, "Libraries"), {
+      recursive: true,
+      withFileTypes: true,
+    })
+    .then((files) =>
+      Promise.all(
+        files
+          .filter((entry) => entry.isFile() && entry.name.endsWith(".dylib"))
+          .map((entry) =>
+            exec(
+              `codesign ${keychain} -s "${signId}" -f "${path.join(
+                entry.path,
+                entry.name
+              )}"`
+            )
+          )
+      )
+    );
+}
+
+async function fileExists(path) {
+  return await fs
+    .access(path)
+    .then(() => true)
+    .catch(() => false);
+}
