@@ -14,22 +14,22 @@ const __dirname = path.dirname(__filename);
 const __root = path.resolve(path.join(__dirname, ".."));
 const targetDir = `${__root}/target`;
 
+const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
+
 async function main() {
   if (process.platform === "darwin") {
     const NATIVE_DEPS_URL =
       "https://github.com/spacedriveapp/native-deps/releases/latest/download";
 
     const NATIVE_DEPS_ASSETS = {
-      darwin: {
-        x86_64: "native-deps-x86_64-darwin-apple.tar.xz",
-        aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
-      },
+      x86_64: "native-deps-x86_64-darwin-apple.tar.xz",
+      aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
     };
 
     const nativeDepsTar = `${targetDir}/native-deps.tar.xz`;
     if (!(await fileExists(nativeDepsTar))) {
       const nativeDepsBytes = await fetch(
-        `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS.darwin.aarch64}`
+        `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS.darwin[arch]}`
       )
         .then((r) => r.blob())
         .then((b) => b.arrayBuffer());
