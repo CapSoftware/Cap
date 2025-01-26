@@ -36,3 +36,5 @@ pnpm-lock.yaml
 native-deps*
 apps/storybook/storybook-static
 tauri.*.conf.json
+
+*.tsbuildinfo

@@ -173,6 +173,7 @@ impl AudioInfo {
         let interleaved_chunk_size = sample_size * self.channels;
         let samples = data.len() / interleaved_chunk_size;
 
+        dbg!(samples);
         let mut frame = FFAudio::new(self.sample_format, samples, self.channel_layout());
         frame.set_pts(Some(timestamp));
         frame.set_rate(self.sample_rate);

@@ -203,6 +203,7 @@ impl MP4Encoder {
         //     frame.samples()
         // );
 
+        dbg!(audio.encoder.frame_size());
         audio.buffer.consume(frame);
 
         // Process all buffered frames
@@ -219,6 +220,10 @@ impl MP4Encoder {
             if let Some(pts) = buffered_frame.pts() {
                 output.set_pts(Some(pts));
             }
+
+            let data = output.data(0);
+            let data_f32 =
+                unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() / 4) };
 
             // Send frame to encoder
             audio.encoder.send_frame(&output).unwrap();

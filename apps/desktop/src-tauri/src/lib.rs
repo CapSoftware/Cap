@@ -1157,7 +1157,6 @@ fn open_main_window(app: AppHandle) {
 
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
 pub struct UploadProgress {
-    stage: String,
     progress: f64,
     message: String,
 }
@@ -1233,7 +1232,6 @@ async fn upload_exported_video(
 
     // Start upload progress
     UploadProgress {
-        stage: "uploading".to_string(),
         progress: 0.0,
         message: "Starting upload...".to_string(),
     }
@@ -1265,7 +1263,6 @@ async fn upload_exported_video(
         Ok(uploaded_video) => {
             // Emit upload complete
             UploadProgress {
-                stage: "uploading".to_string(),
                 progress: 1.0,
                 message: "Upload complete!".to_string(),
             }
