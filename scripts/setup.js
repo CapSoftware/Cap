@@ -29,7 +29,7 @@ async function main() {
     const nativeDepsTar = `${targetDir}/native-deps.tar.xz`;
     if (!(await fileExists(nativeDepsTar))) {
       const nativeDepsBytes = await fetch(
-        `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS.darwin[arch]}`
+        `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS[arch]}`
       )
         .then((r) => r.blob())
         .then((b) => b.arrayBuffer());
@@ -38,19 +38,25 @@ async function main() {
     } else console.log("Using cached native-deps.tar.xz");
 
     const nativeDepsDir = `${targetDir}/native-deps`;
+    const frameworkDir = path.join(nativeDepsDir, "Spacedrive.framework");
     if (!(await fileExists(nativeDepsDir))) {
       await fs.mkdir(nativeDepsDir, { recursive: true });
       await exec(`tar xf ${targetDir}/native-deps.tar.xz -C ${nativeDepsDir}`);
       console.log("Extracted native-deps");
     } else console.log("Using cached native-deps");
 
-    const frameworkDir = path.join(nativeDepsDir, "Spacedrive.framework");
     await trimMacOSFramework(frameworkDir);
     console.log("Trimmed .framework");
 
     console.log("Signing .framework libraries");
     await signMacOSFrameworkLibs(frameworkDir);
     console.log("Signed .framework libraries");
+
+    const frameworkTargetDir = `${targetDir}/Frameworks/Spacedrive.framework`;
+    await fs.rm(frameworkTargetDir, { recursive: true }).catch(() => {});
+    await fs.cp(frameworkDir, `${targetDir}/Frameworks/Spacedrive.framework`, {
+      recursive: true,
+    });
 
     // alternative to specifying dylibs as linker args
     for (const name of await fs.readdir(`${nativeDepsDir}/lib`)) {

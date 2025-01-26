@@ -25,10 +25,9 @@ There are many ways to contribute to Cap. You can:
 ### Development Requirements
 
 - Node Version 20+
-- Cargo 1.77.0+ (previous versions may work)
+- Rust 1.84.0+
 - pnpm 8.10.5+
 - Docker ([OrbStack](https://orbstack.dev/) recommended)
-- pkg-config
 
 ### How do I get started with development on my local machine?
 
@@ -36,6 +35,7 @@ This is a very top level guide right now, but if you want to develop for both th
 
 1. Clone the repository
 2. Install dependencies with `pnpm install`
+3. Setup native dependencies with `pnpm cap-setup`
 3. Clone .env.example and rename it to .env
 4. At the root of the directory, run the app with `pnpm dev`. This will create a local database simulator, run the necessary DB migrations, and start both the web app and desktop app concurrently.
 5. Make sure both the the desktop app, and web app can be built without any errors. For the desktop app, use `pnpm tauri:build`. For the web app, use `pnpm build`
