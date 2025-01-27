@@ -408,10 +408,6 @@ fn inner<T>(
                     info!("Screen recording started.");
                 }
 
-                if t.elapsed().as_millis() > 5000 {
-                    break;
-                }
-
                 match get_frame(&mut capturer) {
                     Some(ControlFlow::Break(_)) => {
                         break;
