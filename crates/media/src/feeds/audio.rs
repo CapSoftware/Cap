@@ -220,7 +220,7 @@ impl AudioFrameBuffer {
 
     pub fn next_frame_data<'a>(
         &'a mut self,
-        samples: usize,
+        requested_samples: usize,
         maybe_timeline: Option<&TimelineConfiguration>,
     ) -> Option<(usize, &'a [f32])> {
         if let Some(timeline) = maybe_timeline {
@@ -228,10 +228,12 @@ impl AudioFrameBuffer {
         }
 
         let buffer = &self.data[self.cursor.segment_index].buffer;
-        if self.cursor.segment_index >= buffer.len() {
-            self.elapsed_samples += samples;
+        if self.cursor.samples >= buffer.len() {
+            self.elapsed_samples += requested_samples;
             return None;
         }
+
+        let samples = requested_samples.min(buffer.len() - self.cursor.samples);
 
         let start = self.cursor;
         self.elapsed_samples += samples;
