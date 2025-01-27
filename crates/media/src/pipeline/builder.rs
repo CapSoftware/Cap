@@ -1,7 +1,8 @@
 use flume::Receiver;
 use indexmap::IndexMap;
 use std::thread::{self, JoinHandle};
-use tracing::{info, trace, Instrument};
+use tokio::sync::oneshot;
+use tracing::{info, trace};
 
 use crate::pipeline::{
     clock::CloneFrom,
@@ -13,6 +14,7 @@ use crate::pipeline::{
 struct Task {
     ready_signal: Receiver<Result<(), MediaError>>,
     join_handle: JoinHandle<()>,
+    done_rx: tokio::sync::oneshot::Receiver<()>,
 }
 
 pub struct PipelineBuilder<T> {
@@ -63,25 +65,31 @@ impl<T> PipelineBuilder<T> {
 
         let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
         let span = tracing::error_span!("pipeline", task = &name);
+
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+
         let join_handle = thread::spawn(move || {
             tracing::dispatcher::with_default(&dispatcher, || {
                 span.in_scope(|| {
                     launch(ready_sender);
                 })
-            })
+            });
+            done_tx.send(()).ok();
         });
+
         self.tasks.insert(
             name,
             Task {
                 ready_signal,
                 join_handle,
+                done_rx,
             },
         );
     }
 }
 
 impl<T: PipelineClock> PipelineBuilder<T> {
-    pub async fn build(self) -> Result<Pipeline<T>, MediaError> {
+    pub async fn build(self) -> Result<(Pipeline<T>, oneshot::Receiver<()>), MediaError> {
         let Self {
             clock,
             control,
@@ -94,6 +102,8 @@ impl<T: PipelineClock> PipelineBuilder<T> {
 
         let mut task_handles = IndexMap::new();
 
+        let mut stop_rx = vec![];
+
         // TODO: Shut down tasks if launch failed.
         for (name, task) in tasks.into_iter() {
             // TODO: Wait for these in parallel?
@@ -103,14 +113,32 @@ impl<T: PipelineClock> PipelineBuilder<T> {
                 .map_err(|_| MediaError::TaskLaunch(name.clone()))??;
 
             task_handles.insert(name, task.join_handle);
+            stop_rx.push(task.done_rx);
         }
 
-        Ok(Pipeline {
-            clock,
-            control,
-            task_handles,
-            is_shutdown: false,
-        })
+        let (done_tx, done_rx) = oneshot::channel::<()>();
+
+        tokio::spawn({
+            let mut control = control.clone();
+            async move {
+                futures::future::select_all(stop_rx).await.0.ok();
+                control
+                    .broadcast(super::control::Control::Shutdown)
+                    .await
+                    .ok();
+                done_tx.send(()).ok();
+            }
+        });
+
+        Ok((
+            Pipeline {
+                clock,
+                control,
+                task_handles,
+                is_shutdown: false,
+            },
+            done_rx,
+        ))
     }
 }
 

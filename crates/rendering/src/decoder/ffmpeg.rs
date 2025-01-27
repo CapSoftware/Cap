@@ -7,27 +7,12 @@ use std::{
 
 use ffmpeg::{
     codec::{self, Capabilities},
-    format::{self},
-    frame::{self},
-    rescale,
-    software::{self},
-    Codec, Rational, Rescale,
+    format, frame, rescale, software, Codec, Rescale,
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
 use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
 
-pub type DecodedFrame = Arc<Vec<u8>>;
-
-enum VideoDecoderMessage {
-    GetFrame(f32, tokio::sync::oneshot::Sender<DecodedFrame>),
-}
-
-fn pts_to_frame(pts: i64, time_base: Rational, fps: u32) -> u32 {
-    (fps as f64 * ((pts as f64 * time_base.numerator() as f64) / (time_base.denominator() as f64)))
-        .round() as u32
-}
-
-const FRAME_CACHE_SIZE: usize = 100;
+use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
 
 #[derive(Clone)]
 struct CachedFrame {
@@ -85,12 +70,10 @@ enum CachedFrameData {
     Processed(Arc<Vec<u8>>),
 }
 
-pub struct AsyncVideoDecoder;
+struct FfmpegDecoder;
 
-impl AsyncVideoDecoder {
-    pub fn spawn(path: PathBuf, fps: u32) -> AsyncVideoDecoderHandle {
-        let (tx, rx) = mpsc::channel();
-
+impl FfmpegDecoder {
+    fn spawn(name: &'static str, path: PathBuf, fps: u32, rx: mpsc::Receiver<VideoDecoderMessage>) {
         std::thread::spawn(move || {
             let mut input = ffmpeg::format::input(&path).unwrap();
 
@@ -101,7 +84,7 @@ impl AsyncVideoDecoder {
                 .unwrap();
 
             let decoder_codec =
-                ff_find_decoder(&input, &input_stream, input_stream.parameters().id()).unwrap();
+                find_decoder(&input, &input_stream, input_stream.parameters().id()).unwrap();
 
             let mut context = codec::context::Context::new_with_codec(decoder_codec);
             context.set_parameters(input_stream.parameters()).unwrap();
@@ -140,7 +123,7 @@ impl AsyncVideoDecoder {
                 #[cfg(target_os = "windows")]
                 {
                     decoder
-                        .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA, Pixel::NV12)
+                        .try_use_hw_device(AVHWDeviceType::AV_HWDEVICE_TYPE_DXVA2, Pixel::DXVA2_VLD)
                         .ok()
                 }
 
@@ -151,6 +134,12 @@ impl AsyncVideoDecoder {
             use ffmpeg::format::Pixel;
 
             let mut temp_frame = ffmpeg::frame::Video::empty();
+
+            // let mut packets = input.packets().peekable();
+
+            let width = decoder.width();
+            let height = decoder.height();
+            let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             // active frame is a frame that triggered decode.
@@ -164,14 +153,13 @@ impl AsyncVideoDecoder {
 
             let mut packets = input.packets().peekable();
 
-            let width = decoder.width();
-            let height = decoder.height();
-            let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
-
             while let Ok(r) = peekable_requests.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_time, sender) => {
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
+                        // sender.send(black_frame.clone()).ok();
+                        // continue;
+
                         let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
                             let data = cached.process(&decoder);
 
@@ -190,8 +178,8 @@ impl AsyncVideoDecoder {
                                 .as_ref()
                                 .map(|last| {
                                     requested_frame < last.0 ||
-                                    // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
-                                    requested_frame - last.0 > FRAME_CACHE_SIZE as u32
+                                // seek forward for big jumps. this threshold is arbitrary but should be derived from i-frames in future
+                                requested_frame - last.0 > FRAME_CACHE_SIZE as u32
                                 })
                                 .unwrap_or(true)
                         {
@@ -203,7 +191,6 @@ impl AsyncVideoDecoder {
                             decoder.flush();
                             input.seek(position, ..position).unwrap();
                             last_decoded_frame = None;
-                            last_sent_frame = None;
 
                             packets = input.packets().peekable();
                         }
@@ -331,28 +318,36 @@ impl AsyncVideoDecoder {
                 }
             }
         });
-
-        AsyncVideoDecoderHandle { sender: tx }
     }
 }
 
-#[derive(Clone)]
-pub struct AsyncVideoDecoderHandle {
-    sender: mpsc::Sender<VideoDecoderMessage>,
-}
+pub fn find_decoder(
+    s: &format::context::Input,
+    st: &format::stream::Stream,
+    codec_id: codec::Id,
+) -> Option<Codec> {
+    unsafe {
+        use ffmpeg::media::Type;
+        let codec = match st.parameters().medium() {
+            Type::Video => Some((*s.as_ptr()).video_codec),
+            Type::Audio => Some((*s.as_ptr()).audio_codec),
+            Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
+            _ => None,
+        };
 
-impl AsyncVideoDecoderHandle {
-    pub async fn get_frame(&self, time: f32) -> Option<DecodedFrame> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.sender
-            .send(VideoDecoderMessage::GetFrame(time, tx))
-            .unwrap();
-        rx.await.ok()
+        if let Some(codec) = codec {
+            if !codec.is_null() {
+                return Some(Codec::wrap(codec));
+            }
+        }
+
+        let found = avcodec_find_decoder(codec_id.into());
+
+        if found.is_null() {
+            return None;
+        }
+        Some(Codec::wrap(found))
     }
-}
-
-pub enum GetFrameError {
-    Failed,
 }
 
 struct PeekableReceiver<T> {
@@ -381,34 +376,5 @@ impl<T> PeekableReceiver<T> {
         } else {
             self.rx.recv()
         }
-    }
-}
-
-fn ff_find_decoder(
-    s: &format::context::Input,
-    st: &format::stream::Stream,
-    codec_id: codec::Id,
-) -> Option<Codec> {
-    unsafe {
-        use ffmpeg::media::Type;
-        let codec = match st.parameters().medium() {
-            Type::Video => Some((*s.as_ptr()).video_codec),
-            Type::Audio => Some((*s.as_ptr()).audio_codec),
-            Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
-            _ => None,
-        };
-
-        if let Some(codec) = codec {
-            if !codec.is_null() {
-                return Some(Codec::wrap(codec));
-            }
-        }
-
-        let found = avcodec_find_decoder(codec_id.into());
-
-        if found.is_null() {
-            return None;
-        }
-        Some(Codec::wrap(found))
     }
 }

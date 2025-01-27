@@ -5,8 +5,10 @@
   "windows": ["*"],
   "permissions": [
     "core:event:default",
+    "core:menu:default",
     "core:window:default",
     "core:window:allow-close",
+    "core:window:allow-destroy",
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-center",

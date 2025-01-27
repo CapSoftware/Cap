@@ -57,7 +57,8 @@
           "x": 480,
           "y": 140
         }
-      }
+      },
+      "frameworks": ["../../../target/native-deps/Spacedrive.framework"]
     },
     "windows": {
       "nsis": {

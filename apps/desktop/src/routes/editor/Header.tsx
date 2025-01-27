@@ -1,9 +1,8 @@
 import { Button } from "@cap/ui-solid";
 import { cx } from "cva";
 import {
-  Match,
+  Setter,
   Show,
-  Switch,
   batch,
   createEffect,
   createResource,
@@ -15,14 +14,13 @@ import { type as ostype } from "@tauri-apps/plugin-os";
 import { Tooltip } from "@kobalte/core";
 import { Select as KSelect } from "@kobalte/core/select";
 import { createMutation } from "@tanstack/solid-query";
-import { getRequestEvent } from "solid-js/web";
 import { save } from "@tauri-apps/plugin-dialog";
-import { Channel } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
+import { createStore, produce } from "solid-js/store";
 
-import { type RenderProgress, commands, events } from "~/utils/tauri";
-import { FPS, useEditorContext } from "./context";
+import { commands, events, RenderProgress } from "~/utils/tauri";
+import { useEditorContext } from "./context";
 import { authStore } from "~/store";
 import {
   Dialog,
@@ -32,14 +30,9 @@ import {
   PopperContent,
   topLeftAnimateClasses,
 } from "./ui";
-import { DEFAULT_PROJECT_CONFIG } from "./projectConfig";
-import {
-  type ProgressState,
-  progressState,
-  setProgressState,
-} from "~/store/progress";
 import Titlebar from "~/components/titlebar/Titlebar";
 import { initializeTitlebar, setTitlebar } from "~/utils/titlebar-state";
+import { Channel } from "@tauri-apps/api/core";
 
 type ResolutionOption = {
   label: string;
@@ -67,9 +60,7 @@ export interface ExportEstimates {
 
 export function Header() {
   const currentWindow = getCurrentWindow();
-  const { videoId, project, prettyName } = useEditorContext();
 
-  const [showExportOptions, setShowExportOptions] = createSignal(false);
   const [selectedFps, setSelectedFps] = createSignal(
     Number(localStorage.getItem("cap-export-fps")) || 30
   );
@@ -80,142 +71,17 @@ export function Header() {
       ) || RESOLUTION_OPTIONS[0]
     );
 
-  const [exportEstimates] = createResource(
-    () => ({
-      videoId,
-      resolution: {
-        x: selectedResolution()?.width || RESOLUTION_OPTIONS[0].width,
-        y: selectedResolution()?.height || RESOLUTION_OPTIONS[0].height,
-      },
-      fps: selectedFps(),
-    }),
-    async (params) => {
-      return commands.getExportEstimates(
-        params.videoId,
-        params.resolution,
-        params.fps
-      );
-    }
-  );
-
-  let unlistenTitlebar: UnlistenFn | undefined;
-  onMount(async () => {
-    unlistenTitlebar = await initializeTitlebar();
-  });
-  onCleanup(() => unlistenTitlebar?.());
-
   // Save settings when they change
   createEffect(() => {
     localStorage.setItem("cap-export-fps", selectedFps().toString());
     localStorage.setItem("cap-export-resolution", selectedResolution().value);
   });
 
-  createEffect(() => {
-    const state = progressState;
-    if (state === undefined || state.type === "idle") {
-      currentWindow.setProgressBar({ status: ProgressBarStatus.None });
-      return;
-    }
-
-    let percentage: number | undefined;
-    if (state.type === "saving") {
-      percentage =
-        state.stage === "rendering"
-          ? Math.min(
-              ((state.renderProgress || 0) / (state.totalFrames || 1)) * 100,
-              100
-            )
-          : Math.min(state.progress || 0, 100);
-    }
-
-    if (percentage)
-      currentWindow.setProgressBar({ progress: Math.round(percentage) });
+  let unlistenTitlebar: UnlistenFn | undefined;
+  onMount(async () => {
+    unlistenTitlebar = await initializeTitlebar();
   });
-
-  const exportWithSettings = async () => {
-    setShowExportOptions(false);
-
-    const path = await save({
-      filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
-      defaultPath: `~/Desktop/${prettyName()}.mp4`,
-    });
-    if (!path) return;
-
-    setProgressState({
-      type: "saving",
-      progress: 0,
-      renderProgress: 0,
-      totalFrames: 0,
-      message: "Preparing to render...",
-      mediaPath: path,
-      stage: "rendering",
-    });
-
-    const progress = new Channel<RenderProgress>();
-    progress.onmessage = (p) => {
-      if (p.type === "FrameRendered" && progressState.type === "saving") {
-        const percentComplete = Math.min(
-          Math.round(
-            (p.current_frame / (progressState.totalFrames || 1)) * 100
-          ),
-          100
-        );
-
-        setProgressState({
-          ...progressState,
-          renderProgress: p.current_frame,
-          message: `Rendering video - ${percentComplete}%`,
-        });
-
-        // If rendering is complete, update to finalizing state
-        if (percentComplete === 100) {
-          setProgressState({
-            ...progressState,
-            message: "Finalizing export...",
-          });
-        }
-      }
-      if (
-        p.type === "EstimatedTotalFrames" &&
-        progressState.type === "saving"
-      ) {
-        setProgressState({
-          ...progressState,
-          totalFrames: p.total_frames,
-          message: "Starting render...",
-        });
-      }
-    };
-
-    try {
-      const videoPath = await commands.exportVideo(
-        videoId,
-        project,
-        progress,
-        true,
-        selectedFps(),
-        {
-          x: selectedResolution()?.width || RESOLUTION_OPTIONS[0].width,
-          y: selectedResolution()?.height || RESOLUTION_OPTIONS[0].height,
-        }
-      );
-      await commands.copyFileToPath(videoPath, path);
-
-      setProgressState({
-        type: "saving",
-        progress: 100,
-        message: "Saved successfully!",
-        mediaPath: path,
-      });
-
-      setTimeout(() => {
-        setProgressState({ type: "idle" });
-      }, 1500);
-    } catch (error) {
-      setProgressState({ type: "idle" });
-      throw error;
-    }
-  };
+  onCleanup(() => unlistenTitlebar?.());
 
   batch(() => {
     setTitlebar("border", false);
@@ -236,355 +102,347 @@ export function Header() {
             selectedResolution={selectedResolution}
             selectedFps={selectedFps}
           />
-          <div class="relative">
-            <Button
-              variant="primary"
-              onClick={() => setShowExportOptions(!showExportOptions())}
-            >
-              Export
-            </Button>
-            <Show when={showExportOptions()}>
-              <div class="absolute right-0 top-full mt-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-40 p-4 min-w-[240px]">
-                <div class="space-y-4">
-                  <div>
-                    <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
-                      Resolution
-                    </label>
-                    <KSelect<ResolutionOption>
-                      options={RESOLUTION_OPTIONS}
-                      optionValue="value"
-                      optionTextValue="label"
-                      placeholder="Select Resolution"
-                      value={selectedResolution()}
-                      onChange={setSelectedResolution}
-                      itemComponent={(props) => (
-                        <MenuItem<typeof KSelect.Item>
-                          as={KSelect.Item}
-                          item={props.item}
-                        >
-                          <KSelect.ItemLabel class="flex-1">
-                            {props.item.rawValue.label}
-                          </KSelect.ItemLabel>
-                        </MenuItem>
-                      )}
-                    >
-                      <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
-                        <KSelect.Value<ResolutionOption> class="flex-1 text-sm text-left truncate text-[--gray-500]">
-                          {(state) => (
-                            <span>{state.selectedOption()?.label}</span>
-                          )}
-                        </KSelect.Value>
-                        <KSelect.Icon>
-                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
-                        </KSelect.Icon>
-                      </KSelect.Trigger>
-                      <KSelect.Portal>
-                        <PopperContent<typeof KSelect.Content>
-                          as={KSelect.Content}
-                          class={cx(topLeftAnimateClasses, "z-50")}
-                        >
-                          <MenuItemList<typeof KSelect.Listbox>
-                            class="max-h-32 overflow-y-auto"
-                            as={KSelect.Listbox}
-                          />
-                        </PopperContent>
-                      </KSelect.Portal>
-                    </KSelect>
-                  </div>
-                  <div>
-                    <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
-                      FPS
-                    </label>
-                    <KSelect
-                      options={FPS_OPTIONS}
-                      optionValue="value"
-                      optionTextValue="label"
-                      placeholder="Select FPS"
-                      value={FPS_OPTIONS.find(
-                        (opt) => opt.value === selectedFps()
-                      )}
-                      onChange={(option) => setSelectedFps(option?.value ?? 30)}
-                      itemComponent={(props) => (
-                        <MenuItem<typeof KSelect.Item>
-                          as={KSelect.Item}
-                          item={props.item}
-                        >
-                          <KSelect.ItemLabel class="flex-1">
-                            {props.item.rawValue.label}
-                          </KSelect.ItemLabel>
-                        </MenuItem>
-                      )}
-                    >
-                      <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
-                        <KSelect.Value<
-                          (typeof FPS_OPTIONS)[number]
-                        > class="flex-1 text-sm text-left truncate text-[--gray-500]">
-                          {(state) => (
-                            <span>{state.selectedOption()?.label}</span>
-                          )}
-                        </KSelect.Value>
-                        <KSelect.Icon>
-                          <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
-                        </KSelect.Icon>
-                      </KSelect.Trigger>
-                      <KSelect.Portal>
-                        <PopperContent<typeof KSelect.Content>
-                          as={KSelect.Content}
-                          class={cx(topLeftAnimateClasses, "z-50")}
-                        >
-                          <MenuItemList<typeof KSelect.Listbox>
-                            class="max-h-32 overflow-y-auto"
-                            as={KSelect.Listbox}
-                          />
-                        </PopperContent>
-                      </KSelect.Portal>
-                    </KSelect>
-                  </div>
-                  <Button
-                    variant="primary"
-                    class="w-full justify-center"
-                    onClick={exportWithSettings}
-                  >
-                    Export Video
-                  </Button>
-                  <Show when={exportEstimates()}>
-                    {(est) => (
-                      <div
-                        class={cx(
-                          "font-medium z-40 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden text-xs"
-                        )}
-                      >
-                        <p class="flex items-center gap-4">
-                          <span class="flex items-center text-[--gray-500]">
-                            <IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
-                            {(() => {
-                              const totalSeconds = Math.round(
-                                est().duration_seconds
-                              );
-                              const hours = Math.floor(totalSeconds / 3600);
-                              const minutes = Math.floor(
-                                (totalSeconds % 3600) / 60
-                              );
-                              const seconds = totalSeconds % 60;
-
-                              if (hours > 0) {
-                                return `${hours}:${minutes
-                                  .toString()
-                                  .padStart(2, "0")}:${seconds
-                                  .toString()
-                                  .padStart(2, "0")}`;
-                              }
-                              return `${minutes}:${seconds
-                                .toString()
-                                .padStart(2, "0")}`;
-                            })()}
-                          </span>
-                          <span class="flex items-center text-[--gray-500]">
-                            <IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
-                            {est().estimated_size_mb.toFixed(2)} MB
-                          </span>
-                          <span class="flex items-center text-[--gray-500]">
-                            <IconLucideClock class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
-                            {(() => {
-                              const totalSeconds = Math.round(
-                                est().estimated_time_seconds
-                              );
-                              const hours = Math.floor(totalSeconds / 3600);
-                              const minutes = Math.floor(
-                                (totalSeconds % 3600) / 60
-                              );
-                              const seconds = totalSeconds % 60;
-
-                              if (hours > 0) {
-                                return `~${hours}:${minutes
-                                  .toString()
-                                  .padStart(2, "0")}:${seconds
-                                  .toString()
-                                  .padStart(2, "0")}`;
-                              }
-                              return `~${minutes}:${seconds
-                                .toString()
-                                .padStart(2, "0")}`;
-                            })()}
-                          </span>
-                        </p>
-                      </div>
-                    )}
-                  </Show>
-                </div>
-              </div>
-            </Show>
-          </div>
+          <ExportButton
+            selectedResolution={selectedResolution()}
+            selectedFps={selectedFps()}
+            setSelectedFps={setSelectedFps}
+            setSelectedResolution={setSelectedResolution}
+          />
         </div>
       </div>
     );
   });
 
-  return (
-    <>
-      <Titlebar />
-      <Dialog.Root open={progressState.type !== "idle"} onOpenChange={() => {}}>
-        <DialogContent
-          title={
-            progressState.type === "copying"
-              ? "Link Copied"
-              : progressState.type === "uploading"
-              ? "Creating Shareable Link"
-              : "Exporting Recording"
+  return <Titlebar />;
+}
+
+function ExportButton(props: {
+  selectedFps: number;
+  selectedResolution: ResolutionOption;
+  setSelectedResolution: Setter<ResolutionOption>;
+  setSelectedFps: Setter<number>;
+}) {
+  const { videoId, project, prettyName } = useEditorContext();
+  const [showExportOptions, setShowExportOptions] = createSignal(false);
+
+  const [exportEstimates] = createResource(
+    () => ({
+      videoId,
+      resolution: {
+        x: props.selectedResolution.width,
+        y: props.selectedResolution.height,
+      },
+      fps: props.selectedFps,
+    }),
+    (params) =>
+      commands.getExportEstimates(params.videoId, params.resolution, params.fps)
+  );
+
+  const exportWithSettings = createMutation(() => ({
+    mutationFn: async () => {
+      setExportState({ type: "idle" });
+
+      setShowExportOptions(false);
+
+      const path = await save({
+        filters: [{ name: "mp4 filter", extensions: ["mp4"] }],
+        defaultPath: `~/Desktop/${prettyName()}.mp4`,
+      });
+      if (!path) return;
+
+      setExportState({ type: "starting" });
+
+      const progress = new Channel<RenderProgress>();
+
+      progress.onmessage = (msg) => {
+        if (msg.type === "EstimatedTotalFrames")
+          setExportState({
+            type: "rendering",
+            renderedFrames: 0,
+            totalFrames: msg.total_frames,
+          });
+        else
+          setExportState(
+            produce((state) => {
+              if (msg.type === "FrameRendered" && state.type === "rendering")
+                state.renderedFrames = msg.current_frame;
+            })
+          );
+      };
+
+      try {
+        const videoPath = await commands.exportVideo(
+          videoId,
+          project,
+          progress,
+          true,
+          props.selectedFps,
+          {
+            x: props.selectedResolution.width,
+            y: props.selectedResolution.height,
           }
+        );
+
+        setExportState({ type: "saving", done: false });
+
+        await commands.copyFileToPath(videoPath, path);
+
+        setExportState({ type: "saving", done: false });
+      } catch (error) {
+        throw error;
+      }
+    },
+    onSettled() {
+      setTimeout(() => {
+        exportWithSettings.reset();
+      }, 2000);
+    },
+  }));
+
+  const [exportState, setExportState] = createStore<
+    | { type: "idle" }
+    | { type: "starting" }
+    | { type: "rendering"; renderedFrames: number; totalFrames: number }
+    | { type: "saving"; done: boolean }
+  >({ type: "idle" });
+
+  createProgressBar(() => {
+    if (exportWithSettings.isIdle || exportState.type === "idle") return;
+    if (exportState.type === "starting") return 0;
+    if (exportState.type === "rendering")
+      return (exportState.renderedFrames / exportState.totalFrames) * 100;
+    return 100;
+  });
+
+  return (
+    <div class="relative">
+      <Button
+        variant="primary"
+        onClick={() => setShowExportOptions(!showExportOptions())}
+      >
+        Export
+      </Button>
+      <Show when={showExportOptions()}>
+        <div class="absolute right-0 top-full mt-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-40 p-4 min-w-[240px]">
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
+                Resolution
+              </label>
+              <KSelect<ResolutionOption>
+                options={RESOLUTION_OPTIONS}
+                optionValue="value"
+                optionTextValue="label"
+                placeholder="Select Resolution"
+                value={props.selectedResolution}
+                onChange={props.setSelectedResolution}
+                itemComponent={(props) => (
+                  <MenuItem<typeof KSelect.Item>
+                    as={KSelect.Item}
+                    item={props.item}
+                  >
+                    <KSelect.ItemLabel class="flex-1">
+                      {props.item.rawValue.label}
+                    </KSelect.ItemLabel>
+                  </MenuItem>
+                )}
+              >
+                <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+                  <KSelect.Value<ResolutionOption> class="flex-1 text-sm text-left truncate text-[--gray-500]">
+                    {(state) => <span>{state.selectedOption()?.label}</span>}
+                  </KSelect.Value>
+                  <KSelect.Icon>
+                    <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+                  </KSelect.Icon>
+                </KSelect.Trigger>
+                <KSelect.Portal>
+                  <PopperContent<typeof KSelect.Content>
+                    as={KSelect.Content}
+                    class={cx(topLeftAnimateClasses, "z-50")}
+                  >
+                    <MenuItemList<typeof KSelect.Listbox>
+                      class="max-h-32 overflow-y-auto"
+                      as={KSelect.Listbox}
+                    />
+                  </PopperContent>
+                </KSelect.Portal>
+              </KSelect>
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1 text-gray-500 dark:text-gray-400">
+                FPS
+              </label>
+              <KSelect
+                options={FPS_OPTIONS}
+                optionValue="value"
+                optionTextValue="label"
+                placeholder="Select FPS"
+                value={FPS_OPTIONS.find(
+                  (opt) => opt.value === props.selectedFps
+                )}
+                onChange={(option) => props.setSelectedFps(option?.value ?? 30)}
+                itemComponent={(props) => (
+                  <MenuItem<typeof KSelect.Item>
+                    as={KSelect.Item}
+                    item={props.item}
+                  >
+                    <KSelect.ItemLabel class="flex-1">
+                      {props.item.rawValue.label}
+                    </KSelect.ItemLabel>
+                  </MenuItem>
+                )}
+              >
+                <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
+                  <KSelect.Value<
+                    (typeof FPS_OPTIONS)[number]
+                  > class="flex-1 text-sm text-left truncate text-[--gray-500]">
+                    {(state) => <span>{state.selectedOption()?.label}</span>}
+                  </KSelect.Value>
+                  <KSelect.Icon>
+                    <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
+                  </KSelect.Icon>
+                </KSelect.Trigger>
+                <KSelect.Portal>
+                  <PopperContent<typeof KSelect.Content>
+                    as={KSelect.Content}
+                    class={cx(topLeftAnimateClasses, "z-50")}
+                  >
+                    <MenuItemList<typeof KSelect.Listbox>
+                      class="max-h-32 overflow-y-auto"
+                      as={KSelect.Listbox}
+                    />
+                  </PopperContent>
+                </KSelect.Portal>
+              </KSelect>
+            </div>
+            <Button
+              variant="primary"
+              class="w-full justify-center"
+              onClick={() => exportWithSettings.mutate()}
+            >
+              Export Video
+            </Button>
+            <Show when={exportEstimates.latest}>
+              {(est) => (
+                <div
+                  class={cx(
+                    "font-medium z-40 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden text-xs"
+                  )}
+                >
+                  <p class="flex items-center gap-4">
+                    <span class="flex items-center text-[--gray-500]">
+                      <IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                      {(() => {
+                        const totalSeconds = Math.round(est().duration_seconds);
+                        const hours = Math.floor(totalSeconds / 3600);
+                        const minutes = Math.floor((totalSeconds % 3600) / 60);
+                        const seconds = totalSeconds % 60;
+
+                        if (hours > 0) {
+                          return `${hours}:${minutes
+                            .toString()
+                            .padStart(2, "0")}:${seconds
+                            .toString()
+                            .padStart(2, "0")}`;
+                        }
+                        return `${minutes}:${seconds
+                          .toString()
+                          .padStart(2, "0")}`;
+                      })()}
+                    </span>
+                    <span class="flex items-center text-[--gray-500]">
+                      <IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                      {est().estimated_size_mb.toFixed(2)} MB
+                    </span>
+                    <span class="flex items-center text-[--gray-500]">
+                      <IconLucideClock class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                      {(() => {
+                        const totalSeconds = Math.round(
+                          est().estimated_time_seconds
+                        );
+                        const hours = Math.floor(totalSeconds / 3600);
+                        const minutes = Math.floor((totalSeconds % 3600) / 60);
+                        const seconds = totalSeconds % 60;
+
+                        if (hours > 0) {
+                          return `~${hours}:${minutes
+                            .toString()
+                            .padStart(2, "0")}:${seconds
+                            .toString()
+                            .padStart(2, "0")}`;
+                        }
+                        return `~${minutes}:${seconds
+                          .toString()
+                          .padStart(2, "0")}`;
+                      })()}
+                    </span>
+                  </p>
+                </div>
+              )}
+            </Show>
+          </div>
+        </div>
+      </Show>
+      <Dialog.Root
+        open={!exportWithSettings.isIdle && exportState.type !== "idle"}
+        onOpenChange={(o) => {
+          // cancellation doesn't work yet
+          // if (!o) exportWithSettings.reset();
+        }}
+      >
+        <DialogContent
+          title="Exporting Recording"
           confirm={<></>}
+          close={<></>}
           class="bg-gray-600 text-gray-500 dark:text-gray-500"
         >
-          <div class="min-h-[120px] flex items-center justify-center relative">
-            <Switch>
-              <Match when={progressState.type === "copying"}>
-                {(when) => {
-                  const state = progressState as Extract<
-                    ProgressState,
-                    { type: "copying" }
-                  >;
-                  return (
-                    <div class="w-[80%] text-center mx-auto relative z-10">
-                      <h3 class="text-sm font-medium mb-3 text-gray-50">
-                        {state.stage === "rendering"
-                          ? "Rendering video"
-                          : "Copying to clipboard"}
-                      </h3>
-
-                      <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
-                        <div
-                          class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
-                          style={{
-                            width: `${
-                              state.stage === "rendering"
-                                ? Math.min(
-                                    ((state.renderProgress || 0) /
-                                      (state.totalFrames || 1)) *
-                                      100,
-                                    100
-                                  )
-                                : Math.min(state.progress || 0, 100)
-                            }%`,
-                          }}
-                        />
-                      </div>
-
-                      <p class="text-xs mt-3 relative z-10">
-                        {state.stage === "rendering" &&
-                        state.renderProgress &&
-                        state.totalFrames
-                          ? `${state.message} (${state.renderProgress}/${state.totalFrames} frames)`
-                          : state.message}
-                      </p>
-                    </div>
-                  );
+          <div class="w-[80%] text-center mx-auto relative z-10 space-y-6 py-4">
+            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+              <div
+                class="bg-blue-300 h-2.5 rounded-full"
+                style={{
+                  width: `${
+                    exportState.type === "saving"
+                      ? 100
+                      : exportState.type === "rendering"
+                      ? Math.min(
+                          (exportState.renderedFrames /
+                            exportState.totalFrames) *
+                            100,
+                          100
+                        )
+                      : 0
+                  }%`,
                 }}
-              </Match>
-              <Match when={progressState.type === "saving"}>
-                {(when) => {
-                  const state = progressState as Extract<
-                    ProgressState,
-                    { type: "saving" }
-                  >;
-                  return (
-                    <div class="w-[80%] text-center mx-auto relative z-10">
-                      <h3 class="text-sm font-medium mb-3 text-gray-50">
-                        {state.stage === "rendering"
-                          ? "Rendering video"
-                          : "Saving file"}
-                      </h3>
-
-                      <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
-                        <div
-                          class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
-                          style={{
-                            width: `${
-                              state.stage === "rendering"
-                                ? Math.min(
-                                    ((state.renderProgress || 0) /
-                                      (state.totalFrames || 1)) *
-                                      100,
-                                    100
-                                  )
-                                : Math.min(state.progress || 0, 100)
-                            }%`,
-                          }}
-                        />
-                      </div>
-
-                      <p class="text-xs mt-3 relative z-10">
-                        {state.stage === "rendering" &&
-                        state.renderProgress &&
-                        state.totalFrames
-                          ? `${state.message} (${state.renderProgress}/${state.totalFrames} frames)`
-                          : state.message}
-                      </p>
-                    </div>
-                  );
-                }}
-              </Match>
-              <Match when={progressState.type === "uploading"}>
-                {(when) => {
-                  const state = progressState as Extract<
-                    ProgressState,
-                    { type: "uploading" }
-                  >;
-                  return (
-                    <div class="w-[80%] text-center mx-auto relative z-10">
-                      <h3 class="text-sm font-medium mb-3 text-gray-50">
-                        {state.stage === "rendering"
-                          ? "Rendering video"
-                          : "Creating shareable link"}
-                      </h3>
-
-                      <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
-                        <div
-                          class="bg-blue-300 h-2.5 rounded-full transition-all duration-200"
-                          style={{
-                            width: `${
-                              state.stage === "rendering"
-                                ? Math.min(state.renderProgress || 0, 100)
-                                : Math.min(
-                                    (state.uploadProgress || 0) * 100,
-                                    100
-                                  )
-                            }%`,
-                          }}
-                        />
-                      </div>
-
-                      <p class="text-xs text-white mt-3 relative z-10">
-                        {state.stage === "rendering"
-                          ? `Rendering - ${Math.round(
-                              state.renderProgress || 0
-                            )}%`
-                          : state.message}
-                      </p>
-                    </div>
-                  );
-                }}
-              </Match>
-            </Switch>
+              />
+            </div>
+            <p class="text-xs mt-3 relative z-10">
+              {exportState.type == "idle" || exportState.type === "starting"
+                ? "Preparing to render..."
+                : exportState.type === "rendering"
+                ? `Rendering video (${exportState.renderedFrames}/${exportState.totalFrames} frames)`
+                : "Exported successfully!"}
+            </p>
           </div>
         </DialogContent>
       </Dialog.Root>
-    </>
+    </div>
   );
 }
 
-type ShareButtonProps = {
+function ShareButton(props: {
   selectedResolution: () => ResolutionOption;
   selectedFps: () => number;
-};
-
-function ShareButton(props: ShareButtonProps) {
-  const { videoId, project, presets } = useEditorContext();
+}) {
+  const { videoId, project } = useEditorContext();
   const [recordingMeta, metaActions] = createResource(() =>
     commands.getRecordingMeta(videoId, "recording")
   );
 
   const uploadVideo = createMutation(() => ({
-    mutationFn: async (useCustomMuxer: boolean) => {
+    mutationFn: async () => {
+      setUploadState({ type: "idle" });
+
       console.log("Starting upload process...");
 
       // Check authentication first
@@ -616,85 +474,41 @@ function ShareButton(props: ShareButtonProps) {
         }
       }
 
-      let unlisten: (() => void) | undefined;
+      const unlisten = await events.uploadProgress.listen((event) => {
+        console.log("Upload progress event:", event.payload);
+        setUploadState(
+          produce((state) => {
+            if (state.type !== "uploading") return;
+
+            state.progress = Math.round(event.payload.progress * 100);
+          })
+        );
+      });
 
       try {
-        setProgressState({
-          type: "uploading",
-          renderProgress: 0,
-          uploadProgress: 0,
-          message: "Rendering - 0%",
-          mediaPath: videoId,
-          stage: "rendering",
-        });
+        setUploadState({ type: "starting" });
 
         // Setup progress listener before starting upload
-        unlisten = await events.uploadProgress.listen((event) => {
-          console.log("Upload progress event:", event.payload);
-          if (progressState.type === "uploading") {
-            const progress = Math.round(event.payload.progress * 100);
-            if (event.payload.stage === "rendering") {
-              setProgressState({
-                type: "uploading",
-                renderProgress: progress,
-                uploadProgress: 0,
-                message: `Rendering - ${progress}%`,
-                mediaPath: videoId,
-                stage: "rendering",
-              });
-            } else {
-              setProgressState({
-                type: "uploading",
-                renderProgress: 100,
-                uploadProgress: progress / 100,
-                message: `Uploading - ${progress}%`,
-                mediaPath: videoId,
-                stage: "uploading",
-              });
-            }
-          }
-        });
 
         console.log("Starting actual upload...");
 
-        setProgressState({
-          type: "uploading",
-          renderProgress: 0,
-          uploadProgress: 0,
-          message: "Rendering - 0%",
-          mediaPath: videoId,
-          stage: "rendering",
-        });
-
         const progress = new Channel<RenderProgress>();
-        progress.onmessage = (p) => {
-          console.log("Progress channel message:", p);
-          if (
-            p.type === "FrameRendered" &&
-            progressState.type === "uploading"
-          ) {
-            const renderProgress = Math.round(
-              (p.current_frame / (progressState.totalFrames || 1)) * 100
-            );
-            setProgressState({
-              ...progressState,
-              message: `Rendering - ${renderProgress}%`,
-              renderProgress,
-            });
-          }
-          if (
-            p.type === "EstimatedTotalFrames" &&
-            progressState.type === "uploading"
-          ) {
-            console.log("Got total frames:", p.total_frames);
-            setProgressState({
-              ...progressState,
-              totalFrames: p.total_frames,
-            });
-          }
-        };
 
-        getRequestEvent()?.nativeEvent;
+        progress.onmessage = (msg) => {
+          if (msg.type === "EstimatedTotalFrames")
+            setUploadState({
+              type: "rendering",
+              renderedFrames: 0,
+              totalFrames: msg.total_frames,
+            });
+          else
+            setUploadState(
+              produce((state) => {
+                if (msg.type === "FrameRendered" && state.type === "rendering")
+                  state.renderedFrames = msg.current_frame;
+              })
+            );
+        };
 
         await commands.exportVideo(
           videoId,
@@ -710,6 +524,8 @@ function ShareButton(props: ShareButtonProps) {
           }
         );
 
+        setUploadState({ type: "uploading", progress: 0 });
+
         // Now proceed with upload
         const result = recordingMeta()?.sharing
           ? await commands.uploadExportedVideo(videoId, "Reupload")
@@ -720,123 +536,179 @@ function ShareButton(props: ShareButtonProps) {
         if (result === "NotAuthenticated") {
           await commands.showWindow("SignIn");
           throw new Error("You need to sign in to share recordings");
-        }
-        if (result === "PlanCheckFailed") {
+        } else if (result === "PlanCheckFailed")
           throw new Error("Failed to verify your subscription status");
-        }
-        if (result === "UpgradeRequired") {
+        else if (result === "UpgradeRequired")
           throw new Error("This feature requires an upgraded plan");
-        }
-
-        // Show success state briefly before resetting
-        setProgressState({
-          type: "uploading",
-          renderProgress: 100,
-          uploadProgress: 100,
-          message: "Upload complete!",
-          mediaPath: videoId,
-          stage: "uploading",
-        });
-
-        setTimeout(() => {
-          setProgressState({ type: "idle" });
-        }, 1500);
 
         return result;
       } catch (error) {
         console.error("Upload error:", error);
-        setProgressState({ type: "idle" });
         throw error instanceof Error
           ? error
           : new Error("Failed to upload recording");
       } finally {
-        if (unlisten) {
-          console.log("Cleaning up upload progress listener");
-          unlisten();
-        }
+        unlisten();
       }
     },
     onSuccess: () => {
-      console.log("Upload successful, refreshing metadata");
       metaActions.refetch();
     },
     onError: (error) => {
-      console.error("Upload mutation error:", error);
-      setProgressState({ type: "idle" });
       commands.globalMessageDialog(
         error instanceof Error ? error.message : "Failed to upload recording"
       );
     },
+    onSettled() {
+      setTimeout(() => {
+        setUploadState({ type: "idle" });
+      }, 1500);
+    },
   }));
 
-  return (
-    <Show
-      when={recordingMeta()?.sharing}
-      fallback={
-        <Button
-          disabled={uploadVideo.isPending}
-          onClick={(e) =>
-            uploadVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
-          }
-          variant="primary"
-          class="flex items-center space-x-1"
-        >
-          {uploadVideo.isPending ? (
-            <>
-              <span>Uploading Cap</span>
-              <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
-            </>
-          ) : (
-            "Create Shareable Link"
-          )}
-        </Button>
-      }
-    >
-      {(sharing) => {
-        const url = () => new URL(sharing().link);
+  const [uploadState, setUploadState] = createStore<
+    | { type: "idle" }
+    | { type: "starting" }
+    | { type: "rendering"; renderedFrames: number; totalFrames: number }
+    | { type: "uploading"; progress: number }
+    | { type: "link-copied" }
+  >({ type: "idle" });
 
-        return (
-          <div class="flex flex-row items-center gap-2">
-            <Tooltip.Root openDelay={0} closeDelay={0}>
-              <Tooltip.Trigger>
-                <Button
-                  disabled={uploadVideo.isPending}
-                  onClick={(e) =>
-                    uploadVideo.mutate((e.ctrlKey || e.metaKey) && e.shiftKey)
-                  }
-                  variant="secondary"
-                  class="flex items-center space-x-1"
-                >
-                  {uploadVideo.isPending ? (
-                    <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
-                  ) : (
-                    <IconLucideRotateCcw class="size-[1rem]" />
-                  )}
-                </Button>
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
-                  {uploadVideo.isPending
-                    ? "Reuploading video"
-                    : "Reupload video"}
-                  <Tooltip.Arrow class="fill-gray-500" />
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
-            <a
-              class="rounded-full h-[2rem] px-[1rem] flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100"
-              href={sharing().link}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <span class="text-[0.875rem] text-gray-500">
-                {url().host}
-                {url().pathname}
-              </span>
-            </a>
+  createProgressBar(() => {
+    if (uploadVideo.isIdle || uploadState.type === "idle") return;
+    if (uploadState.type === "starting") return 0;
+    if (uploadState.type === "rendering")
+      return (uploadState.renderedFrames / uploadState.totalFrames) * 100;
+    if (uploadState.type === "uploading") return uploadState.progress;
+    return 100;
+  });
+
+  return (
+    <div class="relative">
+      <Show
+        when={recordingMeta()?.sharing}
+        fallback={
+          <Button
+            disabled={uploadVideo.isPending}
+            onClick={(e) => uploadVideo.mutate()}
+            variant="primary"
+            class="flex items-center space-x-1"
+          >
+            {uploadVideo.isPending ? (
+              <>
+                <span>Uploading Cap</span>
+                <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+              </>
+            ) : (
+              "Create Shareable Link"
+            )}
+          </Button>
+        }
+      >
+        {(sharing) => {
+          const url = () => new URL(sharing().link);
+
+          return (
+            <div class="flex flex-row items-center gap-2">
+              <Tooltip.Root openDelay={0} closeDelay={0}>
+                <Tooltip.Trigger>
+                  <Button
+                    disabled={uploadVideo.isPending}
+                    onClick={(e) => uploadVideo.mutate()}
+                    variant="secondary"
+                    class="flex items-center space-x-1"
+                  >
+                    {uploadVideo.isPending ? (
+                      <IconLucideLoaderCircle class="size-[1rem] animate-spin" />
+                    ) : (
+                      <IconLucideRotateCcw class="size-[1rem]" />
+                    )}
+                  </Button>
+                </Tooltip.Trigger>
+                <Tooltip.Portal>
+                  <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-gray-500 rounded shadow-lg animate-in fade-in duration-100">
+                    {uploadVideo.isPending
+                      ? "Reuploading video"
+                      : "Reupload video"}
+                    <Tooltip.Arrow class="fill-gray-500" />
+                  </Tooltip.Content>
+                </Tooltip.Portal>
+              </Tooltip.Root>
+              <a
+                class="rounded-full h-[2rem] px-[1rem] flex flex-row items-center gap-[0.375rem] bg-gray-200 hover:bg-gray-300 transition-colors duration-100"
+                href={sharing().link}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <span class="text-[0.875rem] text-gray-500">
+                  {url().host}
+                  {url().pathname}
+                </span>
+              </a>
+            </div>
+          );
+        }}
+      </Show>
+      <Dialog.Root open={!uploadVideo.isIdle}>
+        <DialogContent
+          title={
+            uploadState.type === "uploading"
+              ? "Creating Shareable Link"
+              : uploadState.type === "link-copied"
+              ? "Link Copied"
+              : "Exporting Recording"
+          }
+          confirm={<></>}
+          close={<></>}
+          class="bg-gray-600 text-gray-500 dark:text-gray-500"
+        >
+          <div class="w-[80%] text-center mx-auto relative z-10 space-y-6 py-4">
+            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+              <div
+                class="bg-blue-300 h-2.5 rounded-full"
+                style={{
+                  width: `${
+                    uploadState.type === "uploading"
+                      ? uploadState.progress
+                      : uploadState.type === "link-copied"
+                      ? 100
+                      : uploadState.type === "rendering"
+                      ? Math.min(
+                          (uploadState.renderedFrames /
+                            uploadState.totalFrames) *
+                            100,
+                          100
+                        )
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
+
+            <p class="text-xs text-white mt-3 relative z-10">
+              {uploadState.type == "idle" || uploadState.type === "starting"
+                ? "Preparing to render..."
+                : uploadState.type === "rendering"
+                ? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`
+                : uploadState.type === "uploading"
+                ? `Uploading - ${Math.floor(uploadState.progress)}%`
+                : "Link copied to clipboard!"}
+            </p>
           </div>
-        );
-      }}
-    </Show>
+        </DialogContent>
+      </Dialog.Root>
+    </div>
   );
+}
+
+function createProgressBar(progress: () => number | undefined) {
+  const currentWindow = getCurrentWindow();
+
+  createEffect(() => {
+    const p = progress();
+    console.log({ p });
+    if (p === undefined)
+      currentWindow.setProgressBar({ status: ProgressBarStatus.None });
+    else currentWindow.setProgressBar({ progress: Math.round(p) });
+  });
 }

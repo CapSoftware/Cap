@@ -192,18 +192,20 @@ function Startup(props: { onClose: () => void }) {
     }
   };
 
+  const handleStartupCompleted = () =>
+    generalSettingsStore.set({
+      hasCompletedStartup: true,
+    });
+
   const handleGetStarted = async () => {
     setIsExiting(true);
-    const currentWindow = getCurrentWindow();
 
     // Cancel ongoing cloud animations
     cloud1Animation?.cancel();
     cloud2Animation?.cancel();
     cloud3Animation?.cancel();
 
-    await generalSettingsStore.set({
-      hasCompletedStartup: true,
-    });
+    await handleStartupCompleted();
 
     // Wait for animation to complete before showing new window and closing
     setTimeout(async () => {
@@ -478,10 +480,10 @@ function Startup(props: { onClose: () => void }) {
                 <Button
                   class="px-12"
                   size="lg"
-                  onClick={() => {
-                    commands.openMainWindow().then(() => {
-                      getCurrentWindow().close();
-                    });
+                  onClick={async () => {
+                    handleStartupCompleted();
+                    await commands.openMainWindow();
+                    getCurrentWindow().close();
                   }}
                 >
                   Continue to Cap

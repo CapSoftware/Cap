@@ -10,7 +10,6 @@ use thiserror::Error;
 pub mod data;
 pub mod encoders;
 pub mod feeds;
-pub mod filters;
 pub mod frame_ws;
 pub mod pipeline;
 pub mod platform;

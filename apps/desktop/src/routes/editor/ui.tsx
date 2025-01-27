@@ -147,7 +147,7 @@ export const Dialog = {
     );
     return <Button {...props} />;
   },
-  Footer(props: ComponentProps<"div">) {
+  Footer(props: ComponentProps<"div"> & { close?: JSX.Element }) {
     return (
       <div
         class={cx(
@@ -156,7 +156,7 @@ export const Dialog = {
         )}
         {...props}
       >
-        <Dialog.CloseButton />
+        {props.close ?? <Dialog.CloseButton />}
         {props.children}
       </div>
     );
@@ -172,7 +172,12 @@ export const Dialog = {
 };
 
 export function DialogContent(
-  props: ParentProps<{ title: string; confirm: JSX.Element; class?: string }>
+  props: ParentProps<{
+    title: string;
+    confirm: JSX.Element;
+    class?: string;
+    close?: JSX.Element;
+  }>
 ) {
   return (
     <>
@@ -182,7 +187,7 @@ export function DialogContent(
         </KDialog.Title>
       </Dialog.Header>
       <Dialog.Content class={props.class}>{props.children}</Dialog.Content>
-      <Dialog.Footer>{props.confirm}</Dialog.Footer>
+      <Dialog.Footer close={props.close}>{props.confirm}</Dialog.Footer>
     </>
   );
 }

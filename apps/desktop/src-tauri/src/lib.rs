@@ -64,6 +64,9 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 use upload::{get_s3_config, upload_image, upload_video, S3UploadMeta};
 use web_api::ManagerExt;
 use windows::{CapWindowId, ShowCapWindow};
@@ -128,7 +131,7 @@ impl App {
 
         if matches!(
             current_recording.options.capture_target,
-            ScreenCaptureTarget::Window(_)
+            ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
         ) {
             let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
@@ -160,6 +163,7 @@ impl App {
                 match options.capture_target {
                     ScreenCaptureTarget::Screen(screen) => screen.name,
                     ScreenCaptureTarget::Window(window) => window.owner_name,
+                    ScreenCaptureTarget::Area(area) => area.screen.name,
                 }
                 .into(),
             );
@@ -923,7 +927,7 @@ async fn create_editor_instance(
     let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     // Load the RecordingMeta to get the pretty name
-    let mut meta = RecordingMeta::load_for_project(&editor_instance.project_path)
+    let meta = RecordingMeta::load_for_project(&editor_instance.project_path)
         .map_err(|e| format!("Failed to load recording meta: {}", e))?;
 
     println!("Pretty name: {}", meta.pretty_name);
@@ -1158,7 +1162,6 @@ fn open_main_window(app: AppHandle) {
 
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
 pub struct UploadProgress {
-    stage: String,
     progress: f64,
     message: String,
 }
@@ -1234,7 +1237,6 @@ async fn upload_exported_video(
 
     // Start upload progress
     UploadProgress {
-        stage: "uploading".to_string(),
         progress: 0.0,
         message: "Starting upload...".to_string(),
     }
@@ -1266,7 +1268,6 @@ async fn upload_exported_video(
         Ok(uploaded_video) => {
             // Emit upload complete
             UploadProgress {
-                stage: "uploading".to_string(),
                 progress: 1.0,
                 message: "Upload complete!".to_string(),
             }
@@ -1929,8 +1930,42 @@ async fn check_notification_permissions(app: AppHandle) {
     }
 }
 
+fn configure_logging(folder: &PathBuf) -> tracing_appender::non_blocking::WorkerGuard {
+    let file_appender = tracing_appender::rolling::daily(folder, "cap-logs.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    let filter = || tracing_subscriber::filter::EnvFilter::builder().parse_lossy("cap-*=TRACE");
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_target(false)
+                .with_writer(non_blocking)
+                .with_filter(filter()),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_target(false)
+                .with_filter(filter()),
+        )
+        .init();
+
+    _guard
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run() {
+    let tauri_context = tauri::generate_context!();
+
+    // let _guard = configure_logging(
+    //     &dirs::data_dir()
+    //         .unwrap()
+    //         .join(&tauri_context.config().identifier)
+    //         .join("logs"),
+    // );
+
     let specta_builder = tauri_specta::Builder::new()
         .commands(tauri_specta::collect_commands![
             get_recording_options,
@@ -1988,6 +2023,7 @@ pub async fn run() {
             show_window,
             write_clipboard_string,
             get_editor_total_frames,
+            platform::perform_haptic_feedback
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2065,6 +2101,7 @@ pub async fn run() {
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
                     CapWindowId::WindowCaptureOccluder.label().as_str(),
+                    CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::InProgressRecording.label().as_str(),
@@ -2285,7 +2322,7 @@ pub async fn run() {
                 _ => {}
             }
         })
-        .build(tauri::generate_context!())
+        .build(tauri_context)
         .expect("error while running tauri application")
         .run(|handle, event| match event {
             #[cfg(target_os = "macos")]

@@ -225,7 +225,7 @@ export const [TrackContextProvider, useTrackContext] = createContextProvider(
     isFreeForm: Accessor<boolean>;
   }) => {
     const [trackState, setTrackState] = createStore({
-      draggingHandle: false,
+      draggingSegment: false,
     });
     const bounds = createElementBounds(() => props.ref());
 

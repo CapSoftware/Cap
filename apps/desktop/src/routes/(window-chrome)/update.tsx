@@ -57,7 +57,9 @@ export default function () {
                     })
                     .then(async () => {
                       updateStatusActions.mutate({ type: "done" });
-                      getCurrentWindow().requestUserAttention(UserAttentionType.Informational);
+                      getCurrentWindow().requestUserAttention(
+                        UserAttentionType.Informational
+                      );
                     })
                     .catch(() => navigate("/"));
                 })

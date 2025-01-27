@@ -1,6 +1,6 @@
 use flume::{Receiver, Sender};
 use std::time::Instant;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::{
     data::{FFVideo, VideoInfo},
@@ -85,6 +85,8 @@ impl PipelineSourceTask for CameraSource {
         let mut frames_rx: Option<Receiver<RawCameraFrame>> = None;
         ready_signal.send(Ok(())).unwrap();
 
+        info!("Camera source ready");
+
         loop {
             match control_signal.last() {
                 Some(Control::Play) => {
@@ -103,17 +105,11 @@ impl PipelineSourceTask for CameraSource {
                         }
                     }
                 }
-                Some(Control::Pause) => {
-                    // TODO: This blocks to process frames in the queue, which may delay resumption
-                    // Some way to prevent this from delaying the listen loop?
-                    if let Some(rx) = frames_rx.take() {
-                        self.pause_and_drain_frames(&mut clock, &output, rx);
-                    }
-                }
                 Some(Control::Shutdown) | None => {
                     if let Some(rx) = frames_rx.take() {
                         self.pause_and_drain_frames(&mut clock, &output, rx);
                     }
+                    info!("Camera source stopped");
                     break;
                 }
             }

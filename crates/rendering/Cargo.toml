@@ -23,8 +23,8 @@ thiserror.workspace = true
 wgpu.workspace = true
 bezier_easing = "0.1.1"
 
-[target.'cfg(unix)'.dependencies]
-nix = { version = "0.29.0", features = ["fs"] }
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre.workspace = true
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

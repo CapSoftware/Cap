@@ -42,6 +42,8 @@ pub type AudioInputSamplesReceiver = Receiver<AudioInputSamples>;
 
 pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 
+pub const MAX_AUDIO_CHANNELS: u16 = 2;
+
 #[derive(Clone)]
 pub struct AudioInputFeed {
     control_tx: Sender<AudioInputControl>,
@@ -170,8 +172,6 @@ impl AudioInputFeed {
             MediaError::TaskLaunch("Failed to switch audio input".into())
         })??;
 
-        dbg!(&config);
-
         self.audio_info = AudioInfo::from_stream_config(&config)?;
 
         Ok(())
@@ -299,8 +299,26 @@ fn start_capturing(
             }
 
             match rx.recv() {
-                Ok(data) => {
+                Ok(mut data) => {
                     let mut to_remove = vec![];
+
+                    if config.channels() > MAX_AUDIO_CHANNELS {
+                        let mut new_data = Vec::with_capacity(
+                            MAX_AUDIO_CHANNELS as usize
+                                * (data.data.len() / config.channels() as usize),
+                        );
+
+                        let sample_size = data.format.sample_size();
+
+                        for sample in data.data.chunks(sample_size * config.channels() as usize) {
+                            new_data.extend_from_slice(
+                                &sample[0..sample_size * MAX_AUDIO_CHANNELS as usize],
+                            );
+                        }
+
+                        data.data = new_data;
+                    }
+
                     for (i, sender) in senders.iter().enumerate() {
                         if let Err(TrySendError::Disconnected(_)) = sender.try_send(data.clone()) {
                             warn!("Audio sender {} disconnected, will be removed", i);

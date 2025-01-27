@@ -7,7 +7,6 @@ use crate::pipeline::MediaError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
     Play,
-    Pause,
     Shutdown,
 }
 
@@ -53,7 +52,7 @@ impl PipelineControlSignal {
 
 /// An extremely naive broadcast channel. Sends values synchronously to all receivers,
 /// might block if one receiver takes too long to receive value.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct ControlBroadcast {
     listeners: IndexMap<String, Sender<Control>>,
 }

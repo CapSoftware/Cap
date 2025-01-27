@@ -68,7 +68,17 @@ function Inner() {
               currentWindow.show();
             });
 
-            return <Suspense>{props.children}</Suspense>;
+            return (
+              <Suspense
+                fallback={
+                  (() => {
+                    console.log("Root suspense fallback showing");
+                  }) as any
+                }
+              >
+                {props.children}
+              </Suspense>
+            );
           }}
         >
           <FileRoutes />

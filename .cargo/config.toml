@@ -1,0 +1,2 @@
+[env]
+FFMPEG_DIR = { relative = true, force = true, value = "target/native-deps" }

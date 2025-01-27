@@ -22,16 +22,44 @@ import { LogoSection } from "./_components/LogoSection";
 export const PricingPage = () => {
   const [loading, setLoading] = useState(false);
   const [isAnnual, setIsAnnual] = useState(true);
+  const [quantity, setQuantity] = useState(1);
   const [initialRender, setInitialRender] = useState(true);
   const { push } = useRouter();
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    setInitialRender(false);
-    const planFromUrl = searchParams.get("plan");
-    if (planFromUrl) {
-      planCheckout(planFromUrl);
-    }
+    const init = async () => {
+      setInitialRender(false);
+      const planFromUrl = searchParams.get("plan");
+      const next = searchParams.get("next");
+      const pendingPriceId = localStorage.getItem("pendingPriceId");
+      const pendingQuantity = localStorage.getItem("pendingQuantity");
+
+      if (pendingPriceId && pendingQuantity) {
+        localStorage.removeItem("pendingPriceId");
+        localStorage.removeItem("pendingQuantity");
+
+        const response = await fetch(`/api/settings/billing/subscribe`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            priceId: pendingPriceId,
+            quantity: parseInt(pendingQuantity),
+          }),
+        });
+        const data = await response.json();
+
+        if (data.url) {
+          window.location.href = data.url;
+        }
+      } else if (planFromUrl) {
+        planCheckout(planFromUrl);
+      }
+    };
+
+    init();
   }, []);
 
   const planCheckout = async (planId?: string) => {
@@ -46,12 +74,13 @@ export const PricingPage = () => {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ priceId: planId }),
+      body: JSON.stringify({ priceId: planId, quantity }),
     });
     const data = await response.json();
 
     if (data.auth === false) {
       localStorage.setItem("pendingPriceId", planId);
+      localStorage.setItem("pendingQuantity", quantity.toString());
       push(`/login?next=/pricing`);
       return;
     }
@@ -68,6 +97,10 @@ export const PricingPage = () => {
   };
 
   const proList = [
+    {
+      text: "No watermark on videos",
+      available: true,
+    },
     {
       text: "Unlimited cloud storage & Shareable links",
       available: true,
@@ -257,9 +290,10 @@ export const PricingPage = () => {
                       </p>
                     </div>
                     <p className="pl-8">
-                      Screen & Window recording, Local video export, Powerful
-                      video editor (custom background gradients, transitions,
-                      etc) + many more.
+                      Watermark on video, Screen & Window recording, Local video
+                      export, 5 min shareable links, Powerful video editor
+                      (custom background gradients, transitions, etc) + many
+                      more.
                     </p>
                   </div>
                 </CardFooter>
@@ -274,34 +308,79 @@ export const PricingPage = () => {
                 <CardHeader>
                   <CardTitle className="text-3xl text-white">Cap Pro</CardTitle>
                   <CardDescription className="text-white/80">
-                    For professional use and teams.
+                    For the best Cap experience.
                   </CardDescription>
                   <div>
                     <div>
                       <h3 className="text-4xl text-white">
-                        {isAnnual ? "$6/mo" : "$9/mo"}
+                        {isAnnual
+                          ? `$${6 * quantity}/mo`
+                          : `$${9 * quantity}/mo`}
                       </h3>
                       <div>
                         <p className="text-sm font-medium text-white/80">
                           {isAnnual
-                            ? "per user, billed annually."
-                            : "per user, billed monthly."}
+                            ? quantity === 1
+                              ? "per user, billed annually."
+                              : `for ${quantity} users, billed annually.`
+                            : quantity === 1
+                            ? "per user, billed monthly."
+                            : `for ${quantity} users, billed monthly.`}
                         </p>
                         {isAnnual && (
-                          <p className="text-sm text-white/80">
-                            or, $9/month, billed monthly.
+                          <p
+                            className="text-sm text-white/80 cursor-pointer hover:text-white transition-colors"
+                            onClick={() => setIsAnnual(false)}
+                          >
+                            or, ${9 * quantity}/month,{" "}
+                            {quantity === 1
+                              ? "per user, "
+                              : `for ${quantity} users, `}
+                            billed monthly.
                           </p>
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center mt-4 -mb-3 pt-4 border-t-2 border-white/20">
+                    <div className="flex items-center border-t-2 border-white/20 pt-2 mt-2">
                       <span className="text-xs text-white/80 mr-2">
-                        {isAnnual ? "Switch to monthly" : "Switch to annually"}
+                        Number of users:
                       </span>
-                      <Switch
-                        checked={!isAnnual}
-                        onCheckedChange={() => setIsAnnual(!isAnnual)}
-                      />
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() =>
+                            quantity > 1 && setQuantity(quantity - 1)
+                          }
+                          className="px-2 py-0 h-6"
+                        >
+                          -
+                        </Button>
+                        <span className="text-white min-w-[20px] text-center">
+                          {quantity}
+                        </span>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => setQuantity(quantity + 1)}
+                          className="px-2 py-0 h-6"
+                        >
+                          +
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-4 mt-2 -mb-4 pt-4 border-t-2 border-white/20">
+                      <div className="flex items-center">
+                        <span className="text-xs text-white/80 mr-2">
+                          {isAnnual
+                            ? "Switch to monthly"
+                            : "Switch to annually"}
+                        </span>
+                        <Switch
+                          checked={!isAnnual}
+                          onCheckedChange={() => setIsAnnual(!isAnnual)}
+                        />
+                      </div>
                     </div>
                   </div>
                 </CardHeader>
@@ -310,7 +389,7 @@ export const PricingPage = () => {
                     type="button"
                     spinner={loading}
                     onClick={() => planCheckout()}
-                    className="w-full"
+                    className="w-full -mb-4"
                     size="lg"
                     variant="white"
                   >

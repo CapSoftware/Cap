@@ -4,12 +4,21 @@ import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { cx } from "cva";
-import { For, Show, Suspense, createEffect, createSignal } from "solid-js";
+import {
+  For,
+  Show,
+  Suspense,
+  createEffect,
+  createResource,
+  createSignal,
+} from "solid-js";
 import { reconcile } from "solid-js/store";
+import { useNavigate } from "@solidjs/router";
 
 import { type AspectRatio, commands } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { ASPECT_RATIOS } from "./projectConfig";
+import { authStore } from "~/store";
 import {
   ComingSoonTooltip,
   DropdownItem,
@@ -23,6 +32,8 @@ import {
 import { formatTime } from "./utils";
 
 export function Player() {
+  const navigate = useNavigate();
+  const [auth] = createResource(() => authStore.get());
   const {
     project,
     videoId,
@@ -216,9 +227,18 @@ export function Player() {
           }}
         </Show>
       </div>
-      <div class="flex flex-row items-center p-[0.75rem] z-10 bg-gray-50">
-        <div class="flex-1" />
-        <div class="flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
+      <div class="flex flex-row items-center p-[0.75rem] z-10 bg-gray-50 justify-between">
+        <div class="flex-1 flex items-center">
+          <Show when={!auth()?.plan?.upgraded}>
+            <EditorButton
+              class="bg-gray-200 text-xs"
+              onClick={() => commands.showWindow("Upgrade")}
+            >
+              Remove watermark
+            </EditorButton>
+          </Show>
+        </div>
+        <div class="flex-1 flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
           <span>{formatTime(playbackTime())}</span>
           <button type="button" disabled>
             <IconCapFrameFirst class="size-[1.2rem]" />

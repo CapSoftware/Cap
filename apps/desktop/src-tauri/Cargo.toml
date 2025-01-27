@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.3.12"
+version = "0.3.15"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2021"
@@ -23,6 +23,7 @@ tauri = { workspace = true, features = [
 	"protocol-asset",
 	"tray-icon",
 	"image-png",
+	"devtools",
 ] }
 tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
 tauri-plugin-dialog = "2.2.0"
@@ -81,11 +82,17 @@ cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
 flume.workspace = true
 tracing-subscriber = "0.3.19"
+tracing-appender = "0.2.3"
+dirs = "6.0.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
-objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSResponder"] }
+objc2-app-kit = { version = "0.2.2", features = [
+	"NSWindow",
+	"NSResponder",
+	"NSHapticFeedback",
+] }
 cocoa = "0.26.0"
 objc = "0.2.7"
 swift-rs = "1.0.6"
