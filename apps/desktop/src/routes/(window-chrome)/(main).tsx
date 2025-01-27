@@ -51,6 +51,7 @@ import {
 } from "../editor/ui";
 
 const getAuth = cache(async () => {
+  throw new Error("");
   const value = await authStore.get();
   const local = import.meta.env.VITE_LOCAL_MODE === "true";
 
@@ -89,6 +90,7 @@ export default function () {
   createUpdateCheck();
 
   onMount(async () => {
+    console.log("main mounted");
     if (options.data?.cameraLabel && options.data.cameraLabel !== "No Camera") {
       const cameraWindowActive = await commands.isCameraWindowOpen();
 
@@ -153,6 +155,8 @@ export default function () {
     });
   });
 
+  console.log("main rendering");
+
   return (
     <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] bg-[--gray-50] h-full text-[--text-primary]">
       <div class="flex items-center justify-between pb-[0.25rem]">
@@ -167,10 +171,11 @@ export default function () {
                 await commands.showWindow("Upgrade");
               }
             }}
-            class={`text-[0.6rem] ${isUpgraded()
+            class={`text-[0.6rem] ${
+              isUpgraded()
                 ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
                 : "bg-gray-200 cursor-pointer hover:bg-gray-300"
-              } rounded-lg px-1.5 py-0.5`}
+            } rounded-lg px-1.5 py-0.5`}
           >
             {isUpgraded() ? "Pro" : "Upgrade to Pro"}
           </span>
@@ -451,7 +456,7 @@ function TargetSelects(props: {
             }
           >
             <Show when={isTargetScreenOrArea()}>
-              {(targetScreenOrArea) =>
+              {(targetScreenOrArea) => (
                 <button
                   type="button"
                   disabled={!targetScreenOrArea}
@@ -466,13 +471,14 @@ function TargetSelects(props: {
                   )}
                 >
                   <IconCapCrop
-                    class={`w-[1rem] h-[1rem] ${areaSelection.pending
+                    class={`w-[1rem] h-[1rem] ${
+                      areaSelection.pending
                         ? "animate-gentle-bounce duration-1000 text-gray-500 mt-1"
                         : ""
-                      }`}
+                    }`}
                   />
                 </button>
-              }
+              )}
             </Show>
           </Transition>
         </Tooltip.Trigger>
@@ -481,16 +487,17 @@ function TargetSelects(props: {
             {isTargetCaptureArea()
               ? "Remove selection"
               : areaSelection.pending
-                ? "Selecting area..."
-                : "Select area"}
+              ? "Selecting area..."
+              : "Select area"}
             <Tooltip.Arrow class="fill-gray-500" />
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>
 
       <div
-        class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${isTargetScreenOrArea() ? "ml-[2.4rem]" : ""
-          }`}
+        class={`flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500 ${
+          isTargetScreenOrArea() ? "ml-[2.4rem]" : ""
+        }`}
         style={{
           "transition-timing-function":
             "cubic-bezier(0.785, 0.135, 0.15, 0.86)",
@@ -873,16 +880,16 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
         as={
           props.options.length <= 1
             ? (p) => (
-              <button
-                onClick={() => {
-                  props.onChange(props.options[0]);
-                }}
-                data-selected={props.selected}
-                class={p.class}
-              >
-                <span class="truncate">{props.placeholder}</span>
-              </button>
-            )
+                <button
+                  onClick={() => {
+                    props.onChange(props.options[0]);
+                  }}
+                  data-selected={props.selected}
+                  class={p.class}
+                >
+                  <span class="truncate">{props.placeholder}</span>
+                </button>
+              )
             : undefined
         }
         class="flex-1 text-gray-400 py-1 z-10 data-[selected='true']:text-gray-500 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
@@ -956,8 +963,8 @@ function TargetSelectInfoPill<T>(props: {
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-          ? "On"
-          : "Off"}
+        ? "On"
+        : "Off"}
     </button>
   );
 }
