@@ -81,25 +81,26 @@ impl MP4Encoder {
         };
 
         let audio = if let Some(audio_config) = audio_config {
-            // Setup audio encoder
-            let audio_codec = encoder::find_by_name(if cfg!(target_os = "macos") {
-                "aac"
-            } else {
-                "aac_at"
-            })
-            .ok_or(MediaError::TaskLaunch("Could not find AAC codec".into()))?;
-            let mut audio_ctx = context::Context::new_with_codec(audio_codec);
-            audio_ctx.set_threading(Config::count(4));
-            let mut audio_enc = audio_ctx.encoder().audio()?;
+            let (mut audio_enc, audio_codec, output_format) = if cfg!(target_os = "macos") {
+                let audio_codec = encoder::find_by_name("aac_at")
+                    .ok_or(MediaError::TaskLaunch("Could not find AAC codec".into()))?;
+                let mut audio_ctx = context::Context::new_with_codec(audio_codec);
+                audio_ctx.set_threading(Config::count(4));
+                let mut audio_enc = audio_ctx.encoder().audio()?;
 
-            let output_format = if cfg!(target_os = "macos") {
                 let output_format = ffmpeg::format::Sample::I16(format::sample::Type::Planar);
 
                 audio_enc.set_flags(ffmpeg::codec::Flags::QSCALE);
                 audio_enc.set_quality(10 * FF_QP2LAMBDA as usize);
 
-                output_format
+                (audio_enc, audio_codec, output_format)
             } else {
+                let audio_codec = encoder::find_by_name("aac")
+                    .ok_or(MediaError::TaskLaunch("Could not find AAC codec".into()))?;
+                let mut audio_ctx = context::Context::new_with_codec(audio_codec);
+                audio_ctx.set_threading(Config::count(4));
+                let mut audio_enc = audio_ctx.encoder().audio()?;
+
                 audio_enc.set_bit_rate(128 * 1000);
                 let output_format = ffmpeg::format::Sample::F32(format::sample::Type::Planar);
 
@@ -117,7 +118,7 @@ impl MP4Encoder {
                     )));
                 }
 
-                output_format
+                (audio_enc, audio_codec, output_format)
             };
 
             audio_enc.set_rate(audio_config.rate());
