@@ -59,6 +59,7 @@ async function main() {
     });
 
     // alternative to specifying dylibs as linker args
+    await fs.mkdir(`${targetDir}/debug`, { recursive: true });
     for (const name of await fs.readdir(`${nativeDepsDir}/lib`)) {
       await fs.copyFile(
         `${nativeDepsDir}/lib/${name}`,
