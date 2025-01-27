@@ -127,7 +127,7 @@ impl App {
 
         if matches!(
             current_recording.options.capture_target,
-            ScreenCaptureTarget::Window(_)
+            ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
         ) {
             let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
@@ -159,6 +159,7 @@ impl App {
                 match options.capture_target {
                     ScreenCaptureTarget::Screen(screen) => screen.name,
                     ScreenCaptureTarget::Window(window) => window.owner_name,
+                    ScreenCaptureTarget::Area(area) => area.screen.name,
                 }
                 .into(),
             );
@@ -2006,6 +2007,7 @@ pub async fn run() {
             show_window,
             write_clipboard_string,
             get_editor_total_frames,
+            platform::perform_haptic_feedback
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2082,6 +2084,7 @@ pub async fn run() {
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
                     CapWindowId::WindowCaptureOccluder.label().as_str(),
+                    CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::InProgressRecording.label().as_str(),

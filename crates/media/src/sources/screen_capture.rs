@@ -43,10 +43,17 @@ pub struct CaptureScreen {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct CaptureArea {
+    pub screen: CaptureScreen,
+    pub bounds: Bounds,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
     Window(CaptureWindow),
     Screen(CaptureScreen),
+    Area(CaptureArea),
 }
 
 impl PartialEq<Target> for ScreenCaptureTarget {
@@ -55,11 +62,15 @@ impl PartialEq<Target> for ScreenCaptureTarget {
             (Self::Window(capture_window), Target::Window(window)) => {
                 window.id == capture_window.id
             }
+            (ScreenCaptureTarget::Area(capture_area), Target::Display(display)) => {
+                display.id == capture_area.screen.id
+            }
             (ScreenCaptureTarget::Screen(capture_screen), Target::Display(display)) => {
                 display.id == capture_screen.id
             }
             (&ScreenCaptureTarget::Window(_), &scap::Target::Display(_))
-            | (&ScreenCaptureTarget::Screen(_), &scap::Target::Window(_)) => todo!(),
+            | (&ScreenCaptureTarget::Screen(_), &scap::Target::Window(_))
+            | (&ScreenCaptureTarget::Area(_), &scap::Target::Window(_)) => todo!(),
         }
     }
 }
@@ -69,6 +80,7 @@ impl ScreenCaptureTarget {
         match self {
             ScreenCaptureTarget::Window(window) => window.refresh_rate,
             ScreenCaptureTarget::Screen(screen) => screen.refresh_rate,
+            ScreenCaptureTarget::Area(area) => area.screen.refresh_rate,
         }
         .min(MAX_FPS)
     }
@@ -144,6 +156,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             ScreenCaptureTarget::Screen(capture_screen) => {
                 platform::monitor_bounds(capture_screen.id)
             }
+            ScreenCaptureTarget::Area(capture_area) => capture_area.bounds,
         }
     }
 
@@ -171,6 +184,16 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 },
             }),
             ScreenCaptureTarget::Screen(_) => None,
+            ScreenCaptureTarget::Area(capture_area) => Some(Area {
+                size: Size {
+                    width: capture_area.bounds.width,
+                    height: capture_area.bounds.height,
+                },
+                origin: Point {
+                    x: capture_area.bounds.x,
+                    y: capture_area.bounds.y,
+                },
+            }),
         };
 
         let target = match &self.target {
@@ -208,6 +231,13 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 .iter()
                 .find(|t| match t {
                     Target::Display(display) => display.id == capture_screen.id,
+                    _ => false,
+                })
+                .cloned(),
+            ScreenCaptureTarget::Area(capture_area) => targets
+                .iter()
+                .find(|t| match t {
+                    Target::Display(display) => display.id == capture_area.screen.id,
                     _ => false,
                 })
                 .cloned(),
@@ -495,7 +525,7 @@ pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
                             owner_name: platform_window.owner_name.clone(),
                             name: platform_window.name.clone(),
                             bounds: platform_window.bounds,
-                            refresh_rate: get_target_fps(&target).unwrap(),
+                            refresh_rate: get_target_fps(&target).unwrap_or_default(),
                         },
                         target,
                     )
