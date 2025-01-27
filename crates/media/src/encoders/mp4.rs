@@ -1,3 +1,5 @@
+use std::ffi::CStr;
+
 use crate::{
     data::{
         AudioInfo, FFAudio, FFPacket, FFRational, FFVideo, PlanarData, RawVideoFormat, VideoInfo,
@@ -13,6 +15,7 @@ use ffmpeg::{
     threading::Config,
     Dictionary, Rescale,
 };
+use ffmpeg_sys_next::FF_QP2LAMBDA;
 use tracing::{debug, info, trace};
 
 use super::Output;
@@ -38,8 +41,6 @@ pub struct MP4Encoder {
 }
 
 impl MP4Encoder {
-    const AUDIO_BITRATE: usize = 128 * 1000; // 128k
-
     pub fn init(
         tag: &'static str,
         video_config: VideoInfo,
@@ -81,29 +82,44 @@ impl MP4Encoder {
 
         let audio = if let Some(audio_config) = audio_config {
             // Setup audio encoder
-            let audio_codec = encoder::find(ffmpeg::codec::Id::AAC)
-                .ok_or(MediaError::TaskLaunch("Could not find AAC codec".into()))?;
+            let audio_codec = encoder::find_by_name(if cfg!(target_os = "macos") {
+                "aac"
+            } else {
+                "aac_at"
+            })
+            .ok_or(MediaError::TaskLaunch("Could not find AAC codec".into()))?;
             let mut audio_ctx = context::Context::new_with_codec(audio_codec);
             audio_ctx.set_threading(Config::count(4));
             let mut audio_enc = audio_ctx.encoder().audio()?;
 
-            if !audio_codec
-                .audio()
-                .unwrap()
-                .rates()
-                .into_iter()
-                .flatten()
-                .any(|r| r == audio_config.rate())
-            {
-                return Err(MediaError::TaskLaunch(format!(
-                    "AAC Codec does not support sample rate {}",
-                    audio_config.rate()
-                )));
-            }
+            let output_format = if cfg!(target_os = "macos") {
+                let output_format = ffmpeg::format::Sample::I16(format::sample::Type::Planar);
 
-            let output_format = ffmpeg::format::Sample::F32(format::sample::Type::Planar);
+                audio_enc.set_flags(ffmpeg::codec::Flags::QSCALE);
+                audio_enc.set_quality(10 * FF_QP2LAMBDA as usize);
 
-            audio_enc.set_bit_rate(Self::AUDIO_BITRATE);
+                output_format
+            } else {
+                audio_enc.set_bit_rate(128 * 1000);
+                let output_format = ffmpeg::format::Sample::F32(format::sample::Type::Planar);
+
+                if !audio_codec
+                    .audio()
+                    .unwrap()
+                    .rates()
+                    .into_iter()
+                    .flatten()
+                    .any(|r| r == audio_config.rate())
+                {
+                    return Err(MediaError::TaskLaunch(format!(
+                        "AAC Codec does not support sample rate {}",
+                        audio_config.rate()
+                    )));
+                }
+
+                output_format
+            };
+
             audio_enc.set_rate(audio_config.rate());
             audio_enc.set_format(output_format);
             audio_enc.set_channel_layout(audio_config.channel_layout());
@@ -203,7 +219,6 @@ impl MP4Encoder {
         //     frame.samples()
         // );
 
-        dbg!(audio.encoder.frame_size());
         audio.buffer.consume(frame);
 
         // Process all buffered frames

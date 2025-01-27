@@ -11,6 +11,8 @@ pub use ffmpeg::util::{
 };
 pub use ffmpeg::{error::EAGAIN, Error as FFError, Packet as FFPacket};
 
+use crate::feeds::MAX_AUDIO_CHANNELS;
+
 pub enum RawVideoFormat {
     Bgra,
     Mjpeg,
@@ -115,13 +117,13 @@ impl AudioInfo {
             SupportedBufferSize::Unknown => 1024,
         };
 
-        Self::channel_layout_raw(config.channels())
-            .ok_or(AudioInfoError::ChannelLayout(config.channels()))?;
+        let channels = config.channels().clamp(1, MAX_AUDIO_CHANNELS);
 
         Ok(Self {
             sample_format,
             sample_rate: config.sample_rate().0,
-            channels: config.channels().into(),
+            // we do this here and only here bc we know it's cpal-related
+            channels: channels.into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size,
         })
@@ -173,7 +175,6 @@ impl AudioInfo {
         let interleaved_chunk_size = sample_size * self.channels;
         let samples = data.len() / interleaved_chunk_size;
 
-        dbg!(samples);
         let mut frame = FFAudio::new(self.sample_format, samples, self.channel_layout());
         frame.set_pts(Some(timestamp));
         frame.set_rate(self.sample_rate);

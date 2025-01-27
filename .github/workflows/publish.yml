@@ -92,9 +92,7 @@ jobs:
       matrix:
         settings:
           - target: x86_64-apple-darwin
-            prebuild: x86_64
           - target: aarch64-apple-darwin
-            prebuild: aarch64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -131,6 +129,9 @@ jobs:
           node-version: "20"
           cache: pnpm
 
+      - name: Setup native dependencies
+        run: pnpm cap-setup
+
       - name: Install dependencies
         run: pnpm install
 
@@ -157,7 +158,6 @@ jobs:
         working-directory: apps/desktop
         run: |
           export TARGET_TRIPLE=${{ matrix.settings.target }}
-          node ${{ github.workspace }}/.github/prebuild.js darwin ${{ matrix.settings.prebuild }}
           pnpm tauri build --target ${{ matrix.settings.target }} --config src-tauri/tauri.conf.prod.json
         env:
           # https://github.com/tauri-apps/tauri-action/issues/740

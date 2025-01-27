@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use crate::{
     audio::AppSounds,
@@ -21,6 +21,7 @@ use cap_project::{
 };
 use cap_recording::CompletedRecording;
 use cap_rendering::ProjectRecordings;
+use cap_utils::spawn_actor;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
@@ -51,8 +52,11 @@ pub fn list_cameras() -> Vec<String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
-    let mut state = state.write().await;
+pub async fn start_recording(
+    app: AppHandle,
+    state_mtx: MutableState<'_, App>,
+) -> Result<(), String> {
+    let mut state = state_mtx.write().await;
 
     // Get the recording config
     let config = GeneralSettingsStore::get(&app)?
@@ -99,7 +103,7 @@ pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Re
             }
         }
     }
-    let actor = cap_recording::spawn_recording_actor(
+    let (actor, actor_done_rx) = cap_recording::spawn_recording_actor(
         id,
         recording_dir,
         state.start_recording_options.clone(),
@@ -110,6 +114,20 @@ pub async fn start_recording(app: AppHandle, state: MutableState<'_, App>) -> Re
     .map_err(|e| e.to_string())?;
 
     state.set_current_recording(actor);
+    drop(state);
+
+    spawn_actor({
+        let app = app.clone();
+        let state_mtx = Arc::clone(&state_mtx);
+        async move {
+            actor_done_rx.await.ok();
+
+            let mut state = state_mtx.write().await;
+
+            // this clears the current recording for us
+            handle_recording_finished(app, None, &mut state).await.ok();
+        }
+    });
 
     if let Some(window) = CapWindowId::Main.get(&app) {
         window.minimize().ok();
@@ -165,6 +183,19 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
 
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
 
+    handle_recording_finished(app, Some(completed_recording), &mut state).await?;
+
+    Ok(())
+}
+
+async fn handle_recording_finished(
+    app: AppHandle,
+    completed_recording: Option<cap_recording::CompletedRecording>,
+    state: &mut App,
+) -> Result<(), String> {
+    // Clear current recording, just in case :)
+    state.current_recording.take();
+
     if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
         window.hide().unwrap();
     }
@@ -173,129 +204,139 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
         window.unminimize().ok();
     }
 
-    let screenshots_dir = completed_recording.recording_dir.join("screenshots");
-    std::fs::create_dir_all(&screenshots_dir).ok();
+    if let Some(completed_recording) = completed_recording {
+        let screenshots_dir = completed_recording.recording_dir.join("screenshots");
+        std::fs::create_dir_all(&screenshots_dir).ok();
 
-    let display_output_path = match &completed_recording.meta.content {
-        Content::SingleSegment { segment } => {
-            segment.path(&completed_recording.meta, &segment.display.path)
+        let display_output_path = match &completed_recording.meta.content {
+            Content::SingleSegment { segment } => {
+                segment.path(&completed_recording.meta, &segment.display.path)
+            }
+            Content::MultipleSegments { inner } => {
+                inner.path(&completed_recording.meta, &inner.segments[0].display.path)
+            }
+        };
+
+        let display_screenshot = screenshots_dir.join("display.jpg");
+        create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
+
+        let recording_dir = completed_recording.recording_dir.clone();
+
+        ShowCapWindow::PrevRecordings.show(&app).ok();
+
+        NewRecordingAdded {
+            path: recording_dir.clone(),
         }
-        Content::MultipleSegments { inner } => {
-            inner.path(&completed_recording.meta, &inner.segments[0].display.path)
+        .emit(&app)
+        .ok();
+
+        RecordingStopped {
+            path: recording_dir,
+        }
+        .emit(&app)
+        .ok();
+
+        let recordings = ProjectRecordings::new(&completed_recording.meta);
+
+        let config = project_config_from_recording(&completed_recording, &recordings);
+
+        config
+            .write(&completed_recording.recording_dir)
+            .map_err(|e| e.to_string())?;
+
+        if let Some(pre_created_video) = state.pre_created_video.take() {
+            spawn_actor({
+                let app = app.clone();
+                async move {
+                    if let Some((settings, auth)) = GeneralSettingsStore::get(&app)
+                        .ok()
+                        .flatten()
+                        .zip(AuthStore::get(&app).ok().flatten())
+                    {
+                        if auth.is_upgraded() && settings.auto_create_shareable_link {
+                            // Copy link to clipboard
+                            let _ = app
+                                .state::<MutableState<'_, ClipboardContext>>()
+                                .write()
+                                .await
+                                .set_text(pre_created_video.link.clone());
+
+                            // Send notification for shareable link
+                            notifications::send_notification(
+                                &app,
+                                notifications::NotificationType::ShareableLinkCopied,
+                            );
+
+                            // Open the pre-created shareable link
+                            open_external_link(app.clone(), pre_created_video.link.clone()).ok();
+
+                            // Start the upload process in the background with retry mechanism
+                            let app = app.clone();
+
+                            tauri::async_runtime::spawn(async move {
+                                let max_retries = 3;
+                                let mut retry_count = 0;
+
+                                export_video(
+                                    app.clone(),
+                                    completed_recording.id.clone(),
+                                    config,
+                                    tauri::ipc::Channel::new(|_| Ok(())),
+                                    true,
+                                    completed_recording.meta.content.max_fps(),
+                                    XY::new(1920, 1080),
+                                )
+                                .await
+                                .ok();
+
+                                while retry_count < max_retries {
+                                    match upload_exported_video(
+                                        app.clone(),
+                                        completed_recording.id.clone(),
+                                        UploadMode::Initial {
+                                            pre_created_video: Some(pre_created_video.clone()),
+                                        },
+                                    )
+                                    .await
+                                    {
+                                        Ok(_) => {
+                                            println!("Video uploaded successfully");
+                                            // Don't send notification here since we already did it above
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            retry_count += 1;
+                                            println!(
+                                                "Error during auto-upload (attempt {}/{}): {}",
+                                                retry_count, max_retries, e
+                                            );
+
+                                            if retry_count < max_retries {
+                                                tokio::time::sleep(std::time::Duration::from_secs(
+                                                    5,
+                                                ))
+                                                .await;
+                                            } else {
+                                                println!("Max retries reached. Upload failed.");
+                                                notifications::send_notification(
+                                                    &app,
+                                                    notifications::NotificationType::UploadFailed,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        } else if settings.open_editor_after_recording {
+                            open_editor(app.clone(), completed_recording.id);
+                        }
+                    }
+                }
+            });
         }
     };
 
-    let display_screenshot = screenshots_dir.join("display.jpg");
-    create_screenshot(display_output_path, display_screenshot.clone(), None).await?;
-
-    let recording_dir = completed_recording.recording_dir.clone();
-
-    ShowCapWindow::PrevRecordings.show(&app).ok();
-
-    NewRecordingAdded {
-        path: recording_dir.clone(),
-    }
-    .emit(&app)
-    .ok();
-
-    RecordingStopped {
-        path: recording_dir,
-    }
-    .emit(&app)
-    .ok();
-
-    let recordings = ProjectRecordings::new(&completed_recording.meta);
-
-    let config = project_config_from_recording(&completed_recording, &recordings);
-
-    config
-        .write(&completed_recording.recording_dir)
-        .map_err(|e| e.to_string())?;
-
     AppSounds::StopRecording.play();
-
-    if let Some((settings, auth)) = GeneralSettingsStore::get(&app)
-        .ok()
-        .flatten()
-        .zip(AuthStore::get(&app).ok().flatten())
-    {
-        if auth.is_upgraded() && settings.auto_create_shareable_link {
-            if let Some(pre_created_video) = state.pre_created_video.take() {
-                // Copy link to clipboard
-                let _ = app
-                    .state::<MutableState<'_, ClipboardContext>>()
-                    .write()
-                    .await
-                    .set_text(pre_created_video.link.clone());
-
-                // Send notification for shareable link
-                notifications::send_notification(
-                    &app,
-                    notifications::NotificationType::ShareableLinkCopied,
-                );
-
-                // Open the pre-created shareable link
-                open_external_link(app.clone(), pre_created_video.link.clone()).ok();
-
-                // Start the upload process in the background with retry mechanism
-                let app = app.clone();
-
-                tauri::async_runtime::spawn(async move {
-                    let max_retries = 3;
-                    let mut retry_count = 0;
-
-                    export_video(
-                        app.clone(),
-                        completed_recording.id.clone(),
-                        config,
-                        tauri::ipc::Channel::new(|_| Ok(())),
-                        true,
-                        completed_recording.meta.content.max_fps(),
-                        XY::new(1920, 1080),
-                    )
-                    .await
-                    .ok();
-
-                    while retry_count < max_retries {
-                        match upload_exported_video(
-                            app.clone(),
-                            completed_recording.id.clone(),
-                            UploadMode::Initial {
-                                pre_created_video: Some(pre_created_video.clone()),
-                            },
-                        )
-                        .await
-                        {
-                            Ok(_) => {
-                                println!("Video uploaded successfully");
-                                // Don't send notification here since we already did it above
-                                break;
-                            }
-                            Err(e) => {
-                                retry_count += 1;
-                                println!(
-                                    "Error during auto-upload (attempt {}/{}): {}",
-                                    retry_count, max_retries, e
-                                );
-
-                                if retry_count < max_retries {
-                                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                                } else {
-                                    println!("Max retries reached. Upload failed.");
-                                    notifications::send_notification(
-                                        &app,
-                                        notifications::NotificationType::UploadFailed,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        } else if settings.open_editor_after_recording {
-            open_editor(app.clone(), completed_recording.id);
-        }
-    }
 
     CurrentRecordingChanged.emit(&app).ok();
 
