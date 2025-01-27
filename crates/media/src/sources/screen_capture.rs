@@ -355,16 +355,10 @@ fn inner<T>(
     let mut capturing = false;
     ready_signal.send(Ok(())).unwrap();
 
+    let t = std::time::Instant::now();
+
     loop {
         match control_signal.last() {
-            Some(Control::Pause) => {
-                trace!("Received pause signal");
-                if capturing {
-                    capturer.stop_capture();
-                    info!("Capturer stopped");
-                    capturing = false;
-                }
-            }
             Some(Control::Shutdown) | None => {
                 trace!("Received shutdown signal");
                 if capturing {
@@ -382,6 +376,10 @@ fn inner<T>(
                     capturing = true;
 
                     info!("Screen recording started.");
+                }
+
+                if t.elapsed().as_millis() > 5000 {
+                    break;
                 }
 
                 match get_frame(&mut capturer) {

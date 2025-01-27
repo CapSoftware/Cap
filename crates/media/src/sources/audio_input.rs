@@ -113,13 +113,6 @@ impl PipelineSourceTask for AudioInputSource {
                         }
                     }
                 }
-                Some(Control::Pause) => {
-                    // TODO: This blocks to process frames in the queue, which may delay resumption
-                    // Some way to prevent this from delaying the listen loop?
-                    if let Some(rx) = samples_rx.take() {
-                        self.pause_and_drain_frames(&mut clock, &output, rx);
-                    }
-                }
                 Some(Control::Shutdown) | None => {
                     if let Some(rx) = samples_rx.take() {
                         self.pause_and_drain_frames(&mut clock, &output, rx);

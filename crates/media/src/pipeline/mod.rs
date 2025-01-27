@@ -35,15 +35,6 @@ impl<T: PipelineClock> Pipeline<T> {
         self.control.broadcast(Control::Play).await
     }
 
-    pub async fn pause(&mut self) -> Result<(), MediaError> {
-        if self.is_shutdown {
-            return Err(MediaError::ShutdownPipeline);
-        };
-
-        self.clock.stop();
-        self.control.broadcast(Control::Pause).await
-    }
-
     pub async fn shutdown(&mut self) -> Result<(), MediaError> {
         if self.is_shutdown {
             return Err(MediaError::ShutdownPipeline);
