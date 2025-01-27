@@ -26,6 +26,8 @@ async function main() {
       aarch64: "native-deps-aarch64-darwin-apple.tar.xz",
     };
 
+    await fs.mkdir(targetDir, { recursive: true });
+
     const nativeDepsTar = `${targetDir}/native-deps.tar.xz`;
     if (!(await fileExists(nativeDepsTar))) {
       const nativeDepsBytes = await fetch(

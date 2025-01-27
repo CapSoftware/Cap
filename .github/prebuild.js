@@ -98,7 +98,7 @@ rustflags = [
       recursive: true,
     });
 
-    await signMacOSFrameworkLibs(nativeDeps).catch((e) => {
+    await symlinkSharedLibsMacOS(nativeDeps).catch((e) => {
       console.error(`Failed to symlink shared libs.`);
       throw e;
     });
@@ -146,7 +146,7 @@ const NATIVE_DEPS_ASSETS = {
   },
 };
 
-async function signMacOSFrameworkLibs(nativeDeps) {
+async function symlinkSharedLibsMacOS(nativeDeps) {
   // Framework
   const framework = path.join(nativeDeps, "Spacedrive.framework");
 
