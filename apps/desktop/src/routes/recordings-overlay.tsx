@@ -28,7 +28,6 @@ import IconLucideClock from "~icons/lucide/clock";
 import { commands, events, RenderProgress, UploadResult } from "~/utils/tauri";
 import { DEFAULT_PROJECT_CONFIG } from "./editor/projectConfig";
 import { createPresets } from "~/utils/createPresets";
-import { RenderState } from "~/store/progress";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
 import { authStore } from "~/store";
 
