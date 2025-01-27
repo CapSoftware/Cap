@@ -1,10 +1,10 @@
 // populates an unsymbolicated crash report's 'crashed' section with symbols
+// reference: https://developer.apple.com/documentation/xcode/adding-identifiable-symbol-names-to-a-crash-report#Symbolicate-the-crash-report-with-the-command-line
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { exec as execCb } from "node:child_process";
-import { env } from "node:process";
 import { promisify } from "node:util";
 
 const exec = promisify(execCb);

@@ -50,6 +50,7 @@ You can run cap in "local mode", which means that no auth is required for the de
 
 1. Clone the repository
 2. Install dependencies with `pnpm install`
+3. Setup native dependencies with `pnpm cap-setup`
 3. Clone .env.example and rename it to .env
 4. Make sure you have `NEXT_PUBLIC_ENVIRONMENT=development`, `NEXT_PUBLIC_URL=http://localhost:3000` and `NEXT_PUBLIC_LOCAL_MODE=true`. These should be the only .env vars that you require to get the desktop app up and running.
 5. At the root of the directory, run the app with `pnpm dev`
