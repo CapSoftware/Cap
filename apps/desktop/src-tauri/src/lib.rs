@@ -922,7 +922,7 @@ async fn create_editor_instance(
     let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     // Load the RecordingMeta to get the pretty name
-    let mut meta = RecordingMeta::load_for_project(&editor_instance.project_path)
+    let meta = RecordingMeta::load_for_project(&editor_instance.project_path)
         .map_err(|e| format!("Failed to load recording meta: {}", e))?;
 
     println!("Pretty name: {}", meta.pretty_name);

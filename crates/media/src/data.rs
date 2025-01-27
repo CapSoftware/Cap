@@ -144,7 +144,8 @@ impl AudioInfo {
     fn channel_layout_raw(channels: u16) -> Option<ChannelLayout> {
         Some(match channels {
             1 => ChannelLayout::MONO,
-            _ => ChannelLayout::STEREO,
+            2 => ChannelLayout::STEREO,
+            _ => return None,
         })
     }
 

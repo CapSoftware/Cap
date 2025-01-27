@@ -10,7 +10,7 @@ use scap::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{collections::HashMap, ops::ControlFlow};
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{error, info, trace, warn};
 
 use crate::{
     data::{FFVideo, RawVideoFormat, VideoInfo},
