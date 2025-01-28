@@ -68,7 +68,7 @@ async function main() {
         `${targetDir}/debug/${name}`
       );
     }
-    console.log("Copied ffmepg dylibs to target/debug");
+    console.log("Copied ffmpeg dylibs to target/debug");
   } else if (process.platform === "win32") {
     const FFMPEG_ZIP_NAME = "ffmpeg-7.1-full_build-shared";
     const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/7.1/${FFMPEG_ZIP_NAME}.zip`;
@@ -82,7 +82,7 @@ async function main() {
       console.log("Downloaded ffmpeg.zip");
     } else console.log("Using cached ffmpeg.zip");
 
-    const ffmpegDir = `${targetDir}/ffmepg`;
+    const ffmpegDir = `${targetDir}/ffmpeg`;
     if (!(await fileExists(ffmpegDir))) {
       await exec(`tar xf ${ffmpegZip} -C ${targetDir}`);
       await fs.rename(`${targetDir}/${FFMPEG_ZIP_NAME}`, ffmpegDir);
@@ -96,7 +96,7 @@ async function main() {
         `${targetDir}/debug/${name}`
       );
     }
-    console.log("Copied ffmepg dylibs to target/debug");
+    console.log("Copied ffmpeg dylibs to target/debug");
 
     if (!(await fileExists(`${targetDir}/native-deps`)))
       await fs.mkdir(`${targetDir}/native-deps`, { recursive: true });
