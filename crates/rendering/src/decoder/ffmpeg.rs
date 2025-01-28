@@ -70,7 +70,7 @@ enum CachedFrameData {
     Processed(Arc<Vec<u8>>),
 }
 
-struct FfmpegDecoder;
+pub struct FfmpegDecoder;
 
 impl FfmpegDecoder {
     fn spawn(name: &'static str, path: PathBuf, fps: u32, rx: mpsc::Receiver<VideoDecoderMessage>) {

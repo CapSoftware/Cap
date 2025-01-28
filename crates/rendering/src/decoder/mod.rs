@@ -48,7 +48,7 @@ pub fn spawn_decoder(name: &'static str, path: PathBuf, fps: u32) -> AsyncVideoD
 
     #[cfg(not(target_os = "macos"))]
     {
-        FfmpegDecoder::spawn(name, path, fps, rx);
+        ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx);
     }
 
     handle

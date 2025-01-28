@@ -19,7 +19,6 @@ serde_json = "1.0.133"
 tokio.workspace = true
 editor = "0.1.1"
 scap.workspace = true
-core-graphics = "0.24.0"
 uuid = { version = "1.11.1", features = ["v4"] }
 ffmpeg = { workspace = true }
 tracing = "0.1.41"

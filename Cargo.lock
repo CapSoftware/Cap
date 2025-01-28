@@ -838,7 +838,6 @@ dependencies = [
  "cap-rendering",
  "cap-utils",
  "clap 4.5.23",
- "core-graphics 0.24.0",
  "editor",
  "ffmpeg-next",
  "flume 0.11.0",
