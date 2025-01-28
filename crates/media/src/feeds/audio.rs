@@ -227,18 +227,23 @@ impl AudioFrameBuffer {
             self.adjust_cursor(timeline);
         }
 
-        let buffer = &self.data[self.cursor.segment_index].buffer;
+        let data = &self.data[self.cursor.segment_index];
+        let buffer = &data.buffer;
         if self.cursor.samples >= buffer.len() {
             self.elapsed_samples += requested_samples;
             return None;
         }
 
-        let samples = requested_samples.min(buffer.len() - self.cursor.samples);
+        let samples =
+            (requested_samples * data.info.channels).min(buffer.len() - self.cursor.samples);
 
         let start = self.cursor;
         self.elapsed_samples += samples;
         self.cursor.samples += samples;
-        Some((samples, &buffer[start.samples..self.cursor.samples]))
+        Some((
+            samples / data.info.channels,
+            &buffer[start.samples..self.cursor.samples],
+        ))
     }
 }
 
