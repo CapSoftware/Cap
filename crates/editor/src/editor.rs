@@ -47,7 +47,9 @@ impl Renderer {
 
         // Check camera duration if it exists
         if let Some(camera_path) = meta.content.camera_path() {
-            if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
+            if let Ok(camera_duration) =
+                recordings.get_source_duration(&meta.path(&camera_path))
+            {
                 max_duration = max_duration.max(camera_duration);
             }
         }

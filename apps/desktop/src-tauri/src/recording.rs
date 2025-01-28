@@ -208,13 +208,10 @@ async fn handle_recording_finished(
         let screenshots_dir = completed_recording.recording_dir.join("screenshots");
         std::fs::create_dir_all(&screenshots_dir).ok();
 
-        let display_output_path = match &completed_recording.meta.content {
-            Content::SingleSegment { segment } => {
-                segment.path(&completed_recording.meta, &segment.display.path)
-            }
-            Content::MultipleSegments { inner } => {
-                inner.path(&completed_recording.meta, &inner.segments[0].display.path)
-            }
+        let meta = &completed_recording.meta;
+        let display_output_path = match &meta.content {
+            Content::SingleSegment { segment } => meta.path(&segment.display.path),
+            Content::MultipleSegments { inner } => meta.path(&inner.segments[0].display.path),
         };
 
         let display_screenshot = screenshots_dir.join("display.jpg");

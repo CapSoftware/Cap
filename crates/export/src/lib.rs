@@ -75,15 +75,15 @@ where
             .map(|(i, segment)| {
                 let segment_paths = match &meta.content {
                     cap_project::Content::SingleSegment { segment: s } => SegmentVideoPaths {
-                        display: s.display.path.as_path(),
-                        camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                        display: meta.path(&s.display.path),
+                        camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
                     },
                     cap_project::Content::MultipleSegments { inner } => {
                         let s = &inner.segments[i];
 
                         SegmentVideoPaths {
-                            display: s.display.path.as_path(),
-                            camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                            display: meta.path(&s.display.path),
+                            camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
                         }
                     }
                 };

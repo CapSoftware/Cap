@@ -890,6 +890,7 @@ dependencies = [
  "objc2-app-kit",
  "png",
  "rand 0.8.5",
+ "relative-path",
  "reqwest",
  "rodio",
  "scap",
@@ -1023,6 +1024,7 @@ name = "cap-project"
 version = "0.1.0"
 dependencies = [
  "either",
+ "relative-path",
  "serde",
  "serde_json",
  "specta",
@@ -1043,6 +1045,7 @@ dependencies = [
  "flume 0.11.0",
  "image 0.25.5",
  "objc",
+ "relative-path",
  "serde",
  "serde_json",
  "specta",
@@ -5759,6 +5762,15 @@ name = "regex-syntax"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a66a03ae7c801facd77a29370b4faec201768915ac14a721ba36f20bc9c209b"
+
+[[package]]
+name = "relative-path"
+version = "1.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "renderdoc-sys"

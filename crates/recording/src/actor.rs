@@ -17,6 +17,7 @@ use cap_media::{
 use cap_project::{CursorEvents, RecordingMeta};
 use cap_utils::spawn_actor;
 use either::Either;
+use relative_path::{RelativePath, RelativePathBuf};
 use thiserror::Error;
 use tokio::sync::{oneshot, Mutex};
 use tracing::{
@@ -430,24 +431,31 @@ async fn stop_recording(
                         .iter()
                         .map(|s| MultipleSegment {
                             display: Display {
-                                path: s
-                                    .pipeline
-                                    .display_output_path
-                                    .strip_prefix(&actor.recording_dir)
-                                    .unwrap()
-                                    .to_owned(),
+                                path: RelativePathBuf::from_path(
+                                    s.pipeline
+                                        .display_output_path
+                                        .strip_prefix(&actor.recording_dir)
+                                        .unwrap(),
+                                )
+                                .unwrap(),
                                 fps: actor.options.capture_target.recording_fps(),
                             },
                             camera: s.pipeline.camera.as_ref().map(|camera| CameraMeta {
-                                path: camera
-                                    .output_path
-                                    .strip_prefix(&actor.recording_dir)
-                                    .unwrap()
-                                    .to_owned(),
+                                path: RelativePathBuf::from_path(
+                                    camera
+                                        .output_path
+                                        .strip_prefix(&actor.recording_dir)
+                                        .unwrap()
+                                        .to_owned(),
+                                )
+                                .unwrap(),
                                 fps: camera.fps,
                             }),
                             audio: s.pipeline.audio_output_path.as_ref().map(|path| AudioMeta {
-                                path: path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                                path: RelativePathBuf::from_path(
+                                    path.strip_prefix(&actor.recording_dir).unwrap().to_owned(),
+                                )
+                                .unwrap(),
                             }),
                             cursor: None,
                         })

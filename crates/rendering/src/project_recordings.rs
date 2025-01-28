@@ -78,16 +78,16 @@ impl ProjectRecordings {
     pub fn new(meta: &RecordingMeta) -> Self {
         let segments = match &meta.content {
             crate::Content::SingleSegment { segment } => {
-                let display = Video::new(&meta.project_path.join(&segment.display.path))
+                let display = Video::new(&meta.path(&segment.display.path))
                     .expect("Failed to read display video");
                 let camera = segment.camera.as_ref().map(|camera| {
-                    Video::new(&meta.project_path.join(&camera.path))
+                    Video::new(&meta.path(&camera.path))
                         .expect("Failed to read camera video")
                 });
                 let audio = segment
                     .audio
                     .as_ref()
-                    .map(|audio| Audio::new(&meta.project_path.join(&audio.path)));
+                    .map(|audio| Audio::new(&meta.path(&audio.path)));
 
                 vec![SegmentRecordings {
                     display,
@@ -99,16 +99,16 @@ impl ProjectRecordings {
                 .segments
                 .iter()
                 .map(|s| {
-                    let display = Video::new(&meta.project_path.join(&s.display.path))
+                    let display = Video::new(&meta.path(&s.display.path))
                         .expect("Failed to read display video");
                     let camera = s.camera.as_ref().map(|camera| {
-                        Video::new(&meta.project_path.join(&camera.path))
+                        Video::new(&meta.path(&camera.path))
                             .expect("Failed to read camera video")
                     });
                     let audio = s
                         .audio
                         .as_ref()
-                        .map(|audio| Audio::new(&meta.project_path.join(&audio.path)));
+                        .map(|audio| Audio::new(&meta.path(&audio.path)));
 
                     SegmentRecordings {
                         display,

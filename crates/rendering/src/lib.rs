@@ -21,7 +21,7 @@ use wgpu::util::DeviceExt;
 use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
 use image::GenericImageView;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 pub mod decoder;
@@ -93,9 +93,9 @@ pub struct RecordingSegmentDecoders {
     camera: Option<AsyncVideoDecoderHandle>,
 }
 
-pub struct SegmentVideoPaths<'a> {
-    pub display: &'a Path,
-    pub camera: Option<&'a Path>,
+pub struct SegmentVideoPaths {
+    pub display: PathBuf,
+    pub camera: Option<PathBuf>,
 }
 
 impl RecordingSegmentDecoders {
@@ -270,7 +270,9 @@ pub fn get_duration(
 
     // Check camera duration if it exists
     if let Some(camera_path) = meta.content.camera_path() {
-        if let Ok(camera_duration) = recordings.get_source_duration(&camera_path) {
+        if let Ok(camera_duration) =
+            recordings.get_source_duration(&camera_path.to_path(&meta.project_path))
+        {
             println!("Camera recording duration: {}", camera_duration);
             max_duration = max_duration.max(camera_duration);
             println!("New max duration after camera check: {}", max_duration);

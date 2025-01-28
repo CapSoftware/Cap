@@ -38,6 +38,7 @@ use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
+use relative_path::RelativePathBuf;
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -1009,12 +1010,12 @@ async fn get_video_metadata(
     fn content_paths(project_path: &PathBuf, meta: &RecordingMeta) -> Vec<PathBuf> {
         match &meta.content {
             Content::SingleSegment { segment } => {
-                vec![segment.path(&meta, &segment.display.path)]
+                vec![meta.path(&segment.display.path)]
             }
             Content::MultipleSegments { inner } => inner
                 .segments
                 .iter()
-                .map(|s| inner.path(&meta, &s.display.path))
+                .map(|s| meta.path(&s.display.path))
                 .collect(),
         }
     }
@@ -1027,11 +1028,11 @@ async fn get_video_metadata(
         Content::SingleSegment { segment } => segment
             .camera
             .as_ref()
-            .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
+            .map_or(vec![], |c| vec![meta.path(&c.path)]),
         Content::MultipleSegments { inner } => inner
             .segments
             .iter()
-            .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
+            .filter_map(|s| s.camera.as_ref().map(|c| meta.path(&c.path)))
             .collect(),
     };
     let camera_duration = get_duration_for_paths(camera_paths)?;
@@ -1480,7 +1481,10 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             content: cap_project::Content::SingleSegment {
                 segment: cap_project::SingleSegment {
                     display: Display {
-                        path: screenshot_path.clone(),
+                        path: RelativePathBuf::from_path(
+                            &screenshot_path.strip_prefix(&recording_dir).unwrap(),
+                        )
+                        .unwrap(),
                         fps: 0,
                     },
                     camera: None,
