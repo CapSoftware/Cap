@@ -43,6 +43,7 @@ export function Timeline() {
     history,
     split,
     setState,
+    playing
   } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
@@ -138,7 +139,7 @@ export function Timeline() {
           setPreviewTime(undefined);
         }}
       >
-        <Show when={previewTime()}>
+        <Show when={!playing() && previewTime()}>
           {(time) => (
             <div
               class={cx(
