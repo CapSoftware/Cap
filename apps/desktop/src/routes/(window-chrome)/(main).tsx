@@ -20,6 +20,8 @@ import {
   createSignal,
   onMount,
   onCleanup,
+  ErrorBoundary,
+  Suspense,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { fetch } from "@tauri-apps/plugin-http";
@@ -165,20 +167,24 @@ export default function () {
             <IconCapLogoFullDark class="dark:block hidden" />
             <IconCapLogoFull class="dark:hidden block" />
           </div>
-          <span
-            onClick={async () => {
-              if (!isUpgraded()) {
-                await commands.showWindow("Upgrade");
-              }
-            }}
-            class={`text-[0.6rem] ${
-              isUpgraded()
-                ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
-                : "bg-gray-200 cursor-pointer hover:bg-gray-300"
-            } rounded-lg px-1.5 py-0.5`}
-          >
-            {isUpgraded() ? "Pro" : "Upgrade to Pro"}
-          </span>
+          <ErrorBoundary fallback={<></>}>
+            <Suspense>
+              <span
+                onClick={async () => {
+                  if (!isUpgraded()) {
+                    await commands.showWindow("Upgrade");
+                  }
+                }}
+                class={`text-[0.6rem] ${
+                  isUpgraded()
+                    ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
+                    : "bg-gray-200 cursor-pointer hover:bg-gray-300"
+                } rounded-lg px-1.5 py-0.5`}
+              >
+                {isUpgraded() ? "Pro" : "Upgrade to Pro"}
+              </span>
+            </Suspense>
+          </ErrorBoundary>
         </div>
         <div class="flex items-center space-x-2">
           <Tooltip.Root openDelay={0}>
