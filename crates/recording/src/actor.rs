@@ -8,7 +8,7 @@ use std::{
 use cap_flags::FLAGS;
 use cap_media::{
     data::Pixel,
-    encoders::{H264Encoder, MP3Encoder, Output},
+    encoders::{H264Encoder, OpusEncoder, Output},
     feeds::{AudioInputFeed, CameraFeed},
     pipeline::{builder::PipelineBuilder, Pipeline, RealTimeClock},
     sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
@@ -548,10 +548,10 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
 
     let audio_output_path = if let Some(mic_source) = audio_input_feed.map(AudioInputSource::init) {
         let mic_config = mic_source.info();
-        let output_path = dir.join("audio-input.mp3");
+        let output_path = dir.join("audio-input.ogg");
 
         let mic_encoder =
-            MP3Encoder::init("microphone", mic_config, Output::File(output_path.clone()))?;
+            OpusEncoder::init("microphone", mic_config, Output::File(output_path.clone()))?;
 
         pipeline_builder = pipeline_builder
             .source("microphone_capture", mic_source)

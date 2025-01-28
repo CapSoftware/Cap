@@ -14,22 +14,22 @@ use crate::{
 
 use super::Output;
 
-pub struct MP3Encoder {
+pub struct OpusEncoder {
     tag: &'static str,
     encoder: encoder::Audio,
     output_ctx: format::context::Output,
     buffer: AudioBuffer,
 }
 
-impl MP3Encoder {
+impl OpusEncoder {
     const OUTPUT_BITRATE: usize = 128 * 1000; // 128k
 
     pub fn init(tag: &'static str, config: AudioInfo, output: Output) -> Result<Self, MediaError> {
         let Output::File(destination) = output;
         let mut output_ctx = format::output(&destination)?;
 
-        let codec = encoder::find(ffmpeg::codec::Id::MP3)
-            .ok_or(MediaError::TaskLaunch("Could not find MP3 codec".into()))?;
+        let codec = encoder::find_by_name("libopus")
+            .ok_or(MediaError::TaskLaunch("Could not find Opus codec".into()))?;
         let mut encoder_ctx = context::Context::new_with_codec(codec);
         encoder_ctx.set_threading(Config::count(4));
         let mut encoder = encoder_ctx.encoder().audio()?;
@@ -99,7 +99,7 @@ impl MP3Encoder {
     }
 }
 
-impl PipelineSinkTask for MP3Encoder {
+impl PipelineSinkTask for OpusEncoder {
     type Input = FFAudio;
 
     fn run(
