@@ -73,7 +73,12 @@ enum CachedFrameData {
 pub struct FfmpegDecoder;
 
 impl FfmpegDecoder {
-    fn spawn(name: &'static str, path: PathBuf, fps: u32, rx: mpsc::Receiver<VideoDecoderMessage>) {
+    pub fn spawn(
+        name: &'static str,
+        path: PathBuf,
+        fps: u32,
+        rx: mpsc::Receiver<VideoDecoderMessage>,
+    ) {
         std::thread::spawn(move || {
             let mut input = ffmpeg::format::input(&path).unwrap();
 
