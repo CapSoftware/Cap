@@ -39,8 +39,15 @@ impl AudioBuffer {
         if let Some(pts) = frame.pts() {
             self.current_pts = pts;
         }
-        for channel in 0..self.config.channels {
-            self.data[channel].extend(frame.plane_data(channel));
+        if frame.is_planar() {
+            for channel in 0..self.config.channels {
+                self.data[channel].extend(frame.plane_data(channel));
+            }
+        } else {
+            self.data[0].extend(
+                &frame.data(0)
+                    [0..frame.samples() * frame.channels() as usize * frame.format().bytes()],
+            );
         }
     }
 
@@ -51,16 +58,25 @@ impl AudioBuffer {
 
         let frame_size = self.frame_size * self.config.sample_size();
 
-        if self.len() < frame_size {
+        if self.len() < frame_size * self.config.channels {
             return None;
         }
 
         let mut frame = self.config.empty_frame(self.frame_size);
         frame.set_pts(Some(self.current_pts));
 
-        for channel in 0..self.config.channels {
-            for (index, byte) in self.data[channel].drain(0..frame_size).enumerate() {
-                frame.plane_data_mut(channel)[index] = byte;
+        if frame.is_planar() {
+            for channel in 0..self.config.channels {
+                for (index, byte) in self.data[channel].drain(0..frame_size).enumerate() {
+                    frame.plane_data_mut(channel)[index] = byte;
+                }
+            }
+        } else {
+            for (index, byte) in self.data[0]
+                .drain(0..frame_size * self.config.channels)
+                .enumerate()
+            {
+                frame.plane_data_mut(0)[index] = byte;
             }
         }
 

@@ -415,7 +415,9 @@ impl F32Resampler {
         self.resampled_samples += self.resampled_frame.samples();
 
         write_f32_ne_bytes(
-            &self.resampled_frame.data(0)[0..self.resampled_frame.samples() * f32::BYTE_SIZE],
+            &self.resampled_frame.data(0)[0..self.resampled_frame.samples()
+                * f32::BYTE_SIZE
+                * self.resampled_frame.channels() as usize],
             &mut self.buf,
         );
 
@@ -431,7 +433,9 @@ impl F32Resampler {
             self.resampled_samples += self.resampled_frame.samples();
 
             write_f32_ne_bytes(
-                &self.resampled_frame.data(0)[0..self.resampled_frame.samples() * f32::BYTE_SIZE],
+                &self.resampled_frame.data(0)[0..self.resampled_frame.samples()
+                    * f32::BYTE_SIZE
+                    * self.resampled_frame.channels() as usize],
                 &mut self.buf,
             );
 

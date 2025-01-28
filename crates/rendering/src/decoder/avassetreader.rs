@@ -129,7 +129,24 @@ impl CachedFrame {
                     let mut rgb_frame = frame::Video::empty();
                     converter.run(&ffmpeg_frame, &mut rgb_frame).unwrap();
 
-                    rgb_frame.data(0).to_vec()
+                    let slice = rgb_frame.data(0);
+                    let width = rgb_frame.width();
+                    let height = rgb_frame.height();
+                    let bytes_per_row = rgb_frame.stride(0);
+                    let row_length = width * 4;
+
+                    let mut bytes = vec![0; (width * height * 4) as usize];
+
+                    // TODO: allow for decoded frames to have stride, handle stride in shaders
+                    for i in 0..height as usize {
+                        bytes.as_mut_slice()[i * row_length as usize..(i + 1) * row_length as usize]
+                            .copy_from_slice(
+                                &slice
+                                    [(i * bytes_per_row)..i * bytes_per_row + row_length as usize],
+                            )
+                    }
+
+                    bytes
                 };
 
                 let data = Arc::new(data);
