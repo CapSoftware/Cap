@@ -637,7 +637,7 @@ function createRecordingMutations(
     onSuccess() {
       setTimeout(() => {
         setActionState({ type: "idle" });
-      }, 1500);
+      }, 2000);
     },
   }));
 
@@ -711,7 +711,7 @@ function createRecordingMutations(
     onSettled() {
       setTimeout(() => {
         setActionState({ type: "idle" });
-      }, 1500);
+      }, 2000);
     },
   }));
 
@@ -838,7 +838,7 @@ function createRecordingMutations(
     onSettled() {
       setTimeout(() => {
         setActionState({ type: "idle" });
-      }, 1500);
+      }, 2000);
     },
     onSuccess: () => startTransition(() => recordingMeta.refetch()),
   }));

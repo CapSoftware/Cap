@@ -541,6 +541,8 @@ function ShareButton(props: {
         else if (result === "UpgradeRequired")
           throw new Error("This feature requires an upgraded plan");
 
+        setUploadState({ type: "link-copied" });
+
         return result;
       } catch (error) {
         console.error("Upload error:", error);
@@ -562,7 +564,8 @@ function ShareButton(props: {
     onSettled() {
       setTimeout(() => {
         setUploadState({ type: "idle" });
-      }, 1500);
+        uploadVideo.reset();
+      }, 2000);
     },
   }));
 
@@ -586,7 +589,7 @@ function ShareButton(props: {
   return (
     <div class="relative">
       <Show
-        when={recordingMeta()?.sharing}
+        when={recordingMeta.latest?.sharing}
         fallback={
           <Button
             disabled={uploadVideo.isPending}
