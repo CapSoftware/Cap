@@ -84,7 +84,7 @@ async function main() {
       console.log("Downloaded ffmpeg.zip");
     } else console.log("Using cached ffmpeg.zip");
 
-    const ffmpegDir = `${targetDir}\\ffmepg`;
+    const ffmpegDir = `${targetDir}\\ffmpeg`;
     if (!(await fileExists(ffmpegDir))) {
       await exec(`tar xf ${ffmpegZip} -C ${targetDir}`);
       await fs.rename(`${targetDir}\\${FFMPEG_ZIP_NAME}`, ffmpegDir);
