@@ -1,0 +1,17 @@
+{
+  "name": "@cap/local-docker",
+  "version": "0.0.0",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "scripts": {
+    "dev": "pnpm docker:up",
+    "docker:up": "docker compose up",
+    "docker:stop": "docker compose stop",
+    "docker:clean": "docker compose down -v"
+  },
+  "devDependencies": {},
+  "dependencies": {},
+  "engines": {
+    "node": "20"
+  }
+}

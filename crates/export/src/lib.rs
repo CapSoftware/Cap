@@ -30,6 +30,9 @@ pub enum ExportError {
 
     #[error("Join: {0}")]
     Join(#[from] tokio::task::JoinError),
+
+    #[error("Other:{0}")]
+    Other(String),
 }
 
 pub struct Exporter<TOnProgress> {
@@ -51,7 +54,7 @@ impl<TOnProgress> Exporter<TOnProgress>
 where
     TOnProgress: Fn(u32) + Send + 'static,
 {
-    pub fn new(
+    pub async fn new(
         project: ProjectConfiguration,
         output_path: PathBuf,
         on_progress: TOnProgress,
@@ -69,34 +72,32 @@ where
         let output_size =
             ProjectUniforms::get_output_size(&render_constants.options, &project, resolution_base);
 
-        let (render_segments, audio_segments): (Vec<_>, Vec<_>) = segments
-            .iter()
-            .enumerate()
-            .map(|(i, segment)| {
-                let segment_paths = match &meta.content {
-                    cap_project::Content::SingleSegment { segment: s } => SegmentVideoPaths {
+        let mut render_segments = vec![];
+        let mut audio_segments = vec![];
+
+        for (i, s) in segments.iter().enumerate() {
+            let segment_paths = match &meta.content {
+                cap_project::Content::SingleSegment { segment: s } => SegmentVideoPaths {
+                    display: meta.path(&s.display.path),
+                    camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
+                },
+                cap_project::Content::MultipleSegments { inner } => {
+                    let s = &inner.segments[i];
+
+                    SegmentVideoPaths {
                         display: meta.path(&s.display.path),
                         camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
-                    },
-                    cap_project::Content::MultipleSegments { inner } => {
-                        let s = &inner.segments[i];
-
-                        SegmentVideoPaths {
-                            display: meta.path(&s.display.path),
-                            camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
-                        }
                     }
-                };
-
-                (
-                    RenderSegment {
-                        cursor: segment.cursor.clone(),
-                        decoders: RecordingSegmentDecoders::new(&meta, segment_paths),
-                    },
-                    segment.audio.clone(),
-                )
-            })
-            .unzip();
+                }
+            };
+            render_segments.push(RenderSegment {
+                cursor: s.cursor.clone(),
+                decoders: RecordingSegmentDecoders::new(&meta, segment_paths)
+                    .await
+                    .map_err(ExportError::Other)?,
+            });
+            audio_segments.push(s.audio.clone());
+        }
 
         Ok(Self {
             project,

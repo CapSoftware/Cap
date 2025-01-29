@@ -77,17 +77,17 @@ async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<V
 async createEditorInstance(videoId: string) : Promise<SerializedEditorInstance> {
     return await TAURI_INVOKE("create_editor_instance", { videoId });
 },
-async startPlayback(videoId: string, fps: number, resolutionBase: XY<number>) : Promise<void> {
-    await TAURI_INVOKE("start_playback", { videoId, fps, resolutionBase });
+async startPlayback(videoId: string, fps: number, resolutionBase: XY<number>) : Promise<null> {
+    return await TAURI_INVOKE("start_playback", { videoId, fps, resolutionBase });
 },
-async stopPlayback(videoId: string) : Promise<void> {
-    await TAURI_INVOKE("stop_playback", { videoId });
+async stopPlayback(videoId: string) : Promise<null> {
+    return await TAURI_INVOKE("stop_playback", { videoId });
 },
-async setPlayheadPosition(videoId: string, frameNumber: number) : Promise<void> {
-    await TAURI_INVOKE("set_playhead_position", { videoId, frameNumber });
+async setPlayheadPosition(videoId: string, frameNumber: number) : Promise<null> {
+    return await TAURI_INVOKE("set_playhead_position", { videoId, frameNumber });
 },
-async setProjectConfig(videoId: string, config: ProjectConfiguration) : Promise<void> {
-    await TAURI_INVOKE("set_project_config", { videoId, config });
+async setProjectConfig(videoId: string, config: ProjectConfiguration) : Promise<null> {
+    return await TAURI_INVOKE("set_project_config", { videoId, config });
 },
 async openEditor(id: string) : Promise<void> {
     await TAURI_INVOKE("open_editor", { id });
@@ -143,8 +143,8 @@ async resetMicrophonePermissions() : Promise<null> {
 async isCameraWindowOpen() : Promise<boolean> {
     return await TAURI_INVOKE("is_camera_window_open");
 },
-async seekTo(videoId: string, frameNumber: number) : Promise<void> {
-    await TAURI_INVOKE("seek_to", { videoId, frameNumber });
+async seekTo(videoId: string, frameNumber: number) : Promise<null> {
+    return await TAURI_INVOKE("seek_to", { videoId, frameNumber });
 },
 async sendFeedbackRequest(feedback: string) : Promise<null> {
     return await TAURI_INVOKE("send_feedback_request", { feedback });
