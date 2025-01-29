@@ -4,16 +4,17 @@ import {
 } from "@kobalte/core/radio-group";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { cx } from "cva";
-import { batch, type Component, createRoot, For, Show } from "solid-js";
+import { batch, type Component, createResource, createRoot, createSignal, For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { produce } from "solid-js/store";
 
-import type {
-  BackgroundSource,
-  CursorType,
-  CursorAnimationStyle,
+import {
+  type BackgroundSource,
+  type CursorType,
+  type CursorAnimationStyle,
+  commands,
 } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import {
@@ -29,6 +30,8 @@ import {
   DEFAULT_GRADIENT_TO,
   DEFAULT_PROJECT_CONFIG,
 } from "./projectConfig";
+import { generalSettingsStore } from "~/store";
+import { type as ostype } from "@tauri-apps/plugin-os";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -82,6 +85,12 @@ export function ConfigSidebar() {
       to: DEFAULT_GRADIENT_TO,
     },
   };
+
+  const [previousAngle, setPreviousAngle] = createSignal(0);
+  const [hapticsEnabled, hapticsEnabledOptions] = createResource(async () =>
+    (await generalSettingsStore.get())?.hapticsEnabled && ostype() === "macos"
+  );
+  generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
 
   return (
     <KTabs
@@ -178,7 +187,7 @@ export function ConfigSidebar() {
                             BACKGROUND_SOURCES_LIST.indexOf(
                               project.background.source.type
                             ) ===
-                              i + 1
+                            i + 1
                             ? "bg-gray-50"
                             : "bg-gray-200"
                         )}
@@ -325,11 +334,18 @@ export function ConfigSidebar() {
                                   const rawNewAngle =
                                     Math.round(
                                       start +
-                                        (downEvent.clientY - moveEvent.clientY)
+                                      (downEvent.clientY - moveEvent.clientY)
                                     ) % max;
                                   const newAngle = moveEvent.shiftKey
                                     ? rawNewAngle
                                     : Math.round(rawNewAngle / 45) * 45;
+
+                                  if (!moveEvent.shiftKey && hapticsEnabled() && project.background.source.type === "gradient") {
+                                    if (previousAngle() !== newAngle) {
+                                      commands.performHapticFeedback("Alignment", "Now");
+                                    }
+                                    setPreviousAngle(newAngle);
+                                  }
 
                                   setProject("background", "source", {
                                     type: "gradient",
@@ -436,8 +452,8 @@ export function ConfigSidebar() {
                             item.x === "left"
                               ? "left-2"
                               : item.x === "right"
-                              ? "right-2"
-                              : "left-1/2 transform -translate-x-1/2",
+                                ? "right-2"
+                                : "left-1/2 transform -translate-x-1/2",
                             item.y === "top" ? "top-2" : "bottom-2"
                           )}
                           onClick={() => setProject("camera", "position", item)}
@@ -468,15 +484,14 @@ export function ConfigSidebar() {
             <Field
               name="Size During Zoom"
               icon={<IconCapEnlarge />}
-              value={`${
-                project.camera.zoom_size ??
+              value={`${project.camera.zoom_size ??
                 DEFAULT_PROJECT_CONFIG.camera.zoom_size
-              }%`}
+                }%`}
             >
               <Slider
                 value={[
                   project.camera.zoom_size ??
-                    DEFAULT_PROJECT_CONFIG.camera.zoom_size,
+                  DEFAULT_PROJECT_CONFIG.camera.zoom_size,
                 ]}
                 onChange={(v) => setProject("camera", "zoom_size", v[0])}
                 minValue={10}
@@ -489,7 +504,7 @@ export function ConfigSidebar() {
             <Slider
               value={[
                 project.camera.rounding ??
-                  DEFAULT_PROJECT_CONFIG.camera.rounding,
+                DEFAULT_PROJECT_CONFIG.camera.rounding,
               ]}
               onChange={(v) => setProject("camera", "rounding", v[0])}
               minValue={0}
@@ -723,7 +738,7 @@ export function ConfigSidebar() {
                     <KTabs.Trigger
                       value="manual"
                       class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
-                      // onClick={() => setSelectedTab(item.id)}
+                    // onClick={() => setSelectedTab(item.id)}
                     >
                       Manual
                     </KTabs.Trigger>
@@ -761,7 +776,7 @@ export function ConfigSidebar() {
                                         x: Math.max(
                                           Math.min(
                                             (moveEvent.clientX - bounds.left) /
-                                              bounds.width,
+                                            bounds.width,
                                             1
                                           ),
                                           0
@@ -769,7 +784,7 @@ export function ConfigSidebar() {
                                         y: Math.max(
                                           Math.min(
                                             (moveEvent.clientY - bounds.top) /
-                                              bounds.height,
+                                            bounds.height,
                                             1
                                           ),
                                           0

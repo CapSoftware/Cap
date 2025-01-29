@@ -41,6 +41,12 @@ const settingsList: Array<{
       "The dock icon will be hidden when there are no windows available to close.",
   },
   {
+    key: "hapticsEnabled",
+    label: "Enable Haptics",
+    platforms: ["macos"],
+    description: "Use haptics on Force Touch™ trackpads",
+  },
+  {
     key: "autoCreateShareableLink",
     label: "Automatically create shareable link after recording",
     description:

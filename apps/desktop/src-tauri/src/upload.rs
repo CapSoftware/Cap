@@ -248,7 +248,6 @@ pub async fn upload_video(
 
                     // Emit progress every chunk
                     UploadProgress {
-                        stage: "uploading".to_string(),
                         progress: current / total_size,
                         message: format!("{:.0}%", (current / total_size * 100.0)),
                     }
@@ -308,7 +307,6 @@ pub async fn upload_video(
     if response.status().is_success() {
         // Final progress update
         UploadProgress {
-            stage: "uploading".to_string(),
             progress: 1.0,
             message: "100%".to_string(),
         }

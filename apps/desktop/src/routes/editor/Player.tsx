@@ -43,6 +43,7 @@ export function Player() {
     setDialog,
     playbackTime,
     setPlaybackTime,
+    previewTime,
     playing,
     setPlaying,
     split,
@@ -117,6 +118,11 @@ export function Player() {
   createEventListener(document, "keydown", async (e: KeyboardEvent) => {
     if (e.code === "Space" && e.target === document.body) {
       e.preventDefault();
+      const time = previewTime();
+			if (!playing() && time !== undefined) {
+				setPlaybackTime(time);
+				await commands.seekTo(videoId, Math.floor(time * FPS));
+			}
       await handlePlayPauseClick();
     }
   });

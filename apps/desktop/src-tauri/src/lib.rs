@@ -38,6 +38,7 @@ use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
+use relative_path::RelativePathBuf;
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use serde::{Deserialize, Serialize};
@@ -127,7 +128,7 @@ impl App {
 
         if matches!(
             current_recording.options.capture_target,
-            ScreenCaptureTarget::Window(_)
+            ScreenCaptureTarget::Window(_) | ScreenCaptureTarget::Area(_)
         ) {
             let _ = ShowCapWindow::WindowCaptureOccluder.show(&self.handle);
         } else {
@@ -159,6 +160,7 @@ impl App {
                 match options.capture_target {
                     ScreenCaptureTarget::Screen(screen) => screen.name,
                     ScreenCaptureTarget::Window(window) => window.owner_name,
+                    ScreenCaptureTarget::Area(area) => area.screen.name,
                 }
                 .into(),
             );
@@ -922,7 +924,7 @@ async fn create_editor_instance(
     let editor_instance = upsert_editor_instance(&app, video_id).await;
 
     // Load the RecordingMeta to get the pretty name
-    let mut meta = RecordingMeta::load_for_project(&editor_instance.project_path)
+    let meta = RecordingMeta::load_for_project(&editor_instance.project_path)
         .map_err(|e| format!("Failed to load recording meta: {}", e))?;
 
     println!("Pretty name: {}", meta.pretty_name);
@@ -1008,12 +1010,12 @@ async fn get_video_metadata(
     fn content_paths(project_path: &PathBuf, meta: &RecordingMeta) -> Vec<PathBuf> {
         match &meta.content {
             Content::SingleSegment { segment } => {
-                vec![segment.path(&meta, &segment.display.path)]
+                vec![meta.path(&segment.display.path)]
             }
             Content::MultipleSegments { inner } => inner
                 .segments
                 .iter()
-                .map(|s| inner.path(&meta, &s.display.path))
+                .map(|s| meta.path(&s.display.path))
                 .collect(),
         }
     }
@@ -1026,11 +1028,11 @@ async fn get_video_metadata(
         Content::SingleSegment { segment } => segment
             .camera
             .as_ref()
-            .map_or(vec![], |c| vec![segment.path(&meta, &c.path)]),
+            .map_or(vec![], |c| vec![meta.path(&c.path)]),
         Content::MultipleSegments { inner } => inner
             .segments
             .iter()
-            .filter_map(|s| s.camera.as_ref().map(|c| inner.path(&meta, &c.path)))
+            .filter_map(|s| s.camera.as_ref().map(|c| meta.path(&c.path)))
             .collect(),
     };
     let camera_duration = get_duration_for_paths(camera_paths)?;
@@ -1157,7 +1159,6 @@ fn open_main_window(app: AppHandle) {
 
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
 pub struct UploadProgress {
-    stage: String,
     progress: f64,
     message: String,
 }
@@ -1233,7 +1234,6 @@ async fn upload_exported_video(
 
     // Start upload progress
     UploadProgress {
-        stage: "uploading".to_string(),
         progress: 0.0,
         message: "Starting upload...".to_string(),
     }
@@ -1265,7 +1265,6 @@ async fn upload_exported_video(
         Ok(uploaded_video) => {
             // Emit upload complete
             UploadProgress {
-                stage: "uploading".to_string(),
                 progress: 1.0,
                 message: "Upload complete!".to_string(),
             }
@@ -1482,7 +1481,10 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
             content: cap_project::Content::SingleSegment {
                 segment: cap_project::SingleSegment {
                     display: Display {
-                        path: screenshot_path.clone(),
+                        path: RelativePathBuf::from_path(
+                            &screenshot_path.strip_prefix(&recording_dir).unwrap(),
+                        )
+                        .unwrap(),
                         fps: 0,
                     },
                     camera: None,
@@ -2009,6 +2011,7 @@ pub async fn run() {
             show_window,
             write_clipboard_string,
             get_editor_total_frames,
+            platform::perform_haptic_feedback
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -2085,6 +2088,7 @@ pub async fn run() {
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
                     CapWindowId::WindowCaptureOccluder.label().as_str(),
+                    CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
                     CapWindowId::InProgressRecording.label().as_str(),

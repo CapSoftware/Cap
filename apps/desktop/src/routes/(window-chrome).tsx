@@ -16,6 +16,7 @@ export default function (props: RouteSectionProps) {
   let unlistenResize: UnlistenFn | undefined;
 
   onMount(async () => {
+    console.log("window chrome mounted");
     unlistenResize = await initializeTitlebar();
     if (location.pathname === "/") getCurrentWindow().show();
   });
@@ -35,10 +36,25 @@ export default function (props: RouteSectionProps) {
         enterClass="opacity-0"
         exitToClass="opacity-0"
         > */}
-      <Suspense fallback={<AbsoluteInsetLoader />}>
+      <Suspense
+        fallback={
+          (() => {
+            console.log("Outer window chrome suspense fallback");
+            return <AbsoluteInsetLoader />;
+          }) as any
+        }
+      >
         <Inner>
           {/* prevents flicker idk */}
-          <Suspense>{props.children}</Suspense>
+          <Suspense
+            fallback={
+              (() => {
+                console.log("Inner window chrome suspense fallback");
+              }) as any
+            }
+          >
+            {props.children}
+          </Suspense>
         </Inner>
       </Suspense>
       {/* </Transition> */}

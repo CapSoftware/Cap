@@ -1,4 +1,5 @@
 use either::Either;
+use relative_path::{RelativePath, RelativePathBuf};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
@@ -11,14 +12,16 @@ use crate::{CursorData, CursorEvents, CursorImages, ProjectConfiguration};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Display {
-    pub path: PathBuf,
+    #[specta(type = String)]
+    pub path: RelativePathBuf,
     #[serde(default = "legacy_static_video_fps")]
     pub fps: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CameraMeta {
-    pub path: PathBuf,
+    #[specta(type = String)]
+    pub path: RelativePathBuf,
     #[serde(default = "legacy_static_video_fps")]
     pub fps: u32,
 }
@@ -29,7 +32,8 @@ fn legacy_static_video_fps() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct AudioMeta {
-    pub path: PathBuf,
+    #[specta(type = String)]
+    pub path: RelativePathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -51,6 +55,9 @@ pub struct RecordingMeta {
 }
 
 impl RecordingMeta {
+    pub fn path(&self, relative: &RelativePathBuf) -> PathBuf {
+        relative.to_path(&self.project_path)
+    }
     pub fn load_for_project(project_path: &PathBuf) -> Result<Self, String> {
         let meta_path = project_path.join("recording-meta.json");
         let mut meta: Self =
@@ -91,7 +98,7 @@ pub enum Content {
 }
 
 impl Content {
-    pub fn camera_path(&self) -> Option<PathBuf> {
+    pub fn camera_path(&self) -> Option<RelativePathBuf> {
         match self {
             Content::SingleSegment { segment } => segment.camera.as_ref().map(|c| c.path.clone()),
             Content::MultipleSegments { inner } => inner
@@ -128,20 +135,17 @@ pub struct SingleSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<AudioMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<PathBuf>,
+    #[specta(type = Option<String>)]
+    pub cursor: Option<RelativePathBuf>,
 }
 
 impl SingleSegment {
-    pub fn path(&self, meta: &RecordingMeta, path: impl AsRef<Path>) -> PathBuf {
-        meta.project_path.join(path)
-    }
-
     pub fn cursor_data(&self, meta: &RecordingMeta) -> CursorData {
         let Some(cursor_path) = &self.cursor else {
             return CursorData::default();
         };
 
-        let full_path = self.path(meta, cursor_path);
+        let full_path = meta.path(cursor_path);
         println!("Loading cursor data from: {:?}", full_path);
 
         // Try to load the cursor data
@@ -154,7 +158,7 @@ impl SingleSegment {
         };
 
         // If cursor_images is empty but cursor files exist, populate it
-        let cursors_dir = self.path(meta, "cursors");
+        let cursors_dir = meta.path(&RelativePathBuf::from("./cursors"));
         if data.cursor_images.0.is_empty() && cursors_dir.exists() {
             println!("Scanning cursors directory: {:?}", cursors_dir);
             if let Ok(entries) = std::fs::read_dir(&cursors_dir) {

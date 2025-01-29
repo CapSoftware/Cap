@@ -319,7 +319,7 @@ pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
     match &meta.content {
         cap_project::Content::SingleSegment { segment: s } => {
             let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
-                AudioData::from_file(meta.project_path.join(&audio_meta.path)).unwrap()
+                AudioData::from_file(meta.path(&audio_meta.path)).unwrap()
             }));
 
             let cursor = Arc::new(s.cursor_data(&meta).into());
@@ -327,8 +327,8 @@ pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
             let decoders = RecordingSegmentDecoders::new(
                 &meta,
                 SegmentVideoPaths {
-                    display: s.display.path.as_path(),
-                    camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                    display: meta.path(&s.display.path),
+                    camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
                 },
             );
 
@@ -343,7 +343,7 @@ pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
 
             for s in &inner.segments {
                 let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
-                    AudioData::from_file(meta.project_path.join(&audio_meta.path)).unwrap()
+                    AudioData::from_file(meta.path(&audio_meta.path)).unwrap()
                 }));
 
                 let cursor = Arc::new(s.cursor_events(&meta));
@@ -351,8 +351,8 @@ pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
                 let decoders = RecordingSegmentDecoders::new(
                     &meta,
                     SegmentVideoPaths {
-                        display: s.display.path.as_path(),
-                        camera: s.camera.as_ref().map(|c| c.path.as_path()),
+                        display: meta.path(&s.display.path),
+                        camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
                     },
                 );
 

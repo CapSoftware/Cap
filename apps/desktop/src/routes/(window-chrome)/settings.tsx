@@ -2,7 +2,6 @@ import { A, type RouteSectionProps } from "@solidjs/router";
 import { createResource, For, Show, Suspense } from "solid-js";
 import { Button } from "@cap/ui-solid";
 import { getVersion } from "@tauri-apps/api/app";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import "@total-typescript/ts-reset/filter-boolean";
 
 import { commands } from "~/utils/tauri";

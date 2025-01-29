@@ -1,0 +1,14 @@
+---
+title: Screen cropping and audio improvements
+app: Cap Desktop
+publishedAt: "2025-01-27"
+version: 0.3.14
+image:
+---
+
+- A crop option is now available when preparing to record a screen, allowing you to record only a portion of the screen.
+  Thanks to @ItsEeleeya for contributing this!
+- Audio inputs with with >2 channels can now be recorded. The first 2 channels will be recorded as stereo, the rest will be discarded.
+- Audio encoding during export is now done with macOS's built-in AAC encoder
+- If any part of the recording pipeline (capture or encode) fails, the recording will be immediately stopped
+- Webview devtools are now exposed

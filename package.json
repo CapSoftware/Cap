@@ -13,7 +13,8 @@
     "typecheck": "pnpm tsc -b",
     "docker:up": "turbo run docker:up",
     "docker:stop": "turbo run docker:stop",
-    "docker:clean": "turbo run docker:clean"
+    "docker:clean": "turbo run docker:clean",
+    "cap-setup": "node scripts/setup.js"
   },
   "devDependencies": {
     "@turbo/gen": "^1.9.7",
@@ -21,7 +22,8 @@
     "eslint": "^7.32.0",
     "extract-zip": "^2.0.1",
     "prettier": "^2.5.1",
-    "turbo": "^1.10.16"
+    "turbo": "^1.10.16",
+    "typescript": "^5.7.2"
   },
   "packageManager": "pnpm@9.8.0",
   "name": "cap",

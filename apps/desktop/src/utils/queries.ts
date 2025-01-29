@@ -11,33 +11,50 @@ import { createEffect, createMemo } from "solid-js";
 import { makePersisted } from "@solid-primitives/storage";
 import { FPS } from "~/routes/editor/context";
 
+function debugFetch<T>(name: string, doFetch: () => Promise<T>) {
+  return () => {
+    console.log(`fetching '${name}'`);
+    return doFetch()
+      .then((s) => {
+        console.log(`fetched '${name}'`);
+        return s;
+      })
+      .catch((e) => {
+        console.log(`failed to fetch '${name}'`);
+        throw e;
+      });
+  };
+}
+
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
-  queryFn: () => commands.listCaptureWindows(),
+  queryFn: debugFetch("captureWindows", () => commands.listCaptureWindows()),
   reconcile: "id",
   refetchInterval: 1000,
 });
 
 export const listScreens = queryOptions({
   queryKey: ["capture", "screens"] as const,
-  queryFn: () => commands.listCaptureScreens(),
+  queryFn: debugFetch("captureScreens", () => commands.listCaptureScreens()),
   reconcile: "id",
   refetchInterval: 1000,
 });
 
 const getOptions = queryOptions({
   queryKey: ["recordingOptions"] as const,
-  queryFn: () => commands.getRecordingOptions(),
+  queryFn: debugFetch("recordingOptions", () => commands.getRecordingOptions()),
 });
 
 const getCurrentRecording = queryOptions({
   queryKey: ["currentRecording"] as const,
-  queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
+  queryFn: debugFetch("recordingOptions", () =>
+    commands.getCurrentRecording().then((d) => d[0])
+  ),
 });
 
 const listVideoDevices = queryOptions({
   queryKey: ["videoDevices"] as const,
-  queryFn: () => commands.listCameras(),
+  queryFn: debugFetch("recordingOptions", () => commands.listCameras()),
   refetchInterval: 1000,
 });
 
@@ -55,10 +72,10 @@ export function createVideoDevicesQuery() {
 
 export const listAudioDevices = queryOptions({
   queryKey: ["audioDevices"] as const,
-  queryFn: async () => {
+  queryFn: debugFetch("audioDevices", async () => {
     const devices = await commands.listAudioDevices();
     return devices.map((name) => ({ name, deviceId: name }));
-  },
+  }),
   reconcile: "name",
   refetchInterval: 1000,
   gcTime: 0,
@@ -67,7 +84,7 @@ export const listAudioDevices = queryOptions({
 
 export const getPermissions = queryOptions({
   queryKey: ["permissionsOS"] as const,
-  queryFn: () => commands.doPermissionsCheck(true),
+  queryFn: debugFetch("permissions", () => commands.doPermissionsCheck(true)),
   refetchInterval: 1000,
 });
 

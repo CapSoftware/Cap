@@ -47,6 +47,9 @@ jobs:
           node-version: "20"
           cache: pnpm
 
+      - name: Setup native dependencies
+        run: pnpm cap-setup
+
       - name: Install dependencies
         run: pnpm install
 
@@ -59,7 +62,7 @@ jobs:
           echo 'VITE_SERVER_URL=${NEXT_PUBLIC_URL}' >> .env
           echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
-          
+
       - name: Copy .env to apps/desktop
         run: cp .env apps/desktop/.env
 
@@ -70,7 +73,6 @@ jobs:
         working-directory: apps/desktop
         run: |
           export TARGET_TRIPLE=aarch64-apple-darwin
-          node ${{ github.workspace }}/.github/prebuild.js darwin aarch64
           pnpm tauri build --target aarch64-apple-darwin --debug
         env:
           CI: false
