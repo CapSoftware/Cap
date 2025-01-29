@@ -68,7 +68,7 @@ async function main() {
         `${targetDir}/debug/${name}`
       );
     }
-    console.log("Copied ffmepg dylibs to target/debug");
+    console.log("Copied ffmpeg dylibs to target/debug");
   } else if (process.platform === "win32") {
     const FFMPEG_ZIP_NAME = "ffmpeg-7.1-full_build-shared";
     const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/7.1/${FFMPEG_ZIP_NAME}.zip`;
