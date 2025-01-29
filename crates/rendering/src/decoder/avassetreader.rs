@@ -174,7 +174,7 @@ impl AVAssetReaderDecoder {
 
         let handle = std::thread::spawn(move || {
             let init = || {
-                let (pixel_format, width, height) = {
+                let (pixel_format, width, height, duration) = {
                     let input = ffmpeg::format::input(&path).unwrap();
 
                     let input_stream = input
@@ -190,6 +190,11 @@ impl AVAssetReaderDecoder {
                     )
                     .unwrap();
 
+                    let duration = cm::Time::new(
+                        input_stream.duration(),
+                        input_stream.time_base().1 / input_stream.time_base().0,
+                    );
+
                     let mut context = codec::context::Context::new_with_codec(decoder_codec);
                     context.set_parameters(input_stream.parameters()).unwrap();
 
@@ -198,6 +203,7 @@ impl AVAssetReaderDecoder {
                         pixel_to_pixel_format(decoder.format()),
                         decoder.width(),
                         decoder.height(),
+                        duration,
                     )
                 };
 
@@ -208,15 +214,16 @@ impl AVAssetReaderDecoder {
                 .ok_or_else(|| format!("UrlAsset::with_url{{{path:?}}}"))?;
 
                 Ok((
-                    get_reader_track_output(&asset, 0.0, &handle, pixel_format)?,
+                    get_reader_track_output(&asset, 0.0, &handle, pixel_format, duration)?,
                     width,
                     height,
                     asset,
                     pixel_format,
+                    duration,
                 ))
             };
 
-            let (mut track_output, width, height, asset, pixel_format) = match init() {
+            let (mut track_output, width, height, asset, pixel_format, duration) = match init() {
                 Ok(v) => {
                     ready_tx.send(Ok(())).ok();
                     v
@@ -269,6 +276,7 @@ impl AVAssetReaderDecoder {
                                 requested_time,
                                 &handle,
                                 pixel_format,
+                                duration,
                             )
                             .unwrap();
                             last_decoded_frame = None;
@@ -407,13 +415,15 @@ fn get_reader_track_output(
     time: f32,
     handle: &TokioHandle,
     pixel_format: cv::PixelFormat,
+    duration: cm::Time,
 ) -> Result<R<av::AssetReaderTrackOutput>, String> {
     let mut reader =
         av::AssetReader::with_asset(&asset).map_err(|e| format!("AssetReader::with_asset: {e}"))?;
 
     let time_range = cm::TimeRange {
         start: cm::Time::with_secs(time as f64, 100),
-        duration: asset.duration(),
+        // used to use asset.duration but that's deprecated
+        duration,
     };
 
     reader.set_time_range(time_range);
