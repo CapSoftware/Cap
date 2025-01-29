@@ -38,7 +38,7 @@ async function main() {
     await exec(
       `dsymutil "${binaryPath}" -o "${path.join(targetDir, releaseFile)}.dSYM"`
     );
-    await exec(`strip "${binaryPath}"`);
+    // await exec(`strip "${binaryPath}"`);
   } else if (process.platform === "win32") {
     // TODO
   } else {

@@ -23,9 +23,7 @@ async function main() {
   const file = await fs.readFile(crashFilePath).then((b) => b.toString());
 
   const sections = file.split("\n\n");
-  const crashedSectionIndex = sections.findIndex((s) =>
-    s.includes("Crashed::")
-  );
+  const crashedSectionIndex = sections.findIndex((s) => s.includes("Crashed:"));
   const crashedSection = sections[crashedSectionIndex];
   if (!crashedSection) throw new Error("crashed section not found");
 
@@ -39,7 +37,7 @@ async function main() {
     const loadAddress = loadAddressOrSymbol;
 
     const symbol = await exec(
-      `atos -o "${targetDir}/Cap - Development.dSYM/Contents/Resources/DWARF/Cap - Development" -l ${loadAddress} ${address}`
+      `atos -o "${targetDir}/Cap.dSYM" -l ${loadAddress} ${address}`
     ).then((s) => s.stdout.trim());
 
     const loadAddressIndex = line.indexOf(loadAddress);
