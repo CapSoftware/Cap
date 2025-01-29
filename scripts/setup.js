@@ -12,7 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const __root = path.resolve(path.join(__dirname, ".."));
-const targetDir = `${__root}/target`;
+const targetDir = path.join(__root, "target");
 
 const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
 
@@ -72,8 +72,10 @@ async function main() {
   } else if (process.platform === "win32") {
     const FFMPEG_ZIP_NAME = "ffmpeg-7.1-full_build-shared";
     const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/7.1/${FFMPEG_ZIP_NAME}.zip`;
+    
+    await fs.mkdir(targetDir, { recursive: true });
 
-    const ffmpegZip = `${targetDir}/ffmpeg.zip`;
+    const ffmpegZip = `${targetDir}\\ffmpeg.zip`;
     if (!(await fileExists(ffmpegZip))) {
       const ffmpegZipBytes = await fetch(FFMPEG_ZIP_URL)
         .then((r) => r.blob())
@@ -82,18 +84,19 @@ async function main() {
       console.log("Downloaded ffmpeg.zip");
     } else console.log("Using cached ffmpeg.zip");
 
-    const ffmpegDir = `${targetDir}/ffmpeg`;
+    const ffmpegDir = `${targetDir}\\ffmpeg`;
     if (!(await fileExists(ffmpegDir))) {
       await exec(`tar xf ${ffmpegZip} -C ${targetDir}`);
-      await fs.rename(`${targetDir}/${FFMPEG_ZIP_NAME}`, ffmpegDir);
+      await fs.rename(`${targetDir}\\${FFMPEG_ZIP_NAME}`, ffmpegDir);
       console.log("Extracted ffmpeg");
     } else console.log("Using cached ffmpeg");
 
     // alternative to adding ffmpeg/bin to PATH
-    for (const name of await fs.readdir(`${ffmpegDir}/bin`)) {
+    await fs.mkdir(`${targetDir}\\debug`, { recursive: true });
+    for (const name of await fs.readdir(`${ffmpegDir}\\bin`)) {
       await fs.copyFile(
-        `${ffmpegDir}/bin/${name}`,
-        `${targetDir}/debug/${name}`
+        `${ffmpegDir}\\bin\\${name}`,
+        `${targetDir}\\debug\\${name}`
       );
     }
     console.log("Copied ffmpeg dylibs to target/debug");
