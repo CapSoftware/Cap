@@ -28,7 +28,7 @@ async function main() {
 
     await fs.mkdir(targetDir, { recursive: true });
 
-    const nativeDepsTar = `${targetDir}/native-deps.tar.xz`;
+    const nativeDepsTar = path.join(targetDir, "/native-deps.tar.xz");
     if (!(await fileExists(nativeDepsTar))) {
       const nativeDepsBytes = await fetch(
         `${NATIVE_DEPS_URL}/${NATIVE_DEPS_ASSETS[arch]}`
@@ -39,11 +39,16 @@ async function main() {
       console.log("Downloaded native deps");
     } else console.log("Using cached native-deps.tar.xz");
 
-    const nativeDepsDir = `${targetDir}/native-deps`;
+    const nativeDepsDir = path.join(targetDir, "/native-deps");
     const frameworkDir = path.join(nativeDepsDir, "Spacedrive.framework");
     if (!(await fileExists(nativeDepsDir))) {
       await fs.mkdir(nativeDepsDir, { recursive: true });
-      await exec(`tar xf ${targetDir}/native-deps.tar.xz -C ${nativeDepsDir}`);
+      await exec(
+        `tar xf ${path.join(
+          targetDir,
+          "native-deps.tar.xz"
+        )} -C ${nativeDepsDir}`
+      );
       console.log("Extracted native-deps");
     } else console.log("Using cached native-deps");
 
@@ -54,28 +59,34 @@ async function main() {
     await signMacOSFrameworkLibs(frameworkDir);
     console.log("Signed .framework libraries");
 
-    const frameworkTargetDir = `${targetDir}/Frameworks/Spacedrive.framework`;
+    const frameworkTargetDir = path.join(
+      targetDir,
+      "Frameworks",
+      "Spacedrive.framework"
+    );
     await fs.rm(frameworkTargetDir, { recursive: true }).catch(() => {});
-    await fs.cp(frameworkDir, `${targetDir}/Frameworks/Spacedrive.framework`, {
-      recursive: true,
-    });
+    await fs.cp(
+      frameworkDir,
+      path.join(targetDir, "Frameworks", "Spacedrive.framework"),
+      { recursive: true }
+    );
 
     // alternative to specifying dylibs as linker args
-    await fs.mkdir(`${targetDir}/debug`, { recursive: true });
-    for (const name of await fs.readdir(`${nativeDepsDir}/lib`)) {
+    await fs.mkdir(path.join(targetDir, "/debug"), { recursive: true });
+    for (const name of await fs.readdir(path.join(nativeDepsDir, "lib"))) {
       await fs.copyFile(
-        `${nativeDepsDir}/lib/${name}`,
-        `${targetDir}/debug/${name}`
+        path.join(nativeDepsDir, "lib", name),
+        path.join(targetDir, "debug", name)
       );
     }
     console.log("Copied ffmpeg dylibs to target/debug");
   } else if (process.platform === "win32") {
     const FFMPEG_ZIP_NAME = "ffmpeg-7.1-full_build-shared";
     const FFMPEG_ZIP_URL = `https://github.com/GyanD/codexffmpeg/releases/download/7.1/${FFMPEG_ZIP_NAME}.zip`;
-    
+
     await fs.mkdir(targetDir, { recursive: true });
 
-    const ffmpegZip = `${targetDir}\\ffmpeg.zip`;
+    const ffmpegZip = path.join(targetDir, "ffmpeg.zip");
     if (!(await fileExists(ffmpegZip))) {
       const ffmpegZipBytes = await fetch(FFMPEG_ZIP_URL)
         .then((r) => r.blob())
@@ -84,34 +95,42 @@ async function main() {
       console.log("Downloaded ffmpeg.zip");
     } else console.log("Using cached ffmpeg.zip");
 
-    const ffmpegDir = `${targetDir}\\ffmpeg`;
+    const ffmpegDir = path.join(targetDir, "ffmpeg");
     if (!(await fileExists(ffmpegDir))) {
       await exec(`tar xf ${ffmpegZip} -C ${targetDir}`);
-      await fs.rename(`${targetDir}\\${FFMPEG_ZIP_NAME}`, ffmpegDir);
+      await fs.rename(path.join(targetDir, FFMPEG_ZIP_NAME), ffmpegDir);
       console.log("Extracted ffmpeg");
     } else console.log("Using cached ffmpeg");
 
     // alternative to adding ffmpeg/bin to PATH
-    await fs.mkdir(`${targetDir}\\debug`, { recursive: true });
-    for (const name of await fs.readdir(`${ffmpegDir}\\bin`)) {
+    await fs.mkdir(path.join(targetDir, "debug"), { recursive: true });
+    for (const name of await fs.readdir(path.join(ffmpegDir, "bin"))) {
       await fs.copyFile(
-        `${ffmpegDir}\\bin\\${name}`,
-        `${targetDir}\\debug\\${name}`
+        path.join(ffmpegDir, "bin", name),
+        path.join(targetDir, "debug", name)
       );
     }
     console.log("Copied ffmpeg dylibs to target/debug");
 
-    if (!(await fileExists(`${targetDir}/native-deps`)))
-      await fs.mkdir(`${targetDir}/native-deps`, { recursive: true });
+    if (!(await fileExists(path.join(targetDir, "native-deps"))))
+      await fs.mkdir(path.join(targetDir, "native-deps"), { recursive: true });
 
-    await fs.cp(`${ffmpegDir}/lib`, `${targetDir}/native-deps/lib`, {
-      recursive: true,
-      force: true,
-    });
-    await fs.cp(`${ffmpegDir}/include`, `${targetDir}/native-deps/include`, {
-      recursive: true,
-      force: true,
-    });
+    await fs.cp(
+      path.join(ffmpegDir, "lib"),
+      path.join(targetDir, "native-deps", "lib"),
+      {
+        recursive: true,
+        force: true,
+      }
+    );
+    await fs.cp(
+      path.join(ffmpegDir, "include"),
+      path.join(targetDir, "native-deps", "include"),
+      {
+        recursive: true,
+        force: true,
+      }
+    );
     console.log("Copied ffmpeg/lib and ffmpeg/include to target/native-deps");
   }
 }
