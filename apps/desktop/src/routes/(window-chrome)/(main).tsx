@@ -53,7 +53,6 @@ import {
 } from "../editor/ui";
 
 const getAuth = cache(async () => {
-  throw new Error("");
   const value = await authStore.get();
   const local = import.meta.env.VITE_LOCAL_MODE === "true";
 

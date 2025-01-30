@@ -71,10 +71,13 @@ impl<T> PipelineBuilder<T> {
         let join_handle = thread::spawn(move || {
             tracing::dispatcher::with_default(&dispatcher, || {
                 span.in_scope(|| {
-                    launch(ready_sender);
-                })
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        launch(ready_sender);
+                    }))
+                    .ok();
+                });
+                done_tx.send(()).ok();
             });
-            done_tx.send(()).ok();
         });
 
         self.tasks.insert(
