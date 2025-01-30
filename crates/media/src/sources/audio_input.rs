@@ -25,7 +25,6 @@ impl LocalTimestamp for StreamInstant {
 pub struct AudioInputSource {
     feed_connection: AudioInputConnection,
     audio_info: AudioInfo,
-    received_samples: usize,
 }
 
 impl AudioInputSource {
@@ -33,7 +32,6 @@ impl AudioInputSource {
         Self {
             feed_connection: feed.create_connection(),
             audio_info: feed.audio_info(),
-            received_samples: 0,
         }
     }
 
@@ -103,9 +101,6 @@ impl PipelineSourceTask for AudioInputSource {
 
                     match samples.recv() {
                         Ok(samples) => {
-                            self.received_samples += samples.data.len()
-                                / samples.format.sample_size()
-                                / self.audio_info.channels;
                             if let Err(error) = self.process_frame(&mut clock, &output, samples) {
                                 error!("{error}");
                                 break;
@@ -118,7 +113,6 @@ impl PipelineSourceTask for AudioInputSource {
                     }
                 }
                 Some(Control::Shutdown) | None => {
-                    dbg!(self.received_samples);
                     if let Some(rx) = samples_rx.take() {
                         self.pause_and_drain_frames(&mut clock, &output, rx);
                     }

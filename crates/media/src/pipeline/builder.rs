@@ -189,7 +189,7 @@ impl<Clock, PreviousOutput: Send + 'static> PipelinePathBuilder<Clock, PreviousO
             trace!("Sink starting");
             task.run(ready_signal, &input);
             info!("Sink stopped running");
-            task.finish(&input);
+            task.finish();
             info!("Sink stopped");
         });
 

@@ -270,21 +270,18 @@ impl AudioFrameBuffer {
         requested_samples: usize,
         maybe_timeline: Option<&TimelineConfiguration>,
     ) -> Option<(usize, &'a [f32])> {
-        // dbg!(self.elapsed_samples);
-        // if let Some(timeline) = maybe_timeline {
-        //     self.adjust_cursor(timeline);
-        // }
+        if let Some(timeline) = maybe_timeline {
+            self.adjust_cursor(timeline);
+        }
 
         let data = &self.data[self.cursor.segment_index];
         let buffer = &data.buffer;
-        dbg!(self.cursor.samples);
         if self.cursor.samples >= buffer.len() {
             self.elapsed_samples += requested_samples;
             return None;
         }
 
         let samples = (requested_samples).min(buffer.len() - self.cursor.samples);
-        // dbg!(samples);
 
         let start = self.cursor;
         self.elapsed_samples += samples;
@@ -300,7 +297,6 @@ pub struct AudioPlaybackBuffer<T: FromSampleBytes> {
     frame_buffer: AudioFrameBuffer,
     resampler: AudioResampler,
     resampled_buffer: HeapRb<T>,
-    resampled_samples: usize,
 }
 
 impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
@@ -325,7 +321,6 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
             frame_buffer,
             resampler,
             resampled_buffer,
-            resampled_samples: 0,
         }
     }
 
@@ -345,16 +340,15 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
     }
 
     pub fn render(&mut self, timeline: Option<&TimelineConfiguration>) {
-        // if self.buffer_reaching_limit() {
-        //     return;
-        // }
+        if self.buffer_reaching_limit() {
+            return;
+        }
 
         let bytes_per_sample = self.resampler.output.sample_size();
 
         let next_frame = self
             .frame_buffer
             .next_frame(Self::PROCESSING_SAMPLES_COUNT as usize, timeline);
-        dbg!(next_frame.is_some());
 
         let maybe_rendered = match next_frame {
             Some(frame) => Some(self.resampler.queue_and_process_frame(&frame)),
@@ -362,14 +356,12 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         };
 
         if let Some(rendered) = maybe_rendered {
-            dbg!(rendered.len());
             let mut typed_data = vec![T::EQUILIBRIUM; rendered.len() / bytes_per_sample];
 
             for (src, dest) in std::iter::zip(rendered.chunks(bytes_per_sample), &mut typed_data) {
                 *dest = T::from_bytes(src);
             }
             self.resampled_buffer.push_slice(&typed_data);
-            self.resampled_samples += typed_data.len();
         }
     }
 

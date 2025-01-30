@@ -20,7 +20,6 @@ pub struct OpusEncoder {
     encoder: encoder::Audio,
     output_ctx: format::context::Output,
     buffer: AudioBuffer,
-    buffered_samples: usize,
     frame: FFAudio,
     packet: ffmpeg::Packet,
 }
@@ -72,7 +71,6 @@ impl OpusEncoder {
             buffer: AudioBuffer::new(config, &encoder),
             encoder,
             output_ctx,
-            buffered_samples: 0,
             frame: FFAudio::new(
                 ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
                 frame_size,
@@ -82,15 +80,7 @@ impl OpusEncoder {
         })
     }
 
-    fn queue_frame(&mut self, mut frame: FFAudio) {
-        let enc_tb = self.encoder.time_base();
-        // frame.set_pts(Some(
-        //     (self.buffered_samples as f64 / self.encoder.rate() as f64
-        //         * enc_tb.denominator() as f64
-        //         / enc_tb.numerator() as f64) as i64,
-        // ));
-        self.buffered_samples += frame.samples();
-
+    fn queue_frame(&mut self, frame: FFAudio) {
         self.buffer.consume(frame);
         self.process_buffer();
     }

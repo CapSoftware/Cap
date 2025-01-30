@@ -15,8 +15,6 @@ pub struct AudioBuffer {
     pub data: Vec<VecDeque<f32>>,
     pub frame_size: usize,
     config: AudioInfo,
-    pub consumed_samples: usize,
-    pub returned_samples: usize,
 }
 
 impl AudioBuffer {
@@ -29,8 +27,6 @@ impl AudioBuffer {
             data: vec![VecDeque::with_capacity(frame_buffer_size); config.channels],
             frame_size: encoder.frame_size().try_into().unwrap(),
             config,
-            consumed_samples: 0,
-            returned_samples: 0,
         }
     }
 
@@ -58,8 +54,6 @@ impl AudioBuffer {
         //         )
         //     });
         // }
-
-        self.consumed_samples += frame.samples();
     }
 
     pub fn next_frame(&mut self, drain: bool) -> Option<FFAudio> {
@@ -99,8 +93,6 @@ impl AudioBuffer {
                     .copy_from_slice(&byte.to_ne_bytes());
             }
         }
-
-        self.returned_samples += actual_samples_per_channel;
 
         self.current_pts += i64::try_from(self.frame_size).unwrap();
         Some(frame)

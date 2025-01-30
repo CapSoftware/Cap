@@ -252,8 +252,7 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             crop_area,
             output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
             output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
-            excluded_targets: None,
-            // excluded_targets: Some(excluded_targets),
+            excluded_targets: Some(excluded_targets),
         }
     }
 
