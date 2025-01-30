@@ -133,7 +133,7 @@ impl PipelineSinkTask for H264AVAssetWriterEncoder {
         }
     }
 
-    fn finish(&mut self, input: &flume::Receiver<Self::Input>) {
+    fn finish(&mut self) {
         self.finish();
     }
 }

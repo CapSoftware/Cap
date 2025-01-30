@@ -161,7 +161,7 @@ impl PipelineSinkTask for H264Encoder {
         }
     }
 
-    fn finish(&mut self, input: &flume::Receiver<Self::Input>) {
+    fn finish(&mut self) {
         self.finish();
     }
 }

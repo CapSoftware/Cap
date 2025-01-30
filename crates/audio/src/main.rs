@@ -58,7 +58,6 @@ pub fn decode_audio(path: impl AsRef<Path>) -> AudioSampleBuffer {
 
         while let Ok(_) = decoder.receive_frame(&mut decoded_frame) {
             decoded_samples += decoded_frame.samples();
-            dbg!(decoded_frame.format());
             let resample_delay = resampler.run(&decoded_frame, &mut resampled_frame).unwrap();
 
             let slice = &resampled_frame.data(0)
@@ -97,7 +96,6 @@ pub fn decode_audio(path: impl AsRef<Path>) -> AudioSampleBuffer {
 
     while let Ok(_) = decoder.receive_frame(&mut decoded_frame) {
         decoded_samples += decoded_frame.samples();
-        dbg!(decoded_frame.format());
         let resample_delay = resampler.run(&decoded_frame, &mut resampled_frame).unwrap();
 
         let slice = &resampled_frame.data(0)
@@ -126,16 +124,10 @@ pub fn decode_audio(path: impl AsRef<Path>) -> AudioSampleBuffer {
             [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
         samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
 
-        dbg!(resample_delay);
         if resample_delay.is_none() {
             break;
         }
     }
-
-    dbg!(decoded_samples);
-    dbg!(samples.len());
-
-    dbg!(Delay::from(&resampler));
 
     AudioSampleBuffer {
         samples,

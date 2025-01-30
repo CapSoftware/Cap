@@ -142,14 +142,7 @@ impl PipelineSinkTask for OpusEncoder {
         }
     }
 
-    fn finish(&mut self, input: &flume::Receiver<Self::Input>) {
-        let frames = input.drain().collect::<Vec<_>>();
-
-        for frame in frames {
-            self.queue_frame(frame);
-        }
-
+    fn finish(&mut self) {
         self.finish();
-        println!("finished");
     }
 }
