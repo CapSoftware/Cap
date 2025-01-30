@@ -179,7 +179,6 @@ impl AudioFrameBuffer {
 
     pub fn info(&self) -> AudioInfo {
         self.data[0].info
-        // self.data.info
     }
 
     pub fn set_playhead(&mut self, playhead: f64, maybe_timeline: Option<&TimelineConfiguration>) {
@@ -188,7 +187,6 @@ impl AudioFrameBuffer {
         self.cursor = match maybe_timeline {
             Some(timeline) => match timeline.get_recording_time(playhead) {
                 Some((time, segment)) => {
-                    dbg!(playhead, time);
                     let index = segment.unwrap_or(0) as usize;
                     AudioFrameBufferCursor {
                         segment_index: index,
@@ -197,7 +195,7 @@ impl AudioFrameBuffer {
                 }
                 None => AudioFrameBufferCursor {
                     segment_index: 0,
-                    samples: 99999999, //  self.data[0].buffer.len(),
+                    samples: self.data[0].buffer.len(),
                 },
             },
             None => AudioFrameBufferCursor {
@@ -281,13 +279,14 @@ impl AudioFrameBuffer {
             return None;
         }
 
-        let samples = (requested_samples).min(buffer.len() - self.cursor.samples);
+        let samples =
+            (requested_samples * self.info().channels).min(buffer.len() - self.cursor.samples);
 
         let start = self.cursor;
         self.elapsed_samples += samples;
         self.cursor.samples += samples;
         Some((
-            samples, // data.info.channels,
+            samples / data.info.channels,
             &buffer[start.samples..self.cursor.samples],
         ))
     }

@@ -86,20 +86,10 @@ impl OpusEncoder {
     }
 
     fn process_buffer(&mut self) {
-        let frame_size = self.buffer.frame_size;
-        while self.buffer.data[0].len() >= frame_size {
-            for (index, sample) in self.buffer.data[0].drain(0..frame_size).enumerate() {
-                self.frame.plane_mut::<f32>(0)[index] = sample;
-            }
-
-            self.encoder.send_frame(&self.frame).unwrap();
-
+        while let Some(buffered_frame) = self.buffer.next_frame(false) {
+            self.encoder.send_frame(buffered_frame).unwrap();
             self.process_packets();
         }
-        // while let Some(buffered_frame) = self.buffer.next_frame(false) {
-        //     self.encoder.send_frame(&buffered_frame).unwrap();
-        //     self.process_packets();
-        // }
     }
 
     fn process_packets(&mut self) {
