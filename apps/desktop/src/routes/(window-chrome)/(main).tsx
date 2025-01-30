@@ -191,24 +191,6 @@ export default function () {
               <button
                 type="button"
                 onClick={() =>
-                  commands.showWindow({ Settings: { page: "apps" } })
-                }
-              >
-                <IconLucideLayoutGrid class="w-[1.25rem] h-[1.25rem] text-gray-400 hover:text-gray-500" />
-              </button>
-            </Tooltip.Trigger>
-            <Tooltip.Portal>
-              <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-[--gray-500] rounded shadow-lg animate-in fade-in duration-100">
-                Integrations
-                <Tooltip.Arrow class="fill-[--gray-500]" />
-              </Tooltip.Content>
-            </Tooltip.Portal>
-          </Tooltip.Root>
-          <Tooltip.Root openDelay={0}>
-            <Tooltip.Trigger>
-              <button
-                type="button"
-                onClick={() =>
                   commands.showWindow({ Settings: { page: "recordings" } })
                 }
               >
