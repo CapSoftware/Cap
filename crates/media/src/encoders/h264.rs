@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::{
     data::{FFPacket, FFVideo, VideoInfo},
     pipeline::task::PipelineSinkTask,
@@ -10,25 +12,29 @@ use ffmpeg::{
     Dictionary, Rescale,
 };
 use ffmpeg_sys_next as sys;
-use tracing::{info, trace};
-
-use super::Output;
 
 pub struct H264Encoder {
     tag: &'static str,
     encoder: encoder::Video,
-    output_ctx: format::context::Output,
     config: VideoInfo,
     frame_count: i64,
     converter: Option<ffmpeg::software::scaling::Context>,
+    stream_index: usize,
 }
 
 impl H264Encoder {
-    pub fn init(tag: &'static str, config: VideoInfo, output: Output) -> Result<Self, MediaError> {
-        let Output::File(destination) = output;
+    pub fn factory(
+        tag: &'static str,
+        config: VideoInfo,
+    ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, MediaError> {
+        move |o| Self::init(tag, config, o)
+    }
 
-        let mut output_ctx = format::output(&destination)?;
-
+    pub fn init(
+        tag: &'static str,
+        config: VideoInfo,
+        output: &mut format::context::Output,
+    ) -> Result<Self, MediaError> {
         let (codec, options) = get_codec_and_options(&config)?;
 
         let (format, converter) = if !codec
@@ -65,106 +71,96 @@ impl H264Encoder {
         encoder.set_format(format);
         encoder.set_time_base(config.frame_rate.invert());
         encoder.set_frame_rate(Some(config.frame_rate));
-
-        if codec.name() == "h264_videotoolbox" {
-            encoder.set_bit_rate(1_200_000);
-            encoder.set_max_bit_rate(120_000);
-        } else {
-            encoder.set_bit_rate(8_000_000);
-            encoder.set_max_bit_rate(8_000_000);
-        }
+        encoder.set_bit_rate(12_000_000);
+        encoder.set_max_bit_rate(12_000_000);
 
         let video_encoder = encoder.open_with(options)?;
 
-        let mut output_stream = output_ctx.add_stream(codec)?;
+        let mut output_stream = output.add_stream(codec)?;
+        let stream_index = output_stream.index();
         output_stream.set_time_base(config.frame_rate.invert());
         output_stream.set_rate(config.frame_rate);
         output_stream.set_parameters(&video_encoder);
-        output_ctx.write_header()?;
 
         Ok(Self {
             tag,
             encoder: video_encoder,
-            output_ctx,
+            stream_index,
             config,
             frame_count: 0,
             converter,
         })
     }
 
-    fn queue_frame(&mut self, mut frame: FFVideo) {
+    pub fn queue_frame(&mut self, mut frame: FFVideo, output: &mut format::context::Output) {
+        dbg!(
+            frame.width(),
+            frame.height(),
+            frame.planes(),
+            frame.stride(0),
+            frame.format()
+        );
+        dbg!(self.converter.is_some());
         if let Some(converter) = &mut self.converter {
             let mut new_frame = FFVideo::empty();
             converter.run(&frame, &mut new_frame).unwrap();
+            dbg!(
+                new_frame.width(),
+                new_frame.height(),
+                new_frame.planes(),
+                new_frame.format()
+            );
             frame = new_frame;
         }
 
         frame.set_pts(Some(self.frame_count));
         self.frame_count += 1;
         self.encoder.send_frame(&frame).unwrap();
+
+        self.process_frame(output);
     }
 
-    fn process_frame(&mut self) {
+    fn process_frame(&mut self, output: &mut format::context::Output) {
         let mut encoded_packet = FFPacket::empty();
 
         while self.encoder.receive_packet(&mut encoded_packet).is_ok() {
             encoded_packet.set_stream(0);
             encoded_packet.rescale_ts(
                 self.encoder.time_base(),
-                self.output_ctx.stream(0).unwrap().time_base(),
+                output.stream(0).unwrap().time_base(),
             );
-            encoded_packet
-                .write_interleaved(&mut self.output_ctx)
-                .unwrap();
+            encoded_packet.write_interleaved(output).unwrap();
         }
     }
 
-    fn finish(&mut self) {
+    pub fn finish(&mut self, output: &mut format::context::Output) {
         self.encoder.send_eof().unwrap();
-        self.process_frame();
-
-        // Set the duration in the output container's stream
-        if let Some(stream) = self.output_ctx.stream(0) {
-            let duration = self
-                .frame_count
-                .rescale(self.config.frame_rate.invert(), stream.time_base());
-            unsafe {
-                let stream_ptr = stream.as_ptr() as *mut sys::AVStream;
-                (*stream_ptr).duration = duration;
-                (*stream_ptr).time_base = stream.time_base().into();
-                (*stream_ptr).nb_frames = self.frame_count;
-                (*stream_ptr).start_time = 0;
-                (*stream_ptr).r_frame_rate = self.config.frame_rate.into();
-                (*stream_ptr).avg_frame_rate = self.config.frame_rate.into();
-            }
-        }
-
-        self.output_ctx.write_trailer().unwrap();
+        self.process_frame(output);
     }
 }
 
-unsafe impl Send for H264Encoder {}
+// unsafe impl Send for H264Encoder {}
 
-impl PipelineSinkTask for H264Encoder {
-    type Input = FFVideo;
+// impl PipelineSinkTask for H264Encoder {
+//     type Input = FFVideo;
 
-    fn run(
-        &mut self,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<Self::Input>,
-    ) {
-        ready_signal.send(Ok(())).unwrap();
+//     fn run(
+//         &mut self,
+//         ready_signal: crate::pipeline::task::PipelineReadySignal,
+//         input: &flume::Receiver<Self::Input>,
+//     ) {
+//         ready_signal.send(Ok(())).unwrap();
 
-        while let Ok(frame) = input.recv() {
-            self.queue_frame(frame);
-            self.process_frame();
-        }
-    }
+//         while let Ok(frame) = input.recv() {
+//             self.queue_frame(frame);
+//             self.process_frame();
+//         }
+//     }
 
-    fn finish(&mut self) {
-        self.finish();
-    }
-}
+//     fn finish(&mut self) {
+//         self.finish();
+//     }
+// }
 
 fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), MediaError> {
     let encoder_name = {

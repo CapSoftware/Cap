@@ -1,7 +1,7 @@
 use cap_editor::Segment;
 use cap_media::{
     data::{cast_f32_slice_to_bytes, AudioInfo, RawVideoFormat, VideoInfo},
-    encoders::{MP4Encoder, MP4Input},
+    encoders::{H264Encoder, MP4File, MP4Input, OpusEncoder},
     feeds::{AudioData, AudioFrameBuffer},
     MediaError,
 };
@@ -140,17 +140,21 @@ where
         };
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
-            let mut encoder = cap_media::encoders::MP4Encoder::init(
+            let mut encoder = cap_media::encoders::MP4File::init(
                 "output",
-                VideoInfo::from_raw(
-                    MP4Encoder::video_format(),
-                    self.output_size.0,
-                    self.output_size.1,
-                    self.fps,
+                self.output_path.clone(),
+                H264Encoder::factory(
+                    "output_video",
+                    VideoInfo::from_raw(
+                        RawVideoFormat::Rgba,
+                        self.output_size.0,
+                        self.output_size.1,
+                        self.fps,
+                    ),
                 ),
-                audio_info,
-                cap_media::encoders::Output::File(self.output_path.clone()),
-            )?;
+                move |o| audio_info.map(|a| OpusEncoder::init("output_audio", a, o)),
+            )
+            .unwrap();
 
             while let Ok(frame) = frame_rx.recv() {
                 encoder.queue_video_frame(frame.video);
@@ -163,7 +167,9 @@ where
 
             Ok::<_, ExportError>(self.output_path)
         })
-        .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
+        .then(|f| async {
+            f.unwrap().unwrap() /*.map_err(Into::into).and_then(|v| v)*/
+        });
 
         let render_task = tokio::spawn({
             let project = self.project.clone();
@@ -278,7 +284,9 @@ where
                 Ok::<_, ExportError>(())
             }
         })
-        .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
+        .then(|f| async {
+            f.unwrap().unwrap() /*.map_err(Into::into).and_then(|v| v)*/
+        });
 
         println!("Rendering video to channel");
 
@@ -292,9 +300,11 @@ where
             self.resolution_base,
             self.is_upgraded,
         )
-        .then(|f| async { f.map_err(Into::into) });
+        .then(|f| async {
+            f.unwrap() /*.map_err(Into::into)*/
+        });
 
-        let (output_path, _, _) = tokio::try_join!(encoder_thread, render_video_task, render_task)?;
+        let (output_path, _, _) = tokio::join!(encoder_thread, render_video_task, render_task);
 
         Ok(output_path)
     }

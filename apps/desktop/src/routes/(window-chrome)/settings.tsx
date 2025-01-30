@@ -43,9 +43,9 @@ export default function Settings(props: RouteSectionProps) {
                 icon: IconLucideCamera,
               },
               {
-                href: "apps",
-                name: "Cap Apps",
-                icon: IconLucideLayoutGrid,
+                href: "integrations",
+                name: "Integrations",
+                icon: IconLucideUnplug,
               },
               {
                 href: "feedback",

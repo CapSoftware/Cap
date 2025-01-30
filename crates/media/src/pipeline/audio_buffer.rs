@@ -11,7 +11,6 @@ use cap_project::TimelineConfiguration;
 
 #[derive(Debug)]
 pub struct AudioBuffer {
-    current_pts: i64,
     pub data: Vec<VecDeque<f32>>,
     pub frame_size: usize,
     config: AudioInfo,
@@ -26,7 +25,6 @@ impl AudioBuffer {
         let frame_size = encoder.frame_size() as usize;
 
         Self {
-            current_pts: 0,
             data: vec![VecDeque::with_capacity(frame_buffer_size); config.channels],
             frame_size,
             config,
@@ -46,7 +44,11 @@ impl AudioBuffer {
         self.data[0].len()
     }
 
-    pub fn consume(&mut self, frame: FFAudio) {
+    pub fn consume(&mut self, frame: &FFAudio) {
+        if frame.samples() == 0 {
+            return;
+        }
+
         if frame.is_planar() {
             for channel in 0..self.config.channels {
                 self.data[channel]
@@ -70,6 +72,7 @@ impl AudioBuffer {
             return None;
         }
 
+        dbg!(self.frame_size, drain);
         let actual_samples_per_channel = if drain {
             (self.len() / self.config.channels).min(self.frame_size)
         } else {
@@ -96,7 +99,6 @@ impl AudioBuffer {
             }
         }
 
-        self.current_pts += i64::try_from(self.frame_size).unwrap();
         Some(&self.frame)
     }
 }

@@ -1,119 +1,252 @@
+use std::{collections::VecDeque, path::PathBuf};
+
 use ffmpeg::{
     codec::{context, encoder},
-    format,
-    frame::Packet,
+    format::{self, sample::Type, Sample},
     threading::Config,
 };
-use std::collections::VecDeque;
-use tracing::{debug, info, trace};
 
 use crate::{
-    data::{AudioInfo, FFAudio, FFPacket, FFRational, PlanarData},
-    pipeline::{audio_buffer::AudioBuffer, task::PipelineSinkTask},
+    data::{AudioInfo, FFAudio, FFRational},
+    pipeline::task::PipelineSinkTask,
     MediaError,
 };
 
-use super::Output;
+pub struct OggFile {
+    encoder: OpusEncoder,
+    output: format::context::Output,
+}
+
+impl OggFile {
+    pub fn init(
+        mut output: PathBuf,
+        encoder: impl FnOnce(&mut format::context::Output) -> Result<OpusEncoder, MediaError>,
+    ) -> Result<Self, MediaError> {
+        output.set_extension("ogg");
+        let mut output = format::output(&output)?;
+        Ok(Self {
+            encoder: encoder(&mut output)?,
+            output,
+        })
+    }
+
+    pub fn queue_frame(&mut self, frame: FFAudio) {
+        self.encoder.queue_frame(frame, &mut self.output);
+    }
+
+    pub fn finish(&mut self) {
+        self.encoder.finish(&mut self.output);
+        self.output.write_trailer().unwrap();
+    }
+}
 
 pub struct OpusEncoder {
     tag: &'static str,
     encoder: encoder::Audio,
-    output_ctx: format::context::Output,
-    buffer: AudioBuffer,
-    frame: FFAudio,
     packet: ffmpeg::Packet,
+    resampler: ffmpeg::software::resampling::Context,
+    resampled_frame: FFAudio,
+    buffer: VecDeque<u8>,
+    stream_index: usize,
 }
 
 impl OpusEncoder {
     const OUTPUT_BITRATE: usize = 128 * 1000; // 128k
+    const SAMPLE_FORMAT: Sample = Sample::F32(Type::Packed);
 
-    pub fn init(tag: &'static str, config: AudioInfo, output: Output) -> Result<Self, MediaError> {
-        let Output::File(destination) = output;
-        let mut output_ctx = format::output(&destination)?;
+    pub fn factory(
+        tag: &'static str,
+        input_config: AudioInfo,
+    ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, MediaError> {
+        move |o| Self::init(tag, input_config, o)
+    }
 
+    pub fn init(
+        tag: &'static str,
+        input_config: AudioInfo,
+        output: &mut format::context::Output,
+    ) -> Result<Self, MediaError> {
         let codec = encoder::find_by_name("libopus")
             .ok_or(MediaError::TaskLaunch("Could not find Opus codec".into()))?;
         let mut encoder_ctx = context::Context::new_with_codec(codec);
         encoder_ctx.set_threading(Config::count(4));
         let mut encoder = encoder_ctx.encoder().audio()?;
 
-        if !codec
-            .audio()
-            .unwrap()
-            .rates()
-            .into_iter()
-            .flatten()
-            .any(|r| r == config.rate())
-        {
-            return Err(MediaError::TaskLaunch(format!(
-                "MP3 Codec does not support sample rate {}",
-                config.rate()
-            )));
-        }
+        let rate = {
+            let mut rates = codec
+                .audio()
+                .unwrap()
+                .rates()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            rates.sort();
+
+            let Some(&rate) = rates
+                .iter()
+                .find(|r| **r >= input_config.rate())
+                .or(rates.first())
+            else {
+                return Err(MediaError::TaskLaunch(format!(
+                    "Opus Codec does not support sample rate {}",
+                    input_config.rate()
+                )));
+            };
+            rate
+        };
+
+        let mut output_config = input_config.clone();
+        output_config.sample_format = Self::SAMPLE_FORMAT;
+        output_config.sample_rate = rate as u32;
+
+        let resampler = ffmpeg::software::resampler(
+            dbg!((
+                input_config.sample_format,
+                input_config.channel_layout(),
+                input_config.sample_rate,
+            )),
+            dbg!((
+                output_config.sample_format,
+                output_config.channel_layout(),
+                output_config.sample_rate
+            )),
+        )
+        .unwrap();
 
         encoder.set_bit_rate(Self::OUTPUT_BITRATE);
-        encoder.set_rate(config.rate());
-        encoder.set_format(config.sample_format);
-        encoder.set_channel_layout(config.channel_layout());
-        encoder.set_time_base(config.time_base);
+        encoder.set_rate(rate);
+        encoder.set_format(output_config.sample_format);
+        encoder.set_channel_layout(output_config.channel_layout());
+        encoder.set_time_base(output_config.time_base);
 
         let encoder = encoder.open()?;
 
-        let mut output_stream = output_ctx.add_stream(codec)?;
-        output_stream.set_time_base(FFRational(1, config.rate()));
+        let mut output_stream = output.add_stream(codec)?;
+        let stream_index = output_stream.index();
+        output_stream.set_time_base(FFRational(1, output_config.rate()));
         output_stream.set_parameters(&encoder);
-        output_ctx.write_header()?;
-
-        let frame_size = encoder.frame_size() as usize;
 
         Ok(Self {
             tag,
-            buffer: AudioBuffer::new(config, &encoder),
+            buffer: VecDeque::new(),
             encoder,
-            output_ctx,
-            frame: FFAudio::new(
-                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
-                frame_size,
-                ffmpeg::ChannelLayout::default(config.channels as i32),
-            ),
+            stream_index,
             packet: ffmpeg::Packet::empty(),
+            resampled_frame: FFAudio::empty(),
+            resampler,
         })
     }
 
-    fn queue_frame(&mut self, frame: FFAudio) {
-        self.buffer.consume(frame);
-        self.process_buffer();
-    }
+    pub fn queue_frame(&mut self, frame: FFAudio, output: &mut format::context::Output) {
+        self.resampler
+            .run(&frame, &mut self.resampled_frame)
+            .unwrap();
 
-    fn process_buffer(&mut self) {
-        while let Some(buffered_frame) = self.buffer.next_frame(false) {
-            self.encoder.send_frame(buffered_frame).unwrap();
-            self.process_packets();
+        self.buffer.extend(
+            &self.resampled_frame.data(0)[0..self.resampled_frame.samples()
+                * self.resampled_frame.channels() as usize
+                * self.resampled_frame.format().bytes()],
+        );
+
+        loop {
+            let frame_size_bytes = self.encoder.frame_size() as usize
+                * self.encoder.channels() as usize
+                * self.encoder.format().bytes();
+            if self.buffer.len() < frame_size_bytes {
+                break;
+            }
+
+            let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
+            let mut frame = FFAudio::new(
+                self.encoder.format(),
+                self.encoder.frame_size() as usize,
+                self.encoder.channel_layout(),
+            );
+
+            frame.data_mut(0)[0..frame_size_bytes].copy_from_slice(&bytes);
+
+            self.encoder.send_frame(&frame).unwrap();
+
+            self.process_packets(output);
         }
     }
 
-    fn process_packets(&mut self) {
+    fn process_packets(&mut self, output: &mut format::context::Output) {
         while self.encoder.receive_packet(&mut self.packet).is_ok() {
-            self.packet.set_stream(0);
-            self.packet.write_interleaved(&mut self.output_ctx).unwrap();
+            self.packet.set_stream(self.stream_index);
+            self.packet.rescale_ts(
+                self.encoder.time_base(),
+                output.stream(0).unwrap().time_base(),
+            );
+            self.packet.write_interleaved(output).unwrap();
         }
     }
 
-    fn finish(&mut self) {
-        self.process_buffer();
+    pub fn finish(&mut self, output: &mut format::context::Output) {
+        let frame_size_bytes = self.encoder.frame_size() as usize
+            * self.encoder.channels() as usize
+            * self.encoder.format().bytes();
+
+        while self.resampler.delay().is_some() {
+            self.resampler.flush(&mut self.resampled_frame).unwrap();
+            if self.resampled_frame.samples() == 0 {
+                break;
+            }
+
+            self.buffer.extend(
+                &self.resampled_frame.data(0)[0..self.resampled_frame.samples()
+                    * self.resampled_frame.channels() as usize
+                    * self.resampled_frame.format().bytes()],
+            );
+
+            while self.buffer.len() >= frame_size_bytes {
+                let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
+
+                let mut frame = FFAudio::new(
+                    self.encoder.format(),
+                    self.encoder.frame_size() as usize,
+                    self.encoder.channel_layout(),
+                );
+
+                frame.data_mut(0)[0..frame_size_bytes].copy_from_slice(&bytes);
+
+                self.encoder.send_frame(&frame).unwrap();
+
+                self.process_packets(output);
+            }
+        }
+
+        while self.buffer.len() > 0 {
+            let frame_size_bytes = frame_size_bytes.min(self.buffer.len());
+            let frame_size =
+                frame_size_bytes / self.encoder.channels() as usize / self.encoder.format().bytes();
+
+            let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
+
+            let mut frame = FFAudio::new(
+                self.encoder.format(),
+                frame_size,
+                self.encoder.channel_layout(),
+            );
+
+            frame.data_mut(0)[0..frame_size_bytes].copy_from_slice(&bytes);
+
+            self.encoder.send_frame(&frame).unwrap();
+
+            self.process_packets(output);
+        }
+
         self.encoder.send_eof().unwrap();
-        self.process_packets();
-        self.output_ctx.write_trailer().unwrap();
+
+        self.process_packets(output);
     }
 }
 
-impl PipelineSinkTask for OpusEncoder {
-    type Input = FFAudio;
-
+impl PipelineSinkTask<FFAudio> for OggFile {
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<Self::Input>,
+        input: &flume::Receiver<FFAudio>,
     ) {
         ready_signal.send(Ok(())).unwrap();
 

@@ -65,6 +65,7 @@ declare global {
   const IconLucideRotateCcw: typeof import('~icons/lucide/rotate-ccw.jsx')['default']
   const IconLucideSearch: typeof import('~icons/lucide/search.jsx')['default']
   const IconLucideSquarePlay: typeof import('~icons/lucide/square-play.jsx')['default']
+  const IconLucideUnplug: typeof import('~icons/lucide/unplug.jsx')['default']
   const IconLucideVideo: typeof import('~icons/lucide/video.jsx')['default']
   const IconLucideVolume2: typeof import('~icons/lucide/volume2.jsx')['default']
   const IconLucideVolumeX: typeof import('~icons/lucide/volume-x.jsx')['default']

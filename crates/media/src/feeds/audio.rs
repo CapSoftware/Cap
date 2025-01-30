@@ -76,6 +76,47 @@ fn decode_audio_to_f32(
     // let mut resampled_frames = 0;
     let mut samples: Vec<f32> = vec![];
 
+    fn process_resampler(
+        resampler: &mut resampling::Context,
+        samples: &mut Vec<f32>,
+        resampled_frame: &mut FFAudio,
+    ) {
+        loop {
+            let resample_delay = resampler.flush(resampled_frame).unwrap();
+            if resampled_frame.samples() == 0 {
+                break;
+            }
+
+            let slice = &resampled_frame.data(0)
+                [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
+            samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
+
+            if resample_delay.is_none() {
+                break;
+            }
+        }
+    }
+
+    fn process_decoder(
+        decoder: &mut ffmpeg::decoder::Audio,
+        decoded_frame: &mut FFAudio,
+        resampler: &mut resampling::Context,
+        resampled_frame: &mut FFAudio,
+        samples: &mut Vec<f32>,
+    ) {
+        while let Ok(_) = decoder.receive_frame(decoded_frame) {
+            let resample_delay = resampler.run(&decoded_frame, resampled_frame).unwrap();
+
+            let slice = &resampled_frame.data(0)
+                [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
+            samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
+
+            if resample_delay.is_some() {
+                process_resampler(resampler, samples, resampled_frame);
+            }
+        }
+    }
+
     for (stream, packet) in input_ctx.packets() {
         if stream.index() != stream_index {
             continue;
@@ -83,67 +124,30 @@ fn decode_audio_to_f32(
 
         decoder.send_packet(&packet).unwrap();
 
-        while let Ok(_) = decoder.receive_frame(&mut decoded_frame) {
-            if decoded_frame.format() == Sample::F32(Type::Planar) {
-                let mut resample_delay =
-                    resampler.run(&decoded_frame, &mut resampled_frame).unwrap();
+        process_decoder(
+            decoder,
+            &mut decoded_frame,
+            &mut resampler,
+            &mut resampled_frame,
+            &mut samples,
+        );
 
-                let slice = &resampled_frame.data(0)
-                    [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-                samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
-
-                while resample_delay.is_some() {
-                    resample_delay = resampler.flush(&mut resampled_frame).unwrap();
-
-                    let slice = &resampled_frame.data(0)
-                        [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-                    samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
-                }
-            }
-        }
-
-        use ffmpeg::software::resampling::Delay;
-
-        let mut resample_delay = Some(Delay::from(&resampler));
-        while resample_delay.is_some() {
-            resample_delay = resampler.flush(&mut resampled_frame).unwrap();
-
-            let slice = &resampled_frame.data(0)
-                [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-            samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
+        if resampler.delay().is_some() {
+            process_resampler(&mut resampler, &mut samples, &mut resampled_frame);
         }
     }
 
     decoder.send_eof().unwrap();
 
-    while let Ok(_) = decoder.receive_frame(&mut decoded_frame) {
-        if decoded_frame.format() == Sample::F32(Type::Planar) {
-            let mut resample_delay = resampler.run(&decoded_frame, &mut resampled_frame).unwrap();
+    process_decoder(
+        decoder,
+        &mut decoded_frame,
+        &mut resampler,
+        &mut resampled_frame,
+        &mut samples,
+    );
 
-            let slice = &resampled_frame.data(0)
-                [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-            samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
-
-            while resample_delay.is_some() {
-                resample_delay = resampler.flush(&mut resampled_frame).unwrap();
-
-                let slice = &resampled_frame.data(0)
-                    [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-                samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
-            }
-        }
-    }
-
-    use ffmpeg::software::resampling::Delay;
-
-    let mut resample_delay = Some(Delay::from(&resampler));
-    while resample_delay.is_some() {
-        resample_delay = resampler.flush(&mut resampled_frame).unwrap();
-
-        let slice = &resampled_frame.data(0)
-            [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-        samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
-    }
+    process_resampler(&mut resampler, &mut samples, &mut resampled_frame);
 
     samples
 }
@@ -151,6 +155,8 @@ fn decode_audio_to_f32(
 pub struct AudioFrameBuffer {
     data: Vec<AudioData>,
     cursor: AudioFrameBufferCursor,
+    // sum of `frame.samples()` that have elapsed
+    // this * channel count = cursor
     elapsed_samples: usize,
     sample_size: usize,
 }
@@ -158,6 +164,7 @@ pub struct AudioFrameBuffer {
 #[derive(Clone, Copy, Debug)]
 pub struct AudioFrameBufferCursor {
     segment_index: usize,
+    // excludes channels
     samples: usize,
 }
 
@@ -219,7 +226,7 @@ impl AudioFrameBuffer {
             },
             None => AudioFrameBufferCursor {
                 segment_index: 0,
-                samples: self.data[0].buffer.len(),
+                samples: self.data[0].buffer.len() / self.info().channels,
             },
         };
 
@@ -232,12 +239,11 @@ impl AudioFrameBuffer {
     }
 
     fn playhead_to_samples(&self, playhead: f64) -> usize {
-        let estimated_start_sample = playhead * f64::from(self.info().sample_rate);
-        num_traits::cast(estimated_start_sample).unwrap()
+        (playhead * self.info().sample_rate as f64) as usize
     }
 
     fn elapsed_samples_to_playhead(&self) -> f64 {
-        self.elapsed_samples as f64 / f64::from(self.info().sample_rate)
+        self.elapsed_samples as f64 / self.info().sample_rate as f64
     }
 
     pub fn next_frame(
@@ -263,9 +269,10 @@ impl AudioFrameBuffer {
         res
     }
 
+    // buffer samples = frame samples * channel count
     pub fn next_frame_data<'a>(
         &'a mut self,
-        requested_samples: usize,
+        samples: usize,
         maybe_timeline: Option<&TimelineConfiguration>,
     ) -> Option<(usize, &'a [f32])> {
         if let Some(timeline) = maybe_timeline {
@@ -274,20 +281,20 @@ impl AudioFrameBuffer {
 
         let data = &self.data[self.cursor.segment_index];
         let buffer = &data.buffer;
-        if self.cursor.samples >= buffer.len() {
-            self.elapsed_samples += requested_samples;
+        if self.cursor.samples >= buffer.len() / self.info().channels {
+            self.elapsed_samples += samples;
             return None;
         }
 
-        let samples =
-            (requested_samples * self.info().channels).min(buffer.len() - self.cursor.samples);
+        let samples = (samples).min((buffer.len() / self.info().channels) - self.cursor.samples);
 
         let start = self.cursor;
         self.elapsed_samples += samples;
         self.cursor.samples += samples;
         Some((
-            samples / data.info.channels,
-            &buffer[start.samples..self.cursor.samples],
+            samples,
+            &buffer
+                [start.samples * self.info().channels..self.cursor.samples * self.info().channels],
         ))
     }
 }
@@ -333,9 +340,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
 
     pub fn buffer_reaching_limit(&self) -> bool {
         self.resampled_buffer.vacant_len()
-            <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize)
-                * self.resampler.output.channels
-                * self.resampler.output.sample_format.bytes()
+            <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize) * self.resampler.output.channels
     }
 
     pub fn render(&mut self, timeline: Option<&TimelineConfiguration>) {

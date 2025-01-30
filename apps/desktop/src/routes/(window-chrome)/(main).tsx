@@ -199,7 +199,7 @@ export default function () {
             </Tooltip.Trigger>
             <Tooltip.Portal>
               <Tooltip.Content class="z-50 px-2 py-1 text-xs text-gray-50 bg-[--gray-500] rounded shadow-lg animate-in fade-in duration-100">
-                Cap Apps
+                Integrations
                 <Tooltip.Arrow class="fill-[--gray-500]" />
               </Tooltip.Content>
             </Tooltip.Portal>

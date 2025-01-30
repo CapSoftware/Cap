@@ -178,7 +178,7 @@ impl<Clock, PreviousOutput: Send + 'static> PipelinePathBuilder<Clock, PreviousO
     pub fn sink(
         self,
         name: impl Into<String>,
-        mut task: impl PipelineSinkTask<Input = PreviousOutput> + 'static,
+        mut task: impl PipelineSinkTask<PreviousOutput> + 'static,
     ) -> PipelineBuilder<Clock> {
         let Self {
             mut pipeline,

@@ -11,7 +11,3 @@ pub use h264::*;
 pub use h264_avassetwriter::*;
 pub use mp4::*;
 pub use opus::*;
-
-pub enum Output {
-    File(PathBuf),
-}
