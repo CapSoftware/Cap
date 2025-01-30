@@ -24,10 +24,13 @@ impl OggFile {
     ) -> Result<Self, MediaError> {
         output.set_extension("ogg");
         let mut output = format::output(&output)?;
-        Ok(Self {
-            encoder: encoder(&mut output)?,
-            output,
-        })
+
+        let encoder = encoder(&mut output)?;
+
+        // make sure this happens after adding all encoders!
+        output.write_header()?;
+
+        Ok(Self { encoder, output })
     }
 
     pub fn queue_frame(&mut self, frame: FFAudio) {
@@ -176,7 +179,7 @@ impl OpusEncoder {
             self.packet.set_stream(self.stream_index);
             self.packet.rescale_ts(
                 self.encoder.time_base(),
-                output.stream(0).unwrap().time_base(),
+                output.stream(self.stream_index).unwrap().time_base(),
             );
             self.packet.write_interleaved(output).unwrap();
         }

@@ -1,13 +1,9 @@
 use crate::{
-    data::{FFAudio, FFVideo, RawVideoFormat, VideoInfo},
+    data::{FFAudio, FFVideo, RawVideoFormat},
     pipeline::task::PipelineSinkTask,
     MediaError,
 };
-use ffmpeg::{
-    codec::{codec::Codec, encoder},
-    format::{self},
-    Dictionary,
-};
+use ffmpeg::format::{self};
 use std::path::PathBuf;
 
 use super::{H264Encoder, OpusEncoder};
@@ -22,15 +18,17 @@ pub struct MP4File {
 impl MP4File {
     pub fn init(
         tag: &'static str,
-        output: PathBuf,
+        mut output: PathBuf,
         video: impl FnOnce(&mut format::context::Output) -> Result<H264Encoder, MediaError>,
         audio: impl FnOnce(&mut format::context::Output) -> Option<Result<OpusEncoder, MediaError>>,
     ) -> Result<Self, MediaError> {
+        output.set_extension("mp4");
         let mut output = format::output(&output)?;
 
         let video = video(&mut output)?;
         let audio = audio(&mut output).transpose()?;
 
+        // make sure this happens after adding all encoders!
         output.write_header()?;
 
         Ok(Self {
@@ -118,34 +116,4 @@ impl PipelineSinkTask<FFVideo> for MP4File {
     fn finish(&mut self) {
         self.finish();
     }
-}
-
-fn get_video_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), MediaError> {
-    let encoder_name = {
-        if cfg!(target_os = "macos") {
-            "libx264"
-            // looks terrible rn :(
-            // "h264_videotoolbox"
-        } else {
-            "libx264"
-        }
-    };
-    if let Some(codec) = encoder::find_by_name(encoder_name) {
-        let mut options = Dictionary::new();
-
-        if encoder_name == "h264_videotoolbox" {
-            // options.set("constant_bit_rate", "true");
-            options.set("realtime", "true");
-        } else {
-            let keyframe_interval_secs = 2;
-            let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
-
-            options.set("preset", "ultrafast");
-            options.set("tune", "zerolatency");
-        }
-
-        return Ok((codec, options));
-    }
-
-    Err(MediaError::MissingCodec("H264 video"))
 }

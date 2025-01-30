@@ -1,17 +1,13 @@
-use std::path::PathBuf;
-
 use crate::{
     data::{FFPacket, FFVideo, VideoInfo},
-    pipeline::task::PipelineSinkTask,
     MediaError,
 };
 use ffmpeg::{
     codec::{codec::Codec, context, encoder},
     format::{self},
     threading::Config,
-    Dictionary, Rescale,
+    Dictionary,
 };
-use ffmpeg_sys_next as sys;
 
 pub struct H264Encoder {
     tag: &'static str,
@@ -93,23 +89,9 @@ impl H264Encoder {
     }
 
     pub fn queue_frame(&mut self, mut frame: FFVideo, output: &mut format::context::Output) {
-        dbg!(
-            frame.width(),
-            frame.height(),
-            frame.planes(),
-            frame.stride(0),
-            frame.format()
-        );
-        dbg!(self.converter.is_some());
         if let Some(converter) = &mut self.converter {
             let mut new_frame = FFVideo::empty();
             converter.run(&frame, &mut new_frame).unwrap();
-            dbg!(
-                new_frame.width(),
-                new_frame.height(),
-                new_frame.planes(),
-                new_frame.format()
-            );
             frame = new_frame;
         }
 
@@ -124,10 +106,10 @@ impl H264Encoder {
         let mut encoded_packet = FFPacket::empty();
 
         while self.encoder.receive_packet(&mut encoded_packet).is_ok() {
-            encoded_packet.set_stream(0);
+            encoded_packet.set_stream(self.stream_index);
             encoded_packet.rescale_ts(
                 self.encoder.time_base(),
-                output.stream(0).unwrap().time_base(),
+                output.stream(self.stream_index).unwrap().time_base(),
             );
             encoded_packet.write_interleaved(output).unwrap();
         }
@@ -138,29 +120,6 @@ impl H264Encoder {
         self.process_frame(output);
     }
 }
-
-// unsafe impl Send for H264Encoder {}
-
-// impl PipelineSinkTask for H264Encoder {
-//     type Input = FFVideo;
-
-//     fn run(
-//         &mut self,
-//         ready_signal: crate::pipeline::task::PipelineReadySignal,
-//         input: &flume::Receiver<Self::Input>,
-//     ) {
-//         ready_signal.send(Ok(())).unwrap();
-
-//         while let Ok(frame) = input.recv() {
-//             self.queue_frame(frame);
-//             self.process_frame();
-//         }
-//     }
-
-//     fn finish(&mut self) {
-//         self.finish();
-//     }
-// }
 
 fn get_codec_and_options(config: &VideoInfo) -> Result<(Codec, Dictionary), MediaError> {
     let encoder_name = {
