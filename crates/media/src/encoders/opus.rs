@@ -1,6 +1,7 @@
 use ffmpeg::{
     codec::{context, encoder},
     format,
+    frame::Packet,
     threading::Config,
 };
 use std::collections::VecDeque;
@@ -19,6 +20,9 @@ pub struct OpusEncoder {
     encoder: encoder::Audio,
     output_ctx: format::context::Output,
     buffer: AudioBuffer,
+    buffered_samples: usize,
+    frame: FFAudio,
+    packet: ffmpeg::Packet,
 }
 
 impl OpusEncoder {
@@ -54,45 +58,69 @@ impl OpusEncoder {
         encoder.set_channel_layout(config.channel_layout());
         encoder.set_time_base(config.time_base);
 
-        let audio_encoder = encoder.open()?;
+        let encoder = encoder.open()?;
 
         let mut output_stream = output_ctx.add_stream(codec)?;
         output_stream.set_time_base(FFRational(1, config.rate()));
-        output_stream.set_parameters(&audio_encoder);
+        output_stream.set_parameters(&encoder);
         output_ctx.write_header()?;
+
+        let frame_size = encoder.frame_size() as usize;
 
         Ok(Self {
             tag,
-            buffer: AudioBuffer::new(config, &audio_encoder),
-            encoder: audio_encoder,
+            buffer: AudioBuffer::new(config, &encoder),
+            encoder,
             output_ctx,
+            buffered_samples: 0,
+            frame: FFAudio::new(
+                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed),
+                frame_size,
+                ffmpeg::ChannelLayout::default(config.channels as i32),
+            ),
+            packet: ffmpeg::Packet::empty(),
         })
     }
 
-    fn queue_frame(&mut self, frame: FFAudio) {
+    fn queue_frame(&mut self, mut frame: FFAudio) {
+        let enc_tb = self.encoder.time_base();
+        // frame.set_pts(Some(
+        //     (self.buffered_samples as f64 / self.encoder.rate() as f64
+        //         * enc_tb.denominator() as f64
+        //         / enc_tb.numerator() as f64) as i64,
+        // ));
+        self.buffered_samples += frame.samples();
+
         self.buffer.consume(frame);
-        while let Some(buffered_frame) = self.buffer.next_frame() {
-            self.encoder.send_frame(&buffered_frame).unwrap();
+        self.process_buffer();
+    }
+
+    fn process_buffer(&mut self) {
+        let frame_size = self.buffer.frame_size;
+        while self.buffer.data[0].len() >= frame_size {
+            for (index, sample) in self.buffer.data[0].drain(0..frame_size).enumerate() {
+                self.frame.plane_mut::<f32>(0)[index] = sample;
+            }
+
+            self.encoder.send_frame(&self.frame).unwrap();
+
             self.process_packets();
         }
+        // while let Some(buffered_frame) = self.buffer.next_frame(false) {
+        //     self.encoder.send_frame(&buffered_frame).unwrap();
+        //     self.process_packets();
+        // }
     }
 
     fn process_packets(&mut self) {
-        let mut encoded_packet = FFPacket::empty();
-
-        while self.encoder.receive_packet(&mut encoded_packet).is_ok() {
-            encoded_packet.set_stream(0);
-            encoded_packet.rescale_ts(
-                encoded_packet.time_base(),
-                self.output_ctx.stream(0).unwrap().time_base(),
-            );
-            encoded_packet
-                .write_interleaved(&mut self.output_ctx)
-                .unwrap();
+        while self.encoder.receive_packet(&mut self.packet).is_ok() {
+            self.packet.set_stream(0);
+            self.packet.write_interleaved(&mut self.output_ctx).unwrap();
         }
     }
 
     fn finish(&mut self) {
+        self.process_buffer();
         self.encoder.send_eof().unwrap();
         self.process_packets();
         self.output_ctx.write_trailer().unwrap();
@@ -105,7 +133,7 @@ impl PipelineSinkTask for OpusEncoder {
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: flume::Receiver<Self::Input>,
+        input: &flume::Receiver<Self::Input>,
     ) {
         ready_signal.send(Ok(())).unwrap();
 
@@ -114,7 +142,14 @@ impl PipelineSinkTask for OpusEncoder {
         }
     }
 
-    fn finish(&mut self) {
+    fn finish(&mut self, input: &flume::Receiver<Self::Input>) {
+        let frames = input.drain().collect::<Vec<_>>();
+
+        for frame in frames {
+            self.queue_frame(frame);
+        }
+
         self.finish();
+        println!("finished");
     }
 }

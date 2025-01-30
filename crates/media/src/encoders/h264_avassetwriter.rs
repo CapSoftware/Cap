@@ -123,7 +123,7 @@ impl PipelineSinkTask for H264AVAssetWriterEncoder {
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: flume::Receiver<Self::Input>,
+        input: &flume::Receiver<Self::Input>,
     ) {
         ready_signal.send(Ok(())).ok();
 
@@ -133,7 +133,7 @@ impl PipelineSinkTask for H264AVAssetWriterEncoder {
         }
     }
 
-    fn finish(&mut self) {
+    fn finish(&mut self, input: &flume::Receiver<Self::Input>) {
         self.finish();
     }
 }

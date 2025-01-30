@@ -187,9 +187,9 @@ impl<Clock, PreviousOutput: Send + 'static> PipelinePathBuilder<Clock, PreviousO
 
         pipeline.spawn_task(name.into(), move |ready_signal| {
             trace!("Sink starting");
-            task.run(ready_signal, input);
+            task.run(ready_signal, &input);
             info!("Sink stopped running");
-            task.finish();
+            task.finish(&input);
             info!("Sink stopped");
         });
 

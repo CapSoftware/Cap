@@ -246,7 +246,7 @@ impl MP4Encoder {
 
         // Process all buffered frames
         loop {
-            let Some(buffered_frame) = audio.buffer.next_frame() else {
+            let Some(buffered_frame) = audio.buffer.next_frame(false) else {
                 break;
             };
 
@@ -340,7 +340,7 @@ impl MP4Encoder {
             println!("MP4Encoder: Flushing audio encoder");
 
             // Process any remaining frames in the buffer
-            while let Some(buffered_frame) = audio.buffer.next_frame() {
+            while let Some(buffered_frame) = audio.buffer.next_frame(true) {
                 let mut output = ffmpeg::util::frame::Audio::empty();
                 audio.resampler.run(&buffered_frame, &mut output).unwrap();
 
@@ -395,7 +395,7 @@ impl PipelineSinkTask for MP4Encoder {
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: flume::Receiver<Self::Input>,
+        input: &flume::Receiver<Self::Input>,
     ) {
         ready_signal.send(Ok(())).unwrap();
 
@@ -407,7 +407,7 @@ impl PipelineSinkTask for MP4Encoder {
         }
     }
 
-    fn finish(&mut self) {
+    fn finish(&mut self, input: &flume::Receiver<Self::Input>) {
         self.finish();
     }
 }

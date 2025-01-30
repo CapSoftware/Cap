@@ -151,7 +151,7 @@ impl PipelineSinkTask for H264Encoder {
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: flume::Receiver<Self::Input>,
+        input: &flume::Receiver<Self::Input>,
     ) {
         ready_signal.send(Ok(())).unwrap();
 
@@ -161,7 +161,7 @@ impl PipelineSinkTask for H264Encoder {
         }
     }
 
-    fn finish(&mut self) {
+    fn finish(&mut self, input: &flume::Receiver<Self::Input>) {
         self.finish();
     }
 }

@@ -42,7 +42,7 @@ pub trait PipelinePipeTask: Send {
 pub trait PipelineSinkTask: Send {
     type Input;
 
-    fn run(&mut self, ready_signal: PipelineReadySignal, input: Receiver<Self::Input>);
+    fn run(&mut self, ready_signal: PipelineReadySignal, input: &Receiver<Self::Input>);
 
-    fn finish(&mut self);
+    fn finish(&mut self, input: &Receiver<Self::Input>);
 }
