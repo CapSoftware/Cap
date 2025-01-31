@@ -8,7 +8,7 @@ import { toast } from "react-hot-toast";
 import { Copy, Loader2 } from "lucide-react";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
-import { clientEnv } from "env/client";
+import { clientEnv, NODE_ENV } from "@cap/env";
 
 export const ShareHeader = ({
   data,

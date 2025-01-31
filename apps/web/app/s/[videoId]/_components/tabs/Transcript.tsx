@@ -4,7 +4,7 @@ import { videos } from "@cap/database/schema";
 import { useState, useEffect } from "react";
 import { MessageSquare } from "lucide-react";
 import { S3_BUCKET_URL } from "@cap/utils";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 interface TranscriptProps {
   data: typeof videos.$inferSelect;

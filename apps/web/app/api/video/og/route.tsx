@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export const runtime = "edge";
 

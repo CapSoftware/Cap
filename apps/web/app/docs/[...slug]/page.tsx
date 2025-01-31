@@ -5,7 +5,7 @@ import { MDXRemote } from "next-mdx-remote/rsc";
 import { getDocs } from "@/utils/blog";
 import type { Metadata } from "next";
 import type { DocMetadata } from "@/utils/blog";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 type Doc = {
   metadata: DocMetadata;

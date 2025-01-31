@@ -1,5 +1,5 @@
 import { Dialog, DialogContent, LogoBadge, Button } from "@cap/ui";
-import { NODE_ENV } from "env/client";
+import { NODE_ENV } from "@cap/env";
 import { motion } from "framer-motion";
 import { signIn } from "next-auth/react";
 import { useState, useEffect } from "react";

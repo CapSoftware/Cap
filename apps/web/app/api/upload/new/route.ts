@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { uploadToS3 } from "@/utils/video/upload/helpers";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export async function POST(request: NextRequest) {
   const user = await getCurrentUser();

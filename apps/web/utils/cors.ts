@@ -1,4 +1,4 @@
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export const allowedOrigins = [
   clientEnv.NEXT_PUBLIC_WEB_URL,

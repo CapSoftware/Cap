@@ -1,4 +1,4 @@
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export async function uploadToS3({
   filename,

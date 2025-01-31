@@ -1,8 +1,7 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { clientEnv } from "env/client";
-import { serverEnv } from "env/server";
+import { serverEnv, clientEnv } from "@cap/env";
 import { NextResponse } from "next/server";
 
 export async function GET(

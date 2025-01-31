@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
 import { sendEmail } from "@cap/database/emails/config";
 import { WorkspaceInvite } from "@cap/database/emails/workspace-invite";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export async function POST(request: NextRequest) {
   console.log("POST request received for workspace invite");

@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { getHeaders } from "@/utils/helpers";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import { S3_BUCKET_URL } from "@cap/utils";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export const revalidate = 0;
 

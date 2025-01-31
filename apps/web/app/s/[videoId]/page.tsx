@@ -13,7 +13,7 @@ import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
 import type { Metadata, ResolvingMetadata } from "next";
 import { notFound } from "next/navigation";
 import { ImageViewer } from "./_components/ImageViewer";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export const dynamic = "auto";
 export const dynamicParams = true;

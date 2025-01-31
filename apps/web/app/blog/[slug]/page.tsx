@@ -7,7 +7,7 @@ import type { Metadata } from "next";
 import { Share } from "../_components/Share";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { calculateReadingTime } from "@/utils/readTime";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 interface PostProps {
   params: {

@@ -8,7 +8,7 @@ import { Toolbar } from "./_components/Toolbar";
 import { Logo } from "@cap/ui";
 import { Sidebar } from "./_components/Sidebar";
 import { useEffect, useState, useRef } from "react";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;

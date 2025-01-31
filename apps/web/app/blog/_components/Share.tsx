@@ -2,7 +2,7 @@
 
 import toast from "react-hot-toast";
 import { useState } from "react";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 interface ShareProps {
   post: {

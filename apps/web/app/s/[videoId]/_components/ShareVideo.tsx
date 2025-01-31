@@ -17,7 +17,7 @@ import toast from "react-hot-toast";
 import { Tooltip } from "react-tooltip";
 import { apiClient } from "@/utils/web-api";
 import { S3_BUCKET_URL } from "@cap/utils";
-import { clientEnv, NODE_ENV } from "env/client";
+import { clientEnv, NODE_ENV } from "@cap/env";
 
 declare global {
   interface Window {

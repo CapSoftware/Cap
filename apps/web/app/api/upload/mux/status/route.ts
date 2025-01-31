@@ -6,8 +6,7 @@ import {
   MediaConvertClient,
   GetJobCommand,
 } from "@aws-sdk/client-mediaconvert";
-import { clientEnv } from "env/client";
-import { serverEnv } from "env/server";
+import { serverEnv, clientEnv } from "@cap/env";
 
 const allowedOrigins = [
   clientEnv.NEXT_PUBLIC_WEB_URL,

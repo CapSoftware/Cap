@@ -3,8 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@cap/database/auth/auth-options";
 import { decode } from "next-auth/jwt";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { serverEnv } from "env/server";
-import { clientEnv } from "env/client";
+import { clientEnv, serverEnv } from "@cap/env";
 
 export async function GET(req: NextRequest) {
   const searchParams = req.nextUrl.searchParams;

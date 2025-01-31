@@ -10,8 +10,8 @@ import { getHeaders } from "@/utils/helpers";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { serverEnv } from "env/server";
+import { createS3Client } from "@/utils/s3";
+import { serverEnv } from "@cap/env";
 
 export const maxDuration = 120;
 

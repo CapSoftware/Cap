@@ -7,7 +7,7 @@ import { cookies } from "next/headers";
 import { dub } from "@/utils/dub";
 import { eq } from "drizzle-orm";
 import { getS3Bucket, getS3Config } from "@/utils/s3";
-import { clientEnv, NODE_ENV } from "env/client";
+import { clientEnv, NODE_ENV } from "@cap/env";
 
 const allowedOrigins = [
   clientEnv.NEXT_PUBLIC_WEB_URL,

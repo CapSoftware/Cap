@@ -8,8 +8,7 @@ import { Tooltip } from "react-tooltip";
 import { ShareIcon, ChevronDown } from "lucide-react";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import { useRouter } from "next/navigation"; // Add this import
-import { clientEnv } from "env/client";
-import { serverEnv } from "env/server";
+import { serverEnv, clientEnv, NODE_ENV } from "@cap/env";
 
 interface CapCardProps {
   cap: {
@@ -122,7 +121,7 @@ export const CapCard: React.FC<CapCardProps> = ({
       <a
         className="group block"
         href={
-          clientEnv.NEXT_PUBLIC_IS_CAP && serverEnv.NEXT_ENV === "production"
+          clientEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
             ? `https://cap.link/${cap.id}`
             : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
         }

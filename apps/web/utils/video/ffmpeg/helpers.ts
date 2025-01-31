@@ -1,6 +1,6 @@
 import { S3_BUCKET_URL } from "@cap/utils";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export const playlistToMp4 = async (
   userId: string,

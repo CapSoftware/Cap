@@ -2,7 +2,7 @@ import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { type NextRequest } from "next/server";
 import { ReadonlyHeaders } from "next/dist/server/web/spec-extension/adapters/headers";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export function classNames(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

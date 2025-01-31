@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";
 import { Input, Label } from "@cap/ui";
-import { NODE_ENV } from "env/client";
+import { NODE_ENV } from "@cap/env";
 
 export function LoginForm() {
   const searchParams = useSearchParams();

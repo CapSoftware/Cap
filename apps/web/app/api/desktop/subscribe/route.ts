@@ -5,7 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { isUserOnProPlan, stripe } from "@cap/utils";
 import { eq } from "drizzle-orm";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 const allowedOrigins = [
   clientEnv.NEXT_PUBLIC_WEB_URL,

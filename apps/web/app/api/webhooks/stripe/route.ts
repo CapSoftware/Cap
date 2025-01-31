@@ -4,6 +4,7 @@ import { users } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
+import { serverEnv } from "@cap/env";
 
 const relevantEvents = new Set([
   "checkout.session.completed",
@@ -87,7 +88,7 @@ export const POST = async (req: Request) => {
   console.log("Webhook received");
   const buf = await req.text();
   const sig = req.headers.get("Stripe-Signature") as string;
-  const webhookSecret = STRIPE_WEBHOOK_SECRET;
+  const webhookSecret = serverEnv.STRIPE_WEBHOOK_SECRET;
   let event: Stripe.Event;
 
   try {

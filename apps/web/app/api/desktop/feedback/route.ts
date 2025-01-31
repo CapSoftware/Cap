@@ -1,8 +1,7 @@
 import { type NextRequest } from "next/server";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
-import { clientEnv } from "env/client";
-import { serverEnv } from "env/server";
+import { serverEnv, clientEnv } from "@cap/env";
 
 const allowedOrigins = [
   clientEnv.NEXT_PUBLIC_WEB_URL,

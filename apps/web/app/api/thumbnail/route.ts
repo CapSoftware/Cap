@@ -7,7 +7,7 @@ import { s3Buckets, videos } from "@cap/database/schema";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { S3_BUCKET_URL } from "@cap/utils";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export const revalidate = 0;
 

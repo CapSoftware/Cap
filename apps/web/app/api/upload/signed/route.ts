@@ -13,7 +13,7 @@ import { s3Buckets } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import type { NextRequest } from "next/server";
-import { clientEnv } from "env/client";
+import { clientEnv, serverEnv } from "@cap/env";
 
 export async function POST(request: NextRequest) {
   try {
@@ -62,16 +62,20 @@ export async function POST(request: NextRequest) {
           }
         : null;
 
-      if (!bucket || !s3Config || bucket.bucketName !== CAP_S3_BUCKET) {
-        const distributionId = CAP_CLOUDFRONT_DISTRIBUTION_ID;
+      if (
+        !bucket ||
+        !s3Config ||
+        bucket.bucketName !== clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET
+      ) {
+        const distributionId = serverEnv.CAP_CLOUDFRONT_DISTRIBUTION_ID;
         if (distributionId) {
           console.log("Creating CloudFront invalidation for", fileKey);
 
           const cloudfront = new CloudFrontClient({
             region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION || "us-east-1",
             credentials: {
-              accessKeyId: CAP_AWS_ACCESS_KEY || "",
-              secretAccessKey: CAP_AWS_SECRET_KEY || "",
+              accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY || "",
+              secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY || "",
             },
           });
 

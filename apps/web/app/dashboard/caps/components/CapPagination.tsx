@@ -7,7 +7,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@cap/ui";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 interface CapPaginationProps {
   currentPage: number;

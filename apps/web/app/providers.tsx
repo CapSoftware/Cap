@@ -1,6 +1,6 @@
 "use client";
 
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 import posthog from "posthog-js";
 import { PostHogProvider } from "posthog-js/react";
 import { ReactNode } from "react";

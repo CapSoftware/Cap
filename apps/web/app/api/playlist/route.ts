@@ -16,7 +16,7 @@ import {
 import { getHeaders, CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { S3_BUCKET_URL } from "@cap/utils";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export const revalidate = 3599;
 

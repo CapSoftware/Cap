@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export async function POST(request: NextRequest) {
   console.log("Starting subscription process");

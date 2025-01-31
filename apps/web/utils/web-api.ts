@@ -1,6 +1,6 @@
 import { initClient } from "@ts-rest/core";
 import { contract } from "@cap/web-api-contract";
-import { clientEnv } from "env/client";
+import { clientEnv } from "@cap/env";
 
 export const apiClient = initClient(contract, {
   baseUrl:

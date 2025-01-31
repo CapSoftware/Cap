@@ -2,7 +2,7 @@ import { S3Client } from "@aws-sdk/client-s3";
 import type { s3Buckets } from "@cap/database/schema";
 import type { InferSelectModel } from "drizzle-orm";
 import { decrypt } from "@cap/database/crypto";
-import { clientEnv } from "env/client";
+import { clientEnv, serverEnv } from "@cap/env";
 
 type S3Config = {
   endpoint?: string | null;
@@ -29,8 +29,8 @@ export async function getS3Config(config?: S3Config) {
       endpoint: clientEnv.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
       region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION,
       credentials: {
-        accessKeyId: CAP_AWS_ACCESS_KEY ?? "",
-        secretAccessKey: CAP_AWS_SECRET_KEY ?? "",
+        accessKeyId: serverEnv.CAP_AWS_ACCESS_KEY ?? "",
+        secretAccessKey: serverEnv.CAP_AWS_SECRET_KEY ?? "",
       },
     };
   }
@@ -43,9 +43,13 @@ export async function getS3Config(config?: S3Config) {
       (await tryDecrypt(config.region)) ?? clientEnv.NEXT_PUBLIC_CAP_AWS_REGION,
     credentials: {
       accessKeyId:
-        (await tryDecrypt(config.accessKeyId)) ?? CAP_AWS_ACCESS_KEY ?? "",
+        (await tryDecrypt(config.accessKeyId)) ??
+        serverEnv.CAP_AWS_ACCESS_KEY ??
+        "",
       secretAccessKey:
-        (await tryDecrypt(config.secretAccessKey)) ?? CAP_AWS_SECRET_KEY ?? "",
+        (await tryDecrypt(config.secretAccessKey)) ??
+        serverEnv.CAP_AWS_SECRET_KEY ??
+        "",
     },
   };
 }
