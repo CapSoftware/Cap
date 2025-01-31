@@ -6,6 +6,8 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { decrypt } from "@cap/database/crypto";
 import { cookies } from "next/headers";
 
+export const dynamic = "force-dynamic";
+
 export async function OPTIONS(request: NextRequest) {
   return new Response(null, {
     status: 200,
