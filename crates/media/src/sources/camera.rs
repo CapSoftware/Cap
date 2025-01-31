@@ -83,28 +83,27 @@ impl PipelineSourceTask for CameraSource {
         output: Sender<Self::Output>,
     ) {
         let mut frames_rx: Option<Receiver<RawCameraFrame>> = None;
-        ready_signal.send(Ok(())).unwrap();
 
         info!("Camera source ready");
 
+        let frames = frames_rx.get_or_insert_with(|| self.feed_connection.attach());
+
+        ready_signal.send(Ok(())).unwrap();
+
         loop {
             match control_signal.last() {
-                Some(Control::Play) => {
-                    let frames = frames_rx.get_or_insert_with(|| self.feed_connection.attach());
-
-                    match frames.recv() {
-                        Ok(frame) => {
-                            if let Err(error) = self.process_frame(&mut clock, &output, frame) {
-                                eprintln!("{error}");
-                                break;
-                            }
-                        }
-                        Err(_) => {
-                            error!("Lost connection with the camera feed");
+                Some(Control::Play) => match frames.drain().last().or_else(|| frames.recv().ok()) {
+                    Some(frame) => {
+                        if let Err(error) = self.process_frame(&mut clock, &output, frame) {
+                            eprintln!("{error}");
                             break;
                         }
                     }
-                }
+                    None => {
+                        error!("Lost connection with the camera feed");
+                        break;
+                    }
+                },
                 Some(Control::Shutdown) | None => {
                     if let Some(rx) = frames_rx.take() {
                         self.pause_and_drain_frames(&mut clock, &output, rx);

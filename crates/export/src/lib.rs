@@ -122,7 +122,8 @@ where
 
         println!("Exporting with custom muxer");
 
-        let (tx_image_data, mut rx_image_data) = tokio::sync::mpsc::channel::<RenderedFrame>(4);
+        let (tx_image_data, mut rx_image_data) =
+            tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
         let (frame_tx, frame_rx) = std::sync::mpsc::sync_channel::<MP4Input>(4);
 
         let fps = self.fps;
@@ -167,9 +168,7 @@ where
 
             Ok::<_, ExportError>(self.output_path)
         })
-        .then(|f| async {
-            f.unwrap().unwrap() /*.map_err(Into::into).and_then(|v| v)*/
-        });
+        .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
 
         let render_task = tokio::spawn({
             let project = self.project.clone();
@@ -193,7 +192,7 @@ where
                 let mut frame_count = 0;
                 let mut first_frame = None;
 
-                while let Some(frame) = rx_image_data.recv().await {
+                while let Some((frame, frame_number)) = rx_image_data.recv().await {
                     (self.on_progress)(frame_count);
 
                     if frame_count == 0 {
@@ -216,7 +215,7 @@ where
                         {
                             let mut frame = audio_info
                                 .wrap_frame(unsafe { cast_f32_slice_to_bytes(&frame_data) }, 0);
-                            let pts = (frame_count as f64 * f64::from(audio_info.sample_rate)
+                            let pts = (frame_number as f64 * f64::from(audio_info.sample_rate)
                                 / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
                             Some(frame)
@@ -238,7 +237,7 @@ where
                         0,
                         frame.padded_bytes_per_row as usize,
                     );
-                    video_frame.set_pts(Some(frame_count as i64));
+                    video_frame.set_pts(Some(frame_number as i64));
 
                     frame_tx
                         .send(MP4Input {
@@ -284,9 +283,7 @@ where
                 Ok::<_, ExportError>(())
             }
         })
-        .then(|f| async {
-            f.unwrap().unwrap() /*.map_err(Into::into).and_then(|v| v)*/
-        });
+        .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
 
         println!("Rendering video to channel");
 
@@ -300,11 +297,9 @@ where
             self.resolution_base,
             self.is_upgraded,
         )
-        .then(|f| async {
-            f.unwrap() /*.map_err(Into::into)*/
-        });
+        .then(|f| async { f.map_err(Into::into) });
 
-        let (output_path, _, _) = tokio::join!(encoder_thread, render_video_task, render_task);
+        let (output_path, _, _) = tokio::try_join!(encoder_thread, render_video_task, render_task)?;
 
         Ok(output_path)
     }

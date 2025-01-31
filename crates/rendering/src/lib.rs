@@ -159,7 +159,7 @@ pub enum RenderingError {
     #[error(transparent)]
     BufferMapFailed(#[from] wgpu::BufferAsyncError),
     #[error("Sending frame to channel failed")]
-    ChannelSendFrameFailed(#[from] mpsc::error::SendError<RenderedFrame>),
+    ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
 }
 
 pub struct RenderSegment {
@@ -170,7 +170,7 @@ pub struct RenderSegment {
 pub async fn render_video_to_channel(
     options: RenderOptions,
     project: ProjectConfiguration,
-    sender: mpsc::Sender<RenderedFrame>,
+    sender: mpsc::Sender<(RenderedFrame, u32)>,
     meta: &RecordingMeta,
     segments: Vec<RenderSegment>,
     fps: u32,
@@ -222,6 +222,12 @@ pub async fn render_video_to_channel(
 
         let segment = &segments[segment_i as usize];
 
+        // do this after all usages but before any 'continue' to handle frame skip
+        let frame_number = {
+            let prev = frame_number;
+            std::mem::replace(&mut frame_number, prev + 1)
+        };
+
         if let Some((screen_frame, camera_frame)) = segment
             .decoders
             .get_frames(source_time as f32, !project.camera.hide)
@@ -251,10 +257,8 @@ pub async fn render_video_to_channel(
                 continue;
             }
 
-            sender.send(frame).await?;
+            sender.send((frame, frame_number)).await?;
         }
-
-        frame_number += 1;
     }
 
     let total_time = start_time.elapsed();

@@ -1,6 +1,9 @@
 use flume::Receiver;
 use indexmap::IndexMap;
-use std::thread::{self, JoinHandle};
+use std::{
+    thread::{self, JoinHandle},
+    time::Duration,
+};
 use tokio::sync::oneshot;
 use tracing::{info, trace};
 
@@ -118,6 +121,8 @@ impl<T: PipelineClock> PipelineBuilder<T> {
             task_handles.insert(name, task.join_handle);
             stop_rx.push(task.done_rx);
         }
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
 
         let (done_tx, done_rx) = oneshot::channel::<()>();
 
