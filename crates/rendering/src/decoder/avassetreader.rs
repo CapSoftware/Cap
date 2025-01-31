@@ -227,13 +227,13 @@ impl AVAssetReaderDecoder {
                 }
             };
 
-            let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
+            // let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
 
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
 
             let mut last_active_frame = None::<u32>;
 
-            let mut last_decoded_frame = None::<u32>;
+            let mut last_decoded_frame = None::<(u32, CachedFrame)>;
             let mut last_sent_frame = None::<(u32, DecodedFrame)>;
 
             while let Ok(r) = rx.recv() {
@@ -295,22 +295,21 @@ impl AVAssetReaderDecoder {
                         {
                             // Handles frame skips. requested_frame == last_decoded_frame should be handled by the frame cache.
                             if let Some((last_decoded_frame, sender)) = last_decoded_frame
-                                .filter(|last_decoded_frame| {
-                                    requested_frame > *last_decoded_frame
+                                .as_mut()
+                                .filter(|(last_decoded_frame_i, _)| {
+                                    requested_frame > *last_decoded_frame_i
                                         && requested_frame < current_frame
                                 })
                                 .and_then(|l| Some((l, sender.take()?)))
                             {
-                                let data = cache
-                                    .get_mut(&last_decoded_frame)
-                                    .map(|f| f.process())
-                                    .unwrap_or_else(|| black_frame.clone());
+                                let (frame_number, frame) = last_decoded_frame;
 
-                                last_sent_frame = Some((last_decoded_frame, data.clone()));
+                                let data = frame.process();
+                                last_sent_frame = Some((*frame_number, data.clone()));
                                 sender.send(data).ok();
                             }
 
-                            last_decoded_frame = Some(current_frame);
+                            last_decoded_frame = Some((current_frame, cache_frame.clone()));
 
                             let exceeds_cache_bounds = current_frame > cache_max;
                             let too_small_for_cache_bounds = current_frame < cache_min;
