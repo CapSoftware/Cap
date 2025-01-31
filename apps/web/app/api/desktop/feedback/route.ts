@@ -1,9 +1,11 @@
 import { type NextRequest } from "next/server";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
+import { clientEnv } from "env/client";
+import { serverEnv } from "env/server";
 
 const allowedOrigins = [
-  process.env.NEXT_PUBLIC_WEB_URL,
+  clientEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "http://localhost:3000",
   "tauri://localhost",
@@ -92,7 +94,7 @@ export async function POST(req: NextRequest) {
 
   try {
     // Send feedback to Discord channel
-    const discordWebhookUrl = process.env.DISCORD_FEEDBACK_WEBHOOK_URL;
+    const discordWebhookUrl = serverEnv.DISCORD_FEEDBACK_WEBHOOK_URL;
     if (!discordWebhookUrl) {
       throw new Error("Discord webhook URL is not configured");
     }

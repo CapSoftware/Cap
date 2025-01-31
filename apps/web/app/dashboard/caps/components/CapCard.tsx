@@ -8,6 +8,8 @@ import { Tooltip } from "react-tooltip";
 import { ShareIcon, ChevronDown } from "lucide-react";
 import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import { useRouter } from "next/navigation"; // Add this import
+import { clientEnv } from "env/client";
+import { serverEnv } from "env/server";
 
 interface CapCardProps {
   cap: {
@@ -46,7 +48,7 @@ export const CapCard: React.FC<CapCardProps> = ({
     }
 
     const response = await fetch(
-      `${process.env.NEXT_PUBLIC_WEB_URL}/api/video/title`,
+      `${clientEnv.NEXT_PUBLIC_WEB_URL}/api/video/title`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -120,10 +122,9 @@ export const CapCard: React.FC<CapCardProps> = ({
       <a
         className="group block"
         href={
-          process.env.NEXT_PUBLIC_IS_CAP &&
-          process.env.NEXT_ENV === "production"
+          clientEnv.NEXT_PUBLIC_IS_CAP && serverEnv.NEXT_ENV === "production"
             ? `https://cap.link/${cap.id}`
-            : `${process.env.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
+            : `${clientEnv.NEXT_PUBLIC_WEB_URL}/s/${cap.id}`
         }
       >
         <VideoThumbnail

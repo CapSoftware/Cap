@@ -12,6 +12,7 @@ import { getHeaders } from "@/utils/helpers";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { S3_BUCKET_URL } from "@cap/utils";
+import { clientEnv } from "env/client";
 
 export const revalidate = 0;
 
@@ -100,7 +101,7 @@ export async function GET(request: NextRequest) {
 
     let screenshotUrl: string;
 
-    if (video.awsBucket !== process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) {
+    if (video.awsBucket !== clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET) {
       screenshotUrl = await getSignedUrl(
         s3Client,
         new GetObjectCommand({

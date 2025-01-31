@@ -2,6 +2,7 @@ import { S3Client } from "@aws-sdk/client-s3";
 import type { s3Buckets } from "@cap/database/schema";
 import type { InferSelectModel } from "drizzle-orm";
 import { decrypt } from "@cap/database/crypto";
+import { clientEnv } from "env/client";
 
 type S3Config = {
   endpoint?: string | null;
@@ -25,11 +26,11 @@ async function tryDecrypt(
 export async function getS3Config(config?: S3Config) {
   if (!config) {
     return {
-      endpoint: process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
-      region: process.env.NEXT_PUBLIC_CAP_AWS_REGION,
+      endpoint: clientEnv.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
+      region: clientEnv.NEXT_PUBLIC_CAP_AWS_REGION,
       credentials: {
-        accessKeyId: process.env.CAP_AWS_ACCESS_KEY ?? "",
-        secretAccessKey: process.env.CAP_AWS_SECRET_KEY ?? "",
+        accessKeyId: CAP_AWS_ACCESS_KEY ?? "",
+        secretAccessKey: CAP_AWS_SECRET_KEY ?? "",
       },
     };
   }
@@ -37,19 +38,14 @@ export async function getS3Config(config?: S3Config) {
   return {
     endpoint: config.endpoint
       ? await tryDecrypt(config.endpoint)
-      : process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
+      : clientEnv.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
     region:
-      (await tryDecrypt(config.region)) ??
-      process.env.NEXT_PUBLIC_CAP_AWS_REGION,
+      (await tryDecrypt(config.region)) ?? clientEnv.NEXT_PUBLIC_CAP_AWS_REGION,
     credentials: {
       accessKeyId:
-        (await tryDecrypt(config.accessKeyId)) ??
-        process.env.CAP_AWS_ACCESS_KEY ??
-        "",
+        (await tryDecrypt(config.accessKeyId)) ?? CAP_AWS_ACCESS_KEY ?? "",
       secretAccessKey:
-        (await tryDecrypt(config.secretAccessKey)) ??
-        process.env.CAP_AWS_SECRET_KEY ??
-        "",
+        (await tryDecrypt(config.secretAccessKey)) ?? CAP_AWS_SECRET_KEY ?? "",
     },
   };
 }
@@ -58,12 +54,12 @@ export async function getS3Bucket(
   bucket?: InferSelectModel<typeof s3Buckets> | null
 ) {
   if (!bucket?.bucketName) {
-    return process.env.NEXT_PUBLIC_CAP_AWS_BUCKET || "";
+    return clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET || "";
   }
 
   return (
     ((await tryDecrypt(bucket.bucketName)) ??
-      process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) ||
+      clientEnv.NEXT_PUBLIC_CAP_AWS_BUCKET) ||
     ""
   );
 }
