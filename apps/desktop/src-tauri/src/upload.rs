@@ -24,6 +24,8 @@ pub struct S3UploadMeta {
     aws_region: String,
     #[serde(default, deserialize_with = "deserialize_empty_object_as_string")]
     aws_bucket: String,
+    #[serde(default)]
+    aws_endpoint: String,
 }
 
 fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -82,12 +84,23 @@ impl S3UploadMeta {
         &self.aws_bucket
     }
 
-    pub fn new(id: String, user_id: String, aws_region: String, aws_bucket: String) -> Self {
+    pub fn aws_endpoint(&self) -> &str {
+        &self.aws_endpoint
+    }
+
+    pub fn new(
+        id: String,
+        user_id: String,
+        aws_region: String,
+        aws_bucket: String,
+        aws_endpoint: String,
+    ) -> Self {
         Self {
             id,
             user_id,
             aws_region,
             aws_bucket,
+            aws_endpoint,
         }
     }
 
@@ -100,6 +113,10 @@ impl S3UploadMeta {
             self.aws_bucket =
                 std::env::var("NEXT_PUBLIC_CAP_AWS_BUCKET").unwrap_or_else(|_| "capso".to_string());
         }
+        if self.aws_endpoint.is_empty() {
+            self.aws_endpoint = std::env::var("NEXT_PUBLIC_CAP_AWS_ENDPOINT")
+                .unwrap_or_else(|_| "https://s3.amazonaws.com".to_string());
+        }
     }
 }
 
@@ -110,6 +127,7 @@ struct S3UploadBody {
     file_key: String,
     aws_bucket: String,
     aws_region: String,
+    aws_endpoint: String,
 }
 
 #[derive(serde::Serialize)]
@@ -197,6 +215,7 @@ pub async fn upload_video(
             file_key: file_key.clone(),
             aws_bucket: s3_config.aws_bucket().to_string(),
             aws_region: s3_config.aws_region().to_string(),
+            aws_endpoint: s3_config.aws_endpoint().to_string(),
         },
     )?;
 
@@ -350,6 +369,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
             file_key: file_key.clone(),
             aws_bucket: s3_config.aws_bucket,
             aws_region: s3_config.aws_region,
+            aws_endpoint: s3_config.aws_endpoint,
         },
     };
 
@@ -417,6 +437,7 @@ pub async fn upload_audio(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
             file_key: file_key.clone(),
             aws_bucket: s3_config.aws_bucket.clone(),
             aws_region: s3_config.aws_region.clone(),
+            aws_endpoint: s3_config.aws_endpoint.clone(),
         },
     )?;
 
@@ -717,6 +738,7 @@ pub async fn upload_individual_file(
         file_key: file_key.clone(),
         aws_bucket: s3_config.aws_bucket.clone(),
         aws_region: s3_config.aws_region.clone(),
+        aws_endpoint: s3_config.aws_endpoint.clone(),
     };
 
     let (upload_url, mut form) = if is_audio {
@@ -783,6 +805,7 @@ async fn prepare_screenshot_upload(
             file_key: file_key.clone(),
             aws_bucket: s3_config.aws_bucket.clone(),
             aws_region: s3_config.aws_region.clone(),
+            aws_endpoint: s3_config.aws_endpoint.clone(),
         },
     };
 

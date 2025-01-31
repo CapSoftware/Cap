@@ -54,7 +54,11 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
         .select()
         .from(users)
         .where(eq(users.email, email))
-        .limit(1);
+        .limit(1)
+        .catch((e) => {
+          console.log(e);
+          throw e;
+        });
       const row = rows[0];
       return row ?? null;
     },

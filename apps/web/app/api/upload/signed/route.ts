@@ -143,6 +143,14 @@ export async function POST(request: NextRequest) {
         }
       );
 
+      // When not using aws s3, we need to transform the url to the local endpoint
+      if (process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT) {
+        const endpoint = process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT;
+        const bucket = process.env.NEXT_PUBLIC_CAP_AWS_BUCKET;
+        const newUrl = `${endpoint}/${bucket}/`;
+        presignedPostData.url = newUrl;
+      }
+
       console.log("Presigned URL created successfully");
 
       // After successful presigned URL creation, trigger revalidation

@@ -1,9 +1,9 @@
 {
-  "name": "web",
+  "name": "@cap/web",
   "version": "0.3.1",
   "private": true,
   "scripts": {
-    "dev": "dotenv -e ../../.env -- next dev",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

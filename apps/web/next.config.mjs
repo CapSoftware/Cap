@@ -42,6 +42,12 @@ const nextConfig = {
         port: "",
         pathname: "**",
       },
+      process.env.NODE_ENV === "development" && {
+        protocol: "http",
+        hostname: "localhost",
+        port: "3902",
+        pathname: "**",
+      },
     ],
   },
   async rewrites() {

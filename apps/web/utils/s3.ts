@@ -10,7 +10,9 @@ type S3Config = {
   secretAccessKey?: string;
 } | null;
 
-async function tryDecrypt(text: string | null | undefined): Promise<string | undefined> {
+async function tryDecrypt(
+  text: string | null | undefined
+): Promise<string | undefined> {
   if (!text) return undefined;
   try {
     const decrypted = await decrypt(text);
@@ -33,11 +35,21 @@ export async function getS3Config(config?: S3Config) {
   }
 
   return {
-    endpoint: config.endpoint ? await tryDecrypt(config.endpoint) : process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
-    region: (await tryDecrypt(config.region)) ?? process.env.NEXT_PUBLIC_CAP_AWS_REGION,
+    endpoint: config.endpoint
+      ? await tryDecrypt(config.endpoint)
+      : process.env.NEXT_PUBLIC_CAP_AWS_ENDPOINT,
+    region:
+      (await tryDecrypt(config.region)) ??
+      process.env.NEXT_PUBLIC_CAP_AWS_REGION,
     credentials: {
-      accessKeyId: (await tryDecrypt(config.accessKeyId)) ?? process.env.CAP_AWS_ACCESS_KEY ?? "",
-      secretAccessKey: (await tryDecrypt(config.secretAccessKey)) ?? process.env.CAP_AWS_SECRET_KEY ?? "",
+      accessKeyId:
+        (await tryDecrypt(config.accessKeyId)) ??
+        process.env.CAP_AWS_ACCESS_KEY ??
+        "",
+      secretAccessKey:
+        (await tryDecrypt(config.secretAccessKey)) ??
+        process.env.CAP_AWS_SECRET_KEY ??
+        "",
     },
   };
 }
@@ -49,7 +61,11 @@ export async function getS3Bucket(
     return process.env.NEXT_PUBLIC_CAP_AWS_BUCKET || "";
   }
 
-  return (await tryDecrypt(bucket.bucketName) ?? process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) || "";
+  return (
+    ((await tryDecrypt(bucket.bucketName)) ??
+      process.env.NEXT_PUBLIC_CAP_AWS_BUCKET) ||
+    ""
+  );
 }
 
 export async function createS3Client(config?: S3Config) {

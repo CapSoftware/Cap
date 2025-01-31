@@ -6,6 +6,7 @@ import { ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { getHeaders } from "@/utils/helpers";
 import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { S3_BUCKET_URL } from "@cap/utils";
 
 export const revalidate = 3599;
 
@@ -93,7 +94,7 @@ export async function GET(request: NextRequest) {
       const fileName = key.split("/").pop();
       return {
         fileName,
-        url: `https://v.cap.so/${key}`,
+        url: `${S3_BUCKET_URL}/${key}`,
       };
     });
 
