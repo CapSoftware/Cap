@@ -402,7 +402,7 @@ export const ShareVideo = ({
                 href={
                   user
                     ? "/dashboard"
-                    : `${process.env.NEXT_PUBLIC_URL}?referrer=${data.id}`
+                    : `${process.env.NEXT_PUBLIC_WEB_URL}?referrer=${data.id}`
                 }
               >
                 <LogoBadge className="w-8 h-auto" />
@@ -442,7 +442,7 @@ export const ShareVideo = ({
             data.skipProcessing === true ||
             (data.jobStatus !== "COMPLETE" &&
               data.source.type === "MediaConvert")
-              ? `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`
+              ? `${process.env.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`
               : data.source.type === "MediaConvert"
               ? `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`
               : `${S3_BUCKET_URL}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`

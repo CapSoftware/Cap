@@ -48,7 +48,9 @@ export async function generateMetadata(
   if (!doc) return;
 
   const { title, summary, image } = doc.metadata;
-  const ogImage = image ? `${process.env.NEXT_PUBLIC_URL}${image}` : undefined;
+  const ogImage = image
+    ? `${process.env.NEXT_PUBLIC_WEB_URL}${image}`
+    : undefined;
   const description = summary || title;
 
   return {
@@ -58,7 +60,7 @@ export async function generateMetadata(
       title,
       description,
       type: "article",
-      url: `${process.env.NEXT_PUBLIC_URL}/docs/${fullSlug}`,
+      url: `${process.env.NEXT_PUBLIC_WEB_URL}/docs/${fullSlug}`,
       ...(ogImage && {
         images: [{ url: ogImage }],
       }),

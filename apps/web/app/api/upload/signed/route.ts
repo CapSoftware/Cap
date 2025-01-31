@@ -157,7 +157,7 @@ export async function POST(request: NextRequest) {
       const videoId = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
       if (videoId) {
         try {
-          await fetch(`${process.env.NEXT_PUBLIC_URL}/api/revalidate`, {
+          await fetch(`${process.env.NEXT_PUBLIC_WEB_URL}/api/revalidate`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

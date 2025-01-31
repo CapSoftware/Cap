@@ -5,10 +5,7 @@ const URL = process.env.DATABASE_URL!;
 
 let fetchHandler: Promise<Config["fetch"]> | undefined = undefined;
 
-if (
-  process.env.NEXT_PUBLIC_ENVIRONMENT === "development" &&
-  URL.startsWith("mysql://")
-) {
+if (process.env.NODE_ENV === "development" && URL.startsWith("mysql://")) {
   fetchHandler = import("@mattrax/mysql-planetscale").then((m) =>
     m.createFetchHandler(URL)
   );

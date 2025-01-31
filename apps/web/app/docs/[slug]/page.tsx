@@ -19,7 +19,9 @@ export async function generateMetadata({
   }
 
   let { title, summary: description, image } = doc.metadata;
-  let ogImage = image ? `${process.env.NEXT_PUBLIC_URL}${image}` : undefined;
+  let ogImage = image
+    ? `${process.env.NEXT_PUBLIC_WEB_URL}${image}`
+    : undefined;
 
   return {
     title,
@@ -28,7 +30,7 @@ export async function generateMetadata({
       title,
       description,
       type: "article",
-      url: `${process.env.NEXT_PUBLIC_URL}/docs/${doc.slug}`,
+      url: `${process.env.NEXT_PUBLIC_WEB_URL}/docs/${doc.slug}`,
       ...(ogImage && {
         images: [
           {

@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
   const videoId = req.nextUrl.searchParams.get("videoId") as string;
 
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_URL}/api/video/${videoId}`,
+    `${process.env.NEXT_PUBLIC_WEB_URL}/api/video/${videoId}`,
     {
       method: "GET",
       headers: {

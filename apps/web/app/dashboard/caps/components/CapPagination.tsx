@@ -23,7 +23,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {currentPage > 1 && (
           <PaginationItem>
             <PaginationPrevious
-              href={`${process.env.NEXT_PUBLIC_URL}/dashboard/caps?page=${
+              href={`${process.env.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=${
                 currentPage - 1
               }`}
             />
@@ -31,7 +31,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         )}
         <PaginationItem>
           <PaginationLink
-            href={`${process.env.NEXT_PUBLIC_URL}/dashboard/caps?page=1`}
+            href={`${process.env.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=1`}
             isActive={currentPage === 1}
           >
             1
@@ -40,7 +40,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {currentPage !== 1 && (
           <PaginationItem>
             <PaginationLink
-              href={`${process.env.NEXT_PUBLIC_URL}/dashboard/caps?page=${currentPage}`}
+              href={`${process.env.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=${currentPage}`}
               isActive={true}
             >
               {currentPage}
@@ -50,7 +50,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {totalPages > currentPage + 1 && (
           <PaginationItem>
             <PaginationLink
-              href={`${process.env.NEXT_PUBLIC_URL}/dashboard/caps?page=${
+              href={`${process.env.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=${
                 currentPage + 1
               }`}
               isActive={false}
@@ -62,7 +62,7 @@ export const CapPagination: React.FC<CapPaginationProps> = ({
         {currentPage > 2 && <PaginationEllipsis />}
         <PaginationItem>
           <PaginationNext
-            href={`${process.env.NEXT_PUBLIC_URL}/dashboard/caps?page=${
+            href={`${process.env.NEXT_PUBLIC_WEB_URL}/dashboard/caps?page=${
               currentPage === totalPages ? currentPage : currentPage + 1
             }`}
           />

@@ -75,8 +75,8 @@ export async function GET(request: NextRequest) {
 
   return new Response(
     JSON.stringify({
-      playlistOne: `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}&videoType=video`,
-      playlistTwo: `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}&videoType=audio`,
+      playlistOne: `${process.env.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}&videoType=video`,
+      playlistTwo: `${process.env.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}&videoType=audio`,
     }),
     {
       status: 200,

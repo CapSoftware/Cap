@@ -23,7 +23,7 @@ export async function generateMetadata({
   }
 
   let { title, publishedAt: publishedTime, description, image } = post.metadata;
-  let ogImage = `${process.env.NEXT_PUBLIC_URL}${image}`;
+  let ogImage = `${process.env.NEXT_PUBLIC_WEB_URL}${image}`;
 
   return {
     title,
@@ -33,7 +33,7 @@ export async function generateMetadata({
       description,
       type: "article",
       publishedTime,
-      url: `${process.env.NEXT_PUBLIC_URL}/blog/${post.slug}`,
+      url: `${process.env.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`,
       images: [
         {
           url: ogImage,

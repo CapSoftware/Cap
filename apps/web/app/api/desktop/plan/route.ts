@@ -9,7 +9,7 @@ import { stripe } from "@cap/utils";
 import { eq } from "drizzle-orm";
 
 const allowedOrigins = [
-  process.env.NEXT_PUBLIC_URL,
+  process.env.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "tauri://localhost",
   "http://tauri.localhost",

@@ -13,7 +13,7 @@ interface ShareProps {
 }
 
 export function Share({ post }: ShareProps) {
-  const shareUrl = `${process.env.NEXT_PUBLIC_URL}/blog/${post.slug}`;
+  const shareUrl = `${process.env.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`;
   const [copied, setCopied] = useState(false);
 
   return (

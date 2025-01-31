@@ -15,7 +15,7 @@ export const CapCardActions: React.FC<CapCardActionsProps> = ({
     const link =
       process.env.NEXT_PUBLIC_IS_CAP && process.env.NEXT_ENV === "production"
         ? `https://cap.link/${capId}`
-        : `${process.env.NEXT_PUBLIC_URL}/s/${capId}`;
+        : `${process.env.NEXT_PUBLIC_WEB_URL}/s/${capId}`;
 
     navigator.clipboard.writeText(link);
     toast.success("Link copied to clipboard!");

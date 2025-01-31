@@ -282,9 +282,9 @@ export async function GET(request: NextRequest) {
       const generatedPlaylist = await generateMasterPlaylist(
         videoMetadata?.Metadata?.resolution ?? "",
         videoMetadata?.Metadata?.bandwidth ?? "",
-        `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${userId}&videoId=${videoId}&videoType=video`,
+        `${process.env.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${userId}&videoId=${videoId}&videoType=video`,
         audioMetadata
-          ? `${process.env.NEXT_PUBLIC_URL}/api/playlist?userId=${userId}&videoId=${videoId}&videoType=audio`
+          ? `${process.env.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${userId}&videoId=${videoId}&videoType=audio`
           : null,
         video.xStreamInfo ?? ""
       );
