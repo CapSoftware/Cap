@@ -188,6 +188,11 @@ export async function GET(req: NextRequest) {
   await db.insert(videos).values(videoData);
 
   if (process.env.NEXT_PUBLIC_IS_CAP && process.env.NODE_ENV === "production") {
+    console.log({
+      url: `${process.env.NEXT_PUBLIC_WEB_URL}/s/${id}`,
+      domain: "cap.link",
+      key: id,
+    });
     await dub.links.create({
       url: `${process.env.NEXT_PUBLIC_WEB_URL}/s/${id}`,
       domain: "cap.link",
