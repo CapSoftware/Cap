@@ -48,7 +48,7 @@ const nextConfig = {
         port: "3902",
         pathname: "**",
       },
-    ],
+    ].filter(Boolean),
   },
   async rewrites() {
     return [

@@ -2100,6 +2100,7 @@ pub async fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(flags::plugin::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags({
