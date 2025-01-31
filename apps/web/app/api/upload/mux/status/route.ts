@@ -8,7 +8,7 @@ import {
 } from "@aws-sdk/client-mediaconvert";
 
 const allowedOrigins = [
-  process.env.NEXT_PUBLIC_URL,
+  process.env.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "tauri://localhost",
   "http://tauri.localhost",

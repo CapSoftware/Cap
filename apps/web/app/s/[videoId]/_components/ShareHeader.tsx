@@ -29,7 +29,7 @@ export const ShareHeader = ({
   const handleBlur = async () => {
     setIsEditing(false);
     const response = await fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/video/title`,
+      `${process.env.NEXT_PUBLIC_WEB_URL}/api/video/title`,
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -152,7 +152,7 @@ export const ShareHeader = ({
                     );
                   } else {
                     navigator.clipboard.writeText(
-                      `${process.env.NEXT_PUBLIC_URL}/s/${data.id}`
+                      `${process.env.NEXT_PUBLIC_WEB_URL}/s/${data.id}`
                     );
                   }
                   toast.success("Link copied to clipboard!");
@@ -161,14 +161,14 @@ export const ShareHeader = ({
                 {process.env.NEXT_PUBLIC_IS_CAP &&
                 process.env.NODE_ENV === "production"
                   ? `cap.link/${data.id}`
-                  : `${process.env.NEXT_PUBLIC_URL}/s/${data.id}`}
+                  : `${process.env.NEXT_PUBLIC_WEB_URL}/s/${data.id}`}
                 <Copy className="ml-2 h-4 w-4" />
               </Button>
               {user !== null && (
                 <div className="hidden md:flex">
                   <Button
                     onClick={() => {
-                      push(`${process.env.NEXT_PUBLIC_URL}/dashboard`);
+                      push(`${process.env.NEXT_PUBLIC_WEB_URL}/dashboard`);
                     }}
                   >
                     Go to Dashboard

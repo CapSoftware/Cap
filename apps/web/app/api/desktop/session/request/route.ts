@@ -10,14 +10,11 @@ export async function GET(req: NextRequest) {
   const port = searchParams.get("port") || "";
   const platform = searchParams.get("platform") || "web";
 
-  const secret =
-    process.env.NODE_ENV === "development"
-      ? process.env.NEXTAUTH_SECRET_DEV
-      : process.env.NEXTAUTH_SECRET;
+  const secret = process.env.NEXTAUTH_SECRET;
 
   if (!session) {
     return Response.redirect(
-      `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?port=${port}`
+      `${process.env.NEXT_PUBLIC_WEB_URL}/login?next=${process.env.NEXT_PUBLIC_WEB_URL}/api/desktop/session/request?port=${port}`
     );
   }
 
@@ -27,7 +24,7 @@ export async function GET(req: NextRequest) {
 
   if (!tokenValue || !user) {
     return Response.redirect(
-      `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?port=${port}`
+      `${process.env.NEXT_PUBLIC_WEB_URL}/login?next=${process.env.NEXT_PUBLIC_WEB_URL}/api/desktop/session/request?port=${port}`
     );
   }
 
@@ -38,7 +35,7 @@ export async function GET(req: NextRequest) {
 
   if (!decodedToken) {
     return Response.redirect(
-      `${process.env.NEXT_PUBLIC_URL}/login?next=${process.env.NEXT_PUBLIC_URL}/api/desktop/session/request?port=${port}`
+      `${process.env.NEXT_PUBLIC_WEB_URL}/login?next=${process.env.NEXT_PUBLIC_WEB_URL}/api/desktop/session/request?port=${port}`
     );
   }
 

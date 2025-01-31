@@ -83,7 +83,7 @@ export const Toolbar = ({
     console.log("Current timestamp:", timestamp);
 
     const response = await fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/video/comment`,
+      `${process.env.NEXT_PUBLIC_WEB_URL}/api/video/comment`,
       {
         method: "POST",
         headers: {

@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Send invitation email
-    const inviteUrl = `${process.env.NEXT_PUBLIC_URL}/invite/${inviteId}`;
+    const inviteUrl = `${process.env.NEXT_PUBLIC_WEB_URL}/invite/${inviteId}`;
     await sendEmail({
       email: email.trim(),
       subject: `Invitation to join ${space[0].name} on Cap`,

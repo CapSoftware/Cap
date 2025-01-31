@@ -57,9 +57,9 @@ jobs:
         run: |
           echo "appVersion=debug" >> .env
           echo "CAP_DESKTOP_SENTRY_URL=https://6a3b6a09e6ae976c2ad6fff710e88748@o4506859771527168.ingest.us.sentry.io/4508330917101568" >> .env
-          echo "NEXT_PUBLIC_URL=${{ secrets.NEXT_PUBLIC_URL }}" >> .env
-          echo 'NEXTAUTH_URL=${NEXT_PUBLIC_URL}' >> .env
-          echo 'VITE_SERVER_URL=${NEXT_PUBLIC_URL}' >> .env
+          echo "NEXT_PUBLIC_WEB_URL=${{ secrets.NEXT_PUBLIC_WEB_URL }}" >> .env
+          echo 'NEXTAUTH_URL=${NEXT_PUBLIC_WEB_URL}' >> .env
+          echo 'VITE_SERVER_URL=${NEXT_PUBLIC_WEB_URL}' >> .env
           echo "NEXT_PUBLIC_CAP_AWS_REGION=${{ secrets.NEXT_PUBLIC_CAP_AWS_REGION }}" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=${{ secrets.NEXT_PUBLIC_CAP_AWS_BUCKET }}" >> .env
 

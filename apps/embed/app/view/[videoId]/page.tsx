@@ -30,7 +30,7 @@ export async function generateMetadata(
       description: "This video is private and cannot be shared.",
       openGraph: {
         images: [
-          `${process.env.NEXT_PUBLIC_URL}/api/video/og?videoId=${videoId}`,
+          `${process.env.NEXT_PUBLIC_WEB_URL}/api/video/og?videoId=${videoId}`,
         ],
       },
     };
@@ -41,7 +41,7 @@ export async function generateMetadata(
     description: "Watch this video on Cap",
     openGraph: {
       images: [
-        `${process.env.NEXT_PUBLIC_URL}/api/video/og?videoId=${videoId}`,
+        `${process.env.NEXT_PUBLIC_WEB_URL}/api/video/og?videoId=${videoId}`,
       ],
     },
   };
@@ -66,7 +66,7 @@ export default async function ShareVideoPage(props: Props) {
     video.source.type === "MediaConvert"
   ) {
     const res = await fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/create?videoId=${videoId}&userId=${video.ownerId}`,
+      `${process.env.NEXT_PUBLIC_WEB_URL}/api/upload/mux/create?videoId=${videoId}&userId=${video.ownerId}`,
       {
         method: "GET",
         credentials: "include",
@@ -79,7 +79,7 @@ export default async function ShareVideoPage(props: Props) {
 
   if (video.transcriptionStatus !== "COMPLETE") {
     fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/video/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
+      `${process.env.NEXT_PUBLIC_WEB_URL}/api/video/transcribe?videoId=${videoId}&userId=${video.ownerId}`,
       {
         method: "GET",
         credentials: "include",
@@ -94,7 +94,7 @@ export default async function ShareVideoPage(props: Props) {
     video.source.type === "MediaConvert"
   ) {
     fetch(
-      `${process.env.NEXT_PUBLIC_URL}/api/upload/mux/status?videoId=${videoId}&userId=${video.ownerId}`,
+      `${process.env.NEXT_PUBLIC_WEB_URL}/api/upload/mux/status?videoId=${videoId}&userId=${video.ownerId}`,
       {
         method: "GET",
         credentials: "include",

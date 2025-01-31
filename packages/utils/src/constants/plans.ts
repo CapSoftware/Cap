@@ -10,7 +10,7 @@ const planIds = {
 };
 
 export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
-  const value = process.env.NEXT_PUBLIC_ENVIRONMENT;
+  const value = process.env.NODE_ENV;
   const environment = value === "development" ? "development" : "production";
 
   return planIds[environment]?.[billingCycle] || "";

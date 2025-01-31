@@ -14,7 +14,7 @@ export const playlistToMp4 = async (
   }
 
   const videoFetch = await fetch(
-    `${process.env.NEXT_PUBLIC_URL}/api/video/playlistUrl?userId=${userId}&videoId=${videoId}`
+    `${process.env.NEXT_PUBLIC_WEB_URL}/api/video/playlistUrl?userId=${userId}&videoId=${videoId}`
   );
 
   if (videoFetch.status !== 200) {
