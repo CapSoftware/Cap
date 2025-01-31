@@ -12,6 +12,7 @@
     "db:studio": "drizzle-kit studio --config=drizzle.config.ts"
   },
   "dependencies": {
+    "@cap/env": "workspace:*",
     "@mattrax/mysql-planetscale": "^0.0.3",
     "@paralleldrive/cuid2": "^2.2.2",
     "@planetscale/database": "^1.13.0",

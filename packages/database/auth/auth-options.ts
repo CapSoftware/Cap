@@ -9,12 +9,13 @@ import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
 import { nanoId } from "../helpers";
 import WorkOSProvider from "next-auth/providers/workos";
+import { NODE_ENV, serverEnv } from "@cap/env";
 
 export const config = {
   maxDuration: 120,
 };
 
-const secret = process.env.NEXTAUTH_SECRET;
+const secret = serverEnv.NEXTAUTH_SECRET;
 
 export const authOptions: NextAuthOptions = {
   adapter: DrizzleAdapter(db),
@@ -28,8 +29,8 @@ export const authOptions: NextAuthOptions = {
   },
   providers: [
     GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      clientId: serverEnv.GOOGLE_CLIENT_ID!,
+      clientSecret: serverEnv.GOOGLE_CLIENT_SECRET!,
       authorization: {
         params: {
           scope: [
@@ -41,8 +42,8 @@ export const authOptions: NextAuthOptions = {
       },
     }),
     WorkOSProvider({
-      clientId: process.env.WORKOS_CLIENT_ID as string,
-      clientSecret: process.env.WORKOS_API_KEY as string,
+      clientId: serverEnv.WORKOS_CLIENT_ID as string,
+      clientSecret: serverEnv.WORKOS_API_KEY as string,
       profile(profile) {
         return {
           id: profile.id,
@@ -56,8 +57,8 @@ export const authOptions: NextAuthOptions = {
     }),
     EmailProvider({
       sendVerificationRequest({ identifier, url }) {
-        console.log({ NODE_ENV: process.env.NODE_ENV });
-        if (process.env.NODE_ENV === "development") {
+        console.log({ NODE_ENV });
+        if (NODE_ENV === "development") {
           console.log(`Login link: ${url}`);
         } else {
           sendEmail({

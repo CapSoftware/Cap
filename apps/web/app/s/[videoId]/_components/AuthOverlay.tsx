@@ -1,4 +1,5 @@
 import { Dialog, DialogContent, LogoBadge, Button } from "@cap/ui";
+import { NODE_ENV } from "@cap/env";
 import { motion } from "framer-motion";
 import { signIn } from "next-auth/react";
 import { useState, useEffect } from "react";
@@ -55,7 +56,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
           </div>
 
           <div className="flex flex-col space-y-3 fade-in-down animate-delay-2">
-            {process.env.NODE_ENV !== "development" && (
+            {NODE_ENV !== "development" && (
               <>
                 <Button
                   variant="dark"
@@ -142,7 +143,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                   }}
                   className="block w-full appearance-none rounded-full border border-gray-300 px-3 h-12 placeholder-gray-400 shadow-sm focus:border-black focus:outline-none focus:ring-black text-lg"
                 />
-                {process.env.NODE_ENV === "development" && (
+                {NODE_ENV === "development" && (
                   <div className="py-3 px-6 flex items-center justify-center bg-red-600 rounded-xl mt-3">
                     <p className="text-white text-lg">
                       <span className="font-bold text-white">
@@ -161,7 +162,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                 disabled={loading || emailSent}
               >
                 {emailSent
-                  ? process.env.NODE_ENV === "development"
+                  ? NODE_ENV === "development"
                     ? "Email sent to your terminal"
                     : "Email sent to your inbox"
                   : "Continue with Email"}

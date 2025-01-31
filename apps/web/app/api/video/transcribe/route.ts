@@ -10,7 +10,8 @@ import { getHeaders } from "@/utils/helpers";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
+import { createS3Client } from "@/utils/s3";
+import { serverEnv } from "@cap/env";
 
 export const maxDuration = 120;
 
@@ -29,7 +30,7 @@ export async function GET(request: NextRequest) {
   const videoId = searchParams.get("videoId") || "";
   const origin = request.headers.get("origin") as string;
 
-  if (!process.env.DEEPGRAM_API_KEY) {
+  if (!serverEnv.DEEPGRAM_API_KEY) {
     return new Response(
       JSON.stringify({
         error: true,
@@ -236,7 +237,7 @@ function formatTimestamp(seconds: number): string {
 }
 
 async function transcribeAudio(videoUrl: string): Promise<string> {
-  const deepgram = createClient(process.env.DEEPGRAM_API_KEY as string);
+  const deepgram = createClient(serverEnv.DEEPGRAM_API_KEY as string);
 
   const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
     {
