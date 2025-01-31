@@ -988,66 +988,47 @@ async fn get_video_metadata(
         .join("recordings")
         .join(format!("{}.cap", video_id));
 
-    let mut meta = RecordingMeta::load_for_project(&project_path)?;
+    let meta = RecordingMeta::load_for_project(&project_path)?;
 
-    fn get_duration_for_paths(paths: Vec<PathBuf>) -> Result<f64, String> {
-        let mut max_duration: f64 = 0.0;
-        for path in paths {
-            let reader = BufReader::new(
-                File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?,
-            );
-            let file_size = path
-                .metadata()
-                .map_err(|e| format!("Failed to get file metadata: {}", e))?
-                .len();
+    fn get_duration_for_path(path: PathBuf) -> Result<f64, String> {
+        let reader = BufReader::new(
+            File::open(&path).map_err(|e| format!("Failed to open video file: {}", e))?,
+        );
+        let file_size = path
+            .metadata()
+            .map_err(|e| format!("Failed to get file metadata: {}", e))?
+            .len();
 
-            let current_duration = match Mp4Reader::read_header(reader, file_size) {
-                Ok(mp4) => mp4.duration().as_secs_f64(),
-                Err(e) => {
-                    println!(
-                        "Failed to read MP4 header: {}. Falling back to default duration.",
-                        e
-                    );
-                    0.0_f64
-                }
-            };
-            max_duration = max_duration.max(current_duration);
-        }
-        Ok(max_duration)
-    }
-
-    fn content_paths(project_path: &PathBuf, meta: &RecordingMeta) -> Vec<PathBuf> {
-        match &meta.content {
-            Content::SingleSegment { segment } => {
-                vec![meta.path(&segment.display.path)]
+        let current_duration = match Mp4Reader::read_header(reader, file_size) {
+            Ok(mp4) => mp4.duration().as_secs_f64(),
+            Err(e) => {
+                println!(
+                    "Failed to read MP4 header: {}. Falling back to default duration.",
+                    e
+                );
+                0.0_f64
             }
-            Content::MultipleSegments { inner } => inner
-                .segments
-                .iter()
-                .map(|s| meta.path(&s.display.path))
-                .collect(),
-        }
+        };
+
+        Ok(current_duration)
     }
 
-    // Get display duration
-    let display_duration = get_duration_for_paths(content_paths(&project_path, &meta))?;
-
-    // Get camera duration
-    let camera_paths = match &meta.content {
-        Content::SingleSegment { segment } => segment
-            .camera
-            .as_ref()
-            .map_or(vec![], |c| vec![meta.path(&c.path)]),
+    let display_paths = match &meta.content {
+        Content::SingleSegment { segment } => {
+            vec![meta.path(&segment.display.path)]
+        }
         Content::MultipleSegments { inner } => inner
             .segments
             .iter()
-            .filter_map(|s| s.camera.as_ref().map(|c| meta.path(&c.path)))
+            .map(|s| meta.path(&s.display.path))
             .collect(),
     };
-    let camera_duration = get_duration_for_paths(camera_paths)?;
 
-    // Use the longer duration
-    let duration = display_duration.max(camera_duration);
+    // Use the shorter duration
+    let duration = display_paths
+        .into_iter()
+        .map(get_duration_for_path)
+        .sum::<Result<_, _>>()?;
 
     // Calculate estimated size using same logic as get_export_estimates
     let (width, height) = (1920, 1080); // Default to 1080p

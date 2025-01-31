@@ -388,48 +388,43 @@ export default function () {
                             </Button>
                           </div>
                         </div>
-                        <Show when={metadata()}>
+                        <Show when={metadata.latest}>
                           {(metadata) => (
                             <div
                               style={{
-                                color: "white",
                                 "font-size": "12px",
                                 "border-end-end-radius": "7.4px",
                                 "border-end-start-radius": "7.4px",
                               }}
                               class={cx(
-                                "absolute bottom-0 left-0 right-0 font-medium bg-[--gray-50] dark:bg-gray-50/60 backdrop-blur-md p-2.5 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
+                                "absolute bottom-0 left-0 right-0 font-medium text-gray-200 backdrop-blur-lg px-3 py-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
                                 isLoading() || showUpgradeTooltip()
                                   ? "opacity-0"
                                   : "group-hover:opacity-0"
                               )}
                             >
-                              <p class="flex items-center gap-4 text-[--gray-500]">
-                                <span class="flex items-center">
-                                  <IconCapCamera class="w-[16px] h-[16px] mr-1.5" />
-                                  {Math.floor(metadata().duration / 60)}:
-                                  {Math.floor(metadata().duration % 60)
-                                    .toString()
-                                    .padStart(2, "0")}
-                                </span>
-                                <span class="flex items-center">
-                                  <IconLucideHardDrive class="w-[16px] h-[16px] mr-1.5" />
-                                  {metadata().size.toFixed(2)} MB
-                                </span>
-                                <span class="flex items-center">
-                                  <IconLucideClock class="w-[16px] h-[16px] mr-1.5" />
-                                  ~
-                                  {Math.floor(
-                                    metadata().estimatedExportTime / 60
-                                  )}
-                                  :
-                                  {Math.floor(
-                                    metadata().estimatedExportTime % 60
-                                  )
-                                    .toString()
-                                    .padStart(2, "0")}
-                                </span>
-                              </p>
+                              <span class="flex items-center">
+                                <IconCapCamera class="w-[16px] h-[16px] mr-1.5" />
+                                {Math.floor(metadata().duration / 60)}:
+                                {Math.floor(metadata().duration % 60)
+                                  .toString()
+                                  .padStart(2, "0")}
+                              </span>
+                              <span class="flex items-center">
+                                <IconLucideHardDrive class="w-[16px] h-[16px] mr-1.5" />
+                                {metadata().size.toFixed(2)} MB
+                              </span>
+                              <span class="flex items-center">
+                                <IconLucideClock class="w-[16px] h-[16px] mr-1.5" />
+                                ~
+                                {Math.floor(
+                                  metadata().estimatedExportTime / 60
+                                )}
+                                :
+                                {Math.floor(metadata().estimatedExportTime % 60)
+                                  .toString()
+                                  .padStart(2, "0")}
+                              </span>
                             </div>
                           )}
                         </Show>
