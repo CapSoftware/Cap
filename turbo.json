@@ -1,12 +1,10 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalDependencies": [
+    ".env",
     ".env"
   ],
-  "globalDotEnv": [
-    ".env"
-  ],
-  "pipeline": {
+  "tasks": {
     "build": {
       "inputs": [
         "**/*.ts",

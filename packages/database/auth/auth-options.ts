@@ -8,8 +8,7 @@ import type { NextAuthOptions } from "next-auth";
 import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
 import { nanoId } from "../helpers";
-import WorkOSProvider from 'next-auth/providers/workos';
-
+import WorkOSProvider from "next-auth/providers/workos";
 
 export const config = {
   maxDuration: 120,
@@ -37,12 +36,12 @@ export const authOptions: NextAuthOptions = {
       authorization: {
         params: {
           scope: [
-            'https://www.googleapis.com/auth/userinfo.email',
-            'https://www.googleapis.com/auth/userinfo.profile',
-          ].join(' '),
-          prompt: "select_account"
-        }
-      }
+            "https://www.googleapis.com/auth/userinfo.email",
+            "https://www.googleapis.com/auth/userinfo.profile",
+          ].join(" "),
+          prompt: "select_account",
+        },
+      },
     }),
     WorkOSProvider({
       clientId: process.env.WORKOS_CLIENT_ID as string,
@@ -50,9 +49,9 @@ export const authOptions: NextAuthOptions = {
       profile(profile) {
         return {
           id: profile.id,
-          name: profile.first_name 
-            ? `${profile.first_name} ${profile.last_name || ''}`
-            : profile.email?.split('@')[0] || profile.id,
+          name: profile.first_name
+            ? `${profile.first_name} ${profile.last_name || ""}`
+            : profile.email?.split("@")[0] || profile.id,
           email: profile.email,
           image: profile.profile_picture_url,
         };
@@ -89,7 +88,7 @@ export const authOptions: NextAuthOptions = {
       if (isNewUser) {
         // Create initial space for the user
         const spaceId = nanoId();
-        
+
         // Create space
         await db.insert(spaces).values({
           id: spaceId,
@@ -106,7 +105,8 @@ export const authOptions: NextAuthOptions = {
         });
 
         // Update user's activeSpaceId
-        await db.update(users)
+        await db
+          .update(users)
           .set({ activeSpaceId: spaceId })
           .where(eq(users.id, user.id));
       }

@@ -29,8 +29,8 @@ importers:
         specifier: ^2.5.1
         version: 2.8.8
       turbo:
-        specifier: ^1.10.16
-        version: 1.13.4
+        specifier: ^2.3.4
+        version: 2.3.4
       typescript:
         specifier: ^5.7.2
         version: 5.7.2
@@ -109,6 +109,9 @@ importers:
       '@tauri-apps/api':
         specifier: ^2.1.1
         version: 2.1.1
+      '@tauri-apps/plugin-clipboard-manager':
+        specifier: ^2.2.1
+        version: 2.2.1
       '@tauri-apps/plugin-deep-link':
         specifier: ^2.2.0
         version: 2.2.0
@@ -4305,10 +4308,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@8.6.0-alpha.1':
-    resolution: {integrity: sha512-14mIpBx5oxjliGokiejGxUGReG0UNQwrkeu4FiObX8QQWl94/eCO9ExxdyYPNjMx7OfOfhqwIL3SQnoChp+2yA==}
+  '@storybook/builder-vite@8.6.0-alpha.2':
+    resolution: {integrity: sha512-O5Ha7ub4dsXSbOo4/yBa9mBGuBp6puJHH47m528KXFiuaj4FgP0OHdD2ztbk3mMGTYl+HM8m8JuByPkBZm0RRg==}
     peerDependencies:
-      storybook: ^8.6.0-alpha.1
+      storybook: ^8.6.0-alpha.2
       vite: ^4.0.0 || ^5.0.0 || ^6.0.0
 
   '@storybook/core@8.3.3':
@@ -4319,10 +4322,10 @@ packages:
     peerDependencies:
       storybook: ^8.3.3
 
-  '@storybook/csf-plugin@8.6.0-alpha.1':
-    resolution: {integrity: sha512-Us0p0WaM4QUigPTQ9pRjfUM8PtuflPriuN51FFlTiJDmLF/OEmr/AvWnYhET6RZCYD4p912TVJN/t2xig+nMdA==}
+  '@storybook/csf-plugin@8.6.0-alpha.2':
+    resolution: {integrity: sha512-g5XY9SAe5hp8YzjBk6jHORt0Mn6YF4JI1upFFxTa+YjMMgx7R3tERN+rDoAIZcVTCTTqrjG0LhR8KhMVdY4yMA==}
     peerDependencies:
-      storybook: ^8.6.0-alpha.1
+      storybook: ^8.6.0-alpha.2
 
   '@storybook/csf@0.1.11':
     resolution: {integrity: sha512-dHYFQH3mA+EtnCkHXzicbLgsvzYjcDJ1JWsogbItZogkPHgSJM/Wr71uMkcvw8v9mmCyP4NpXJuu6bPoVsOnzg==}
@@ -4548,6 +4551,9 @@ packages:
     resolution: {integrity: sha512-K2VhcKqBhAeS5pNOVdnR/xQRU6jwpgmkSL2ejHXcl0m+kaTggT0WRDQnFtPq6NljA7aE03cvwsbCAoFG7vtkJw==}
     engines: {node: '>= 10'}
     hasBin: true
+
+  '@tauri-apps/plugin-clipboard-manager@2.2.1':
+    resolution: {integrity: sha512-+7YDULB9Bk4fejxYrVNBQcxs3KsjPA3A3r53wwn7K8zOQvxjNBSYBRx/FW1OUBPGzm8BrreJFBkPVzQZSF2R4A==}
 
   '@tauri-apps/plugin-deep-link@2.2.0':
     resolution: {integrity: sha512-H6mkxr2KZ3XJcKL44tiq6cOjCw9DL8OgU1xjn3j26Qsn+H/roPFiyhR7CHuB8Ar+sQFj4YVlfmJwtBajK2FETQ==}
@@ -10501,38 +10507,38 @@ packages:
     peerDependencies:
       typescript: '>=2.8.0 || >= 3.2.0-dev || >= 3.3.0-dev || >= 3.4.0-dev || >= 3.5.0-dev || >= 3.6.0-dev || >= 3.6.0-beta || >= 3.7.0-dev || >= 3.7.0-beta'
 
-  turbo-darwin-64@1.13.4:
-    resolution: {integrity: sha512-A0eKd73R7CGnRinTiS7txkMElg+R5rKFp9HV7baDiEL4xTG1FIg/56Vm7A5RVgg8UNgG2qNnrfatJtb+dRmNdw==}
+  turbo-darwin-64@2.3.4:
+    resolution: {integrity: sha512-uOi/cUIGQI7uakZygH+cZQ5D4w+aMLlVCN2KTGot+cmefatps2ZmRRufuHrEM0Rl63opdKD8/JIu+54s25qkfg==}
     cpu: [x64]
     os: [darwin]
 
-  turbo-darwin-arm64@1.13.4:
-    resolution: {integrity: sha512-eG769Q0NF6/Vyjsr3mKCnkG/eW6dKMBZk6dxWOdrHfrg6QgfkBUk0WUUujzdtVPiUIvsh4l46vQrNVd9EOtbyA==}
+  turbo-darwin-arm64@2.3.4:
+    resolution: {integrity: sha512-IIM1Lq5R+EGMtM1YFGl4x8Xkr0MWb4HvyU8N4LNoQ1Be5aycrOE+VVfH+cDg/Q4csn+8bxCOxhRp5KmUflrVTQ==}
     cpu: [arm64]
     os: [darwin]
 
-  turbo-linux-64@1.13.4:
-    resolution: {integrity: sha512-Bq0JphDeNw3XEi+Xb/e4xoKhs1DHN7OoLVUbTIQz+gazYjigVZvtwCvgrZI7eW9Xo1eOXM2zw2u1DGLLUfmGkQ==}
+  turbo-linux-64@2.3.4:
+    resolution: {integrity: sha512-1aD2EfR7NfjFXNH3mYU5gybLJEFi2IGOoKwoPLchAFRQ6OEJQj201/oNo9CDL75IIrQo64/NpEgVyZtoPlfhfA==}
     cpu: [x64]
     os: [linux]
 
-  turbo-linux-arm64@1.13.4:
-    resolution: {integrity: sha512-BJcXw1DDiHO/okYbaNdcWN6szjXyHWx9d460v6fCHY65G8CyqGU3y2uUTPK89o8lq/b2C8NK0yZD+Vp0f9VoIg==}
+  turbo-linux-arm64@2.3.4:
+    resolution: {integrity: sha512-MxTpdKwxCaA5IlybPxgGLu54fT2svdqTIxRd0TQmpRJIjM0s4kbM+7YiLk0mOh6dGqlWPUsxz/A0Mkn8Xr5o7Q==}
     cpu: [arm64]
     os: [linux]
 
-  turbo-windows-64@1.13.4:
-    resolution: {integrity: sha512-OFFhXHOFLN7A78vD/dlVuuSSVEB3s9ZBj18Tm1hk3aW1HTWTuAw0ReN6ZNlVObZUHvGy8d57OAGGxf2bT3etQw==}
+  turbo-windows-64@2.3.4:
+    resolution: {integrity: sha512-yyCrWqcRGu1AOOlrYzRnizEtdkqi+qKP0MW9dbk9OsMDXaOI5jlWtTY/AtWMkLw/czVJ7yS9Ex1vi9DB6YsFvw==}
     cpu: [x64]
     os: [win32]
 
-  turbo-windows-arm64@1.13.4:
-    resolution: {integrity: sha512-u5A+VOKHswJJmJ8o8rcilBfU5U3Y1TTAfP9wX8bFh8teYF1ghP0EhtMRLjhtp6RPa+XCxHHVA2CiC3gbh5eg5g==}
+  turbo-windows-arm64@2.3.4:
+    resolution: {integrity: sha512-PggC3qH+njPfn1PDVwKrQvvQby8X09ufbqZ2Ha4uSu+5TvPorHHkAbZVHKYj2Y+tvVzxRzi4Sv6NdHXBS9Be5w==}
     cpu: [arm64]
     os: [win32]
 
-  turbo@1.13.4:
-    resolution: {integrity: sha512-1q7+9UJABuBAHrcC4Sxp5lOqYS5mvxRrwa33wpIyM18hlOCpRD/fTJNxZ0vhbMcJmz15o9kkVm743mPn7p6jpQ==}
+  turbo@2.3.4:
+    resolution: {integrity: sha512-1kiLO5C0Okh5ay1DbHsxkPsw9Sjsbjzm6cF85CpWjR0BIyBFNDbKqtUyqGADRS1dbbZoQanJZVj4MS5kk8J42Q==}
     hasBin: true
 
   tween-functions@1.2.0:
@@ -15057,9 +15063,9 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@storybook/builder-vite@8.6.0-alpha.1(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))':
+  '@storybook/builder-vite@8.6.0-alpha.2(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))':
     dependencies:
-      '@storybook/csf-plugin': 8.6.0-alpha.1(storybook@8.3.3)
+      '@storybook/csf-plugin': 8.6.0-alpha.2(storybook@8.3.3)
       browser-assert: 1.2.1
       storybook: 8.3.3
       ts-dedent: 2.2.0
@@ -15090,7 +15096,7 @@ snapshots:
       storybook: 8.3.3
       unplugin: 1.16.0
 
-  '@storybook/csf-plugin@8.6.0-alpha.1(storybook@8.3.3)':
+  '@storybook/csf-plugin@8.6.0-alpha.2(storybook@8.3.3)':
     dependencies:
       storybook: 8.3.3
       unplugin: 1.16.0
@@ -15281,6 +15287,10 @@ snapshots:
       '@tauri-apps/cli-win32-arm64-msvc': 2.1.0
       '@tauri-apps/cli-win32-ia32-msvc': 2.1.0
       '@tauri-apps/cli-win32-x64-msvc': 2.1.0
+
+  '@tauri-apps/plugin-clipboard-manager@2.2.1':
+    dependencies:
+      '@tauri-apps/api': 2.1.1
 
   '@tauri-apps/plugin-deep-link@2.2.0':
     dependencies:
@@ -22632,7 +22642,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0)):
     dependencies:
-      '@storybook/builder-vite': 8.6.0-alpha.1(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))
+      '@storybook/builder-vite': 8.6.0-alpha.2(storybook@8.3.3)(vite@5.4.8(@types/node@20.16.9)(terser@5.34.0))
     transitivePeerDependencies:
       - storybook
       - vite
@@ -23122,32 +23132,32 @@ snapshots:
       tslib: 1.14.1
       typescript: 5.7.2
 
-  turbo-darwin-64@1.13.4:
+  turbo-darwin-64@2.3.4:
     optional: true
 
-  turbo-darwin-arm64@1.13.4:
+  turbo-darwin-arm64@2.3.4:
     optional: true
 
-  turbo-linux-64@1.13.4:
+  turbo-linux-64@2.3.4:
     optional: true
 
-  turbo-linux-arm64@1.13.4:
+  turbo-linux-arm64@2.3.4:
     optional: true
 
-  turbo-windows-64@1.13.4:
+  turbo-windows-64@2.3.4:
     optional: true
 
-  turbo-windows-arm64@1.13.4:
+  turbo-windows-arm64@2.3.4:
     optional: true
 
-  turbo@1.13.4:
+  turbo@2.3.4:
     optionalDependencies:
-      turbo-darwin-64: 1.13.4
-      turbo-darwin-arm64: 1.13.4
-      turbo-linux-64: 1.13.4
-      turbo-linux-arm64: 1.13.4
-      turbo-windows-64: 1.13.4
-      turbo-windows-arm64: 1.13.4
+      turbo-darwin-64: 2.3.4
+      turbo-darwin-arm64: 2.3.4
+      turbo-linux-64: 2.3.4
+      turbo-linux-arm64: 2.3.4
+      turbo-windows-64: 2.3.4
+      turbo-windows-arm64: 2.3.4
 
   tween-functions@1.2.0: {}
 

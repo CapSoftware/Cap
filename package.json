@@ -3,7 +3,8 @@
   "scripts": {
     "build": "dotenv -e .env -- turbo run build",
     "db:studio": "dotenv -e .env -- pnpm --dir packages/database db:studio",
-    "dev": "(pnpm run docker:up &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev",
+    "dev": "(pnpm run docker:up > /dev/null &) && sleep 5 && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --env-mode=loose --ui tui",
+    "dev:web": "pnpm dev --filter=!@cap/desktop",
     "dev:manual": "pnpm run docker:up && trap 'pnpm run docker:stop' EXIT && dotenv -e .env -- turbo run dev --filter=!@cap/storybook --no-cache --concurrency 1",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
@@ -22,7 +23,7 @@
     "eslint": "^7.32.0",
     "extract-zip": "^2.0.1",
     "prettier": "^2.5.1",
-    "turbo": "^1.10.16",
+    "turbo": "^2.3.4",
     "typescript": "^5.7.2"
   },
   "packageManager": "pnpm@9.8.0",
