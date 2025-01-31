@@ -193,7 +193,6 @@ where
                 let mut first_frame = None;
 
                 while let Some((frame, frame_number)) = rx_image_data.recv().await {
-                    dbg!(frame_number);
                     (self.on_progress)(frame_count);
 
                     if frame_count == 0 {
@@ -220,7 +219,6 @@ where
                                 / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
                             let audio_frame = &frame;
-                            dbg!(audio_frame.pts());
                             Some(frame)
                         } else {
                             None
