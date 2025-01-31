@@ -21,6 +21,7 @@ import { createMemo } from "solid-js";
 import { commands, TimelineSegment } from "~/utils/tauri";
 import {
   FPS,
+  OUTPUT_SIZE,
   SegmentContextProvider,
   TimelineContextProvider,
   TrackContextProvider,
@@ -43,7 +44,9 @@ export function Timeline() {
     history,
     split,
     setState,
-    playing
+    playing,
+    setPlaying,
+    setPlaybackTime,
   } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
@@ -97,17 +100,27 @@ export function Timeline() {
     | { type: "movePending" }
     | { type: "moving" };
 
-  function handleUpdatePlayhead(e: MouseEvent) {
+  async function handleUpdatePlayhead(e: MouseEvent) {
     const { left, width } = timelineBounds;
+    const targetFrame = Math.floor(
+      FPS * editorInstance.recordingDuration * ((e.clientX - left!) / width!)
+    );
+
+    // when we click on a position while playing, move the playhead to that position
+    // and either continue playback from new position, or:
+    // TODO: pause playback (behind an option) -- there is a bug where
+    //        the playback frame in viewer won't update if we pause playback
+    //        until you preview or seek to a new position :/ ~ilynxcat 2025.01.28
+    if (playing()) {
+      await commands.stopPlayback(videoId);
+      setPlaying(false);
+      await commands.seekTo(videoId, targetFrame);
+      await commands.startPlayback(videoId, FPS, OUTPUT_SIZE);
+      setPlaying(true);
+    }
+
     if (zoomSegmentDragState.type !== "moving")
-      commands.setPlayheadPosition(
-        videoId,
-        Math.round(
-          FPS *
-            editorInstance.recordingDuration *
-            ((e.clientX - left!) / width!)
-        )
-      );
+      commands.setPlayheadPosition(videoId, targetFrame);
   }
 
   return (
@@ -798,8 +811,10 @@ function SegmentRoot(
         )}
         style={{
           "--segment-x": `${translateX()}px`,
-          transform: isFreeForm() ? "translateX(var(--segment-x))" : undefined,
-          width: `${width()}px`,
+          "transform": isFreeForm()
+            ? "translateX(var(--segment-x))"
+            : undefined,
+          "width": `${width()}px`,
         }}
         ref={props.ref}
       >
