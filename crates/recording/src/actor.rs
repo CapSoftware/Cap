@@ -8,7 +8,7 @@ use std::{
 use cap_flags::FLAGS;
 use cap_media::{
     data::Pixel,
-    encoders::{H264Encoder, OpusEncoder, Output},
+    encoders::{H264Encoder, MP4File, OggFile, OpusEncoder},
     feeds::{AudioInputFeed, CameraFeed},
     pipeline::{builder::PipelineBuilder, Pipeline, RealTimeClock},
     sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
@@ -558,8 +558,10 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
         let mic_config = mic_source.info();
         let output_path = dir.join("audio-input.ogg");
 
-        let mic_encoder =
-            OpusEncoder::init("microphone", mic_config, Output::File(output_path.clone()))?;
+        let mic_encoder = OggFile::init(
+            output_path.clone(),
+            OpusEncoder::factory("microphone", mic_config),
+        )?;
 
         pipeline_builder = pipeline_builder
             .source("microphone_capture", mic_source)
@@ -579,8 +581,12 @@ async fn create_segment_pipeline<TCaptureFormat: MakeCapturePipeline>(
         let camera_config = camera_source.info();
         let output_path = dir.join("camera.mp4");
 
-        let camera_encoder =
-            H264Encoder::init("camera", camera_config, Output::File(output_path.clone()))?;
+        let camera_encoder = MP4File::init(
+            "camera",
+            output_path.clone(),
+            H264Encoder::factory("camera", camera_config),
+            |_| None,
+        )?;
 
         pipeline_builder = pipeline_builder
             .source("camera_capture", camera_source)
@@ -664,7 +670,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         let screen_encoder = cap_media::encoders::H264AVAssetWriterEncoder::init(
             "screen",
             screen_config,
-            Output::File(output_path.into()),
+            output_path.into(),
         )?;
 
         Ok(builder
@@ -683,8 +689,12 @@ impl MakeCapturePipeline for cap_media::sources::AVFrameCapture {
         Self: Sized,
     {
         let screen_config = source.info();
-        let screen_encoder =
-            H264Encoder::init("screen", screen_config, Output::File(output_path.into()))?;
+        let screen_encoder = MP4File::init(
+            "screen",
+            output_path.into(),
+            H264Encoder::factory("screen", screen_config),
+            |_| None,
+        )?;
         Ok(builder
             .source("screen_capture", source)
             .sink("screen_capture_encoder", screen_encoder))

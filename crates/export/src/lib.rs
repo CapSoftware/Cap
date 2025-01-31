@@ -1,7 +1,7 @@
 use cap_editor::Segment;
 use cap_media::{
     data::{cast_f32_slice_to_bytes, AudioInfo, RawVideoFormat, VideoInfo},
-    encoders::{MP4Encoder, MP4Input},
+    encoders::{H264Encoder, MP4File, MP4Input, OpusEncoder},
     feeds::{AudioData, AudioFrameBuffer},
     MediaError,
 };
@@ -30,6 +30,9 @@ pub enum ExportError {
 
     #[error("Join: {0}")]
     Join(#[from] tokio::task::JoinError),
+
+    #[error("Other:{0}")]
+    Other(String),
 }
 
 pub struct Exporter<TOnProgress> {
@@ -51,7 +54,7 @@ impl<TOnProgress> Exporter<TOnProgress>
 where
     TOnProgress: Fn(u32) + Send + 'static,
 {
-    pub fn new(
+    pub async fn new(
         project: ProjectConfiguration,
         output_path: PathBuf,
         on_progress: TOnProgress,
@@ -69,34 +72,32 @@ where
         let output_size =
             ProjectUniforms::get_output_size(&render_constants.options, &project, resolution_base);
 
-        let (render_segments, audio_segments): (Vec<_>, Vec<_>) = segments
-            .iter()
-            .enumerate()
-            .map(|(i, segment)| {
-                let segment_paths = match &meta.content {
-                    cap_project::Content::SingleSegment { segment: s } => SegmentVideoPaths {
+        let mut render_segments = vec![];
+        let mut audio_segments = vec![];
+
+        for (i, s) in segments.iter().enumerate() {
+            let segment_paths = match &meta.content {
+                cap_project::Content::SingleSegment { segment: s } => SegmentVideoPaths {
+                    display: meta.path(&s.display.path),
+                    camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
+                },
+                cap_project::Content::MultipleSegments { inner } => {
+                    let s = &inner.segments[i];
+
+                    SegmentVideoPaths {
                         display: meta.path(&s.display.path),
                         camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
-                    },
-                    cap_project::Content::MultipleSegments { inner } => {
-                        let s = &inner.segments[i];
-
-                        SegmentVideoPaths {
-                            display: meta.path(&s.display.path),
-                            camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
-                        }
                     }
-                };
-
-                (
-                    RenderSegment {
-                        cursor: segment.cursor.clone(),
-                        decoders: RecordingSegmentDecoders::new(&meta, segment_paths),
-                    },
-                    segment.audio.clone(),
-                )
-            })
-            .unzip();
+                }
+            };
+            render_segments.push(RenderSegment {
+                cursor: s.cursor.clone(),
+                decoders: RecordingSegmentDecoders::new(&meta, segment_paths)
+                    .await
+                    .map_err(ExportError::Other)?,
+            });
+            audio_segments.push(s.audio.clone());
+        }
 
         Ok(Self {
             project,
@@ -139,17 +140,21 @@ where
         };
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
-            let mut encoder = cap_media::encoders::MP4Encoder::init(
+            let mut encoder = cap_media::encoders::MP4File::init(
                 "output",
-                VideoInfo::from_raw(
-                    MP4Encoder::video_format(),
-                    self.output_size.0,
-                    self.output_size.1,
-                    self.fps,
+                self.output_path.clone(),
+                H264Encoder::factory(
+                    "output_video",
+                    VideoInfo::from_raw(
+                        RawVideoFormat::Rgba,
+                        self.output_size.0,
+                        self.output_size.1,
+                        self.fps,
+                    ),
                 ),
-                audio_info,
-                cap_media::encoders::Output::File(self.output_path.clone()),
-            )?;
+                move |o| audio_info.map(|a| OpusEncoder::init("output_audio", a, o)),
+            )
+            .unwrap();
 
             while let Ok(frame) = frame_rx.recv() {
                 encoder.queue_video_frame(frame.video);
@@ -162,7 +167,9 @@ where
 
             Ok::<_, ExportError>(self.output_path)
         })
-        .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
+        .then(|f| async {
+            f.unwrap().unwrap() /*.map_err(Into::into).and_then(|v| v)*/
+        });
 
         let render_task = tokio::spawn({
             let project = self.project.clone();
@@ -277,7 +284,9 @@ where
                 Ok::<_, ExportError>(())
             }
         })
-        .then(|f| async { f.map_err(Into::into).and_then(|v| v) });
+        .then(|f| async {
+            f.unwrap().unwrap() /*.map_err(Into::into).and_then(|v| v)*/
+        });
 
         println!("Rendering video to channel");
 
@@ -291,9 +300,11 @@ where
             self.resolution_base,
             self.is_upgraded,
         )
-        .then(|f| async { f.map_err(Into::into) });
+        .then(|f| async {
+            f.unwrap() /*.map_err(Into::into)*/
+        });
 
-        let (output_path, _, _) = tokio::try_join!(encoder_thread, render_video_task, render_task)?;
+        let (output_path, _, _) = tokio::join!(encoder_thread, render_video_task, render_task);
 
         Ok(output_path)
     }

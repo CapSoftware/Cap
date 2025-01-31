@@ -3,6 +3,7 @@ use std::{
     path::PathBuf,
     sync::{mpsc, Arc},
 };
+use tokio::sync::oneshot;
 
 #[cfg(target_os = "macos")]
 mod avassetreader;
@@ -36,14 +37,19 @@ impl AsyncVideoDecoderHandle {
     }
 }
 
-pub fn spawn_decoder(name: &'static str, path: PathBuf, fps: u32) -> AsyncVideoDecoderHandle {
+pub async fn spawn_decoder(
+    name: &'static str,
+    path: PathBuf,
+    fps: u32,
+) -> Result<AsyncVideoDecoderHandle, String> {
+    let (ready_tx, ready_rx) = oneshot::channel();
     let (tx, rx) = mpsc::channel();
 
     let handle = AsyncVideoDecoderHandle { sender: tx };
 
     #[cfg(target_os = "macos")]
     {
-        avassetreader::AVAssetReaderDecoder::spawn(name, path, fps, rx);
+        avassetreader::AVAssetReaderDecoder::spawn(name, path, fps, rx, ready_tx);
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -51,5 +57,5 @@ pub fn spawn_decoder(name: &'static str, path: PathBuf, fps: u32) -> AsyncVideoD
         ffmpeg::FfmpegDecoder::spawn(name, path, fps, rx);
     }
 
-    handle
+    ready_rx.await.map_err(|e| e.to_string())?.map(|()| handle)
 }

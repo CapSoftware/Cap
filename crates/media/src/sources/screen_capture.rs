@@ -375,7 +375,7 @@ fn inner<T>(
             error!("Failed to build capturer: {e}");
             ready_signal
                 .send(Err(MediaError::Any("Failed to build capturer")))
-                .unwrap();
+                .ok();
             return;
         }
     };
@@ -383,7 +383,7 @@ fn inner<T>(
     info!("Capturer built");
 
     let mut capturing = false;
-    ready_signal.send(Ok(())).unwrap();
+    ready_signal.send(Ok(())).ok();
 
     let t = std::time::Instant::now();
 
@@ -489,7 +489,13 @@ pub fn list_screens() -> Vec<(CaptureScreen, Target)> {
                     .get(&screen.id)
                     .cloned()
                     .unwrap_or_else(|| format!("Screen {}", idx + 1)),
-                refresh_rate: get_target_fps(&Target::Display(screen.clone())).unwrap(),
+                refresh_rate: {
+                    let Some(fps) = get_target_fps(&Target::Display(screen.clone())) else {
+                        continue;
+                    };
+
+                    fps
+                },
             },
             Target::Display(screen),
         ));

@@ -67,7 +67,6 @@ impl AudioInputSource {
         frames_rx: Receiver<AudioInputSamples>,
     ) {
         let frames: Vec<AudioInputSamples> = frames_rx.drain().collect();
-        drop(frames_rx);
 
         for frame in frames {
             if let Err(error) = self.process_frame(clock, output, frame) {

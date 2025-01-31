@@ -212,6 +212,10 @@ pub unsafe fn cast_f32_slice_to_bytes(slice: &[f32]) -> &[u8] {
     std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * f32::BYTE_SIZE)
 }
 
+pub unsafe fn cast_bytes_to_f32_slice(slice: &[u8]) -> &[f32] {
+    std::slice::from_raw_parts(slice.as_ptr() as *const f32, slice.len() / f32::BYTE_SIZE)
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct VideoInfo {
     pub pixel_format: Pixel,

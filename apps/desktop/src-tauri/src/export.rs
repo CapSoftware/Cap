@@ -45,7 +45,7 @@ pub async fn export_video(
             .unwrap_or(screen_metadata.duration),
     );
 
-    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await?;
     let total_frames = editor_instance.get_total_frames(fps);
 
     let output_path = editor_instance.meta().output_path();
@@ -94,6 +94,7 @@ pub async fn export_video(
         resolution_base,
         is_upgraded,
     )
+    .await
     .map_err(|e| {
         sentry::capture_message(&e.to_string(), sentry::Level::Error);
         e.to_string()
@@ -136,7 +137,7 @@ pub async fn get_export_estimates(
             .await
             .ok();
 
-    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await;
+    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await?;
     let total_frames = editor_instance.get_total_frames(fps);
 
     let raw_duration = screen_metadata.duration.max(

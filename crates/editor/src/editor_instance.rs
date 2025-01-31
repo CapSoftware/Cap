@@ -41,7 +41,7 @@ impl EditorInstance {
         video_id: String,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
         get_is_upgraded: impl Fn() -> bool + Send + 'static,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>, String> {
         sentry::configure_scope(|scope| {
             scope.set_tag("crate", "editor");
         });
@@ -76,7 +76,7 @@ impl EditorInstance {
                 .map(|c| XY::new(c.width, c.height)),
         };
 
-        let segments = create_segments(&meta);
+        let segments = create_segments(&meta).await?;
 
         let (frame_tx, frame_rx) = flume::bounded(4);
 
@@ -121,7 +121,7 @@ impl EditorInstance {
                 .spawn_preview_renderer(preview_rx, get_is_upgraded),
         );
 
-        this
+        Ok(this)
     }
 
     pub fn meta(&self) -> RecordingMeta {
@@ -315,12 +315,14 @@ pub struct Segment {
     pub decoders: RecordingSegmentDecoders,
 }
 
-pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
+pub async fn create_segments(meta: &RecordingMeta) -> Result<Vec<Segment>, String> {
     match &meta.content {
         cap_project::Content::SingleSegment { segment: s } => {
-            let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
-                AudioData::from_file(meta.path(&audio_meta.path)).unwrap()
-            }));
+            let audio = Arc::new(
+                s.audio
+                    .as_ref()
+                    .map(|audio_meta| AudioData::from_file(meta.path(&audio_meta.path)).unwrap()),
+            );
 
             let cursor = Arc::new(s.cursor_data(&meta).into());
 
@@ -330,21 +332,24 @@ pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
                     display: meta.path(&s.display.path),
                     camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
                 },
-            );
+            )
+            .await
+            .map_err(|e| format!("SingleSegment:{e}"))?;
 
-            vec![Segment {
+            Ok(vec![Segment {
                 audio,
                 cursor,
                 decoders,
-            }]
+            }])
         }
         cap_project::Content::MultipleSegments { inner } => {
             let mut segments = vec![];
 
-            for s in &inner.segments {
-                let audio = Arc::new(s.audio.as_ref().map(|audio_meta| {
-                    AudioData::from_file(meta.path(&audio_meta.path)).unwrap()
-                }));
+            for (i, s) in inner.segments.iter().enumerate() {
+                let audio =
+                    Arc::new(s.audio.as_ref().map(|audio_meta| {
+                        AudioData::from_file(meta.path(&audio_meta.path)).unwrap()
+                    }));
 
                 let cursor = Arc::new(s.cursor_events(&meta));
 
@@ -354,7 +359,9 @@ pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
                         display: meta.path(&s.display.path),
                         camera: s.camera.as_ref().map(|c| meta.path(&c.path)),
                     },
-                );
+                )
+                .await
+                .map_err(|e| format!("MultipleSegments/{i}:{e}"))?;
 
                 segments.push(Segment {
                     audio,
@@ -363,7 +370,7 @@ pub fn create_segments(meta: &RecordingMeta) -> Vec<Segment> {
                 });
             }
 
-            segments
+            Ok(segments)
         }
     }
 }

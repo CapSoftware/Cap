@@ -71,10 +71,13 @@ impl<T> PipelineBuilder<T> {
         let join_handle = thread::spawn(move || {
             tracing::dispatcher::with_default(&dispatcher, || {
                 span.in_scope(|| {
-                    launch(ready_sender);
-                })
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        launch(ready_sender);
+                    }))
+                    .ok();
+                });
+                done_tx.send(()).ok();
             });
-            done_tx.send(()).ok();
         });
 
         self.tasks.insert(
@@ -175,7 +178,7 @@ impl<Clock, PreviousOutput: Send + 'static> PipelinePathBuilder<Clock, PreviousO
     pub fn sink(
         self,
         name: impl Into<String>,
-        mut task: impl PipelineSinkTask<Input = PreviousOutput> + 'static,
+        mut task: impl PipelineSinkTask<PreviousOutput> + 'static,
     ) -> PipelineBuilder<Clock> {
         let Self {
             mut pipeline,
@@ -184,7 +187,7 @@ impl<Clock, PreviousOutput: Send + 'static> PipelinePathBuilder<Clock, PreviousO
 
         pipeline.spawn_task(name.into(), move |ready_signal| {
             trace!("Sink starting");
-            task.run(ready_signal, input);
+            task.run(ready_signal, &input);
             info!("Sink stopped running");
             task.finish();
             info!("Sink stopped");

@@ -164,7 +164,7 @@ impl Export {
                 .unwrap(),
         );
 
-        let segments = create_segments(&meta);
+        let segments = create_segments(&meta).await.unwrap();
 
         let fps = meta.content.max_fps();
         let project_output_path = self.project_path.join("output/result.mp4");
@@ -180,6 +180,7 @@ impl Export {
             XY::new(1920, 1080),
             true,
         )
+        .await
         .unwrap();
 
         exporter.export_with_custom_muxer().await.unwrap();

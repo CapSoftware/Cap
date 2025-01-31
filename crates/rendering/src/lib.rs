@@ -11,6 +11,7 @@ use cap_project::{
 use core::f64;
 use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
 use futures::future::OptionFuture;
+use futures::FutureExt;
 use futures_intrusive::channel::shared::oneshot_channel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -99,7 +100,7 @@ pub struct SegmentVideoPaths {
 }
 
 impl RecordingSegmentDecoders {
-    pub fn new(meta: &RecordingMeta, segment: SegmentVideoPaths) -> Self {
+    pub async fn new(meta: &RecordingMeta, segment: SegmentVideoPaths) -> Result<Self, String> {
         let screen = spawn_decoder(
             "screen",
             meta.project_path.join(segment.display),
@@ -107,8 +108,10 @@ impl RecordingSegmentDecoders {
                 Content::SingleSegment { segment } => segment.display.fps,
                 Content::MultipleSegments { inner } => inner.segments[0].display.fps,
             },
-        );
-        let camera = segment.camera.map(|camera| {
+        )
+        .await
+        .map_err(|e| format!("Screen:{e}"))?;
+        let camera = OptionFuture::from(segment.camera.map(|camera| {
             spawn_decoder(
                 "camera",
                 meta.project_path.join(camera),
@@ -119,9 +122,12 @@ impl RecordingSegmentDecoders {
                     }
                 },
             )
-        });
+            .then(|r| async { r.map_err(|e| format!("Camera:{e}")) })
+        }))
+        .await
+        .transpose()?;
 
-        Self { screen, camera }
+        Ok(Self { screen, camera })
     }
 
     pub async fn get_frames(

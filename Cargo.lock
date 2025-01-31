@@ -853,8 +853,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-audio"
+version = "0.1.0"
+dependencies = [
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
+ "ffmpeg-next",
+]
+
+[[package]]
 name = "cap-desktop"
-version = "0.3.16"
+version = "0.3.18"
 dependencies = [
  "anyhow",
  "axum",
@@ -2412,7 +2420,7 @@ dependencies = [
 [[package]]
 name = "ffmpeg-next"
 version = "7.1.0"
-source = "git+https://github.com/CapSoftware/rust-ffmpeg?rev=91b29d09a8c7cb4f5659c38f1f0924b980a30cba#91b29d09a8c7cb4f5659c38f1f0924b980a30cba"
+source = "git+https://github.com/CapSoftware/rust-ffmpeg?rev=29433c248bcd#29433c248bcd4c126e27f7461010354dd62a462e"
 dependencies = [
  "bitflags 2.6.0",
  "ffmpeg-sys-next",

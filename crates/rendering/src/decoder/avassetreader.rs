@@ -12,7 +12,7 @@ use cidre::{
     ns,
 };
 use ffmpeg::{codec, format, frame, Rational};
-use tokio::runtime::Handle as TokioHandle;
+use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
 
 use super::{pts_to_frame, DecodedFrame, VideoDecoderMessage, FRAME_CACHE_SIZE};
 
@@ -168,83 +168,64 @@ impl AVAssetReaderDecoder {
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
+        ready_tx: oneshot::Sender<Result<(), String>>,
     ) {
         let handle = tokio::runtime::Handle::current();
 
-        std::thread::spawn(move || {
-            let (pixel_format, width, height) = {
-                let input = ffmpeg::format::input(&path).unwrap();
+        let handle = std::thread::spawn(move || {
+            let init = || {
+                let (pixel_format, width, height) = {
+                    let input = ffmpeg::format::input(&path).unwrap();
 
-                let input_stream = input
-                    .streams()
-                    .best(ffmpeg::media::Type::Video)
-                    .ok_or("Could not find a video stream")
+                    let input_stream = input
+                        .streams()
+                        .best(ffmpeg::media::Type::Video)
+                        .ok_or("Could not find a video stream")
+                        .unwrap();
+
+                    let decoder_codec = super::ffmpeg::find_decoder(
+                        &input,
+                        &input_stream,
+                        input_stream.parameters().id(),
+                    )
                     .unwrap();
 
-                let decoder_codec = super::ffmpeg::find_decoder(
-                    &input,
-                    &input_stream,
-                    input_stream.parameters().id(),
-                )
-                .unwrap();
+                    let mut context = codec::context::Context::new_with_codec(decoder_codec);
+                    context.set_parameters(input_stream.parameters()).unwrap();
 
-                let mut context = codec::context::Context::new_with_codec(decoder_codec);
-                context.set_parameters(input_stream.parameters()).unwrap();
-
-                let decoder = context.decoder().video().unwrap();
-                (
-                    pixel_to_pixel_format(decoder.format()),
-                    decoder.width(),
-                    decoder.height(),
-                )
-            };
-
-            let asset = av::UrlAsset::with_url(
-                &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
-                None,
-            )
-            .unwrap();
-
-            fn get_reader_track_output(
-                asset: &av::UrlAsset,
-                time: f32,
-                handle: &TokioHandle,
-                pixel_format: cv::PixelFormat,
-            ) -> R<av::AssetReaderTrackOutput> {
-                let mut reader = av::AssetReader::with_asset(&asset).unwrap();
-
-                let time_range = cm::TimeRange {
-                    start: cm::Time::with_secs(time as f64, 100),
-                    duration: asset.duration(),
+                    let decoder = context.decoder().video().unwrap();
+                    (
+                        pixel_to_pixel_format(decoder.format()),
+                        decoder.width(),
+                        decoder.height(),
+                    )
                 };
 
-                reader.set_time_range(time_range);
-
-                let tracks = handle
-                    .block_on(asset.load_tracks_with_media_type(av::MediaType::video()))
-                    .unwrap();
-
-                let track = tracks.get(0).unwrap();
-
-                let mut reader_track_output = av::AssetReaderTrackOutput::with_track(
-                    &track,
-                    Some(&ns::Dictionary::with_keys_values(
-                        &[cv::pixel_buffer::keys::pixel_format().as_ns()],
-                        &[pixel_format.to_cf_number().as_ns().as_id_ref()],
-                    )),
+                let asset = av::UrlAsset::with_url(
+                    &ns::Url::with_fs_path_str(path.to_str().unwrap(), false),
+                    None,
                 )
-                .unwrap();
+                .ok_or_else(|| format!("UrlAsset::with_url{{{path:?}}}"))?;
 
-                reader_track_output.set_always_copies_sample_data(false);
+                Ok((
+                    get_reader_track_output(&asset, 0.0, &handle, pixel_format)?,
+                    width,
+                    height,
+                    asset,
+                    pixel_format,
+                ))
+            };
 
-                reader.add_output(&reader_track_output).unwrap();
-
-                reader.start_reading().ok();
-
-                reader_track_output
-            }
-
-            let mut track_output = get_reader_track_output(&asset, 0.0, &handle, pixel_format);
+            let (mut track_output, width, height, asset, pixel_format) = match init() {
+                Ok(v) => {
+                    ready_tx.send(Ok(())).ok();
+                    v
+                }
+                Err(e) => {
+                    ready_tx.send(Err(e)).ok();
+                    return;
+                }
+            };
 
             let black_frame = LazyCell::new(|| Arc::new(vec![0; (width * height * 4) as usize]));
 
@@ -288,7 +269,8 @@ impl AVAssetReaderDecoder {
                                 requested_time,
                                 &handle,
                                 pixel_format,
-                            );
+                            )
+                            .unwrap();
                             last_decoded_frame = None;
                         }
 
@@ -418,4 +400,48 @@ fn pixel_format_to_pixel(format: cv::PixelFormat) -> format::Pixel {
         cv::PixelFormat::_32_RGBA => format::Pixel::RGBA,
         _ => todo!(),
     }
+}
+
+fn get_reader_track_output(
+    asset: &av::UrlAsset,
+    time: f32,
+    handle: &TokioHandle,
+    pixel_format: cv::PixelFormat,
+) -> Result<R<av::AssetReaderTrackOutput>, String> {
+    let mut reader =
+        av::AssetReader::with_asset(&asset).map_err(|e| format!("AssetReader::with_asset: {e}"))?;
+
+    let time_range = cm::TimeRange {
+        start: cm::Time::with_secs(time as f64, 100),
+        duration: asset.duration(),
+    };
+
+    reader.set_time_range(time_range);
+
+    let tracks = handle
+        .block_on(asset.load_tracks_with_media_type(av::MediaType::video()))
+        .map_err(|e| format!("asset.load_tracks_with_media_type: {e}"))?;
+
+    let track = tracks.get(0).map_err(|e| e.to_string())?;
+
+    let mut reader_track_output = av::AssetReaderTrackOutput::with_track(
+        &track,
+        Some(&ns::Dictionary::with_keys_values(
+            &[cv::pixel_buffer::keys::pixel_format().as_ns()],
+            &[pixel_format.to_cf_number().as_ns().as_id_ref()],
+        )),
+    )
+    .map_err(|e| format!("asset.reader_track_output{{{pixel_format:?}}}): {e}"))?;
+
+    reader_track_output.set_always_copies_sample_data(false);
+
+    reader
+        .add_output(&reader_track_output)
+        .map_err(|e| format!("reader.add_output: {e}"))?;
+
+    reader
+        .start_reading()
+        .map_err(|e| format!("reader.start_reading: {e}"))?;
+
+    Ok(reader_track_output)
 }
