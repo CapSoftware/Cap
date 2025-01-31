@@ -141,18 +141,18 @@ where
         };
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
+            let mut info = VideoInfo::from_raw(
+                RawVideoFormat::Rgba,
+                self.output_size.0,
+                self.output_size.1,
+                self.fps,
+            );
+            info.time_base = ffmpeg::Rational::new(1, self.fps as i32);
+
             let mut encoder = cap_media::encoders::MP4File::init(
                 "output",
                 self.output_path.clone(),
-                H264Encoder::factory(
-                    "output_video",
-                    VideoInfo::from_raw(
-                        RawVideoFormat::Rgba,
-                        self.output_size.0,
-                        self.output_size.1,
-                        self.fps,
-                    ),
-                ),
+                H264Encoder::factory("output_video", info),
                 move |o| audio_info.map(|a| OpusEncoder::init("output_audio", a, o)),
             )
             .unwrap();
@@ -193,6 +193,7 @@ where
                 let mut first_frame = None;
 
                 while let Some((frame, frame_number)) = rx_image_data.recv().await {
+                    dbg!(frame_number);
                     (self.on_progress)(frame_count);
 
                     if frame_count == 0 {
@@ -218,6 +219,8 @@ where
                             let pts = (frame_number as f64 * f64::from(audio_info.sample_rate)
                                 / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
+                            let audio_frame = &frame;
+                            dbg!(audio_frame.pts());
                             Some(frame)
                         } else {
                             None
@@ -238,6 +241,7 @@ where
                         frame.padded_bytes_per_row as usize,
                     );
                     video_frame.set_pts(Some(frame_number as i64));
+                    dbg!(video_frame.pts());
 
                     frame_tx
                         .send(MP4Input {

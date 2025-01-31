@@ -31,6 +31,8 @@ impl H264Encoder {
         config: VideoInfo,
         output: &mut format::context::Output,
     ) -> Result<Self, MediaError> {
+        dbg!(config);
+
         let (codec, options) = get_codec_and_options(&config)?;
 
         let (format, converter) = if !codec
