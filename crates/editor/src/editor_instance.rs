@@ -7,8 +7,8 @@ use cap_media::frame_ws::create_frame_ws;
 use cap_project::RecordingConfig;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, XY};
 use cap_rendering::{
-    get_duration, ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
-    RenderVideoConstants, SegmentVideoPaths,
+    get_duration, DecodedSegmentFrames, ProjectRecordings, ProjectUniforms,
+    RecordingSegmentDecoders, RenderOptions, RenderVideoConstants, SegmentVideoPaths,
 };
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
@@ -244,35 +244,31 @@ impl EditorInstance {
 
                 let project = self.project_config.1.borrow().clone();
 
-                let Some((time, segment)) = project
-                    .timeline
-                    .as_ref()
-                    .map(|timeline| timeline.get_recording_time(frame_number as f64 / fps as f64))
-                    .unwrap_or(Some((frame_number as f64 / fps as f64, None)))
+                let Some((segment_time, segment_i)) =
+                    project.get_segment_time(frame_number as f64 / fps as f64)
                 else {
                     continue;
                 };
 
-                let segment = &self.segments[segment.unwrap_or(0) as usize];
+                let segment = &self.segments[segment_i as usize];
 
-                if let Some((screen_frame, camera_frame)) = segment
+                if let Some(segment_frames) = segment
                     .decoders
-                    .get_frames(time as f32, !project.camera.hide)
+                    .get_frames(segment_time as f32, !project.camera.hide)
                     .await
                 {
                     self.renderer
                         .render_frame(
-                            screen_frame,
-                            camera_frame,
+                            segment_frames,
                             project.background.source.clone(),
                             ProjectUniforms::new(
                                 &self.render_constants,
                                 &project,
-                                time as f32,
+                                frame_number,
+                                fps,
                                 resolution_base,
                                 get_is_upgraded(),
                             ),
-                            time as f32,
                             resolution_base,
                         )
                         .await;

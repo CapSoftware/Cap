@@ -68,7 +68,7 @@ function Inner() {
               <h1 class="text-[--text-primary] text-3xl font-bold">
                 An Error Occured
               </h1>
-              <p>We're very sorry, but something has gone very wrong.</p>
+              <p>We're very sorry, but something has gone wrong.</p>
               <div class="flex flex-row gap-x-4">
                 <Button
                   onClick={() => {
@@ -77,7 +77,14 @@ function Inner() {
                 >
                   Copy Error to Clipboard
                 </Button>
-                <Button variant="secondary">Reload</Button>
+                <Button
+                  onClick={() => {
+                    location.reload();
+                  }}
+                  variant="secondary"
+                >
+                  Reload
+                </Button>
               </div>
             </div>
           );

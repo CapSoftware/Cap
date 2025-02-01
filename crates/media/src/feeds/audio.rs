@@ -1,4 +1,4 @@
-use cap_project::TimelineConfiguration;
+use cap_project::{ProjectConfiguration, TimelineConfiguration};
 use ffmpeg::{
     codec::{context, decoder},
     format::{
@@ -163,7 +163,7 @@ pub struct AudioFrameBuffer {
 
 #[derive(Clone, Copy, Debug)]
 pub struct AudioFrameBufferCursor {
-    segment_index: usize,
+    segment_index: u32,
     // excludes channels
     samples: usize,
 }
@@ -188,22 +188,13 @@ impl AudioFrameBuffer {
         self.data[0].info
     }
 
-    pub fn set_playhead(&mut self, playhead: f64, maybe_timeline: Option<&TimelineConfiguration>) {
+    pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
         self.elapsed_samples = self.playhead_to_samples(playhead);
 
-        self.cursor = match maybe_timeline {
-            Some(timeline) => match timeline.get_recording_time(playhead) {
-                Some((time, segment)) => {
-                    let index = segment.unwrap_or(0) as usize;
-                    AudioFrameBufferCursor {
-                        segment_index: index,
-                        samples: self.playhead_to_samples(time),
-                    }
-                }
-                None => AudioFrameBufferCursor {
-                    segment_index: 0,
-                    samples: self.data[0].buffer.len(),
-                },
+        self.cursor = match project.get_segment_time(playhead) {
+            Some((segment_time, segment_i)) => AudioFrameBufferCursor {
+                segment_index: segment_i,
+                samples: self.playhead_to_samples(segment_time),
             },
             None => AudioFrameBufferCursor {
                 segment_index: 0,
@@ -219,10 +210,10 @@ impl AudioFrameBuffer {
         // this will only seek if there is a significant change in actual vs expected next sample
         // (corresponding to a trim or split point). Currently this change is at least 0.2 seconds
         // - not sure we offer that much precision in the editor even!
-        let new_cursor = match timeline.get_recording_time(playhead) {
-            Some((time, segment)) => AudioFrameBufferCursor {
-                segment_index: segment.unwrap_or(0) as usize,
-                samples: self.playhead_to_samples(time),
+        let new_cursor = match timeline.get_segment_time(playhead) {
+            Some((segment_time, segment_i)) => AudioFrameBufferCursor {
+                segment_index: segment_i,
+                samples: self.playhead_to_samples(segment_time),
             },
             None => AudioFrameBufferCursor {
                 segment_index: 0,
@@ -249,14 +240,14 @@ impl AudioFrameBuffer {
     pub fn next_frame(
         &mut self,
         requested_samples: usize,
-        timeline: Option<&TimelineConfiguration>,
+        project: &ProjectConfiguration,
     ) -> Option<FFAudio> {
         let format = self.info().sample_format;
         let channels = self.info().channel_layout();
         let sample_rate = self.info().sample_rate;
 
         let res = self
-            .next_frame_data(requested_samples, timeline)
+            .next_frame_data(requested_samples, project)
             .map(move |(samples, data)| {
                 let mut raw_frame = FFAudio::new(format, samples, channels);
                 raw_frame.set_rate(sample_rate);
@@ -273,28 +264,28 @@ impl AudioFrameBuffer {
     pub fn next_frame_data<'a>(
         &'a mut self,
         samples: usize,
-        maybe_timeline: Option<&TimelineConfiguration>,
+        project: &ProjectConfiguration,
     ) -> Option<(usize, &'a [f32])> {
-        if let Some(timeline) = maybe_timeline {
+        if let Some(timeline) = &project.timeline {
             self.adjust_cursor(timeline);
         }
+        let channels = self.info().channels;
 
-        let data = &self.data[self.cursor.segment_index];
+        let data = &self.data[self.cursor.segment_index as usize];
         let buffer = &data.buffer;
-        if self.cursor.samples >= buffer.len() / self.info().channels {
+        if self.cursor.samples >= buffer.len() / channels {
             self.elapsed_samples += samples;
             return None;
         }
 
-        let samples = (samples).min((buffer.len() / self.info().channels) - self.cursor.samples);
+        let samples = (samples).min((buffer.len() / channels) - self.cursor.samples);
 
         let start = self.cursor;
         self.elapsed_samples += samples;
         self.cursor.samples += samples;
         Some((
             samples,
-            &buffer
-                [start.samples * self.info().channels..self.cursor.samples * self.info().channels],
+            &buffer[start.samples * channels..self.cursor.samples * channels],
         ))
     }
 }
@@ -330,10 +321,10 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
         }
     }
 
-    pub fn set_playhead(&mut self, playhead: f64, maybe_timeline: Option<&TimelineConfiguration>) {
+    pub fn set_playhead(&mut self, playhead: f64, project: &ProjectConfiguration) {
         self.resampler.reset();
         self.resampled_buffer.clear();
-        self.frame_buffer.set_playhead(playhead, maybe_timeline);
+        self.frame_buffer.set_playhead(playhead, project);
 
         println!("Successful seek to sample {:?}", self.frame_buffer.cursor);
     }
@@ -343,7 +334,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
             <= 2 * (Self::PROCESSING_SAMPLES_COUNT as usize) * self.resampler.output.channels
     }
 
-    pub fn render(&mut self, timeline: Option<&TimelineConfiguration>) {
+    pub fn render(&mut self, project: &ProjectConfiguration) {
         if self.buffer_reaching_limit() {
             return;
         }
@@ -352,7 +343,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
 
         let next_frame = self
             .frame_buffer
-            .next_frame(Self::PROCESSING_SAMPLES_COUNT as usize, timeline);
+            .next_frame(Self::PROCESSING_SAMPLES_COUNT as usize, project);
 
         let maybe_rendered = match next_frame {
             Some(frame) => Some(self.resampler.queue_and_process_frame(&frame)),

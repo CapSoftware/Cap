@@ -87,7 +87,7 @@ function Inner() {
       fps: FPS,
       resolution_base: OUTPUT_SIZE,
     });
-  }, 1000 / 60);
+  }, 1000 / FPS);
 
   const frameNumberToRender = createMemo(() => {
     const preview = previewTime();
@@ -288,9 +288,12 @@ function Dialogs() {
                   position: dialog().position,
                   size: dialog().size,
                 });
-                const [cropOptions, setCropOptions] = makePersisted(createStore({
-                  showGrid: false
-                }), { name: "cropOptionsState" });
+                const [cropOptions, setCropOptions] = makePersisted(
+                  createStore({
+                    showGrid: false,
+                  }),
+                  { name: "cropOptionsState" }
+                );
 
                 const display = editorInstance.recordings.segments[0].display;
 
@@ -303,17 +306,29 @@ function Dialogs() {
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
                           <span>Size</span>
                           <div class="w-[3.25rem]">
-                            <Input class="bg-transparent dark:!text-[#ababab]" value={adjustedCrop().size.x} disabled />
+                            <Input
+                              class="bg-transparent dark:!text-[#ababab]"
+                              value={adjustedCrop().size.x}
+                              disabled
+                            />
                           </div>
                           <span>x</span>
                           <div class="w-[3.25rem]">
-                            <Input class="bg-transparent dark:!text-[#ababab]" value={adjustedCrop().size.y} disabled />
+                            <Input
+                              class="bg-transparent dark:!text-[#ababab]"
+                              value={adjustedCrop().size.y}
+                              disabled
+                            />
                           </div>
                         </div>
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
                           <span>Position</span>
                           <div class="w-[3.25rem]">
-                            <Input class="bg-transparent dark:!text-[#ababab]" value={adjustedCrop().position.x} disabled />
+                            <Input
+                              class="bg-transparent dark:!text-[#ababab]"
+                              value={adjustedCrop().position.x}
+                              disabled
+                            />
                           </div>
                           <span>x</span>
                           <div class="w-[3.25rem]">
@@ -326,11 +341,20 @@ function Dialogs() {
                         </div>
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
                           <Tooltip.Root openDelay={500}>
-                            <Tooltip.Trigger class="fixed flex flex-row items-center w-8 h-8" tabIndex={-1}>
+                            <Tooltip.Trigger
+                              class="fixed flex flex-row items-center w-8 h-8"
+                              tabIndex={-1}
+                            >
                               <button
                                 type="button"
-                                class={`flex items-center justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-300 outline-none transition-colors duration-200 ${cropOptions.showGrid ? "bg-gray-200 text-blue-300" : "text-gray-500"}`}
-                                onClick={() => setCropOptions("showGrid", (s) => !s)}
+                                class={`flex items-center justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-300 outline-none transition-colors duration-200 ${
+                                  cropOptions.showGrid
+                                    ? "bg-gray-200 text-blue-300"
+                                    : "text-gray-500"
+                                }`}
+                                onClick={() =>
+                                  setCropOptions("showGrid", (s) => !s)
+                                }
                               >
                                 <IconCapPadding class="w-4" />
                               </button>

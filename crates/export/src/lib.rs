@@ -201,7 +201,7 @@ where
 
                     let audio_frame = if let Some(audio) = &mut audio {
                         if frame_count == 0 {
-                            audio.buffer.set_playhead(0., project.timeline());
+                            audio.buffer.set_playhead(0., &project);
                         }
 
                         let audio_info = audio.buffer.info();
@@ -209,16 +209,14 @@ where
                             f64::from(audio_info.sample_rate) / f64::from(self.fps);
                         let samples = estimated_samples_per_frame.ceil() as usize;
 
-                        if let Some((_, frame_data)) = audio
-                            .buffer
-                            .next_frame_data(samples, project.timeline.as_ref().map(|t| t))
+                        if let Some((_, frame_data)) =
+                            audio.buffer.next_frame_data(samples, &project)
                         {
                             let mut frame = audio_info
                                 .wrap_frame(unsafe { cast_f32_slice_to_bytes(&frame_data) }, 0);
                             let pts = (frame_number as f64 * f64::from(audio_info.sample_rate)
                                 / f64::from(fps)) as i64;
                             frame.set_pts(Some(pts));
-                            let audio_frame = &frame;
                             Some(frame)
                         } else {
                             None
@@ -239,7 +237,6 @@ where
                         frame.padded_bytes_per_row as usize,
                     );
                     video_frame.set_pts(Some(frame_number as i64));
-                    dbg!(video_frame.pts());
 
                     frame_tx
                         .send(MP4Input {

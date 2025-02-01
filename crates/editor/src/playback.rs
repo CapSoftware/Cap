@@ -57,12 +57,11 @@ impl Playback {
 
             let mut frame_number = self.start_frame_number + 1;
 
-            let duration = self
-                .project
-                .borrow()
-                .timeline()
-                .map(|t| t.duration())
-                .unwrap_or(f64::MAX);
+            let duration = if let Some(timeline) = &self.project.borrow().timeline {
+                timeline.duration()
+            } else {
+                f64::MAX
+            };
 
             // TODO: make this work with >1 segment
             if self.segments[0].audio.is_some() {
@@ -87,24 +86,22 @@ impl Playback {
 
                 let project = self.project.borrow().clone();
 
-                let time = project
-                    .timeline()
-                    .map(|t| t.get_recording_time(frame_number as f64 / fps as f64))
-                    .unwrap_or(Some((frame_number as f64 / fps as f64, None)));
-
-                if let Some((time, segment)) = time {
-                    let segment = &self.segments[segment.unwrap_or(0) as usize];
+                if let Some((segment_time, segment_i)) =
+                    project.get_segment_time(frame_number as f64 / fps as f64)
+                {
+                    let segment = &self.segments[segment_i as usize];
 
                     tokio::select! {
                         _ = stop_rx.changed() => {
                            break;
                         },
-                        data = segment.decoders.get_frames(time as f32, !project.camera.hide) => {
-                            if let Some((screen_frame, camera_frame)) = data {
+                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => {
+                            if let Some(segment_frames) = data {
                                 let uniforms = ProjectUniforms::new(
                                     &self.render_constants,
                                     &project,
-                                    time as f32,
+                                    frame_number,
+                                    fps,
                                     resolution_base,
                                     is_upgraded,
                                 );
@@ -112,11 +109,9 @@ impl Playback {
                                 self
                                     .renderer
                                     .render_frame(
-                                        screen_frame,
-                                        camera_frame,
+                                        segment_frames,
                                         project.background.source.clone(),
-                                        uniforms.clone(),
-                                        time as f32,
+                                        uniforms,
                                         resolution_base
                                     )
                                     .await;
@@ -225,7 +220,7 @@ impl AudioPlayback {
         // pre-recorded videos are obviously a fixed size
         let mut audio_renderer = AudioPlaybackBuffer::new(segments, output_info);
         let playhead = f64::from(start_frame_number) / f64::from(fps);
-        audio_renderer.set_playhead(playhead, project.borrow().timeline());
+        audio_renderer.set_playhead(playhead, &project.borrow());
 
         // Prerender enough for smooth playback
         // disabled bc it causes weirdness during playback atm
@@ -241,7 +236,7 @@ impl AudioPlayback {
             .build_output_stream(
                 &config,
                 move |buffer: &mut [T], _info| {
-                    audio_renderer.render(project.borrow().timeline());
+                    audio_renderer.render(&project.borrow());
                     audio_renderer.fill(buffer);
                 },
                 |_| {},
