@@ -87,24 +87,25 @@ impl Playback {
 
                 let project = self.project.borrow().clone();
 
-                let time = project
-                    .timeline()
-                    .map(|t| t.get_recording_time(frame_number as f64 / fps as f64))
-                    .unwrap_or(Some((frame_number as f64 / fps as f64, None)));
+                let frame_time = frame_number as f32 / fps as f32;
 
-                if let Some((time, segment)) = time {
+                if let Some((segment_time, segment)) = project
+                    .timeline()
+                    .map(|t| t.get_recording_time(frame_time as f64))
+                    .unwrap_or(Some((frame_time as f64, None)))
+                {
                     let segment = &self.segments[segment.unwrap_or(0) as usize];
 
                     tokio::select! {
                         _ = stop_rx.changed() => {
                            break;
                         },
-                        data = segment.decoders.get_frames(time as f32, !project.camera.hide) => {
+                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => {
                             if let Some((screen_frame, camera_frame)) = data {
                                 let uniforms = ProjectUniforms::new(
                                     &self.render_constants,
                                     &project,
-                                    time as f32,
+                                    segment_time as f32,
                                     resolution_base,
                                     is_upgraded,
                                 );
@@ -116,7 +117,7 @@ impl Playback {
                                         camera_frame,
                                         project.background.source.clone(),
                                         uniforms.clone(),
-                                        time as f32,
+                                        frame_time,
                                         resolution_base
                                     )
                                     .await;

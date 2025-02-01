@@ -201,14 +201,14 @@ pub async fn render_video_to_channel(
             break;
         }
 
-        let source_time = if let Some(timeline) = &project.timeline {
-            match timeline.get_recording_time(frame_number as f64 / fps as f64) {
-                Some(value) => value.0,
-                None => frame_number as f64 / fps as f64,
-            }
-        } else {
-            frame_number as f64 / fps as f64
-        };
+        let frame_time = frame_number as f32 / fps as f32;
+
+        let segment_time = project
+            .timeline
+            .as_ref()
+            .and_then(|t| t.get_recording_time(frame_time as f64))
+            .map(|(v, _)| v)
+            .unwrap_or(frame_time as f64);
 
         let segment_i = if let Some(timeline) = &project.timeline {
             timeline
@@ -230,13 +230,13 @@ pub async fn render_video_to_channel(
 
         if let Some((screen_frame, camera_frame)) = segment
             .decoders
-            .get_frames(source_time as f32, !project.camera.hide)
+            .get_frames(segment_time as f32, !project.camera.hide)
             .await
         {
             let uniforms = ProjectUniforms::new(
                 &constants,
                 &project,
-                source_time as f32,
+                frame_time as f32,
                 resolution_base,
                 is_upgraded,
             );
@@ -247,7 +247,7 @@ pub async fn render_video_to_channel(
                 &camera_frame,
                 background,
                 &uniforms,
-                source_time as f32,
+                frame_time,
                 total_frames,
                 resolution_base,
             )
@@ -711,7 +711,7 @@ impl ProjectUniforms {
     pub fn new(
         constants: &RenderVideoConstants,
         project: &ProjectConfiguration,
-        time: f32,
+        frame_time: f32,
         resolution_base: XY<u32>,
         is_upgraded: bool,
     ) -> Self {
@@ -720,7 +720,7 @@ impl ProjectUniforms {
 
         let cursor_position = interpolate_cursor_position(
             &Default::default(), /*constants.cursor*/
-            time,
+            frame_time,
             &project.cursor.animation_style,
         );
 
@@ -750,7 +750,7 @@ impl ProjectUniforms {
         let crop = Self::get_crop(options, project);
 
         let segment_cursor = SegmentsCursor::new(
-            time as f64,
+            frame_time as f64,
             project
                 .timeline
                 .as_ref()
@@ -913,7 +913,7 @@ pub async fn produce_frame(
     camera_frame: &Option<DecodedFrame>,
     background: Background,
     uniforms: &ProjectUniforms,
-    time: f32,
+    segment_time: f32,
     total_frames: u32,
     resolution_base: XY<u32>,
 ) -> Result<RenderedFrame, RenderingError> {
@@ -1043,7 +1043,7 @@ pub async fn produce_frame(
     draw_cursor(
         constants,
         uniforms,
-        time,
+        segment_time,
         &mut encoder,
         get_either(texture_views, !output_is_left),
         resolution_base,
@@ -1304,14 +1304,14 @@ pub async fn produce_frame(
 fn draw_cursor(
     constants: &RenderVideoConstants,
     uniforms: &ProjectUniforms,
-    time: f32,
+    segment_time: f32,
     encoder: &mut CommandEncoder,
     view: &wgpu::TextureView,
     resolution_base: XY<u32>,
 ) {
     let Some(cursor_position) = interpolate_cursor_position(
         &Default::default(), // constants.cursor,
-        time,
+        segment_time,
         &uniforms.project.cursor.animation_style,
     ) else {
         return;
@@ -1320,7 +1320,7 @@ fn draw_cursor(
     // Calculate previous position for velocity
     let prev_position = interpolate_cursor_position(
         &Default::default(), // constants.cursor,
-        time - 1.0 / 30.0,
+        segment_time - 1.0 / 30.0,
         &uniforms.project.cursor.animation_style,
     );
 
@@ -1343,15 +1343,15 @@ fn draw_cursor(
     let motion_blur_amount = (speed * 0.3).min(1.0) * uniforms.project.motion_blur.unwrap_or(0.8);
 
     let cursor = Default::default();
-    let cursor_event = find_cursor_event(&cursor /* constants.cursor */, time);
+    let cursor_event = find_cursor_event(&cursor /* constants.cursor */, segment_time);
 
     let last_click_time =  /* constants
         .cursor
         .clicks */ Vec::<CursorClickEvent>::new()
         .iter()
-        .filter(|click| click.down && click.process_time_ms <= (time as f64) * 1000.0)
+        .filter(|click| click.down && click.process_time_ms <= (segment_time as f64) * 1000.0)
         .max_by_key(|click| click.process_time_ms as i64)
-        .map(|click| ((time as f64) * 1000.0 - click.process_time_ms) as f32 / 1000.0)
+        .map(|click| ((segment_time as f64) * 1000.0 - click.process_time_ms) as f32 / 1000.0)
         .unwrap_or(1.0);
 
     let Some(cursor_texture) = constants.cursor_textures.get(&cursor_event.cursor_id) else {

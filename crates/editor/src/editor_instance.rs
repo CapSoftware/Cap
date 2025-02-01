@@ -244,7 +244,9 @@ impl EditorInstance {
 
                 let project = self.project_config.1.borrow().clone();
 
-                let Some((time, segment)) = project
+                let frame_time = frame_number as f32 / fps as f32;
+
+                let Some((segment_time, segment)) = project
                     .timeline
                     .as_ref()
                     .map(|timeline| timeline.get_recording_time(frame_number as f64 / fps as f64))
@@ -257,7 +259,7 @@ impl EditorInstance {
 
                 if let Some((screen_frame, camera_frame)) = segment
                     .decoders
-                    .get_frames(time as f32, !project.camera.hide)
+                    .get_frames(segment_time as f32, !project.camera.hide)
                     .await
                 {
                     self.renderer
@@ -268,11 +270,11 @@ impl EditorInstance {
                             ProjectUniforms::new(
                                 &self.render_constants,
                                 &project,
-                                time as f32,
+                                frame_time,
                                 resolution_base,
                                 get_is_upgraded(),
                             ),
-                            time as f32,
+                            segment_time as f32,
                             resolution_base,
                         )
                         .await;

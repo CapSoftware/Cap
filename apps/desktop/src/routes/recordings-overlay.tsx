@@ -167,19 +167,15 @@ export default function () {
                       ref={setRef}
                       style={{ "border-color": "rgba(255, 255, 255, 0.1)" }}
                       class={cx(
-                        "w-[260px] h-[150px] p-[0.1875rem] bg-gray-500/40 rounded-[12px] overflow-hidden shadow border-[1px] group relative",
-                        "transition-all duration-300",
-                        media.isNew && "ring-2 ring-blue-300 ring-opacity-75"
+                        "w-[260px] h-[150px] bg-gray-500/40 rounded-xl border-[1px] overflow-hidden shadow group relative transition-all duration-300"
                       )}
                     >
                       <div
                         class={cx(
-                          "w-full h-full flex relative bg-transparent rounded-[8px] border-[1px] z-10 overflow-hidden",
-                          "transition-all",
+                          "w-full h-full flex relative bg-transparent z-10 overflow-hidden transition-all",
                           isLoading() && "backdrop-blur bg-gray-500/80"
                         )}
                         style={{
-                          "border-color": "rgba(255, 255, 255, 0.1)",
                           "pointer-events": "auto",
                         }}
                       >
@@ -289,7 +285,7 @@ export default function () {
                             "background-color": "rgba(0, 0, 0, 0.4)",
                           }}
                           class={cx(
-                            "w-full h-full absolute inset-0 transition-all duration-150 pointer-events-auto rounded-[7.4px]",
+                            "absolute inset-0 transition-all duration-150 pointer-events-auto rounded-[7.4px]",
                             showUpgradeTooltip()
                               ? "opacity-100"
                               : "opacity-0 group-hover:opacity-100",
@@ -397,7 +393,7 @@ export default function () {
                                 "border-end-start-radius": "7.4px",
                               }}
                               class={cx(
-                                "absolute bottom-0 left-0 right-0 font-medium text-gray-200 backdrop-blur-lg px-3 py-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
+                                "absolute bottom-0 left-0 right-0 font-medium text-gray-200 bg-[#00000080] backdrop-blur-lg px-3 py-2 flex justify-between items-center pointer-events-none transition-all max-w-full overflow-hidden",
                                 isLoading() || showUpgradeTooltip()
                                   ? "opacity-0"
                                   : "group-hover:opacity-0"
