@@ -132,19 +132,23 @@ impl RecordingSegmentDecoders {
 
     pub async fn get_frames(
         &self,
-        frame_time: f32,
+        segment_time: f32,
         needs_camera: bool,
-    ) -> Option<(DecodedFrame, Option<DecodedFrame>)> {
+    ) -> Option<DecodedSegmentFrames> {
         let (screen, camera) = tokio::join!(
-            self.screen.get_frame(frame_time),
+            self.screen.get_frame(segment_time),
             OptionFuture::from(
                 needs_camera
-                    .then(|| self.camera.as_ref().map(|d| d.get_frame(frame_time)))
+                    .then(|| self.camera.as_ref().map(|d| d.get_frame(segment_time)))
                     .flatten()
             )
         );
 
-        Some((screen?, camera.flatten()))
+        Some(DecodedSegmentFrames {
+            screen_frame: screen?,
+            camera_frame: camera.flatten(),
+            segment_time,
+        })
     }
 }
 
@@ -201,23 +205,10 @@ pub async fn render_video_to_channel(
             break;
         }
 
-        let frame_time = frame_number as f32 / fps as f32;
+        let frame_time = frame_number as f64 / fps as f64;
 
-        let segment_time = project
-            .timeline
-            .as_ref()
-            .and_then(|t| t.get_recording_time(frame_time as f64))
-            .map(|(v, _)| v)
-            .unwrap_or(frame_time as f64);
-
-        let segment_i = if let Some(timeline) = &project.timeline {
-            timeline
-                .get_recording_time(frame_number as f64 / fps as f64)
-                .map(|value| value.1)
-                .flatten()
-                .unwrap_or(0u32)
-        } else {
-            0u32
+        let Some((segment_time, segment_i)) = project.get_segment_time(frame_time) else {
+            break;
         };
 
         let segment = &segments[segment_i as usize];
@@ -228,7 +219,7 @@ pub async fn render_video_to_channel(
             std::mem::replace(&mut frame_number, prev + 1)
         };
 
-        if let Some((screen_frame, camera_frame)) = segment
+        if let Some(segment_frames) = segment
             .decoders
             .get_frames(segment_time as f32, !project.camera.hide)
             .await
@@ -236,19 +227,17 @@ pub async fn render_video_to_channel(
             let uniforms = ProjectUniforms::new(
                 &constants,
                 &project,
-                frame_time as f32,
+                frame_number,
+                fps,
                 resolution_base,
                 is_upgraded,
             );
 
             let frame = produce_frame(
                 &constants,
-                &screen_frame,
-                &camera_frame,
+                segment_frames,
                 background,
                 &uniforms,
-                frame_time,
-                total_frames,
                 resolution_base,
             )
             .await?;
@@ -711,12 +700,14 @@ impl ProjectUniforms {
     pub fn new(
         constants: &RenderVideoConstants,
         project: &ProjectConfiguration,
-        frame_time: f32,
+        frame_number: u32,
+        fps: u32,
         resolution_base: XY<u32>,
         is_upgraded: bool,
     ) -> Self {
         let options = &constants.options;
         let output_size = Self::get_output_size(options, project, resolution_base);
+        let frame_time = frame_number as f32 / fps as f32;
 
         let cursor_position = interpolate_cursor_position(
             &Default::default(), /*constants.cursor*/
@@ -907,14 +898,17 @@ pub struct RenderedFrame {
     pub padded_bytes_per_row: u32,
 }
 
+pub struct DecodedSegmentFrames {
+    pub screen_frame: DecodedFrame,
+    pub camera_frame: Option<DecodedFrame>,
+    pub segment_time: f32,
+}
+
 pub async fn produce_frame(
     constants: &RenderVideoConstants,
-    screen_frame: &Vec<u8>,
-    camera_frame: &Option<DecodedFrame>,
+    segment_frames: DecodedSegmentFrames,
     background: Background,
     uniforms: &ProjectUniforms,
-    segment_time: f32,
-    total_frames: u32,
     resolution_base: XY<u32>,
 ) -> Result<RenderedFrame, RenderingError> {
     let mut encoder = constants.device.create_command_encoder(
@@ -1010,7 +1004,7 @@ pub async fn produce_frame(
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            screen_frame,
+            &segment_frames.screen_frame,
             wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(constants.options.screen_size.x * 4),
@@ -1043,7 +1037,7 @@ pub async fn produce_frame(
     draw_cursor(
         constants,
         uniforms,
-        segment_time,
+        segment_frames.segment_time,
         &mut encoder,
         get_either(texture_views, !output_is_left),
         resolution_base,
@@ -1052,7 +1046,7 @@ pub async fn produce_frame(
     // camera
     if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (
         constants.options.camera_size,
-        camera_frame,
+        &segment_frames.camera_frame,
         &uniforms.camera,
     ) {
         let texture = constants.device.create_texture(
