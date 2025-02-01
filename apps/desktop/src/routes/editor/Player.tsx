@@ -119,10 +119,10 @@ export function Player() {
     if (e.code === "Space" && e.target === document.body) {
       e.preventDefault();
       const time = previewTime();
-			if (!playing() && time !== undefined) {
-				setPlaybackTime(time);
-				await commands.seekTo(videoId, Math.floor(time * FPS));
-			}
+      if (!playing() && time !== undefined) {
+        setPlaybackTime(time);
+        await commands.seekTo(videoId, Math.floor(time * FPS));
+      }
       await handlePlayPauseClick();
     }
   });
@@ -246,7 +246,14 @@ export function Player() {
         </div>
         <div class="flex-1 flex flex-row items-center justify-center gap-[0.5rem] text-gray-400 text-[0.875rem]">
           <span>{formatTime(playbackTime())}</span>
-          <button type="button" disabled>
+          <button
+            type="button"
+            onClick={async () => {
+              setPlaying(false);
+              await commands.stopPlayback(videoId);
+              await commands.setPlayheadPosition(videoId, 0);
+            }}
+          >
             <IconCapFrameFirst class="size-[1.2rem]" />
           </button>
           <button
@@ -260,7 +267,17 @@ export function Player() {
               <IconCapStopCircle class="size-[1.5rem]" />
             )}
           </button>
-          <button type="button" disabled>
+          <button
+            type="button"
+            onClick={async () => {
+              setPlaying(false);
+              await commands.stopPlayback(videoId);
+              await commands.setPlayheadPosition(
+                videoId,
+                Math.floor(totalDuration() * FPS)
+              );
+            }}
+          >
             <IconCapFrameLast class="size-[1rem]" />
           </button>
           <span>{formatTime(totalDuration())}</span>
