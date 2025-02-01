@@ -56,7 +56,11 @@ export function Timeline() {
       const resume = history.pause();
       setProject("timeline", {
         segments: [
-          { timescale: 1, start: 0, end: duration(), recordingSegment: null },
+          {
+            timescale: 1,
+            start: 0,
+            end: duration(),
+          },
         ],
       });
       resume();
@@ -66,9 +70,7 @@ export function Timeline() {
   const xPadding = 12;
 
   const segments = (): Array<TimelineSegment> =>
-    project.timeline?.segments ?? [
-      { start: 0, end: duration(), timescale: 1, recordingSegment: null },
-    ];
+    project.timeline?.segments ?? [{ start: 0, end: duration(), timescale: 1 }];
 
   if (
     !project.timeline?.zoomSegments ||
@@ -82,7 +84,6 @@ export function Timeline() {
               start: 0,
               end: duration(),
               timescale: 1,
-              recordingSegment: null,
             },
           ],
           zoomSegments: [],
@@ -100,7 +101,6 @@ export function Timeline() {
     const { left, width } = timelineBounds;
     if (zoomSegmentDragState.type !== "moving")
       commands.setPlayheadPosition(
-        videoId,
         Math.round(
           FPS *
             editorInstance.recordingDuration *

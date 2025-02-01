@@ -10,6 +10,7 @@ mod platform;
 mod recording;
 // mod resource;
 mod audio_meter;
+mod editor_window;
 mod export;
 mod fake_window;
 mod tray;
@@ -33,6 +34,8 @@ use cap_recording::RecordingOptions;
 use cap_rendering::ProjectRecordings;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
+use editor_window::EditorInstances;
+use editor_window::WindowEditorInstance;
 use general_settings::{GeneralSettingsStore, RecordingConfig};
 use mp4::Mp4Reader;
 // use display::{list_capture_windows, Bounds, CaptureTarget, FPS};
@@ -56,6 +59,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use tauri::Window;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
@@ -658,18 +662,6 @@ async fn create_thumbnail(input: PathBuf, output: PathBuf, size: (u32, u32)) -> 
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
-async fn get_rendered_video_path(app: AppHandle, video_id: String) -> Result<PathBuf, String> {
-    let editor_instance = upsert_editor_instance(&app, video_id.clone()).await?;
-    let output_path = editor_instance.meta().output_path();
-
-    // If the file doesn't exist, return an error to trigger the progress-enabled path
-    if !output_path.exists() {
-        return Err("Rendered video does not exist".to_string());
-    }
-
-    Ok(output_path)
-}
-
 #[tauri::command]
 #[specta::specta]
 async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(), String> {
@@ -879,12 +871,11 @@ impl EditorStateChanged {
 #[specta::specta]
 async fn start_playback(
     app: AppHandle,
-    video_id: String,
+    editor_instance: WindowEditorInstance,
     fps: u32,
     resolution_base: XY<u32>,
 ) -> Result<(), String> {
-    upsert_editor_instance(&app, video_id)
-        .await?
+    editor_instance
         .start_playback(
             fps,
             resolution_base,
@@ -901,9 +892,7 @@ async fn start_playback(
 
 #[tauri::command]
 #[specta::specta]
-async fn stop_playback(app: AppHandle, video_id: String) -> Result<(), String> {
-    let editor_instance = upsert_editor_instance(&app, video_id).await?;
-
+async fn stop_playback(editor_instance: WindowEditorInstance) -> Result<(), String> {
     let mut state = editor_instance.state.lock().await;
 
     if let Some(handle) = state.playback_task.take() {
@@ -927,10 +916,11 @@ struct SerializedEditorInstance {
 #[tauri::command]
 #[specta::specta]
 async fn create_editor_instance(
-    app: AppHandle,
+    window: Window,
     video_id: String,
 ) -> Result<SerializedEditorInstance, String> {
-    let editor_instance = upsert_editor_instance(&app, video_id).await?;
+    let editor_instance = create_editor_instance_impl(window.app_handle(), video_id).await?;
+    EditorInstances::add(&window, editor_instance.clone());
 
     // Load the RecordingMeta to get the pretty name
     let meta = RecordingMeta::load_for_project(&editor_instance.project_path)
@@ -1104,12 +1094,9 @@ pub enum RenderProgress {
 #[tauri::command]
 #[specta::specta]
 async fn set_playhead_position(
-    app: AppHandle,
-    video_id: String,
+    editor_instance: WindowEditorInstance,
     frame_number: u32,
 ) -> Result<(), String> {
-    let editor_instance = upsert_editor_instance(&app, video_id).await?;
-
     editor_instance
         .modify_and_emit_state(|state| {
             state.playhead_position = frame_number;
@@ -1122,12 +1109,9 @@ async fn set_playhead_position(
 #[tauri::command]
 #[specta::specta]
 async fn set_project_config(
-    app: AppHandle,
-    video_id: String,
+    editor_instance: WindowEditorInstance,
     config: ProjectConfiguration,
 ) -> Result<(), String> {
-    let editor_instance = upsert_editor_instance(&app, video_id).await?;
-
     config.write(&editor_instance.project_path).unwrap();
 
     editor_instance.project_config.0.send(config).ok();
@@ -1870,9 +1854,7 @@ async fn is_camera_window_open(app: AppHandle) -> bool {
 
 #[tauri::command]
 #[specta::specta]
-async fn seek_to(app: AppHandle, video_id: String, frame_number: u32) -> Result<(), String> {
-    let editor_instance = upsert_editor_instance(&app, video_id).await?;
-
+async fn seek_to(editor_instance: WindowEditorInstance, frame_number: u32) -> Result<(), String> {
     editor_instance
         .modify_and_emit_state(|state| {
             state.playhead_position = frame_number;
@@ -2014,7 +1996,6 @@ pub async fn run() {
             global_message_dialog,
             show_window,
             write_clipboard_string,
-            get_editor_total_frames,
             platform::perform_haptic_feedback
         ])
         .events(tauri_specta::collect_events![
@@ -2266,12 +2247,8 @@ pub async fn run() {
                                     w.close().ok();
                                 }
                             }
-                            CapWindowId::Editor { project_id } => {
-                                let app_handle = app.clone();
-                                tokio::spawn(async move {
-                                    let _ = remove_editor_instance(&app_handle, project_id).await;
-                                    tokio::task::yield_now().await;
-                                });
+                            CapWindowId::Editor { .. } => {
+                                EditorInstances::remove(window);
                             }
                             CapWindowId::Settings | CapWindowId::Upgrade => {
                                 // Don't quit the app when settings or upgrade window is closed
@@ -2338,53 +2315,6 @@ pub async fn run() {
             }
             _ => {}
         });
-}
-
-type EditorInstancesState = Arc<Mutex<HashMap<String, Arc<EditorInstance>>>>;
-
-pub async fn remove_editor_instance(
-    app: &AppHandle<impl Runtime>,
-    video_id: String,
-) -> Option<Arc<EditorInstance>> {
-    let map = match app.try_state::<EditorInstancesState>() {
-        Some(s) => (*s).clone(),
-        None => return None,
-    };
-
-    let mut map = map.lock().await;
-
-    if let Some(editor) = map.remove(&video_id) {
-        editor.dispose().await;
-        Some(editor)
-    } else {
-        None
-    }
-}
-
-pub async fn upsert_editor_instance(
-    app: &AppHandle,
-    video_id: String,
-) -> Result<Arc<EditorInstance>, String> {
-    let map = match app.try_state::<EditorInstancesState>() {
-        Some(s) => (*s).clone(),
-        None => {
-            let map = Arc::new(Mutex::new(HashMap::new()));
-            app.manage(map.clone());
-            map
-        }
-    };
-
-    let mut map = map.lock().await;
-
-    use std::collections::hash_map::Entry;
-    Ok(match map.entry(video_id.clone()) {
-        Entry::Occupied(o) => o.get().clone(),
-        Entry::Vacant(v) => {
-            let instance = create_editor_instance_impl(app, video_id).await?;
-            v.insert(instance.clone());
-            instance
-        }
-    })
 }
 
 async fn create_editor_instance_impl(
@@ -2540,19 +2470,3 @@ trait EventExt: tauri_specta::Event {
 }
 
 impl<T: tauri_specta::Event> EventExt for T {}
-
-#[tauri::command(async)]
-#[specta::specta]
-async fn get_editor_total_frames(
-    app: AppHandle,
-    video_id: String,
-    fps: u32,
-) -> Result<u32, String> {
-    let editor_instances = app.state::<EditorInstancesState>();
-    let instances = editor_instances.lock().await;
-
-    let instance = instances
-        .get(&video_id)
-        .ok_or_else(|| "Editor instance not found".to_string())?;
-    Ok(instance.get_total_frames(fps))
-}

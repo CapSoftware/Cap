@@ -89,7 +89,7 @@ export function Player() {
 
   createEffect(() => {
     if (isAtEnd() && playing()) {
-      commands.stopPlayback(videoId);
+      commands.stopPlayback();
       setPlaying(false);
     }
   });
@@ -97,16 +97,16 @@ export function Player() {
   const handlePlayPauseClick = async () => {
     try {
       if (isAtEnd()) {
-        await commands.stopPlayback(videoId);
+        await commands.stopPlayback();
         setPlaybackTime(0);
-        await commands.seekTo(videoId, 0);
-        await commands.startPlayback(videoId, FPS, OUTPUT_SIZE);
+        await commands.seekTo(0);
+        await commands.startPlayback(FPS, OUTPUT_SIZE);
         setPlaying(true);
       } else if (playing()) {
-        await commands.stopPlayback(videoId);
+        await commands.stopPlayback();
         setPlaying(false);
       } else {
-        await commands.startPlayback(videoId, FPS, OUTPUT_SIZE);
+        await commands.startPlayback(FPS, OUTPUT_SIZE);
         setPlaying(true);
       }
     } catch (error) {
@@ -121,7 +121,7 @@ export function Player() {
       const time = previewTime();
       if (!playing() && time !== undefined) {
         setPlaybackTime(time);
-        await commands.seekTo(videoId, Math.floor(time * FPS));
+        await commands.seekTo(Math.floor(time * FPS));
       }
       await handlePlayPauseClick();
     }
@@ -250,8 +250,8 @@ export function Player() {
             type="button"
             onClick={async () => {
               setPlaying(false);
-              await commands.stopPlayback(videoId);
-              await commands.setPlayheadPosition(videoId, 0);
+              await commands.stopPlayback();
+              await commands.setPlayheadPosition(0);
             }}
           >
             <IconCapFrameFirst class="size-[1.2rem]" />
@@ -271,9 +271,8 @@ export function Player() {
             type="button"
             onClick={async () => {
               setPlaying(false);
-              await commands.stopPlayback(videoId);
+              await commands.stopPlayback();
               await commands.setPlayheadPosition(
-                videoId,
                 Math.floor(totalDuration() * FPS)
               );
             }}
