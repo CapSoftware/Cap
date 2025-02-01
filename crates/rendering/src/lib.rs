@@ -1039,17 +1039,15 @@ pub async fn produce_frame(
         output_is_left = !output_is_left;
     }
 
-    if FLAGS.zoom {
-        // Then render the cursor
-        draw_cursor(
-            constants,
-            uniforms,
-            time,
-            &mut encoder,
-            get_either(texture_views, !output_is_left),
-            resolution_base,
-        );
-    }
+    // Then render the cursor
+    draw_cursor(
+        constants,
+        uniforms,
+        time,
+        &mut encoder,
+        get_either(texture_views, !output_is_left),
+        resolution_base,
+    );
 
     // camera
     if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (

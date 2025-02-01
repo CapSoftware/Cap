@@ -43,7 +43,7 @@ export function Timeline() {
     history,
     split,
     setState,
-    playing
+    playing,
   } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
@@ -70,27 +70,26 @@ export function Timeline() {
       { start: 0, end: duration(), timescale: 1, recordingSegment: null },
     ];
 
-  if (window.FLAGS.zoom)
-    if (
-      !project.timeline?.zoomSegments ||
-      project.timeline.zoomSegments.length < 1
-    ) {
-      setProject(
-        produce((project) => {
-          project.timeline ??= {
-            segments: [
-              {
-                start: 0,
-                end: duration(),
-                timescale: 1,
-                recordingSegment: null,
-              },
-            ],
-            zoomSegments: [],
-          };
-        })
-      );
-    }
+  if (
+    !project.timeline?.zoomSegments ||
+    project.timeline.zoomSegments.length < 1
+  ) {
+    setProject(
+      produce((project) => {
+        project.timeline ??= {
+          segments: [
+            {
+              start: 0,
+              end: duration(),
+              timescale: 1,
+              recordingSegment: null,
+            },
+          ],
+          zoomSegments: [],
+        };
+      })
+    );
+  }
 
   let zoomSegmentDragState = { type: "idle" } as
     | { type: "idle" }
@@ -363,375 +362,361 @@ export function Timeline() {
             )}
           </For>
         </TrackRoot>
-        <Show when={window.FLAGS.zoom}>
-          {(_) => {
-            const [hoveringSegment, setHoveringSegment] = createSignal(false);
-            const [hoveredTime, setHoveredTime] = createSignal<number>();
+        {((_) => {
+          const [hoveringSegment, setHoveringSegment] = createSignal(false);
+          const [hoveredTime, setHoveredTime] = createSignal<number>();
 
-            return (
-              <>
-                <div class="h-2 w-full" />
+          return (
+            <>
+              <div class="h-2 w-full" />
 
-                <TrackRoot
-                  isFreeForm
-                  onMouseMove={(e) => {
-                    if (hoveringSegment()) {
-                      setHoveredTime(undefined);
-                      return;
-                    }
+              <TrackRoot
+                isFreeForm
+                onMouseMove={(e) => {
+                  if (hoveringSegment()) {
+                    setHoveredTime(undefined);
+                    return;
+                  }
 
-                    const bounds = e.target.getBoundingClientRect()!;
+                  const bounds = e.target.getBoundingClientRect()!;
 
-                    let time =
-                      ((e.clientX - bounds.left) / bounds.width) * duration();
+                  let time =
+                    ((e.clientX - bounds.left) / bounds.width) * duration();
 
-                    const prevSegmentIndex =
-                      project.timeline?.zoomSegments?.findIndex(
-                        (s) => s.end < time
-                      );
+                  const prevSegmentIndex =
+                    project.timeline?.zoomSegments?.findIndex(
+                      (s) => s.end < time
+                    );
 
-                    const nextSegmentIndex =
-                      project.timeline?.zoomSegments?.findIndex(
-                        (s) => time < s.start
-                      );
+                  const nextSegmentIndex =
+                    project.timeline?.zoomSegments?.findIndex(
+                      (s) => time < s.start
+                    );
 
-                    if (nextSegmentIndex !== undefined) {
-                      const nextSegment =
-                        project.timeline?.zoomSegments?.[nextSegmentIndex];
+                  if (nextSegmentIndex !== undefined) {
+                    const nextSegment =
+                      project.timeline?.zoomSegments?.[nextSegmentIndex];
 
-                      if (prevSegmentIndex !== undefined && nextSegment) {
-                        const prevSegment =
-                          project.timeline?.zoomSegments?.[prevSegmentIndex];
+                    if (prevSegmentIndex !== undefined && nextSegment) {
+                      const prevSegment =
+                        project.timeline?.zoomSegments?.[prevSegmentIndex];
 
-                        if (prevSegment) {
-                          const availableTime =
-                            nextSegment?.start - prevSegment?.end;
+                      if (prevSegment) {
+                        const availableTime =
+                          nextSegment?.start - prevSegment?.end;
 
-                          if (availableTime < 1) return;
-                        }
-                      }
-
-                      if (nextSegment && nextSegment.start - time < 1) {
-                        time = nextSegment.start - 1;
+                        if (availableTime < 1) return;
                       }
                     }
 
-                    setHoveredTime(Math.min(time, duration() - 1));
-                  }}
-                  onMouseLeave={() => setHoveredTime()}
-                  onMouseDown={(e) => {
-                    createRoot((dispose) => {
-                      createEventListener(e.currentTarget, "mouseup", (e) => {
-                        dispose();
+                    if (nextSegment && nextSegment.start - time < 1) {
+                      time = nextSegment.start - 1;
+                    }
+                  }
 
-                        const time = hoveredTime();
-                        if (time === undefined) return;
+                  setHoveredTime(Math.min(time, duration() - 1));
+                }}
+                onMouseLeave={() => setHoveredTime()}
+                onMouseDown={(e) => {
+                  createRoot((dispose) => {
+                    createEventListener(e.currentTarget, "mouseup", (e) => {
+                      dispose();
 
-                        e.stopPropagation();
-                        batch(() => {
-                          setProject(
-                            "timeline",
-                            "zoomSegments",
-                            (v) => v ?? []
-                          );
-                          setProject(
-                            "timeline",
-                            "zoomSegments",
-                            produce((zoomSegments) => {
-                              zoomSegments ??= [];
-                              zoomSegments.push({
-                                start: time,
-                                end: time + 1,
-                                amount: 1.5,
-                                mode: {
-                                  manual: {
-                                    x: 0.5,
-                                    y: 0.5,
-                                  },
+                      const time = hoveredTime();
+                      if (time === undefined) return;
+
+                      e.stopPropagation();
+                      batch(() => {
+                        setProject("timeline", "zoomSegments", (v) => v ?? []);
+                        setProject(
+                          "timeline",
+                          "zoomSegments",
+                          produce((zoomSegments) => {
+                            zoomSegments ??= [];
+                            zoomSegments.push({
+                              start: time,
+                              end: time + 1,
+                              amount: 1.5,
+                              mode: {
+                                manual: {
+                                  x: 0.5,
+                                  y: 0.5,
                                 },
-                              });
-                            })
-                          );
-                        });
-                      });
-                    });
-                  }}
-                >
-                  <Show
-                    when={
-                      !useTrackContext().trackState.draggingSegment &&
-                      hoveredTime()
-                    }
-                  >
-                    {(time) => (
-                      <SegmentRoot
-                        class="border-red-300 group pointer-events-none opacity-70"
-                        innerClass="ring-red-300"
-                        segment={{
-                          start: time(),
-                          end: time() + 1,
-                        }}
-                      >
-                        <SegmentHandle class="bg-red-300" />
-                        <SegmentContent class="bg-red-50" />
-                        <SegmentHandle class="bg-red-300" />
-                      </SegmentRoot>
-                    )}
-                  </Show>
-                  <For each={project.timeline?.zoomSegments}>
-                    {(segment, i) => {
-                      const { setTrackState, trackBounds } = useTrackContext();
-
-                      const zoomPercentage = () => {
-                        const amount = segment.amount;
-                        return `${amount.toFixed(1)}x`;
-                      };
-
-                      const zoomSegments = () =>
-                        project.timeline!.zoomSegments!;
-
-                      function handleSegmentMouseUp(e: MouseEvent) {}
-
-                      function createMouseDownDrag<T>(
-                        setup: () => T,
-                        _update: (
-                          e: MouseEvent,
-                          v: T,
-                          initialMouseX: number
-                        ) => void
-                      ) {
-                        return function (downEvent: MouseEvent) {
-                          downEvent.stopPropagation();
-
-                          const initial = setup();
-
-                          let moved = false;
-                          let initialMouseX: null | number = null;
-
-                          setTrackState("draggingSegment", true);
-
-                          const resumeHistory = history.pause();
-
-                          zoomSegmentDragState = { type: "movePending" };
-
-                          function finish(e: MouseEvent) {
-                            resumeHistory();
-                            if (!moved) {
-                              e.stopPropagation();
-                              setState("timelineSelection", {
-                                type: "zoom",
-                                index: i(),
-                              });
-                              handleUpdatePlayhead(e);
-                            }
-                            zoomSegmentDragState = { type: "idle" };
-                            setTrackState("draggingSegment", false);
-                          }
-
-                          function update(event: MouseEvent) {
-                            if (
-                              Math.abs(event.clientX - downEvent.clientX) > 2
-                            ) {
-                              if (!moved) {
-                                moved = true;
-                                initialMouseX = event.clientX;
-                                zoomSegmentDragState = {
-                                  type: "moving",
-                                };
-                              }
-                            }
-
-                            if (initialMouseX === null) return;
-
-                            _update(event, initial, initialMouseX);
-                          }
-
-                          createRoot((dispose) => {
-                            createEventListenerMap(window, {
-                              mousemove: (e) => {
-                                update(e);
-                              },
-                              mouseup: (e) => {
-                                update(e);
-                                finish(e);
-                                dispose();
                               },
                             });
+                          })
+                        );
+                      });
+                    });
+                  });
+                }}
+              >
+                <Show
+                  when={
+                    !useTrackContext().trackState.draggingSegment &&
+                    hoveredTime()
+                  }
+                >
+                  {(time) => (
+                    <SegmentRoot
+                      class="border-red-300 group pointer-events-none opacity-70"
+                      innerClass="ring-red-300"
+                      segment={{
+                        start: time(),
+                        end: time() + 1,
+                      }}
+                    >
+                      <SegmentHandle class="bg-red-300" />
+                      <SegmentContent class="bg-red-50" />
+                      <SegmentHandle class="bg-red-300" />
+                    </SegmentRoot>
+                  )}
+                </Show>
+                <For each={project.timeline?.zoomSegments}>
+                  {(segment, i) => {
+                    const { setTrackState, trackBounds } = useTrackContext();
+
+                    const zoomPercentage = () => {
+                      const amount = segment.amount;
+                      return `${amount.toFixed(1)}x`;
+                    };
+
+                    const zoomSegments = () => project.timeline!.zoomSegments!;
+
+                    function handleSegmentMouseUp(e: MouseEvent) {}
+
+                    function createMouseDownDrag<T>(
+                      setup: () => T,
+                      _update: (
+                        e: MouseEvent,
+                        v: T,
+                        initialMouseX: number
+                      ) => void
+                    ) {
+                      return function (downEvent: MouseEvent) {
+                        downEvent.stopPropagation();
+
+                        const initial = setup();
+
+                        let moved = false;
+                        let initialMouseX: null | number = null;
+
+                        setTrackState("draggingSegment", true);
+
+                        const resumeHistory = history.pause();
+
+                        zoomSegmentDragState = { type: "movePending" };
+
+                        function finish(e: MouseEvent) {
+                          resumeHistory();
+                          if (!moved) {
+                            e.stopPropagation();
+                            setState("timelineSelection", {
+                              type: "zoom",
+                              index: i(),
+                            });
+                            handleUpdatePlayhead(e);
+                          }
+                          zoomSegmentDragState = { type: "idle" };
+                          setTrackState("draggingSegment", false);
+                        }
+
+                        function update(event: MouseEvent) {
+                          if (Math.abs(event.clientX - downEvent.clientX) > 2) {
+                            if (!moved) {
+                              moved = true;
+                              initialMouseX = event.clientX;
+                              zoomSegmentDragState = {
+                                type: "moving",
+                              };
+                            }
+                          }
+
+                          if (initialMouseX === null) return;
+
+                          _update(event, initial, initialMouseX);
+                        }
+
+                        createRoot((dispose) => {
+                          createEventListenerMap(window, {
+                            mousemove: (e) => {
+                              update(e);
+                            },
+                            mouseup: (e) => {
+                              update(e);
+                              finish(e);
+                              dispose();
+                            },
                           });
-                        };
-                      }
+                        });
+                      };
+                    }
 
-                      return (
-                        <SegmentRoot
-                          class="border-red-300 group bg-red-50 hover:bg-opacity-80 transition-colors"
-                          innerClass="ring-red-300"
-                          segment={segment}
-                          onMouseEnter={() => {
-                            setHoveringSegment(true);
-                          }}
-                          onMouseLeave={() => {
-                            setHoveringSegment(false);
-                          }}
-                        >
-                          <SegmentHandle
-                            class="bg-red-300 hover:opacity-80 transition-colors"
-                            onMouseDown={createMouseDownDrag(
-                              () => {
-                                const start = segment.start;
+                    return (
+                      <SegmentRoot
+                        class="border-red-300 group bg-red-50 hover:bg-opacity-80 transition-colors"
+                        innerClass="ring-red-300"
+                        segment={segment}
+                        onMouseEnter={() => {
+                          setHoveringSegment(true);
+                        }}
+                        onMouseLeave={() => {
+                          setHoveringSegment(false);
+                        }}
+                      >
+                        <SegmentHandle
+                          class="bg-red-300 hover:opacity-80 transition-colors"
+                          onMouseDown={createMouseDownDrag(
+                            () => {
+                              const start = segment.start;
 
-                                let minValue = 0;
+                              let minValue = 0;
 
-                                let maxValue = segment.end - 1;
+                              let maxValue = segment.end - 1;
 
-                                for (
-                                  let i = zoomSegments().length - 1;
-                                  i >= 0;
-                                  i--
-                                ) {
-                                  const segment = zoomSegments()[i]!;
-                                  if (segment.end <= start) {
-                                    minValue = segment.end;
-                                    break;
-                                  }
+                              for (
+                                let i = zoomSegments().length - 1;
+                                i >= 0;
+                                i--
+                              ) {
+                                const segment = zoomSegments()[i]!;
+                                if (segment.end <= start) {
+                                  minValue = segment.end;
+                                  break;
                                 }
-
-                                return { start, minValue, maxValue };
-                              },
-                              (e, value, initialMouseX) => {
-                                const { width } = timelineBounds;
-
-                                const newStart =
-                                  value.start +
-                                  ((e.clientX - initialMouseX) / width!) *
-                                    duration();
-
-                                setProject(
-                                  "timeline",
-                                  "zoomSegments",
-                                  i(),
-                                  "start",
-                                  Math.min(
-                                    value.maxValue,
-                                    Math.max(value.minValue, newStart)
-                                  )
-                                );
                               }
-                            )}
-                          />
-                          <SegmentContent
-                            class="cursor-pointer flex items-center justify-center"
-                            onMouseDown={createMouseDownDrag(
-                              () => {
-                                const original = { ...segment };
 
-                                const prevSegment = zoomSegments()[i() - 1];
-                                const nextSegment = zoomSegments()[i() + 1];
+                              return { start, minValue, maxValue };
+                            },
+                            (e, value, initialMouseX) => {
+                              const { width } = timelineBounds;
 
-                                const minStart = prevSegment?.end ?? 0;
-                                const maxEnd = nextSegment?.start ?? duration();
+                              const newStart =
+                                value.start +
+                                ((e.clientX - initialMouseX) / width!) *
+                                  duration();
 
-                                const secsPerPixel =
-                                  duration() / trackBounds.width!;
-
-                                return {
-                                  secsPerPixel,
-                                  original,
-                                  minStart,
-                                  maxEnd,
-                                };
-                              },
-                              (e, value, initialMouseX) => {
-                                const rawDelta =
-                                  (e.clientX - initialMouseX) *
-                                  value.secsPerPixel;
-
-                                const newStart =
-                                  value.original.start + rawDelta;
-                                const newEnd = value.original.end + rawDelta;
-
-                                let delta = rawDelta;
-
-                                if (newStart < value.minStart)
-                                  delta = value.minStart - value.original.start;
-                                else if (newEnd > value.maxEnd)
-                                  delta = value.maxEnd - value.original.end;
-
-                                setProject("timeline", "zoomSegments", i(), {
-                                  start: value.original.start + delta,
-                                  end: value.original.end + delta,
-                                });
-                              }
-                            )}
-                          >
-                            {(() => {
-                              const ctx = useSegmentContext();
-
-                              return (
-                                <Show when={ctx.width() > 100}>
-                                  <div class="text-xs text-gray-500 whitespace-nowrap flex flex-col justify-center items-center gap-1">
-                                    <div class="flex items-center gap-1 text-red-300">
-                                      <IconLucideSearch class="size-3" />{" "}
-                                      {zoomPercentage()}
-                                    </div>
-                                  </div>
-                                </Show>
+                              setProject(
+                                "timeline",
+                                "zoomSegments",
+                                i(),
+                                "start",
+                                Math.min(
+                                  value.maxValue,
+                                  Math.max(value.minValue, newStart)
+                                )
                               );
-                            })()}
-                          </SegmentContent>
-                          <SegmentHandle
-                            class="bg-red-300 hover:opacity-80 transition-colors"
-                            onMouseDown={createMouseDownDrag(
-                              () => {
-                                const end = segment.end;
+                            }
+                          )}
+                        />
+                        <SegmentContent
+                          class="cursor-pointer flex items-center justify-center"
+                          onMouseDown={createMouseDownDrag(
+                            () => {
+                              const original = { ...segment };
 
-                                const minValue = segment.start + 1;
+                              const prevSegment = zoomSegments()[i() - 1];
+                              const nextSegment = zoomSegments()[i() + 1];
 
-                                let maxValue = duration();
+                              const minStart = prevSegment?.end ?? 0;
+                              const maxEnd = nextSegment?.start ?? duration();
 
-                                for (
-                                  let i = 0;
-                                  i < zoomSegments().length;
-                                  i++
-                                ) {
-                                  const segment = zoomSegments()[i]!;
-                                  if (segment.start > end) {
-                                    maxValue = segment.start;
-                                    break;
-                                  }
+                              const secsPerPixel =
+                                duration() / trackBounds.width!;
+
+                              return {
+                                secsPerPixel,
+                                original,
+                                minStart,
+                                maxEnd,
+                              };
+                            },
+                            (e, value, initialMouseX) => {
+                              const rawDelta =
+                                (e.clientX - initialMouseX) *
+                                value.secsPerPixel;
+
+                              const newStart = value.original.start + rawDelta;
+                              const newEnd = value.original.end + rawDelta;
+
+                              let delta = rawDelta;
+
+                              if (newStart < value.minStart)
+                                delta = value.minStart - value.original.start;
+                              else if (newEnd > value.maxEnd)
+                                delta = value.maxEnd - value.original.end;
+
+                              setProject("timeline", "zoomSegments", i(), {
+                                start: value.original.start + delta,
+                                end: value.original.end + delta,
+                              });
+                            }
+                          )}
+                        >
+                          {(() => {
+                            const ctx = useSegmentContext();
+
+                            return (
+                              <Show when={ctx.width() > 100}>
+                                <div class="text-xs text-gray-500 whitespace-nowrap flex flex-col justify-center items-center gap-1">
+                                  <div class="flex items-center gap-1 text-red-300">
+                                    <IconLucideSearch class="size-3" />{" "}
+                                    {zoomPercentage()}
+                                  </div>
+                                </div>
+                              </Show>
+                            );
+                          })()}
+                        </SegmentContent>
+                        <SegmentHandle
+                          class="bg-red-300 hover:opacity-80 transition-colors"
+                          onMouseDown={createMouseDownDrag(
+                            () => {
+                              const end = segment.end;
+
+                              const minValue = segment.start + 1;
+
+                              let maxValue = duration();
+
+                              for (let i = 0; i < zoomSegments().length; i++) {
+                                const segment = zoomSegments()[i]!;
+                                if (segment.start > end) {
+                                  maxValue = segment.start;
+                                  break;
                                 }
-
-                                return { end, minValue, maxValue };
-                              },
-                              (e, value, initialMouseX) => {
-                                const { width } = timelineBounds;
-
-                                const newEnd =
-                                  value.end +
-                                  ((e.clientX - initialMouseX) / width!) *
-                                    duration();
-
-                                setProject(
-                                  "timeline",
-                                  "zoomSegments",
-                                  i(),
-                                  "end",
-                                  Math.min(
-                                    value.maxValue,
-                                    Math.max(value.minValue, newEnd)
-                                  )
-                                );
                               }
-                            )}
-                          />
-                        </SegmentRoot>
-                      );
-                    }}
-                  </For>
-                </TrackRoot>
-              </>
-            );
-          }}
-        </Show>
+
+                              return { end, minValue, maxValue };
+                            },
+                            (e, value, initialMouseX) => {
+                              const { width } = timelineBounds;
+
+                              const newEnd =
+                                value.end +
+                                ((e.clientX - initialMouseX) / width!) *
+                                  duration();
+
+                              setProject(
+                                "timeline",
+                                "zoomSegments",
+                                i(),
+                                "end",
+                                Math.min(
+                                  value.maxValue,
+                                  Math.max(value.minValue, newEnd)
+                                )
+                              );
+                            }
+                          )}
+                        />
+                      </SegmentRoot>
+                    );
+                  }}
+                </For>
+              </TrackRoot>
+            </>
+          );
+        })()}
       </div>
     </TimelineContextProvider>
   );

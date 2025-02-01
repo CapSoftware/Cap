@@ -346,10 +346,6 @@ fn generate_zoom_segments_from_clicks(
 ) -> Vec<ZoomSegment> {
     let mut segments = vec![];
 
-    if !FLAGS.zoom {
-        return vec![];
-    };
-
     let max_duration = recordings.duration();
 
     const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;

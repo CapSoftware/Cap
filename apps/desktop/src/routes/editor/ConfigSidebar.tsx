@@ -4,7 +4,15 @@ import {
 } from "@kobalte/core/radio-group";
 import { Tabs as KTabs } from "@kobalte/core/tabs";
 import { cx } from "cva";
-import { batch, type Component, createResource, createRoot, createSignal, For, Show } from "solid-js";
+import {
+  batch,
+  type Component,
+  createResource,
+  createRoot,
+  createSignal,
+  For,
+  Show,
+} from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { createWritableMemo } from "@solid-primitives/memo";
 import { createEventListenerMap } from "@solid-primitives/event-listener";
@@ -87,8 +95,9 @@ export function ConfigSidebar() {
   };
 
   const [previousAngle, setPreviousAngle] = createSignal(0);
-  const [hapticsEnabled, hapticsEnabledOptions] = createResource(async () =>
-    (await generalSettingsStore.get())?.hapticsEnabled && ostype() === "macos"
+  const [hapticsEnabled, hapticsEnabledOptions] = createResource(
+    async () =>
+      (await generalSettingsStore.get())?.hapticsEnabled && ostype() === "macos"
   );
   generalSettingsStore.listen(() => hapticsEnabledOptions.refetch());
 
@@ -187,7 +196,7 @@ export function ConfigSidebar() {
                             BACKGROUND_SOURCES_LIST.indexOf(
                               project.background.source.type
                             ) ===
-                            i + 1
+                              i + 1
                             ? "bg-gray-50"
                             : "bg-gray-200"
                         )}
@@ -334,15 +343,23 @@ export function ConfigSidebar() {
                                   const rawNewAngle =
                                     Math.round(
                                       start +
-                                      (downEvent.clientY - moveEvent.clientY)
+                                        (downEvent.clientY - moveEvent.clientY)
                                     ) % max;
                                   const newAngle = moveEvent.shiftKey
                                     ? rawNewAngle
                                     : Math.round(rawNewAngle / 45) * 45;
 
-                                  if (!moveEvent.shiftKey && hapticsEnabled() && project.background.source.type === "gradient") {
+                                  if (
+                                    !moveEvent.shiftKey &&
+                                    hapticsEnabled() &&
+                                    project.background.source.type ===
+                                      "gradient"
+                                  ) {
                                     if (previousAngle() !== newAngle) {
-                                      commands.performHapticFeedback("Alignment", "Now");
+                                      commands.performHapticFeedback(
+                                        "Alignment",
+                                        "Now"
+                                      );
                                     }
                                     setPreviousAngle(newAngle);
                                   }
@@ -452,8 +469,8 @@ export function ConfigSidebar() {
                             item.x === "left"
                               ? "left-2"
                               : item.x === "right"
-                                ? "right-2"
-                                : "left-1/2 transform -translate-x-1/2",
+                              ? "right-2"
+                              : "left-1/2 transform -translate-x-1/2",
                             item.y === "top" ? "top-2" : "bottom-2"
                           )}
                           onClick={() => setProject("camera", "position", item)}
@@ -480,31 +497,30 @@ export function ConfigSidebar() {
               step={0.1}
             />
           </Field>
-          {window.FLAGS.zoom && (
-            <Field
-              name="Size During Zoom"
-              icon={<IconCapEnlarge />}
-              value={`${project.camera.zoom_size ??
-                DEFAULT_PROJECT_CONFIG.camera.zoom_size
-                }%`}
-            >
-              <Slider
-                value={[
-                  project.camera.zoom_size ??
+          <Field
+            name="Size During Zoom"
+            icon={<IconCapEnlarge />}
+            value={`${
+              project.camera.zoom_size ??
+              DEFAULT_PROJECT_CONFIG.camera.zoom_size
+            }%`}
+          >
+            <Slider
+              value={[
+                project.camera.zoom_size ??
                   DEFAULT_PROJECT_CONFIG.camera.zoom_size,
-                ]}
-                onChange={(v) => setProject("camera", "zoom_size", v[0])}
-                minValue={10}
-                maxValue={60}
-                step={0.1}
-              />
-            </Field>
-          )}
+              ]}
+              onChange={(v) => setProject("camera", "zoom_size", v[0])}
+              minValue={10}
+              maxValue={60}
+              step={0.1}
+            />
+          </Field>
           <Field name="Rounded Corners" icon={<IconCapCorners />}>
             <Slider
               value={[
                 project.camera.rounding ??
-                DEFAULT_PROJECT_CONFIG.camera.rounding,
+                  DEFAULT_PROJECT_CONFIG.camera.rounding,
               ]}
               onChange={(v) => setProject("camera", "rounding", v[0])}
               minValue={0}
@@ -576,54 +592,52 @@ export function ConfigSidebar() {
                   disabled={window.FLAGS.recordMouse}
                 />
               </Field>
-              {window.FLAGS.zoom && (
-                <Field name="Animation Style" icon={<IconLucideRabbit />}>
-                  <RadioGroup
-                    defaultValue="regular"
-                    value={project.cursor.animationStyle}
-                    onChange={(value) => {
-                      console.log("Changing animation style to:", value);
-                      setProject(
-                        "cursor",
-                        "animationStyle",
-                        value as CursorAnimationStyle
-                      );
-                    }}
-                    class="flex flex-col gap-2"
-                    disabled
-                  >
-                    {(
-                      Object.entries(CURSOR_ANIMATION_STYLES) as [
-                        CursorAnimationStyle,
-                        string
-                      ][]
-                    ).map(([value, label]) => (
-                      <RadioGroup.Item value={value} class="flex items-center">
-                        <RadioGroup.ItemInput class="peer sr-only" />
-                        <RadioGroup.ItemControl
-                          class={cx(
-                            "w-4 h-4 rounded-full border border-gray-300 mr-2",
-                            "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
-                            "after:transition-colors after:duration-200",
-                            "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
-                            "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
-                            "peer-disabled:opacity-50"
-                          )}
-                        />
-                        <span
-                          class={cx(
-                            "text-gray-500",
-                            "peer-checked:text-gray-900",
-                            "peer-disabled:opacity-50"
-                          )}
-                        >
-                          {label}
-                        </span>
-                      </RadioGroup.Item>
-                    ))}
-                  </RadioGroup>
-                </Field>
-              )}
+              <Field name="Animation Style" icon={<IconLucideRabbit />}>
+                <RadioGroup
+                  defaultValue="regular"
+                  value={project.cursor.animationStyle}
+                  onChange={(value) => {
+                    console.log("Changing animation style to:", value);
+                    setProject(
+                      "cursor",
+                      "animationStyle",
+                      value as CursorAnimationStyle
+                    );
+                  }}
+                  class="flex flex-col gap-2"
+                  disabled
+                >
+                  {(
+                    Object.entries(CURSOR_ANIMATION_STYLES) as [
+                      CursorAnimationStyle,
+                      string
+                    ][]
+                  ).map(([value, label]) => (
+                    <RadioGroup.Item value={value} class="flex items-center">
+                      <RadioGroup.ItemInput class="peer sr-only" />
+                      <RadioGroup.ItemControl
+                        class={cx(
+                          "w-4 h-4 rounded-full border border-gray-300 mr-2",
+                          "relative after:absolute after:inset-0 after:m-auto after:block after:w-2 after:h-2 after:rounded-full",
+                          "after:transition-colors after:duration-200",
+                          "peer-checked:border-blue-500 peer-checked:after:bg-blue-400",
+                          "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-400/50",
+                          "peer-disabled:opacity-50"
+                        )}
+                      />
+                      <span
+                        class={cx(
+                          "text-gray-500",
+                          "peer-checked:text-gray-900",
+                          "peer-disabled:opacity-50"
+                        )}
+                      >
+                        {label}
+                      </span>
+                    </RadioGroup.Item>
+                  ))}
+                </RadioGroup>
+              </Field>
             </>
           ) : (
             <div class="flex flex-col items-center justify-center gap-2 text-gray-400 p-4">
@@ -738,7 +752,7 @@ export function ConfigSidebar() {
                     <KTabs.Trigger
                       value="manual"
                       class="flex-1 text-gray-400 py-1 z-10 ui-selected:text-gray-500 peer outline-none transition-colors duration-100"
-                    // onClick={() => setSelectedTab(item.id)}
+                      // onClick={() => setSelectedTab(item.id)}
                     >
                       Manual
                     </KTabs.Trigger>
@@ -776,7 +790,7 @@ export function ConfigSidebar() {
                                         x: Math.max(
                                           Math.min(
                                             (moveEvent.clientX - bounds.left) /
-                                            bounds.width,
+                                              bounds.width,
                                             1
                                           ),
                                           0
@@ -784,7 +798,7 @@ export function ConfigSidebar() {
                                         y: Math.max(
                                           Math.min(
                                             (moveEvent.clientY - bounds.top) /
-                                            bounds.height,
+                                              bounds.height,
                                             1
                                           ),
                                           0

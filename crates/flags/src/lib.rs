@@ -3,13 +3,9 @@
 pub struct Flags {
     pub record_mouse: bool,
     pub split: bool,
-    pub pause_resume: bool,
-    pub zoom: bool,
 }
 
 pub const FLAGS: Flags = Flags {
     record_mouse: true,
     split: false, // cfg!(debug_assertions),
-    pause_resume: true,
-    zoom: true,
 };

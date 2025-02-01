@@ -176,14 +176,12 @@ export default function () {
             )}
           </div>
 
-          {window.FLAGS.pauseResume && (
-            <ActionButton
-              disabled={togglePause.isPending}
-              onClick={() => togglePause.mutate()}
-            >
-              {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
-            </ActionButton>
-          )}
+          <ActionButton
+            disabled={togglePause.isPending}
+            onClick={() => togglePause.mutate()}
+          >
+            {isPaused() ? <IconCapPlayCircle /> : <IconCapPauseCircle />}
+          </ActionButton>
 
           <ActionButton
             disabled={restartRecording.isPending}

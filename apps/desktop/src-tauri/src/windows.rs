@@ -324,9 +324,8 @@ impl ShowCapWindow {
                 position: _position,
             } => {
                 let mut width = 180.0;
-                if FLAGS.pause_resume {
-                    width += 32.0;
-                }
+                width += 32.0;
+
                 let height = 40.0;
 
                 self.window_builder(app, "/in-progress-recording")
