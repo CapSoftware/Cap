@@ -216,7 +216,8 @@ impl AVAssetReaderDecoder {
                 ))
             };
 
-            let (mut track_output, width, height, asset, pixel_format) = match init() {
+            let ((mut track_output, mut reader), width, height, asset, pixel_format) = match init()
+            {
                 Ok(v) => {
                     ready_tx.send(Ok(())).ok();
                     v
@@ -264,7 +265,8 @@ impl AVAssetReaderDecoder {
                                 })
                                 .unwrap_or(true)
                         {
-                            track_output = get_reader_track_output(
+                            reader.cancel_reading();
+                            (track_output, reader) = get_reader_track_output(
                                 &asset,
                                 requested_time,
                                 &handle,
@@ -406,7 +408,7 @@ fn get_reader_track_output(
     time: f32,
     handle: &TokioHandle,
     pixel_format: cv::PixelFormat,
-) -> Result<R<av::AssetReaderTrackOutput>, String> {
+) -> Result<(R<av::AssetReaderTrackOutput>, R<av::AssetReader>), String> {
     let mut reader =
         av::AssetReader::with_asset(&asset).map_err(|e| format!("AssetReader::with_asset: {e}"))?;
 
@@ -442,5 +444,5 @@ fn get_reader_track_output(
         .start_reading()
         .map_err(|e| format!("reader.start_reading: {e}"))?;
 
-    Ok(reader_track_output)
+    Ok((reader_track_output, reader))
 }
