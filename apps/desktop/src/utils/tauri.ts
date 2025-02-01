@@ -77,17 +77,17 @@ async getVideoMetadata(videoId: string, videoType: VideoType | null) : Promise<V
 async createEditorInstance(videoId: string) : Promise<SerializedEditorInstance> {
     return await TAURI_INVOKE("create_editor_instance", { videoId });
 },
-async startPlayback(videoId: string, fps: number, resolutionBase: XY<number>) : Promise<null> {
-    return await TAURI_INVOKE("start_playback", { videoId, fps, resolutionBase });
+async startPlayback(fps: number, resolutionBase: XY<number>) : Promise<null> {
+    return await TAURI_INVOKE("start_playback", { fps, resolutionBase });
 },
-async stopPlayback(videoId: string) : Promise<null> {
-    return await TAURI_INVOKE("stop_playback", { videoId });
+async stopPlayback() : Promise<null> {
+    return await TAURI_INVOKE("stop_playback");
 },
-async setPlayheadPosition(videoId: string, frameNumber: number) : Promise<null> {
-    return await TAURI_INVOKE("set_playhead_position", { videoId, frameNumber });
+async setPlayheadPosition(frameNumber: number) : Promise<null> {
+    return await TAURI_INVOKE("set_playhead_position", { frameNumber });
 },
-async setProjectConfig(videoId: string, config: ProjectConfiguration) : Promise<null> {
-    return await TAURI_INVOKE("set_project_config", { videoId, config });
+async setProjectConfig(config: ProjectConfiguration) : Promise<null> {
+    return await TAURI_INVOKE("set_project_config", { config });
 },
 async openEditor(id: string) : Promise<void> {
     await TAURI_INVOKE("open_editor", { id });
@@ -143,8 +143,8 @@ async resetMicrophonePermissions() : Promise<null> {
 async isCameraWindowOpen() : Promise<boolean> {
     return await TAURI_INVOKE("is_camera_window_open");
 },
-async seekTo(videoId: string, frameNumber: number) : Promise<null> {
-    return await TAURI_INVOKE("seek_to", { videoId, frameNumber });
+async seekTo(frameNumber: number) : Promise<null> {
+    return await TAURI_INVOKE("seek_to", { frameNumber });
 },
 async sendFeedbackRequest(feedback: string) : Promise<null> {
     return await TAURI_INVOKE("send_feedback_request", { feedback });
@@ -163,9 +163,6 @@ async showWindow(window: ShowCapWindow) : Promise<void> {
 },
 async writeClipboardString(text: string) : Promise<null> {
     return await TAURI_INVOKE("write_clipboard_string", { text });
-},
-async getEditorTotalFrames(videoId: string, fps: number) : Promise<number> {
-    return await TAURI_INVOKE("get_editor_total_frames", { videoId, fps });
 },
 async performHapticFeedback(pattern: HapticPattern | null, time: HapticPerformanceTime | null) : Promise<null> {
     return await TAURI_INVOKE("perform_haptic_feedback", { pattern, time });

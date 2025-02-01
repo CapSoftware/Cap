@@ -177,7 +177,7 @@ impl EditorInstance {
     }
 
     pub async fn start_playback(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         fps: u32,
         resolution_base: XY<u32>,
         is_upgraded: bool,
@@ -204,6 +204,7 @@ impl EditorInstance {
             (playback_handle, prev)
         };
 
+        let this = self.clone();
         tokio::spawn(async move {
             loop {
                 let event = *handle.receive_event().await;
@@ -211,7 +212,7 @@ impl EditorInstance {
                 match event {
                     playback::PlaybackEvent::Start => {}
                     playback::PlaybackEvent::Frame(frame_number) => {
-                        self.modify_and_emit_state(|state| {
+                        this.modify_and_emit_state(|state| {
                             state.playhead_position = frame_number;
                         })
                         .await;
