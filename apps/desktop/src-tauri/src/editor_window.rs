@@ -46,6 +46,14 @@ impl<'de, R: Runtime> CommandArg<'de, R> for WindowEditorInstance {
 }
 
 impl EditorInstances {
+    pub fn get(window: &Window) -> Option<Arc<EditorInstance>> {
+        let instances = window.try_state::<EditorInstances>()?;
+
+        let instances = instances.0.read().unwrap();
+
+        instances.get(window.label()).cloned()
+    }
+
     pub fn add(window: &Window, instance: Arc<EditorInstance>) {
         let instances = match window.try_state::<EditorInstances>() {
             Some(s) => (*s).clone(),
