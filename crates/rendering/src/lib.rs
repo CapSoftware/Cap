@@ -205,9 +205,9 @@ pub async fn render_video_to_channel(
             break;
         }
 
-        let frame_time = frame_number as f64 / fps as f64;
-
-        let Some((segment_time, segment_i)) = project.get_segment_time(frame_time) else {
+        let Some((segment_time, segment_i)) =
+            project.get_segment_time(frame_number as f64 / fps as f64)
+        else {
             break;
         };
 

@@ -86,9 +86,8 @@ impl Playback {
 
                 let project = self.project.borrow().clone();
 
-                let frame_time = frame_number as f32 / fps as f32;
-
-                if let Some((segment_time, segment_i)) = project.get_segment_time(frame_time as f64)
+                if let Some((segment_time, segment_i)) =
+                    project.get_segment_time(frame_number as f64 / fps as f64)
                 {
                     let segment = &self.segments[segment_i as usize];
 
