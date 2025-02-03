@@ -170,7 +170,7 @@ export default function Page() {
                 <div class="px-6 pt-0 pb-4">
                   <button
                     onClick={openCheckoutInExternalBrowser}
-                    class="flex items-center justify-center rounded-full bg-[--gray-50] dark:bg-[--gray-500] hover:bg-[--gray-200] disabled:bg-[--gray-100]
+                    class="flex items-center justify-center hover:opacity-90 transition-opacity duration-200 rounded-full bg-[--gray-50] dark:bg-[--gray-500] hover:bg-[--gray-200] disabled:bg-[--gray-100]
                      font-medium text-lg px-6 h-12 w-full no-underline text-gray-500 dark:text-gray-50"
                     disabled={loading()}
                   >
