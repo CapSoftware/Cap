@@ -72,13 +72,12 @@ export default function Page() {
   return (
     <div
       class={`py-5 max-w-[700px] mx-auto relative ${
-        upgradeComplete() ? "h-full" : ""
-      }`}
+        upgradeComplete() ? "h-full" : ""}`}
     >
       {upgradeComplete() && (
-        <div class="h-full flex items-center justify-center bg-gray-800 bg-opacity-75">
-          <div class="bg-white p-6 rounded-lg shadow-lg text-center relative z-10">
-            <h2 class="text-2xl font-bold mb-4">
+        <div class="flex justify-center items-center h-full bg-gray-800 bg-opacity-75">
+          <div class="relative z-10 p-6 text-center bg-white rounded-lg shadow-lg">
+            <h2 class="mb-4 text-2xl font-bold">
               Upgrade complete - Welcome to Cap Pro!
             </h2>
             <Button
@@ -110,28 +109,28 @@ export default function Page() {
             </p>
           </div>
           <div class="flex flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] flex-1 bg-gray-100">
-            <div class="border text-card-foreground shadow-sm bg-blue-300 p-3 md:p-3 rounded-xl flex-grow border-blue-500/20">
+            <div class="flex-grow p-3 bg-blue-300 rounded-xl border shadow-sm text-card-foreground md:p-3 border-blue-500/20">
               <div class="space-y-3">
                 <div class="flex flex-col space-y-1.5 pt-6 px-6 pb-3">
-                  <h3 class="font-medium tracking-tight text-2xl text-gray-50">
+                  <h3 class="text-2xl font-medium tracking-tight text-gray-50 dark:text-[--text-primary]">
                     Cap Pro — Early Adopter Pricing
                   </h3>
-                  <p class="text-[0.875rem] leading-[1.25rem] text-gray-50">
+                  <p class="text-[0.875rem] leading-[1.25rem] text-gray-50 dark:text-[--text-primary]">
                     For professional use and teams.
                   </p>
                   <div>
                     <div class="flex items-center space-x-3">
-                      <h3 class="text-4xl text-gray-50">
+                      <h3 class="text-4xl text-gray-50 dark:text-[--text-primary]">
                         {isAnnual() ? "$6/mo" : "$9/mo"}
                       </h3>
                       <div>
-                        <p class="text-sm font-medium text-gray-50">
+                        <p class="text-sm font-medium text-gray-50 dark:text-[--text-primary]">
                           {isAnnual()
                             ? "per user, billed annually."
                             : "per user, billed monthly."}
                         </p>
                         {isAnnual() && (
-                          <p class="text-sm text-gray-50">
+                          <p class="text-sm text-gray-50 dark:text-[--text-primary]">
                             or, $9/month, billed monthly.
                           </p>
                         )}
@@ -139,9 +138,9 @@ export default function Page() {
                     </div>
                   </div>
                 </div>
-                <div class="mt-3 px-3 md:px-8">
-                  <div class="flex items-center mt-3 pt-4 pb-1 border-t-2 border-gray-50/20">
-                    <span class="text-xs text-gray-50 mr-2">
+                <div class="px-3 mt-3 md:px-8">
+                  <div class="flex items-center pt-4 pb-1 mt-3 border-t-2 border-[--gray-400]">
+                    <span class="mr-2 text-xs text-gray-50 dark:text-[--text-primary]">
                       Switch to {isAnnual() ? "monthly" : "annually"}
                     </span>
                     <button
@@ -160,25 +159,26 @@ export default function Page() {
                     </button>
                   </div>
                 </div>
-                <div class="px-6 pb-4 pt-0">
+                <div class="px-6 pt-0 pb-4">
                   <button
                     onClick={openCheckoutInExternalBrowser}
-                    class="flex items-center justify-center rounded-full bg-[--gray-50] hover:bg-[--gray-200] disabled:bg-[--gray-100] border border-[--gray-300] font-medium text-lg px-6 h-12 w-full no-underline"
+                    class="flex items-center justify-center rounded-full bg-[--gray-50] hover:bg-[--gray-200] disabled:bg-[--gray-100] border
+                     border-[--gray-300] font-medium text-lg px-6 h-12 w-full no-underline dark:text-[--text-primary]"
                     disabled={loading()}
                   >
                     {loading() ? "Loading..." : "Upgrade to Cap Pro"}
                   </button>
                 </div>
-                <div class="flex items-center px-6 pb-6 pt-0">
+                <div class="flex items-center px-6 pt-0 pb-6">
                   <div class="space-y-6">
                     <div>
-                      <ul class="list-none p-0 space-y-3">
+                      <ul class="p-0 space-y-3 list-none">
                         {proFeatures.map((feature) => (
-                          <li class="flex items-center justify-start">
-                            <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-white justify-center rounded-full">
-                              <IconLucideCheck class="w-4 h-4 stroke-[4px] text-[--gray-50]" />
+                          <li class="flex justify-start items-center">
+                            <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-[--gray-400] justify-center rounded-full">
+                              <IconLucideCheck class="w-4 h-4 text-[--gray-50] dark:text-[--text-primary]" />
                             </div>
-                            <span class="ml-2 text-[0.9rem] text-gray-50">
+                            <span class="ml-2 text-[0.9rem] dark:text-[--text-primary]">
                               {feature}
                             </span>
                           </li>
