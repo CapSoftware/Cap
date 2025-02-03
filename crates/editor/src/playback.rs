@@ -57,32 +57,26 @@ impl Playback {
 
             let mut frame_number = self.start_frame_number + 1;
 
-            let duration = {
-                let project = self.project.borrow();
+            let duration = if let Some(timeline) = &self.project.borrow().timeline {
+                timeline.duration()
+            } else {
+                f64::MAX
+            };
 
-                let duration = if let Some(timeline) = &project.timeline {
-                    timeline.duration()
-                } else {
-                    f64::MAX
-                };
-
-                // TODO: make this work with >1 segment
-                if self.segments[0].audio.is_some() && !project.audio.mute {
-                    AudioPlayback {
-                        segments: self
-                            .segments
-                            .iter()
-                            .map(|s| s.audio.as_ref().as_ref().unwrap().clone())
-                            .collect(),
-                        stop_rx: stop_rx.clone(),
-                        start_frame_number: self.start_frame_number,
-                        project: self.project.clone(),
-                        fps,
-                    }
-                    .spawn();
-                };
-
-                duration
+            // TODO: make this work with >1 segment
+            if self.segments[0].audio.is_some() {
+                AudioPlayback {
+                    segments: self
+                        .segments
+                        .iter()
+                        .map(|s| s.audio.as_ref().as_ref().unwrap().clone())
+                        .collect(),
+                    stop_rx: stop_rx.clone(),
+                    start_frame_number: self.start_frame_number,
+                    project: self.project.clone(),
+                    fps,
+                }
+                .spawn();
             };
 
             loop {

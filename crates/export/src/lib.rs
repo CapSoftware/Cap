@@ -131,7 +131,12 @@ where
 
         let fps = self.fps;
 
-        let audio_info = match self.audio_segments.get(0).and_then(|d| d.as_ref().as_ref()) {
+        let audio_info = match self
+            .audio_segments
+            .get(0)
+            .and_then(|d| d.as_ref().as_ref())
+            .filter(|_| !self.project.audio.mute)
+        {
             Some(audio_data) => Some(
                 AudioInfo::new(
                     audio_data.info.sample_format,
@@ -178,19 +183,23 @@ where
             let project_path = self.project_path.clone();
             async move {
                 println!("Starting FFmpeg output process...");
-                let mut audio =
-                    if let Some(_) = self.audio_segments.get(0).and_then(|d| d.as_ref().as_ref()) {
-                        Some(AudioRender {
-                            buffer: AudioFrameBuffer::new(
-                                self.audio_segments
-                                    .iter()
-                                    .map(|s| s.as_ref().as_ref().unwrap().clone())
-                                    .collect(),
-                            ),
-                        })
-                    } else {
-                        None
-                    };
+                let mut audio = if let Some(_) = self
+                    .audio_segments
+                    .get(0)
+                    .and_then(|d| d.as_ref().as_ref())
+                    .filter(|_| !self.project.audio.mute)
+                {
+                    Some(AudioRender {
+                        buffer: AudioFrameBuffer::new(
+                            self.audio_segments
+                                .iter()
+                                .map(|s| s.as_ref().as_ref().unwrap().clone())
+                                .collect(),
+                        ),
+                    })
+                } else {
+                    None
+                };
 
                 let mut frame_count = 0;
                 let mut first_frame = None;
