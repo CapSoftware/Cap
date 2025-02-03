@@ -2,7 +2,6 @@ import { crx } from "@crxjs/vite-plugin";
 import { resolve } from "path";
 import { defineConfig } from "vite";
 import solidPlugin from "vite-plugin-solid";
-import WindiCSS from "vite-plugin-windicss";
 import manifest from "./src/manifest";
 
 const root = resolve(__dirname, "src");
@@ -10,16 +9,18 @@ const pagesDir = resolve(root, "pages");
 const assetsDir = resolve(root, "assets");
 const outDir = resolve(__dirname, "dist");
 const publicDir = resolve(__dirname, "public");
+const packagesDir = resolve(__dirname, "../../packages");
 
 const isDev = process.env.__DEV__ === "true";
 
 export default defineConfig({
-  plugins: [solidPlugin(), crx({ manifest }), WindiCSS()],
+  plugins: [solidPlugin(), crx({ manifest })],
   resolve: {
     alias: {
       "@src": root,
       "@assets": assetsDir,
       "@pages": pagesDir,
+      "@cap/ui-solid": resolve(packagesDir, "ui-solid/src/index.ts"),
     },
   },
   publicDir,
