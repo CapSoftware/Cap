@@ -246,8 +246,6 @@ pub async fn render_video_to_channel(
                 continue;
             }
 
-            tokio::time::sleep(Duration::from_secs(5)).await;
-
             sender.send((frame, frame_number)).await?;
         }
     }
