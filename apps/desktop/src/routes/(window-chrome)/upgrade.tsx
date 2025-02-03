@@ -99,10 +99,10 @@ export default function Page() {
             <h1 class="text-4xl md:text-4xl mb-3 tracking-[-.05em] font-medium text-[--text-primary]">
               Upgrade to Cap Pro
             </h1>
-            <p class="text-base font-normal leading-6 text-gray-400">
+            <p class="text-base font-normal leading-6 text-gray-400 dark:text-[--black-transparent-60]">
               Cap is currently in public beta, and we're offering special early
               adopter pricing to our first users.{" "}
-              <span class="text-gray-500">
+              <span class="text-gray-500 dark:text-[--text-primary]">
                 This pricing will be locked in for the lifetime of your
                 subscription.
               </span>
@@ -139,7 +139,7 @@ export default function Page() {
                   </div>
                 </div>
                 <div class="px-3 mt-3 md:px-8">
-                  <div class="flex items-center pt-4 pb-1 mt-3 border-t-2 border-[--gray-400]">
+                  <div class="flex items-center pt-4 pb-1 mt-3 border-t-2 border-[--gray-50] dark:border-[--gray-500]">
                     <span class="mr-2 text-xs text-gray-50 dark:text-[--text-primary]">
                       Switch to {isAnnual() ? "monthly" : "annually"}
                     </span>
@@ -149,12 +149,20 @@ export default function Page() {
                       aria-checked={isAnnual()}
                       data-state={isAnnual() ? "unchecked" : "checked"}
                       value={isAnnual() ? "on" : "off"}
-                      class="peer inline-flex h-4 w-8 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 bg-[--blue-400]"
+                      class="peer inline-flex h-4 w-8 shrink-0
+                       cursor-pointer items-center rounded-full border-2 border-transparent
+                       dark:bg-[#3F75E0]
+                        transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 
+                      focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 bg-[--blue-400]"
                       onClick={togglePricing}
                     >
                       <span
                         data-state={isAnnual() ? "unchecked" : "checked"}
-                        class="pointer-events-none block h-4 w-4 rounded-full bg-[--gray-50] shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4 data-[state=unchecked]:translate-x-0"
+                        class={`pointer-events-none block h-4 w-4 rounded-full dark:bg-gray-500
+                           bg-gray-50 shadow-lg ring-0 transition-transform data-[state=checked]:translate-x-4
+                            data-[state=unchecked]:translate-x-0 border-2 ${
+                         isAnnual() ? "border-blue-400 dark:border-[#3F75E0]" : "border-gray-300 dark:border-[--white-transparent-20]"
+                        }`}
                       />
                     </button>
                   </div>
@@ -162,8 +170,8 @@ export default function Page() {
                 <div class="px-6 pt-0 pb-4">
                   <button
                     onClick={openCheckoutInExternalBrowser}
-                    class="flex items-center justify-center rounded-full bg-[--gray-50] hover:bg-[--gray-200] disabled:bg-[--gray-100] border
-                     border-[--gray-300] font-medium text-lg px-6 h-12 w-full no-underline dark:text-[--text-primary]"
+                    class="flex items-center justify-center rounded-full bg-[--gray-50] dark:bg-[--gray-500] hover:bg-[--gray-200] disabled:bg-[--gray-100]
+                     font-medium text-lg px-6 h-12 w-full no-underline text-gray-500 dark:text-gray-50"
                     disabled={loading()}
                   >
                     {loading() ? "Loading..." : "Upgrade to Cap Pro"}
@@ -175,10 +183,10 @@ export default function Page() {
                       <ul class="p-0 space-y-3 list-none">
                         {proFeatures.map((feature) => (
                           <li class="flex justify-start items-center">
-                            <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-[--gray-400] justify-center rounded-full">
-                              <IconLucideCheck class="w-4 h-4 text-[--gray-50] dark:text-[--text-primary]" />
+                            <div class="w-6 h-6 m-0 p-0 flex items-center border-[2px] border-[--gray-50] dark:border-[--gray-500] justify-center rounded-full">
+                              <IconLucideCheck class="w-4 h-4  text-gray-50 dark:text-[--text-primary]" />
                             </div>
-                            <span class="ml-2 text-[0.9rem] dark:text-[--text-primary]">
+                            <span class="ml-2 text-[0.9rem] text-gray-50 dark:text-[--text-primary]">
                               {feature}
                             </span>
                           </li>
