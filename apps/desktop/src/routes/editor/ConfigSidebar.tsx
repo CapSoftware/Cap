@@ -558,11 +558,12 @@ export function ConfigSidebar() {
         <KTabs.Content value="audio" class="flex flex-col gap-6">
           <Field name="Audio" icon={<IconCapAudioOn />}>
             <div class="flex flex-col gap-3 ">
-              <ComingSoonTooltip>
-                <Subfield name="Mute Audio">
-                  <Toggle disabled />
-                </Subfield>
-              </ComingSoonTooltip>
+              <Subfield name="Mute Audio">
+                <Toggle
+                  checked={project.audio.mute}
+                  onChange={(v) => setProject("audio", "mute", v)}
+                />
+              </Subfield>
               <ComingSoonTooltip>
                 <Subfield name="Improve Mic Quality">
                   <Toggle disabled />

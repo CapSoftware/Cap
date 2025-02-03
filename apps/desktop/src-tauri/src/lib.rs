@@ -923,7 +923,7 @@ async fn create_editor_instance(
         Some(editor_instance) => editor_instance,
         None => {
             let editor_instance =
-                create_editor_instance_impl(window.app_handle(), video_id).await?;
+                create_editor_instance_impl(window.app_handle(), &video_id).await?;
             EditorInstances::add(&window, editor_instance.clone());
             editor_instance
         }
@@ -2326,7 +2326,7 @@ pub async fn run() {
 
 async fn create_editor_instance_impl(
     app: &AppHandle,
-    video_id: String,
+    video_id: &str,
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 

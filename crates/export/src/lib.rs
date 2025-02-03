@@ -12,7 +12,7 @@ use cap_rendering::{
 };
 use futures::FutureExt;
 use image::{ImageBuffer, Rgba};
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ExportError {
@@ -33,6 +33,9 @@ pub enum ExportError {
 
     #[error("Other:{0}")]
     Other(String),
+
+    #[error("Exporting timed out")]
+    Timeout(#[from] tokio::time::error::Elapsed),
 }
 
 pub struct Exporter<TOnProgress> {
@@ -192,7 +195,13 @@ where
                 let mut frame_count = 0;
                 let mut first_frame = None;
 
-                while let Some((frame, frame_number)) = rx_image_data.recv().await {
+                loop {
+                    let Some((frame, frame_number)) =
+                        tokio::time::timeout(Duration::from_secs(3), rx_image_data.recv()).await?
+                    else {
+                        break;
+                    };
+
                     (self.on_progress)(frame_count);
 
                     if frame_count == 0 {

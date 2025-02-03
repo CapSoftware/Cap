@@ -213,8 +213,8 @@ impl Default for Camera {
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioConfiguration {
-    mute: bool,
-    improve: bool,
+    pub mute: bool,
+    pub improve: bool,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]

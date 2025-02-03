@@ -38,7 +38,7 @@ pub struct EditorInstance {
 impl EditorInstance {
     pub async fn new(
         projects_path: PathBuf,
-        video_id: String,
+        video_id: &str,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
         get_is_upgraded: impl Fn() -> bool + Send + 'static,
     ) -> Result<Arc<Self>, String> {
@@ -97,7 +97,7 @@ impl EditorInstance {
         let (preview_tx, preview_rx) = watch::channel(None);
 
         let this = Arc::new(Self {
-            id: video_id,
+            id: video_id.to_string(),
             project_path,
             recordings,
             ws_port,

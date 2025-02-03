@@ -1,16 +1,14 @@
 use crate::{
-    create_editor_instance_impl, editor_window::WindowEditorInstance, get_video_metadata,
-    windows::ShowCapWindow, AuthStore, RenderProgress, VideoType,
+    create_editor_instance_impl, get_video_metadata, windows::ShowCapWindow, AuthStore,
+    RenderProgress, VideoType,
 };
-use cap_editor::EditorInstance;
 use cap_project::{ProjectConfiguration, XY};
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 use tauri::AppHandle;
 
 #[tauri::command]
 #[specta::specta]
 pub async fn export_video(
-    editor_instance: WindowEditorInstance,
     app: AppHandle,
     video_id: String,
     project: ProjectConfiguration,
@@ -19,29 +17,8 @@ pub async fn export_video(
     fps: u32,
     resolution_base: XY<u32>,
 ) -> Result<PathBuf, String> {
-    export_video_impl(
-        editor_instance.0,
-        app,
-        video_id,
-        project,
-        progress,
-        force,
-        fps,
-        resolution_base,
-    )
-    .await
-}
+    let editor_instance = create_editor_instance_impl(&app, &video_id).await?;
 
-pub async fn export_video_impl(
-    editor_instance: Arc<EditorInstance>,
-    app: AppHandle,
-    video_id: String,
-    project: ProjectConfiguration,
-    progress: tauri::ipc::Channel<RenderProgress>,
-    force: bool,
-    fps: u32,
-    resolution_base: XY<u32>,
-) -> Result<PathBuf, String> {
     let screen_metadata =
         match get_video_metadata(app.clone(), video_id.clone(), Some(VideoType::Screen)).await {
             Ok(meta) => meta,
@@ -161,7 +138,7 @@ pub async fn get_export_estimates(
             .await
             .ok();
 
-    let editor_instance = create_editor_instance_impl(&app, video_id).await?;
+    let editor_instance = create_editor_instance_impl(&app, &video_id).await?;
 
     let raw_duration = screen_metadata.duration.max(
         camera_metadata

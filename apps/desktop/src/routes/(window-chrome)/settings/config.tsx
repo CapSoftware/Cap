@@ -114,56 +114,6 @@ export default function Config() {
             </KSelect.Portal>
           </KSelect>
         </div>
-
-        <div class="mb-6">
-          <label class="text-sm font-medium mb-2 block text-gray-500 dark:text-gray-400">
-            Frame Rate
-          </label>
-          <KSelect<(typeof FPS_OPTIONS)[number]>
-            options={FPS_OPTIONS}
-            optionValue="value"
-            optionTextValue="label"
-            placeholder="Select FPS"
-            value={FPS_OPTIONS.find((opt) => opt.value === config.data?.fps)}
-            onChange={(option) => {
-              if (option) {
-                updateConfig({ fps: option.value });
-              }
-            }}
-            itemComponent={(props) => (
-              <MenuItem<typeof KSelect.Item>
-                as={KSelect.Item}
-                item={props.item}
-              >
-                <KSelect.ItemLabel class="flex-1">
-                  {props.item.rawValue.label}
-                </KSelect.ItemLabel>
-              </MenuItem>
-            )}
-          >
-            <KSelect.Trigger class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-200 w-full disabled:text-gray-400 transition-colors KSelect">
-              <KSelect.Value<
-                (typeof FPS_OPTIONS)[number]
-              > class="flex-1 text-sm text-left truncate text-[--gray-500]">
-                {(state) => <span>{state.selectedOption()?.label}</span>}
-              </KSelect.Value>
-              <KSelect.Icon>
-                <IconCapChevronDown class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]" />
-              </KSelect.Icon>
-            </KSelect.Trigger>
-            <KSelect.Portal>
-              <PopperContent<typeof KSelect.Content>
-                as={KSelect.Content}
-                class={cx(topLeftAnimateClasses, "z-50")}
-              >
-                <MenuItemList<typeof KSelect.Listbox>
-                  class="max-h-32 overflow-y-auto"
-                  as={KSelect.Listbox}
-                />
-              </PopperContent>
-            </KSelect.Portal>
-          </KSelect>
-        </div>
       </div>
     </div>
   );

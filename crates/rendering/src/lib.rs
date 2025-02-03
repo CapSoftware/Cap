@@ -23,7 +23,7 @@ use wgpu::{CommandEncoder, COPY_BYTES_PER_ROW_ALIGNMENT};
 
 use image::GenericImageView;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub mod decoder;
 mod project_recordings;
@@ -245,6 +245,8 @@ pub async fn render_video_to_channel(
             if frame.width == 0 || frame.height == 0 {
                 continue;
             }
+
+            tokio::time::sleep(Duration::from_secs(5)).await;
 
             sender.send((frame, frame_number)).await?;
         }

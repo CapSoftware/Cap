@@ -3,8 +3,8 @@ use std::{sync::Arc, time::Instant};
 use crate::{
     audio::AppSounds,
     auth::AuthStore,
-    create_editor_instance_impl, create_screenshot,
-    export::{export_video, export_video_impl},
+    create_screenshot,
+    export::export_video,
     general_settings::GeneralSettingsStore,
     notifications, open_editor, open_external_link,
     upload::get_s3_config,
@@ -274,9 +274,7 @@ async fn handle_recording_finished(
                                 let max_retries = 3;
                                 let mut retry_count = 0;
 
-                                let video_id = completed_recording.id.clone();
-                                export_video_impl(
-                                    create_editor_instance_impl(&app, video_id).await.unwrap(),
+                                export_video(
                                     app.clone(),
                                     completed_recording.id.clone(),
                                     config,
