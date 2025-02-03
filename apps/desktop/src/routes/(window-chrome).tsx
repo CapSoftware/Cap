@@ -44,18 +44,18 @@ export default function (props: RouteSectionProps) {
           }) as any
         }
       >
-        <Inner>
-          {/* prevents flicker idk */}
-          <Suspense
-            fallback={
-              (() => {
-                console.log("Inner window chrome suspense fallback");
-              }) as any
-            }
-          >
-            {props.children}
-          </Suspense>
-        </Inner>
+        {/* prevents flicker idk */}
+        <Suspense
+          fallback={
+            (() => {
+              console.log("Inner window chrome suspense fallback");
+
+              return <span>BRUHLMAO</span>;
+            }) as any
+          }
+        >
+          <Inner>{props.children}</Inner>
+        </Suspense>
       </Suspense>
       {/* </Transition> */}
     </div>
@@ -64,7 +64,9 @@ export default function (props: RouteSectionProps) {
 
 function Inner(props: ParentProps) {
   onMount(() => {
-    if (location.pathname !== "/") getCurrentWindow().show();
+    if (location.pathname !== "/") {
+      setTimeout(() => getCurrentWindow().show(), 1000);
+    }
   });
 
   return (

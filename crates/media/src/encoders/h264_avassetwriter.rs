@@ -83,13 +83,14 @@ impl H264AVAssetWriterEncoder {
         })
     }
 
-    fn queue_frame(&mut self, frame: screencapturekit::cm_sample_buffer::CMSampleBuffer) {
+    pub fn queue_sample_buffer(&mut self, frame: screencapturekit::output::CMSampleBuffer) {
         if !self.video_input.is_ready_for_more_media_data() {
             return;
         }
 
         let sample_buf = unsafe {
-            let ptr = &*frame.sys_ref as *const _ as *const cm::SampleBuf;
+            use core_foundation::base::TCFType;
+            let ptr = frame.as_concrete_TypeRef() as *const _ as *const cm::SampleBuf;
             &*ptr
         };
 
@@ -105,8 +106,6 @@ impl H264AVAssetWriterEncoder {
         self.video_input.append_sample_buf(sample_buf).ok();
     }
 
-    fn process_frame(&mut self) {}
-
     fn finish(&mut self) {
         self.asset_writer
             .end_session_at_src_time(self.last_timestamp.take().unwrap_or(cm::Time::zero()));
@@ -115,19 +114,16 @@ impl H264AVAssetWriterEncoder {
     }
 }
 
-use screencapturekit::cm_sample_buffer::CMSampleBuffer;
-
-impl PipelineSinkTask<CMSampleBuffer> for H264AVAssetWriterEncoder {
+impl PipelineSinkTask<screencapturekit::output::CMSampleBuffer> for H264AVAssetWriterEncoder {
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<CMSampleBuffer>,
+        input: &flume::Receiver<screencapturekit::output::CMSampleBuffer>,
     ) {
         ready_signal.send(Ok(())).ok();
 
         while let Ok(frame) = input.recv() {
-            self.queue_frame(frame);
-            self.process_frame();
+            self.queue_sample_buffer(frame);
         }
     }
 

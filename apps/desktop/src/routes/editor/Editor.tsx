@@ -40,6 +40,7 @@ import { Timeline } from "./Timeline";
 import Cropper, { cropToFloor } from "~/components/Cropper";
 import { makePersisted } from "@solid-primitives/storage";
 import { Tooltip } from "@kobalte/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export function Editor() {
   const [params] = useSearchParams<{ id: string }>();
@@ -75,6 +76,7 @@ function Inner() {
     useEditorContext();
 
   onMount(() => {
+    getCurrentWindow().show();
     events.editorStateChanged.listen((e) => {
       renderFrame.clear();
       setPlaybackTime(e.payload.playhead_position / FPS);

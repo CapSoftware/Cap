@@ -353,11 +353,11 @@ importers:
         specifier: ^8.2.7
         version: 8.3.3
       storybook-solidjs:
-        specifier: ^1.0.0-beta.2
-        version: 1.0.0-beta.2(babel-preset-solid@1.9.0(@babel/core@7.25.2))(solid-js@1.9.3)
+        specifier: ^1.0.0-beta.6
+        version: 1.0.0-beta.6(solid-js@1.9.3)
       storybook-solidjs-vite:
-        specifier: ^1.0.0-beta.2
-        version: 1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
+        specifier: ^1.0.0-beta.6
+        version: 1.0.0-beta.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.3)(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
       typescript:
         specifier: ^5.7.2
         version: 5.7.2
@@ -1403,6 +1403,10 @@ packages:
 
   '@babel/runtime@7.25.6':
     resolution: {integrity: sha512-VBj9MYyDb9tuLq7yzqjgzt6Q+IBQLrGZfdjOekyEirZPHxXWoTSGUTMrpsfi58Up73d13NfYLv8HT9vmznjzhQ==}
+    engines: {node: '>=6.9.0'}
+
+  '@babel/standalone@7.26.7':
+    resolution: {integrity: sha512-Fvdo9Dd20GDUAREzYMIR2EFMKAJ+ccxstgQdb39XV/yvygHL4UPcqgTkiChPyltAe/b+zgq+vUPXeukEZ6aUeA==}
     engines: {node: '>=6.9.0'}
 
   '@babel/template@7.25.0':
@@ -10112,9 +10116,9 @@ packages:
     resolution: {integrity: sha512-iCGQj+0l0HOdZ2AEeBADlsRC+vsnDsZsbdSiH1yNSjcfKM7fdpCMfqAL/dwF5BLiw/XhRft/Wax6zQbhq2BcjQ==}
     engines: {node: '>= 0.4'}
 
-  storybook-solidjs-vite@1.0.0-beta.2:
-    resolution: {integrity: sha512-dD+VMYC5fBBQNesVb+mjB0LOkZIf100SQFbjAt9/sDstNUvc5ce3yZwLYXzgcOc7jcSMkrBu/cZNRzEM4YIAyw==}
-    engines: {node: ^14.18 || >=16}
+  storybook-solidjs-vite@1.0.0-beta.6:
+    resolution: {integrity: sha512-+gggXbzmM+p1dA5EdvlfzMPzIB6Nar1WAzDND63wJeDfqHfpL+yYZqewEJm5woLhMLCqhBIMjfei/TXgjVDJXg==}
+    engines: {node: '>=18'}
 
   storybook-solidjs@1.0.0-beta.2:
     resolution: {integrity: sha512-wXjM/uH29IPjgxlPvQVNTM/7iBFNNzjuOugpk7iM2oy+sZl7K70eBjvOqGgX5v35pNHTaA8Ju3BlLdp+O20abg==}
@@ -10122,6 +10126,12 @@ packages:
     peerDependencies:
       babel-preset-solid: ^1.6.6
       solid-js: ^1.6.6
+
+  storybook-solidjs@1.0.0-beta.6:
+    resolution: {integrity: sha512-QlnDo0zljwr/GToBe+JmRrw9dsmY8mR1RzRa7ugG0PPzzLVMU9hL1rqtT6qnVVIjqZTMCce3FNCxPZLrxQZaWA==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      solid-js: ^1.9.3
 
   storybook@8.3.3:
     resolution: {integrity: sha512-FG2KAVQN54T9R6voudiEftehtkXtLO+YVGP2gBPfacEdDQjY++ld7kTbHzpTT/bpCDx7Yq3dqOegLm9arVJfYw==}
@@ -12168,6 +12178,8 @@ snapshots:
   '@babel/runtime@7.25.6':
     dependencies:
       regenerator-runtime: 0.14.1
+
+  '@babel/standalone@7.26.7': {}
 
   '@babel/template@7.25.0':
     dependencies:
@@ -22759,16 +22771,29 @@ snapshots:
     dependencies:
       internal-slot: 1.0.7
 
-  storybook-solidjs-vite@1.0.0-beta.2(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0)):
+  storybook-solidjs-vite@1.0.0-beta.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.3)(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0)):
     dependencies:
       '@storybook/builder-vite': 8.6.0-alpha.3(storybook@8.3.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
+      magic-string: 0.30.11
+      vite-plugin-solid: 2.10.2(@testing-library/jest-dom@6.5.0)(solid-js@1.9.3)(vite@5.4.8(@types/node@22.12.0)(terser@5.34.0))
     transitivePeerDependencies:
+      - '@testing-library/jest-dom'
+      - bufferutil
+      - canvas
+      - solid-js
       - storybook
+      - supports-color
+      - utf-8-validate
       - vite
 
   storybook-solidjs@1.0.0-beta.2(babel-preset-solid@1.9.0(@babel/core@7.25.2))(solid-js@1.9.3):
     dependencies:
       babel-preset-solid: 1.9.0(@babel/core@7.25.2)
+      solid-js: 1.9.3
+
+  storybook-solidjs@1.0.0-beta.6(solid-js@1.9.3):
+    dependencies:
+      '@babel/standalone': 7.26.7
       solid-js: 1.9.3
 
   storybook@8.3.3:

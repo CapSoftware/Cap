@@ -7,8 +7,8 @@ use std::{
 
 use cap_flags::FLAGS;
 use cap_media::{
-    data::Pixel,
-    encoders::{H264Encoder, MP4File, OggFile, OpusEncoder},
+    data::{AudioInfo, Pixel},
+    encoders::{H264Encoder, MP4File, OggFile, OpusEncoder, SplitAVAssetWriterEncoder},
     feeds::{AudioInputFeed, CameraFeed},
     pipeline::{builder::PipelineBuilder, Pipeline, RealTimeClock},
     sources::{AudioInputSource, CameraSource, ScreenCaptureSource, ScreenCaptureTarget},
@@ -666,16 +666,23 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         source: ScreenCaptureSource<Self>,
         output_path: impl Into<PathBuf>,
     ) -> Result<CapturePipelineBuilder, MediaError> {
+        let output_path = output_path.into();
         let screen_config = source.info();
-        let screen_encoder = cap_media::encoders::H264AVAssetWriterEncoder::init(
-            "screen",
-            screen_config,
-            output_path.into(),
-        )?;
 
-        Ok(builder
-            .source("screen_capture", source)
-            .sink("screen_capture_encoder", screen_encoder))
+        Ok(builder.source("screen_capture", source).sink(
+            "screen_capture_encoder",
+            SplitAVAssetWriterEncoder {
+                audio: Some(cap_media::encoders::ACCAVAsetWriterEncoder::init(
+                    "screen_audio",
+                    output_path.parent().unwrap().join("display-audio.m4a"),
+                )?),
+                video: cap_media::encoders::H264AVAssetWriterEncoder::init(
+                    "screen_video",
+                    screen_config,
+                    output_path,
+                )?,
+            },
+        ))
     }
 }
 

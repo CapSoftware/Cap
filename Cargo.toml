@@ -21,7 +21,8 @@ tokio = { version = "1.39.3", features = [
 tauri = { version = "2.2.3", features = ["specta"] }
 specta = { version = "=2.0.0-rc.20", features = ["derive"] }
 
-scap = { git = "https://github.com/CapSoftware/scap", rev = "58d4410bf52f" }
+# scap = { git = "https://github.com/CapSoftware/scap", rev = "58d4410bf52f" }
+scap = { path = "../scap" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "d37141b1883d", features = [
 	"input-native",
 	"serialize",

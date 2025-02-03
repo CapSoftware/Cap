@@ -2,7 +2,8 @@ use cap_flags::FLAGS;
 use flume::Sender;
 use scap::{
     capturer::{
-        get_output_frame_size, Area, Capturer, Options, Point, Resolution as ScapResolution, Size,
+        get_output_frame_size, Area, Capturer, MacOSOptions, Options, Point,
+        Resolution as ScapResolution, Size,
     },
     frame::{Frame, FrameType},
     Target,
@@ -253,6 +254,10 @@ impl<TCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
             output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
             excluded_targets: Some(excluded_targets),
+            macos: MacOSOptions {
+                captures_audio: true,
+                ..Default::default()
+            },
         }
     }
 
@@ -430,7 +435,10 @@ pub struct CMSampleBufferCapture;
 #[cfg(target_os = "macos")]
 impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
     type Clock = RealTimeClock<RawNanoseconds>;
-    type Output = screencapturekit::cm_sample_buffer::CMSampleBuffer;
+    type Output = (
+        screencapturekit::output::CMSampleBuffer,
+        screencapturekit::stream::output_type::SCStreamOutputType,
+    );
 
     fn run(
         &mut self,
@@ -443,13 +451,9 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             self,
             ready_signal,
             control_signal,
-            |capturer| match capturer.raw().get_next_pixel_buffer() {
-                Ok(pixel_buffer) => {
-                    if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
-                        return Some(ControlFlow::Continue(()));
-                    }
-
-                    if let Err(_) = output.send(pixel_buffer.into()) {
+            |capturer| match capturer.raw().get_next_sample_buffer() {
+                Ok((sample_buffer, typ)) => {
+                    if let Err(_) = output.send((sample_buffer, typ)) {
                         eprintln!("Pipeline is unreachable. Shutting down recording.");
                         return Some(ControlFlow::Continue(()));
                     }

@@ -52,7 +52,7 @@ objc = "0.2.7"
 objc-foundation = "0.1.1"
 objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
 nokhwa-bindings-macos.workspace = true
-screencapturekit = "0.2.8"
+screencapturekit = "0.3.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
