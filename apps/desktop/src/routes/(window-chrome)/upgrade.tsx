@@ -139,7 +139,7 @@ export default function Page() {
                   </div>
                 </div>
                 <div class="px-3 mt-3 md:px-8">
-                  <div class="flex items-center pt-4 pb-1 mt-3 border-t-2 border-[--gray-50] dark:border-[--gray-500]">
+                  <div class="flex items-center pt-4 pb-1 mt-3 border-t-2 border-[--white-transparent-20] dark:border-[--black-transparent-20]">
                     <span class="mr-2 text-xs text-gray-50 dark:text-[--text-primary]">
                       Switch to {isAnnual() ? "monthly" : "annually"}
                     </span>
